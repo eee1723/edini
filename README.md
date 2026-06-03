@@ -22,18 +22,58 @@ Natural language AI assistant for Houdini 21, powered by [Pi](https://github.com
 # 1. Install Pi
 npm install -g @earendil-works/pi-coding-agent
 
-# 2. Set API key
-set ANTHROPIC_API_KEY=sk-ant-...
+# 2. For DeepSeek: create ~/.pi/agent/models.json (see below)
+#    For Anthropic: skip this step
 
 # 3. Install Edini into Houdini
-#    Run from Houdini Python Shell or with hython:
 python scripts/install.py
 
 # 4. Restart Houdini, then in Python Shell:
 from edini import createPanel
 panel = createPanel()
 panel.show()
+
+# 5. Click ⚙ in the panel to set API key, provider, and model
 ```
+
+### DeepSeek Configuration
+
+Create `~/.pi/agent/models.json`:
+
+```json
+{
+  "providers": {
+    "deepseek": {
+      "baseUrl": "https://api.deepseek.com/v1",
+      "api": "openai-completions",
+      "apiKey": "$DEEPSEEK_API_KEY",
+      "models": [
+        {
+          "id": "deepseek-chat",
+          "name": "DeepSeek V3",
+          "reasoning": false,
+          "input": ["text"],
+          "contextWindow": 65536,
+          "maxTokens": 8192,
+          "cost": { "input": 0.27, "output": 1.10, "cacheRead": 0.07, "cacheWrite": 0.27 }
+        },
+        {
+          "id": "deepseek-reasoner",
+          "name": "DeepSeek R1",
+          "reasoning": true,
+          "input": ["text"],
+          "contextWindow": 65536,
+          "maxTokens": 8192,
+          "cost": { "input": 0.55, "output": 2.19, "cacheRead": 0.14, "cacheWrite": 0.55 },
+          "compat": { "thinkingFormat": "deepseek" }
+        }
+      ]
+    }
+  }
+}
+```
+
+Then paste your DeepSeek API key in the Edini settings panel (⚙ button).
 
 ## Architecture
 
