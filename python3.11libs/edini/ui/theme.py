@@ -1,7 +1,7 @@
 """Edini theme system — refined dark palette. Base font ~20px."""
 from PySide6 import QtGui
 
-_font_scale = 1.0
+_font_scale = 0.8  # base 20px * 0.8 = 16px effective
 _theme_key = "cyan"
 
 THEMES = {

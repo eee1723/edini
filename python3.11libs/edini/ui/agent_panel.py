@@ -17,6 +17,7 @@ class AgentPanel(QtWidgets.QWidget):
         self._busy = False
         self._raw_stream_text = ""
         self._streaming = False
+        self._ai_bubble_base = ""   # HTML before current AI bubble
         self._request_count = 0
         self._session_id = ""
 
@@ -123,12 +124,13 @@ class AgentPanel(QtWidgets.QWidget):
         self._request_count = count
 
     def begin_assistant_message(self):
-        """Start a new AI bubble for streaming."""
+        """Start streaming: save base HTML, begin accumulation."""
         self._raw_stream_text = ""
         self._streaming = True
+        self._ai_bubble_base = self.timeline_view.toHtml()
 
     def append_stream_chunk(self, text: str):
-        """Append a text delta to the streaming AI message."""
+        """Append delta, throttle flush."""
         self._raw_stream_text += text
         if len(self._raw_stream_text) >= self.STREAM_FLUSH_CHARS:
             self._flush_stream()
@@ -136,36 +138,33 @@ class AgentPanel(QtWidgets.QWidget):
             self._stream_flush_timer.start()
 
     def _flush_stream(self):
+        """Rebuild the single AI bubble with accumulated text + cursor."""
         if not self._raw_stream_text:
             return
         a = accent_color()
         escaped = html.escape(self._raw_stream_text)
         rendered = _format_message(escaped)
-        bubble_html = (
+        bubble = (
             f'<div style="color:#c8ccd4;font-size:{fs(12)};line-height:1.65;'
             f'padding:10px 14px;background:#10101a;border-radius:8px;'
             f'margin:6px 48px 6px 0;">{rendered}'
             f'<span style="color:{a};">▊</span></div>'
         )
-        current = self.timeline_view.toHtml()
-        self.timeline_view.setHtml(current + bubble_html)
-        # Re-set raw text so next append only adds delta
-        self._raw_stream_text = ""
+        self.timeline_view.setHtml(self._ai_bubble_base + bubble)
 
     def finish_streaming(self):
-        """Finalize the streaming message (remove cursor)."""
+        """Final render without cursor."""
         self._streaming = False
         self._stream_flush_timer.stop()
         if self._raw_stream_text:
             escaped = html.escape(self._raw_stream_text)
             rendered = _format_message(escaped)
-            bubble_html = (
+            bubble = (
                 f'<div style="color:#c8ccd4;font-size:{fs(12)};line-height:1.65;'
                 f'padding:10px 14px;background:#10101a;border-radius:8px;'
                 f'margin:6px 48px 6px 0;">{rendered}</div>'
             )
-            current = self.timeline_view.toHtml()
-            self.timeline_view.setHtml(current + bubble_html)
+            self.timeline_view.setHtml(self._ai_bubble_base + bubble)
         self._raw_stream_text = ""
 
     def add_tool_card(self, tool_name: str, args: dict):
