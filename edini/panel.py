@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import html
+import re
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
@@ -31,7 +32,7 @@ class EdiniPanel(QWidget):
         self._tool_executor = ToolExecutor()
         self._rpc_client = RpcClient()
         self._current_assistant_bubble: _ChatBubble | None = None
-        self._tool_cards: dict[str, _ToolCard] = {}
+        self._tool_cards: list[_ToolCard] = []  # ordered list, newest last
 
         self._setup_ui()
         self._connect_signals()
@@ -186,10 +187,20 @@ class EdiniPanel(QWidget):
             self._scroll_to_bottom()
 
     def _on_tool_start(self, tool_name: str, tool_call_id: str, args: dict) -> None:
-        card = _ToolCard(tool_name, json.dumps(args, indent=2, ensure_ascii=False))
+        args_str = json.dumps(args, indent=2, ensure_ascii=False)
+        card = _ToolCard(tool_name, args_str)
         self._chat_layout.insertWidget(self._chat_layout.count() - 1, card)
-        self._tool_cards[tool_call_id] = card
+        self._tool_cards.append(card)
+        self._trim_tool_cards()
         self._scroll_to_bottom()
+
+    def _trim_tool_cards(self) -> None:
+        """Keep only the last 3 tool cards visible, hide older ones."""
+        max_visible = 3
+        if len(self._tool_cards) <= max_visible:
+            return
+        for card in self._tool_cards[:-max_visible]:
+            card.setVisible(False)
 
     def _on_agent_start(self) -> None:
         self._abort_btn.setVisible(True)
@@ -359,11 +370,11 @@ class _ChatBubble(QFrame):
 
     def append_text(self, delta: str) -> None:
         self._raw_text += delta
-        formatted = html.escape(self._raw_text).replace("\n", "<br>")
-        self._label.setText(f"{formatted}<span style='color:#aaa;'>▊</span>")
+        plain = html.escape(self._raw_text).replace("\n", "<br>")
+        self._label.setText(f"{plain}<span style='color:#aaa;'>▊</span>")
 
     def finish_streaming(self) -> None:
-        formatted = html.escape(self._raw_text).replace("\n", "<br>")
+        formatted = _format_message(self._raw_text)
         self._label.setText(formatted)
 
     def set_error_style(self) -> None:
@@ -380,13 +391,55 @@ class _ChatBubble(QFrame):
 # Tool Card Widget
 # ==========================================================================
 
+def _format_message(text: str) -> str:
+    """Convert plain text with markdown-ish syntax to simple HTML."""
+    # Escape HTML first
+    out = html.escape(text)
+
+    # Code blocks: ``` ... ```
+    out = re.sub(
+        r'```(\w*)\n(.*?)```',
+        r'<pre style="background:#1e1e1e;color:#d4d4d4;padding:8px;'
+        r'border-radius:4px;font-family:monospace;font-size:11px;'
+        r'overflow-x:auto;">\2</pre>',
+        out, flags=re.DOTALL,
+    )
+
+    # Inline code: `...`
+    out = re.sub(
+        r'`([^`]+)`',
+        r'<code style="background:#333;padding:1px 4px;border-radius:3px;'
+        r'font-family:monospace;font-size:11px;">\1</code>',
+        out,
+    )
+
+    # Bold: **...**
+    out = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', out)
+
+    # Lines starting with ## → header
+    out = re.sub(r'^## (.+)$', r'<h4 style="margin:4px 0;color:#ccc;">\1</h4>', out, flags=re.MULTILINE)
+
+    # Lines starting with - or * → list item
+    out = re.sub(r'^(\s*)[-*] (.+)$', r'\1• \2', out, flags=re.MULTILINE)
+
+    # Numbered lists: 1. → preserve
+
+    # Newlines → <br>
+    out = out.replace("\n", "<br>")
+
+    return out
+
+
 class _ToolCard(QFrame):
-    """A card showing a tool call with its name."""
+    """A collapsible card showing a tool call. Click header to expand/collapse."""
 
     def __init__(self, tool_name: str, args_json: str, parent: QWidget | None = None):
         super().__init__(parent)
+        self._expanded = False
+
         self.setFrameShape(QFrame.StyledPanel)
         self.setMaximumWidth(500)
+        self.setCursor(Qt.PointingHandCursor)
         self.setStyleSheet("""
             _ToolCard {
                 background-color: #2a332a;
@@ -394,12 +447,37 @@ class _ToolCard(QFrame):
                 margin-left: 20px;
                 margin-right: 40px;
             }
+            _ToolCard:hover { background-color: #334433; }
             QLabel { color: #80c080; font-size: 11px; }
         """)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 4, 10, 4)
-        layout.addWidget(QLabel(f"🔧 <b>{html.escape(tool_name)}</b>"))
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(10, 4, 10, 4)
+
+        # Header: always visible
+        self._header = QLabel(f"▸ 🔧 <b>{html.escape(tool_name)}</b>")
+        self._header.setCursor(Qt.PointingHandCursor)
+        self._layout.addWidget(self._header)
+
+        # Detail: hidden by default
+        self._detail = QLabel(html.escape(args_json).replace("\n", "<br>"))
+        self._detail.setWordWrap(True)
+        self._detail.setStyleSheet(
+            "color:#a0c0a0; font-family:monospace; font-size:10px;"
+            "background:#222; padding:6px; border-radius:4px; margin-top:2px;"
+        )
+        self._detail.setVisible(False)
+        self._layout.addWidget(self._detail)
+
+    def mousePressEvent(self, event) -> None:
+        self._expanded = not self._expanded
+        self._detail.setVisible(self._expanded)
+        arrow = "▾" if self._expanded else "▸"
+        # Extract tool name from header text (after arrow+icon+space)
+        text = self._header.text()
+        text = arrow + text[1:]  # replace first char (arrow)
+        self._header.setText(text)
+        super().mousePressEvent(event)
 
 
 # ==========================================================================
