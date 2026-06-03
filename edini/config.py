@@ -14,7 +14,27 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SETTINGS_FILE = PROJECT_ROOT / "edini" / "settings.json"
 
 # Pi executable (from npm global install)
-PI_EXECUTABLE = os.environ.get("EDINI_PI_PATH", "pi")
+# Houdini may not have npm's bin dir in PATH, so we search for it.
+def _find_pi() -> str:
+    """Find the pi executable, checking common locations."""
+    import shutil
+    # 1. Explicit env var
+    env_path = os.environ.get("EDINI_PI_PATH")
+    if env_path:
+        return env_path
+    # 2. Check npm global bin (Windows)
+    npm_root = os.environ.get("APPDATA", "") + r"\npm"
+    for name in ("pi.cmd", "pi"):
+        pi_path = os.path.join(npm_root, name)
+        if os.path.isfile(pi_path):
+            return pi_path
+    # 3. Fall back to PATH
+    found = shutil.which("pi")
+    if found:
+        return found
+    return "pi"  # last resort
+
+PI_EXECUTABLE = _find_pi()
 
 # Pi extensions directory
 PI_EXTENSIONS_DIR = PROJECT_ROOT / "pi-extensions"
