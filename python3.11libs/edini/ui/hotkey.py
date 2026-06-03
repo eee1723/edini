@@ -1,41 +1,43 @@
-"""Global hotkey event filter for Alt+Shift+E smart launcher."""
-import importlib
-from PySide6 import QtCore, QtWidgets
+"""Global hotkey event filter, modeled after EEEAi_Houdini's approach."""
+from PySide6 import QtCore, QtGui, QtWidgets
 
-try:
-    hou = importlib.import_module("hou")
-except Exception:
-    hou = None
+_event_filter = None
+_hotkey_enabled = True
 
-_filter_instance = None
+
+class HotkeyFilter(QtCore.QObject):
+    _HOTKEY = QtGui.QKeySequence("Alt+Shift+E")
+
+    def eventFilter(self, obj, event):
+        if not _hotkey_enabled:
+            return False
+        if event.type() != QtCore.QEvent.KeyPress:
+            return False
+        if event.isAutoRepeat():
+            return False
+
+        # Houdini may provide keyCombination(); fall back to modifiers|key
+        try:
+            matches = self._HOTKEY.matches(
+                QtGui.QKeySequence(event.modifiers() | event.key())
+            ) == QtGui.QKeySequence.ExactMatch
+        except Exception:
+            matches = False
+
+        if matches:
+            from edini.ui import open_chat_window
+            open_chat_window(toggle=True)
+            return True
+        return False
 
 
 def install_event_filter():
-    global _filter_instance
-    if _filter_instance is not None:
+    global _event_filter
+    if _event_filter is not None:
         return True
-    if hou is None:
+    app = QtWidgets.QApplication.instance()
+    if app is None:
         return False
-    try:
-        app = QtWidgets.QApplication.instance()
-    except Exception:
-        return False
-    _filter_instance = _HotkeyFilter()
-    app.installEventFilter(_filter_instance)
+    _event_filter = HotkeyFilter()
+    app.installEventFilter(_event_filter)
     return True
-
-
-class _HotkeyFilter(QtCore.QObject):
-    def eventFilter(self, watched, event):
-        if event.type() == QtCore.QEvent.KeyPress:
-            key = event.key()
-            mods = event.modifiers()
-            if (
-                key == QtCore.Qt.Key_E
-                and mods & QtCore.Qt.AltModifier
-                and mods & QtCore.Qt.ShiftModifier
-            ):
-                from edini.ui import open_chat_window
-                open_chat_window(toggle=True)
-                return True
-        return False

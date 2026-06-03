@@ -2,6 +2,7 @@
 import html
 import re
 from PySide6 import QtCore, QtWidgets
+from edini.ui.theme import accent_color, fs
 
 
 class AgentPanel(QtWidgets.QWidget):
