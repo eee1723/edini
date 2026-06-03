@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mainMenu>
+  <menuBar>
+    <subMenu id="edini_menu">
+      <label>Edini</label>
+      <scriptItem id="edini_open_chat">
+        <label>Open Chat Panel</label>
+        <scriptCode><![CDATA[
+from edini.ui import open_chat_window
+open_chat_window()
+        ]]></scriptCode>
+      </scriptItem>
+      <separatorItem/>
+      <scriptItem id="edini_settings">
+        <label>Settings</label>
+        <scriptCode><![CDATA[
+from edini.ui import open_settings
+open_settings()
+        ]]></scriptCode>
+      </scriptItem>
+    </subMenu>
+  </menuBar>
+</mainMenu>
