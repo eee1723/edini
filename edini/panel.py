@@ -122,6 +122,10 @@ class EdiniPanel(QWidget):
         self._node_count_label.setStyleSheet("color: #888; font-size: 11px;")
         status_layout.addWidget(self._node_count_label)
 
+        self._token_label = QLabel("Tokens: -")
+        self._token_label.setStyleSheet("color: #888; font-size: 11px;")
+        status_layout.addWidget(self._token_label)
+
         main_layout.addLayout(status_layout)
 
     def _connect_signals(self) -> None:
@@ -131,6 +135,7 @@ class EdiniPanel(QWidget):
         self._rpc_client.agent_finished.connect(self._on_agent_finish)
         self._rpc_client.error_occurred.connect(self._on_error)
         self._rpc_client.status_changed.connect(self._on_status_changed)
+        self._rpc_client.stats_updated.connect(self._on_stats_updated)
 
     def _on_settings(self) -> None:
         """Open the settings dialog."""
@@ -198,6 +203,8 @@ class EdiniPanel(QWidget):
         if self._current_assistant_bubble:
             self._current_assistant_bubble.finish_streaming()
         self._refresh_node_count()
+        # Request latest stats from Pi
+        self._rpc_client.send_get_stats()
 
     def _on_error(self, message: str) -> None:
         self._add_system_message(f"⚠️ {html.escape(message)}", is_error=True)
@@ -210,6 +217,30 @@ class EdiniPanel(QWidget):
             "error": "⬤ Error",
         }
         self._status_label.setText(status_map.get(status, f"⬤ {status}"))
+
+    def _on_stats_updated(self, data: dict) -> None:
+        """Update token/cost display from Pi session stats."""
+        tokens = data.get("tokens", {})
+        cost = data.get("cost", 0)
+        ctx = data.get("contextUsage")
+
+        parts = []
+        total = tokens.get("total", 0)
+        if total:
+            parts.append(f"{total:,} tok")
+
+        if cost and cost > 0:
+            parts.append(f"${cost:.3f}")
+
+        if ctx:
+            pct = ctx.get("percent")
+            if pct is not None:
+                parts.append(f"ctx {pct}%")
+
+        if parts:
+            self._token_label.setText(" · ".join(parts))
+        else:
+            self._token_label.setText("Tokens: -")
 
     # ------------------------------------------------------------------
     # Chat Helpers

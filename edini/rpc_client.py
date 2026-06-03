@@ -26,6 +26,7 @@ class RpcClient(QObject):
     agent_finished = Signal()
     error_occurred = Signal(str)
     status_changed = Signal(str)
+    stats_updated = Signal(object)          # dict: tokens, cost, contextUsage
 
     def __init__(self, parent: QObject | None = None):
         super().__init__(parent)
@@ -53,6 +54,7 @@ class RpcClient(QObject):
         self._worker.agent_finished.connect(self.agent_finished)
         self._worker.error_occurred.connect(self.error_occurred)
         self._worker.status_changed.connect(self.status_changed)
+        self._worker.stats_received.connect(self.stats_updated)
 
         self._thread.started.connect(self._worker.run)
         self._thread.start()
@@ -99,6 +101,11 @@ class RpcClient(QObject):
                 "modelId": model_id,
             })
 
+    def send_get_stats(self) -> None:
+        """Request session token/cost statistics from Pi."""
+        if self._worker:
+            self._worker.send_command({"type": "get_session_stats"})
+
     def restart(self) -> None:
         """Restart the Pi subprocess (needed after API key change)."""
         was_running = self._is_running
@@ -116,6 +123,7 @@ class _RpcWorker(QObject):
     agent_finished = Signal()
     error_occurred = Signal(str)
     status_changed = Signal(str)
+    stats_received = Signal(object)
 
     def __init__(self, pi_cmd: list[str], tool_port: int):
         super().__init__()
@@ -206,6 +214,8 @@ class _RpcWorker(QObject):
         elif event_type == "response":
             if not event.get("success", True):
                 self.error_occurred.emit(event.get("error", "Unknown error"))
+            elif event.get("command") == "get_session_stats":
+                self.stats_received.emit(event.get("data", {}))
 
         elif event_type == "extension_error":
             self.error_occurred.emit(f"Extension: {event.get('error', '')}")
