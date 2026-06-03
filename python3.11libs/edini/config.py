@@ -7,15 +7,11 @@ import os
 from pathlib import Path
 from typing import Any
 
-# Project root (parent of edini/)
 # config.py is at python3.11libs/edini/config.py
 # Project root is 3 levels up: edini/ -> python3.11libs/ -> project root/
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
-# Pi extensions directory (at project root)
-PI_EXTENSIONS_DIR = _PROJECT_ROOT / "pi-extensions"
-
-# Local settings file (next to config.py, gitignored)
+# Local settings file (gitignored, next to config.py)
 SETTINGS_FILE = Path(__file__).resolve().parent / "settings.json"
 
 # Pi executable (from npm global install)
@@ -42,7 +38,7 @@ def _find_pi() -> str:
 PI_EXECUTABLE = _find_pi()
 
 # Pi extensions directory
-
+PI_EXTENSIONS_DIR = PROJECT_ROOT / "pi-extensions"
 
 # Tool executor HTTP server
 TOOL_EXECUTOR_HOST = "127.0.0.1"

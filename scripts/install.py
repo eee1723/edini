@@ -11,12 +11,10 @@ from pathlib import Path
 
 
 def get_edini_root() -> Path:
-    """Get the Edini project root (parent of scripts/)."""
     return Path(__file__).resolve().parent.parent
 
 
 def get_houdini_packages_dir() -> Path | None:
-    """Find Houdini's packages directory."""
     candidates = [
         Path(os.environ.get("HOUDINI_USER_PREF_DIR", "")) / "packages",
         Path.home() / "Documents" / "houdini21.0" / "packages",
@@ -65,7 +63,7 @@ def install() -> None:
     print()
     print("Next steps:")
     print("  1. Restart Houdini")
-    print("  2. Menu: Edini -> Open Chat Panel")
+    print("  2. Menu: Edini > Open Chat Panel")
     print("  3. Or run: scripts/setup_pi.bat")
 
 
