@@ -1,13 +1,6 @@
 """Edini installation script for Houdini.
 
-Registers the Edini package so Houdini can import it.
-Run with Houdini's Python (hython):
-
-    hython scripts/install.py
-
-Or from within Houdini's Python Shell:
-
-    exec(open(r'F:/zz/Edini/scripts/install.py').read())
+Registers Edini as a Houdini package so it appears in the menu bar.
 """
 from __future__ import annotations
 
@@ -29,15 +22,12 @@ def get_houdini_packages_dir() -> Path | None:
         Path.home() / "Documents" / "houdini21.0" / "packages",
         Path.home() / "Documents" / "houdini21.5" / "packages",
     ]
-
-    # Try via hou module if available (running inside Houdini)
     try:
         import hou
         prefs = hou.getenv("HOUDINI_USER_PREF_DIR") or hou.homeHoudiniDirectory()
         candidates.insert(0, Path(prefs) / "packages")
     except ImportError:
         pass
-
     for d in candidates:
         if d.exists() and d.is_dir():
             return d
@@ -45,7 +35,6 @@ def get_houdini_packages_dir() -> Path | None:
 
 
 def install() -> None:
-    """Install Edini to Houdini's packages directory."""
     root = get_edini_root()
     packages_dir = get_houdini_packages_dir()
 
@@ -57,25 +46,27 @@ def install() -> None:
     packages_dir.mkdir(parents=True, exist_ok=True)
     package_file = packages_dir / "edini.json"
 
+    path_forward = str(root).replace("\\", "/")
+
     with open(package_file, "w") as f:
         json.dump({
-            "env": [{"PYTHONPATH": str(root)}],
-            "path": str(root),
+            "env": [
+                {"EDINI_PATH": path_forward}
+            ],
+            "path": "$EDINI_PATH",
+            "houdini": {
+                "python3.11libs": "$EDINI_PATH/python3.11libs"
+            }
         }, f, indent=2)
 
-    print(f"✅ Edini installed!")
-    print(f"   Package file: {package_file}")
-    print(f"   Project root: {root}")
+    print(f"Edini installed!")
+    print(f"  Package file: {package_file}")
+    print(f"  Project root: {root}")
     print()
     print("Next steps:")
     print("  1. Restart Houdini")
-    print("  2. Run: scripts/setup_pi.bat")
-    print("  3. Set API key: set ANTHROPIC_API_KEY=sk-ant-...")
-    print()
-    print("In Houdini Python Shell:")
-    print("  from edini import createPanel")
-    print("  panel = createPanel()")
-    print("  panel.show()")
+    print("  2. Menu: Edini -> Open Chat Panel")
+    print("  3. Or run: scripts/setup_pi.bat")
 
 
 if __name__ == "__main__":
