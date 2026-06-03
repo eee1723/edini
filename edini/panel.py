@@ -12,9 +12,13 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit,
     QScrollArea, QLabel, QFrame, QToolButton, QSizePolicy,
+    QDialog, QFormLayout, QDialogButtonBox,
 )
 
-from edini.config import PANEL_DEFAULT_WIDTH, PANEL_DEFAULT_HEIGHT
+from edini.config import (
+    PANEL_DEFAULT_WIDTH, PANEL_DEFAULT_HEIGHT,
+    get_settings, save_settings,
+)
 from edini.rpc_client import RpcClient
 from edini.tool_executor import ToolExecutor
 
