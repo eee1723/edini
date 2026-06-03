@@ -1,0 +1,9 @@
+{
+  "name": "edini-context",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Houdini context injection for Edini - Pi extension",
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}

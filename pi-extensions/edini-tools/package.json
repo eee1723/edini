@@ -1,0 +1,9 @@
+{
+  "name": "edini-tools",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Houdini tools for Edini - registered as Pi extension",
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}
