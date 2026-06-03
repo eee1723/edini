@@ -11,7 +11,7 @@ from typing import Any
 
 from PySide6.QtCore import QThread, Signal, QObject
 
-from edini.config import get_pi_command, TOOL_EXECUTOR_PORT
+from edini.config import get_pi_command, get_pi_env, TOOL_EXECUTOR_PORT
 
 
 class RpcClient(QObject):
@@ -90,6 +90,22 @@ class RpcClient(QObject):
         if self._worker:
             self._worker.send_command({"type": "steer", "message": text})
 
+    def send_set_model(self, provider: str, model_id: str) -> None:
+        """Switch Pi to a different model (no restart needed)."""
+        if self._worker:
+            self._worker.send_command({
+                "type": "set_model",
+                "provider": provider,
+                "modelId": model_id,
+            })
+
+    def restart(self) -> None:
+        """Restart the Pi subprocess (needed after API key change)."""
+        was_running = self._is_running
+        self.stop()
+        if was_running:
+            self.start()
+
 
 class _RpcWorker(QObject):
     """Worker object running on a QThread. Manages subprocess I/O."""
@@ -118,10 +134,7 @@ class _RpcWorker(QObject):
                 stderr=subprocess.PIPE,
                 text=True,
                 bufsize=1,
-                env={
-                    **__import__("os").environ,
-                    "EDINI_TOOL_PORT": str(self._tool_port),
-                },
+                env=get_pi_env(),
             )
             self.status_changed.emit("connected")
 

@@ -1,9 +1,17 @@
-"""Edini configuration constants."""
+"""Edini configuration with local settings persistence.
+
+Priority: env vars > settings.json > built-in defaults.
+"""
+import json
 import os
 from pathlib import Path
+from typing import Any
 
 # Project root (parent of edini/)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# Local settings file (gitignored, user-specific)
+SETTINGS_FILE = PROJECT_ROOT / "edini" / "settings.json"
 
 # Pi executable (from npm global install)
 PI_EXECUTABLE = os.environ.get("EDINI_PI_PATH", "pi")
@@ -15,13 +23,71 @@ PI_EXTENSIONS_DIR = PROJECT_ROOT / "pi-extensions"
 TOOL_EXECUTOR_HOST = "127.0.0.1"
 TOOL_EXECUTOR_PORT = 9876
 
-# Default model
-DEFAULT_MODEL_PROVIDER = os.environ.get("EDINI_MODEL_PROVIDER", "anthropic")
-DEFAULT_MODEL_ID = os.environ.get("EDINI_MODEL_ID", "claude-sonnet-4-5")
-
 # Panel dimensions
 PANEL_DEFAULT_WIDTH = 500
 PANEL_DEFAULT_HEIGHT = 600
+
+# ---- Defaults (lowest priority) ----
+_DEFAULTS: dict[str, Any] = {
+    "api_key": "",
+    "provider": "deepseek",
+    "model_id": "deepseek-chat",
+}
+
+# ---- Env var overrides (highest priority) ----
+_ENV_MAP = {
+    "api_key": "EDINI_API_KEY",
+    "provider": "EDINI_MODEL_PROVIDER",
+    "model_id": "EDINI_MODEL_ID",
+}
+
+
+def _load_settings() -> dict[str, Any]:
+    """Load settings from local JSON file, falling back to defaults."""
+    if SETTINGS_FILE.exists():
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return {**_DEFAULTS, **data}
+        except (json.JSONDecodeError, OSError):
+            pass
+    return dict(_DEFAULTS)
+
+
+def get_settings() -> dict[str, Any]:
+    """Get current settings (env overrides file)."""
+    settings = _load_settings()
+    for key, env_name in _ENV_MAP.items():
+        env_val = os.environ.get(env_name)
+        if env_val:
+            settings[key] = env_val
+    return settings
+
+
+def save_settings(updates: dict[str, Any]) -> None:
+    """Merge updates into settings file (atomic write)."""
+    current = _load_settings()
+    current.update(updates)
+    SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = SETTINGS_FILE.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(current, f, indent=2, ensure_ascii=False)
+    tmp.replace(SETTINGS_FILE)
+
+
+def get_pi_env() -> dict[str, str]:
+    """Build environment dict for Pi subprocess with current API key."""
+    settings = get_settings()
+    env = {
+        **os.environ,
+        "EDINI_TOOL_PORT": str(TOOL_EXECUTOR_PORT),
+    }
+    # Pass API key as env var so Pi can use it
+    api_key = settings.get("api_key", "")
+    if api_key:
+        env["DEEPSEEK_API_KEY"] = api_key
+    return env
+
 
 def get_pi_command() -> list[str]:
     """Build the Pi subprocess command."""

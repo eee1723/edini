@@ -1,0 +1,14 @@
+# Local settings (API keys, user preferences)
+edini/settings.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Node
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db

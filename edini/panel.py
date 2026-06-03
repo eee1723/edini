@@ -62,6 +62,16 @@ class EdiniPanel(QWidget):
         self._chat_scroll.setWidget(self._chat_container)
         main_layout.addWidget(self._chat_scroll, stretch=1)
 
+        # --- Header bar (settings button) ---
+        header = QHBoxLayout()
+        header.addStretch()
+        self._settings_btn = QToolButton()
+        self._settings_btn.setText("⚙")
+        self._settings_btn.setToolTip("Settings: API Key, Provider, Model")
+        self._settings_btn.clicked.connect(self._on_settings)
+        header.addWidget(self._settings_btn)
+        main_layout.addLayout(header)
+
         self._add_system_message(
             "🤖 <b>Edini</b> ready. I can help you create nodes, set parameters, "
             "write VEX/Python, and more. What would you like to do in Houdini?"
@@ -96,6 +106,12 @@ class EdiniPanel(QWidget):
         self._status_label = QLabel("⬤ Connecting...")
         self._status_label.setStyleSheet("color: #888; font-size: 11px;")
         status_layout.addWidget(self._status_label)
+
+        settings = get_settings()
+        self._model_label = QLabel(f"Model: {settings.get('model_id', '?')}")
+        self._model_label.setStyleSheet("color: #888; font-size: 11px;")
+        status_layout.addWidget(self._model_label)
+
         status_layout.addStretch()
 
         self._node_count_label = QLabel("Nodes: -")
@@ -111,6 +127,30 @@ class EdiniPanel(QWidget):
         self._rpc_client.agent_finished.connect(self._on_agent_finish)
         self._rpc_client.error_occurred.connect(self._on_error)
         self._rpc_client.status_changed.connect(self._on_status_changed)
+
+    def _on_settings(self) -> None:
+        """Open the settings dialog."""
+        dlg = _SettingsDialog(self)
+        if dlg.exec() == QDialog.Accepted:
+            data = dlg.get_values()
+            api_changed = "api_key" in data and data["api_key"]
+            model_changed = "provider" in data or "model_id" in data
+
+            save_settings(data)
+
+            if "model_id" in data:
+                self._model_label.setText(f"Model: {data['model_id']}")
+
+            if api_changed:
+                self._add_system_message("⚙ API key updated. Restarting Pi...")
+                self._rpc_client.restart()
+
+            if model_changed and not api_changed:
+                s = get_settings()
+                self._rpc_client.send_set_model(s["provider"], s["model_id"])
+                self._add_system_message(
+                    f"⚙ Switched to {s['provider']}/{s['model_id']}"
+                )
 
     # ------------------------------------------------------------------
     # Signal Handlers
@@ -325,3 +365,98 @@ class _ToolCard(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 4, 10, 4)
         layout.addWidget(QLabel(f"🔧 <b>{html.escape(tool_name)}</b>"))
+
+
+# ==========================================================================
+# Settings Dialog
+# ==========================================================================
+
+class _SettingsDialog(QDialog):
+    """Dialog for configuring API key, provider, and model."""
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("Edini Settings")
+        self.setMinimumWidth(400)
+
+        settings = get_settings()
+
+        layout = QVBoxLayout(self)
+
+        form = QFormLayout()
+
+        self._api_key = QLineEdit()
+        self._api_key.setEchoMode(QLineEdit.Password)
+        self._api_key.setPlaceholderText("sk-...")
+        self._api_key.setText(settings.get("api_key", ""))
+        form.addRow("API Key:", self._api_key)
+
+        self._provider = QLineEdit()
+        self._provider.setPlaceholderText("deepseek")
+        self._provider.setText(settings.get("provider", ""))
+        form.addRow("Provider:", self._provider)
+
+        self._model_id = QLineEdit()
+        self._model_id.setPlaceholderText("deepseek-chat")
+        self._model_id.setText(settings.get("model_id", ""))
+        form.addRow("Model ID:", self._model_id)
+
+        layout.addLayout(form)
+
+        # Preset buttons
+        preset_layout = QHBoxLayout()
+        for label, prov, model in [
+            ("DeepSeek V3", "deepseek", "deepseek-chat"),
+            ("DeepSeek R1", "deepseek", "deepseek-reasoner"),
+            ("Claude Sonnet", "anthropic", "claude-sonnet-4-5"),
+        ]:
+            btn = QPushButton(label)
+            btn.clicked.connect(
+                lambda checked, p=prov, m=model: self._set_preset(p, m)
+            )
+            preset_layout.addWidget(btn)
+        layout.addLayout(preset_layout)
+
+        # Info label
+        info = QLabel(
+            "<b>DeepSeek:</b> create ~/.pi/agent/models.json first (see README).<br>"
+            "<b>Anthropic:</b> no extra config needed."
+        )
+        info.setWordWrap(True)
+        info.setStyleSheet("color: #aaa; font-size: 11px;")
+        layout.addWidget(info)
+
+        # Buttons
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self._on_accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _set_preset(self, provider: str, model_id: str) -> None:
+        self._provider.setText(provider)
+        self._model_id.setText(model_id)
+
+    def _on_accept(self) -> None:
+        """Validate and accept."""
+        if not self._provider.text().strip():
+            self._provider.setFocus()
+            return
+        if not self._model_id.text().strip():
+            self._model_id.setFocus()
+            return
+        self.accept()
+
+    def get_values(self) -> dict[str, str]:
+        """Return changed values only."""
+        old = get_settings()
+        result: dict[str, str] = {}
+        new_api = self._api_key.text().strip()
+        if new_api != old.get("api_key", ""):
+            result["api_key"] = new_api
+        new_prov = self._provider.text().strip()
+        if new_prov != old.get("provider", ""):
+            result["provider"] = new_prov
+        new_model = self._model_id.text().strip()
+        if new_model != old.get("model_id", ""):
+            result["model_id"] = new_model
+        return result
