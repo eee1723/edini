@@ -1,6 +1,6 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-03 &nbsp;|&nbsp; 第一阶段：基础架构搭建完成
+> 最后更新：2026-06-03 &nbsp;|&nbsp; 第二阶段：UI 重构完成，Houdini 实机运行
 
 ## 总览看板
 
@@ -88,12 +88,12 @@
   <div class="timeline-date">2026-06-03</div>
   <div class="timeline-card">
     <div class="timeline-card-header">
-      <span class="timeline-title">第二阶段：UI 重构 — Houdini 原生菜单 + 三栏高级面板</span>
-      <span class="status-tag status-done">全部完成</span>
+      <span class="timeline-title">第二阶段：UI 重构 — Houdini 原生菜单 + 三栏高级面板 ✅ 实机运行</span>
+      <span class="status-tag status-done">完成</span>
     </div>
-    <div class="timeline-summary">参照 EEEAi_Houdini 架构完成全面 UI 重构：① 目录迁移到 python3.11libs/ 标准 Houdini 包路径 ② MainMenuCommon.xml 注册 Edini 主菜单栏入口 ③ Houdini packages JSON 注册（install.py 改写）④ QMainWindow + QSplitter 三栏布局（History | Chat Timeline | Pi+Scene Context）⑤ 暗色主题系统（4 色霓虹预设 + 字体缩放 + 全局样式表）⑥ AgentPanel 时间线（流式文本渲染、Tool Card、Markdown 支持、Enter 发送/Ctrl+Enter 换行）⑦ ChatRuntime Pi 事件适配层（text_delta/tool_call/stats 事件映射）⑧ HistoryPanel 会话列表（新建/切换/右键删除）⑨ ContextPanel 双面板（Pi 状态：连接灯/模型/token/成本/上下文进度条/流式速率 + 场景信息：HIP/选中节点/节点统计/QTimer 3s 刷新）⑩ session_store JSON 本地持久化 ⑪ SettingsDialog 双标签（Provider 配置 + 主题/字体选择）⑫ Alt+Shift+E 全局热键 ⑬ 窗口单例管理（windows.py）。全部 19 个文件语法验证通过。</div>
+    <div class="timeline-summary">全面 UI 重构完成并在 Houdini 实机验证通过：① python3.11libs 标准目录 + MainMenuCommon.xml 主菜单注册 ② QMainWindow + QSplitter 三栏（History | Timeline | Pi+Scene）③ 暗色主题系统（4 色预设、统一 16px 字号、8px 网格间距）④ AgentPanel 单气泡流式渲染（Tool Card / Markdown / 错误横幅）⑤ ChatRuntime Pi 事件层 ⑥ HistoryPanel + session_store 会话持久化 ⑦ ContextPanel 双面板 ⑧ SettingsDialog 双标签 ⑨ QKeySequence 热键 ⑩ 窗口单例管理。修复：流式渲染多气泡 bug、热键参数透传、import 缺失。</div>
     <div class="timeline-tags">
-      <span>MainMenuCommon.xml</span><span>QSplitter三栏</span><span>暗色主题</span><span>Pi事件映射</span><span>时间线</span><span>会话管理</span><span>热键</span><span>19文件</span>
+      <span>MainMenuCommon.xml</span><span>QSplitter三栏</span><span>暗色主题16px</span><span>单气泡流式</span><span>实机验证</span><span>19文件</span>
     </div>
   </div>
 </div>
