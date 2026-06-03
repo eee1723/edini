@@ -137,13 +137,14 @@ class AgentPanel(QtWidgets.QWidget):
     def _flush_stream(self):
         if not self._raw_stream_text:
             return
+        a = accent_color()
         escaped = html.escape(self._raw_stream_text)
         rendered = _format_message(escaped)
         bubble_html = (
-            f'<div style="color:#e5e5eb;font-size:12px;line-height:1.6;'
-            f'padding:8px 12px;background:#1a1a24;border-radius:8px;'
-            f'margin:4px 40px 4px 0;">{rendered}'
-            f'<span style="color:#06b6d4;">▊</span></div>'
+            f'<div style="color:#c8ccd4;font-size:{fs(12)};line-height:1.65;'
+            f'padding:10px 14px;background:#10101a;border-radius:8px;'
+            f'margin:6px 48px 6px 0;">{rendered}'
+            f'<span style="color:{a};">▊</span></div>'
         )
         current = self.timeline_view.toHtml()
         self.timeline_view.setHtml(current + bubble_html)
@@ -158,9 +159,9 @@ class AgentPanel(QtWidgets.QWidget):
             escaped = html.escape(self._raw_stream_text)
             rendered = _format_message(escaped)
             bubble_html = (
-                f'<div style="color:#e5e5eb;font-size:12px;line-height:1.6;'
-                f'padding:8px 12px;background:#1a1a24;border-radius:8px;'
-                f'margin:4px 40px 4px 0;">{rendered}</div>'
+                f'<div style="color:#c8ccd4;font-size:{fs(12)};line-height:1.65;'
+                f'padding:10px 14px;background:#10101a;border-radius:8px;'
+                f'margin:6px 48px 6px 0;">{rendered}</div>'
             )
             current = self.timeline_view.toHtml()
             self.timeline_view.setHtml(current + bubble_html)
@@ -168,13 +169,14 @@ class AgentPanel(QtWidgets.QWidget):
 
     def add_tool_card(self, tool_name: str, args: dict):
         """Add a tool call card to the timeline."""
+        a = accent_color()
         args_str = str(args)[:200]
         card_html = (
-            f'<div style="color:#67e8f9;font-size:11px;background:#0e2a2e;'
-            f'border-left:3px solid #06b6d4;padding:6px 10px;'
-            f'margin:4px 20px 4px 0;border-radius:4px;">'
+            f'<div style="color:#80cbc4;font-size:{fs(11)};background:rgba(0,188,212,0.06);'
+            f'border-left:3px solid {a};padding:8px 12px;'
+            f'margin:6px 24px 6px 0;border-radius:4px;">'
             f'🔧 <b>{html.escape(tool_name)}</b><br>'
-            f'<span style="color:#94a3b8;">{html.escape(args_str)}</span>'
+            f'<span style="color:#78909c;">{html.escape(args_str)}</span>'
             f'</div>'
         )
         current = self.timeline_view.toHtml()
@@ -183,8 +185,8 @@ class AgentPanel(QtWidgets.QWidget):
     def add_error(self, message: str):
         """Add an error banner."""
         err_html = (
-            f'<div style="color:#fca5a5;font-size:11px;background:#2e1a1a;'
-            f'border-left:3px solid #ef4444;padding:6px 10px;margin:4px 40px;'
+            f'<div style="color:#f87171;font-size:{fs(11)};background:rgba(239,68,68,0.08);'
+            f'border-left:3px solid #ef4444;padding:8px 12px;margin:6px 48px;'
             f'border-radius:4px;">'
             f'⚠️ {html.escape(message)}'
             f'</div>'
@@ -195,8 +197,8 @@ class AgentPanel(QtWidgets.QWidget):
     def add_separator(self, text: str = "── 本轮结束 ──"):
         """Add a separator line."""
         sep_html = (
-            f'<div style="text-align:center;color:#52525b;font-size:10px;'
-            f'margin:16px 0;border-top:1px solid #2a2a3c;padding-top:8px;">'
+            f'<div style="text-align:center;color:#6a6e76;font-size:{fs(10)};'
+            f'margin:16px 0;border-top:1px solid #1a1a28;padding-top:8px;">'
             f'{html.escape(text)}</div>'
         )
         current = self.timeline_view.toHtml()

@@ -6,7 +6,7 @@ from PySide6 import QtCore, QtWidgets
 from edini.rpc_client import RpcClient
 from edini.tool_executor import ToolExecutor
 from edini.ui.chat_runtime import ChatRuntime
-from edini.ui.theme import apply_main_theme
+from edini.ui.theme import apply_theme, accent_color
 from edini.ui.agent_panel import AgentPanel
 from edini.ui.history_panel import HistoryPanel
 from edini.ui.context_panel import ContextPanel
@@ -34,7 +34,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self._bootstrap()
 
     def _build_ui(self):
-        apply_main_theme(self)
+        apply_theme(self)
 
         central = QtWidgets.QWidget(self)
         root = QtWidgets.QVBoxLayout(central)

@@ -1,7 +1,7 @@
 """Settings dialog — provider config and theme selection."""
 from PySide6 import QtCore, QtWidgets
 from edini.config import get_settings, save_settings
-from edini.ui.theme import THEME_COLORS, get_theme_color, set_theme_color
+from edini.ui.theme import THEMES, get_theme, set_theme
 
 
 class SettingsDialog(QtWidgets.QDialog):
@@ -69,10 +69,10 @@ class SettingsDialog(QtWidgets.QDialog):
         app_form.setSpacing(8)
 
         self._theme_combo = QtWidgets.QComboBox()
-        current_theme = get_theme_color()
-        for key, info in THEME_COLORS.items():
+        current = get_theme()
+        for key, info in THEMES.items():
             self._theme_combo.addItem(info["name"], key)
-            if key == current_theme:
+            if key == current:
                 self._theme_combo.setCurrentIndex(self._theme_combo.count() - 1)
         app_form.addRow("Theme:", self._theme_combo)
 
@@ -106,5 +106,5 @@ class SettingsDialog(QtWidgets.QDialog):
         })
         key = self._theme_combo.currentData()
         if key:
-            set_theme_color(key)
+            set_theme(key)
         self.accept()
