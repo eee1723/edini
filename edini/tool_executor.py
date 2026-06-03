@@ -1,0 +1,141 @@
+"""Tool executor HTTP server.
+
+Runs inside Houdini's Python process. Receives tool execution requests
+from Pi extensions via HTTP POST and dispatches to node_utils.
+"""
+from __future__ import annotations
+
+import json
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from typing import Any, Callable
+
+from edini.node_utils import (
+    get_scene_info,  create_node, delete_node, connect_nodes,
+    set_param, get_param, list_nodes, get_node_info, layout_nodes,
+    search_nodes, get_help, inspect_geometry,
+    run_python, run_vex, create_hda, get_hda_info,
+)
+
+# Map tool names to handler functions
+TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
+    "houdini_get_scene_info": lambda **kw: get_scene_info(),
+    "houdini_create_node": lambda **kw: create_node(
+        node_type=kw["node_type"], name=kw.get("name"),
+        parent_path=kw.get("parent_path", "/obj"),
+    ),
+    "houdini_delete_node": lambda **kw: delete_node(kw["node_path"]),
+    "houdini_connect_nodes": lambda **kw: connect_nodes(
+        from_path=kw["from_path"], to_path=kw["to_path"],
+        input_index=kw.get("input_index", 0),
+    ),
+    "houdini_set_param": lambda **kw: set_param(
+        kw["node_path"], kw["param_name"], kw["value"],
+    ),
+    "houdini_get_param": lambda **kw: get_param(kw["node_path"], kw["param_name"]),
+    "houdini_list_nodes": lambda **kw: list_nodes(
+        parent_path=kw.get("parent_path", "/"),
+        type_filter=kw.get("type_filter"),
+    ),
+    "houdini_get_node": lambda **kw: get_node_info(kw["node_path"]),
+    "houdini_layout_nodes": lambda **kw: layout_nodes(
+        parent_path=kw.get("parent_path", "/obj"),
+    ),
+    "houdini_search_nodes": lambda **kw: search_nodes(kw["keyword"]),
+    "houdini_get_help": lambda **kw: get_help(kw["node_type_name"]),
+    "houdini_inspect_geo": lambda **kw: inspect_geometry(kw["node_path"]),
+    "houdini_run_python": lambda **kw: run_python(kw["code"]),
+    "houdini_run_vex": lambda **kw: run_vex(
+        code=kw["code"], node_path=kw.get("node_path"),
+        attrib_name=kw.get("attrib_name", "result"),
+    ),
+    "houdini_create_hda": lambda **kw: create_hda(
+        kw["node_path"], kw["hda_name"], kw.get("hda_label", ""),
+    ),
+    "houdini_get_hda_info": lambda **kw: get_hda_info(kw["hda_name"]),
+}
+
+
+class _ToolHandler(BaseHTTPRequestHandler):
+    """HTTP request handler for tool execution."""
+
+    def do_POST(self) -> None:
+        if self.path != "/execute":
+            self._send_error(404, "Not found")
+            return
+
+        try:
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length)
+            request = json.loads(body)
+
+            tool_name = request.get("tool")
+            params = request.get("params", {})
+
+            if tool_name not in TOOL_HANDLERS:
+                self._send_json({"success": False, "error": f"Unknown tool: {tool_name}"})
+                return
+
+            result = TOOL_HANDLERS[tool_name](**params)
+            self._send_json(result)
+
+        except json.JSONDecodeError as e:
+            self._send_error(400, f"Invalid JSON: {e}")
+        except Exception as e:
+            self._send_json({"success": False, "error": str(e)})
+
+    def do_GET(self) -> None:
+        if self.path == "/health":
+            self._send_json({"status": "ok"})
+        else:
+            self._send_error(404, "Not found")
+
+    def log_message(self, format, *args) -> None:
+        pass  # Suppress default logging
+
+    def _send_json(self, data: dict[str, Any]) -> None:
+        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_error(self, code: int, message: str) -> None:
+        body = json.dumps({"success": False, "error": message}).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+class ToolExecutor:
+    """Manages the tool executor HTTP server lifecycle."""
+
+    def __init__(self, host: str = "127.0.0.1", port: int = 9876):
+        self._host = host
+        self._port = port
+        self._server: HTTPServer | None = None
+        self._thread: threading.Thread | None = None
+
+    @property
+    def port(self) -> int:
+        return self._port
+
+    def start(self) -> None:
+        """Start the HTTP server on a background daemon thread."""
+        if self._server is not None:
+            return
+        self._server = HTTPServer((self._host, self._port), _ToolHandler)
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        """Shut down the HTTP server."""
+        if self._server is not None:
+            self._server.shutdown()
+            self._server = None
+        if self._thread is not None:
+            self._thread.join(timeout=2)
+            self._thread = None
