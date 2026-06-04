@@ -1,6 +1,10 @@
-"""Edini main window — 3-panel layout with QSplitter."""
-import uuid
+"""Edini main window — 3-panel layout with QSplitter.
+
+Pi manages all sessions via RPC. Edini is a thin UI wrapper.
+"""
 import importlib
+import os
+
 from PySide6 import QtCore, QtWidgets
 
 from edini.rpc_client import RpcClient
@@ -10,12 +14,26 @@ from edini.ui.theme import apply_theme, accent_color
 from edini.ui.agent_panel import AgentPanel
 from edini.ui.history_panel import HistoryPanel
 from edini.ui.context_panel import ContextPanel
+from edini.ui.pi_sessions import load_pi_messages
 from edini.config import get_settings
 
 try:
     hou = importlib.import_module("hou")
 except Exception:
     hou = None
+
+
+def _get_working_dir() -> str:
+    """Get the working directory for pi: HIP path in Houdini, CWD otherwise."""
+    if hou:
+        try:
+            hip = hou.hipFile.path()
+            if hip:
+                # Use HIP dir so pi sessions are scoped to the project
+                return os.path.dirname(hip) or hip
+        except Exception:
+            pass
+    return os.getcwd()
 
 
 class EdiniMainWindow(QtWidgets.QMainWindow):
@@ -27,7 +45,9 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self._tool_executor = ToolExecutor()
         self._rpc_client = RpcClient()
         self._chat_runtime = ChatRuntime(self._rpc_client, self)
-        self._current_session_id = ""
+        self._current_session_path = ""
+        self._active_session_path = ""
+        self._browsing_session_path = ""
 
         self._build_ui()
         self._bind_events()
@@ -96,9 +116,14 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self.history_panel.new_session_requested.connect(self._on_new_session)
         self.history_panel.session_selected.connect(self._on_session_selected)
         self.history_panel.session_deleted.connect(self._on_session_deleted)
+        self.history_panel.back_to_current_requested.connect(self._on_back_to_current)
 
         # Pi status
         self._rpc_client.status_changed.connect(self._on_status_changed)
+
+        # Pi session management responses
+        self._rpc_client.session_switched.connect(self._on_pi_session_switched)
+        self._rpc_client.messages_received.connect(self._on_pi_messages_received)
 
         # Scene refresh timer
         self._scene_timer = QtCore.QTimer(self)
@@ -112,6 +137,10 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self._stats_poll_timer.timeout.connect(self._rpc_client.send_get_stats)
 
     def _bootstrap(self):
+        cwd = _get_working_dir()
+        self._rpc_client.set_cwd(cwd)
+        self.history_panel.set_cwd(cwd)
+
         self._tool_executor.start()
         self._rpc_client.start()
         self.history_panel.load_sessions()
@@ -127,15 +156,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
     # ── Signal handlers ──
 
     def _on_agent_submit(self, text: str, images=None):
-        from edini.ui.session_store import append_message, rename_session, load_session
         self.agent_panel.begin_assistant_message()
-        # Store user message + auto-name session on first message
-        if self._current_session_id:
-            record = load_session(self._current_session_id)
-            if record and len(record.get("messages", [])) == 0:
-                rename_session(self._current_session_id, text[:40])
-                self.history_panel.load_sessions()
-            append_message(self._current_session_id, {"role": "user", "content": text})
         self._rpc_client.send_prompt(text, images=images)
 
     def _on_agent_started(self, _):
@@ -144,25 +165,6 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self.status.showMessage("Processing...")
 
     def _on_agent_done(self, _):
-        from edini.ui.session_store import append_message
-        # Store assistant message BEFORE finish_streaming clears data
-        if self._current_session_id:
-            content = self.agent_panel._current_text
-            if self.agent_panel._stream_segments:
-                content = "\n".join(
-                    seg["content"] for seg in self.agent_panel._stream_segments
-                    if seg["type"] == "text"
-                ) + "\n" + content
-            thinkings = [
-                seg["content"] for seg in self.agent_panel._stream_segments
-                if seg["type"] == "thinking"
-            ]
-            msg = {
-                "role": "assistant",
-                "content": content,
-                "thinking": thinkings,
-            }
-            append_message(self._current_session_id, msg)
         self.agent_panel.finish_streaming()
         self.agent_panel.set_busy(False)
         self._stats_poll_timer.stop()
@@ -170,8 +172,8 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self._rpc_client.send_get_stats()
         self._update_statusbar()
         self.status.showMessage("Ready")
-        # Check compression
-        self._check_compression()
+        # Refresh session list (message count updated)
+        self.history_panel.load_sessions()
 
     def _on_tool_call(self, tool_name: str, tool_call_id: str, args: dict):
         self.agent_panel.add_tool_card(tool_name, args, tool_call_id)
@@ -200,38 +202,127 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self._last_pi_status = status
         self.context_panel.set_pi_status(status)
         self._update_statusbar()
+        # On first connect, set session name and request stats
+        if status == "connected":
+            if hou:
+                try:
+                    hip = hou.hipFile.name()
+                    if hip:
+                        name = os.path.splitext(os.path.basename(hip))[0]
+                        self._rpc_client.send_set_session_name(name)
+                except Exception:
+                    pass
+            self._rpc_client.send_get_stats()
 
-    def _on_new_session(self):
-        from edini.ui.session_store import create_session
-        sid = "sess-" + uuid.uuid4().hex[:8]
-        create_session(sid, "New Session")
-        self._current_session_id = sid
-        self.agent_panel.clear_timeline()
-        self.history_panel.load_sessions()
-        self.agent_panel.set_session_id(sid)
+    def _on_pi_session_switched(self, session_path: str):
+        """Called when pi confirms a session switch (new or resumed)."""
+        self._current_session_path = session_path
+        self._rpc_client.send_get_stats()
+        # Update list highlight to match active session
+        highlight = self._browsing_session_path or session_path
+        self.history_panel.highlight_session(highlight)
 
-    def _on_session_selected(self, sid: str):
-        from edini.ui.session_store import load_session, build_context_messages
-        self._current_session_id = sid
+    def _on_pi_messages_received(self, messages: list):
+        """Render messages from pi in the agent panel."""
+        # This is a fallback; normally we load from local file synchronously
         self.agent_panel.clear_timeline()
-        record = load_session(sid)
-        if record is None:
-            self.agent_panel.set_session_id(sid)
-            return
-        msgs = record.get("messages", [])
-        for m in msgs:
+        for m in messages:
             role = m.get("role", "")
             content = m.get("content", "")
             if role == "user":
                 self.agent_panel._append_user_message(content)
             elif role == "assistant":
                 self.agent_panel._render_stored_assistant_message(m)
-        self.agent_panel.set_session_id(sid)
 
-    def _on_session_deleted(self, sid: str):
-        self.history_panel.remove_session(sid)
-        if sid == self._current_session_id:
-            self._current_session_id = ""
+    def _on_new_session(self):
+        # Save current session as active before creating new one (only if not already browsing)
+        if not self._browsing_session_path:
+            self._active_session_path = self._current_session_path
+        self._browsing_session_path = ""
+        self.history_panel.set_browsing_mode(False)
+
+        self._current_session_path = ""
+        self.agent_panel.clear_timeline()
+        self.context_panel.reset_stats()
+        self._rpc_client.send_new_session()
+        # Schedule a reload after pi creates the session
+        QtCore.QTimer.singleShot(500, self.history_panel.load_sessions)
+
+    def _on_session_selected(self, session_path: str):
+        if session_path == self._current_session_path and not self._browsing_session_path:
+            return  # Already viewing this session in normal mode, no-op
+
+        # Enter browsing mode if not already in it
+        if not self._browsing_session_path:
+            self._active_session_path = self._current_session_path
+        self._browsing_session_path = session_path
+        self.history_panel.set_browsing_mode(True)
+        self.history_panel.highlight_session(session_path)
+
+        self._current_session_path = session_path
+        self.agent_panel.clear_timeline()
+        self.context_panel.reset_stats()
+
+        # Load messages directly from local JSONL for instant rendering
+        messages = load_pi_messages(session_path)
+        for m in messages:
+            role = m.get("role", "")
+            content = m.get("content", "")
+            if role == "user":
+                self.agent_panel._append_user_message(content)
+            elif role == "assistant":
+                self.agent_panel._render_stored_assistant_message(m)
+
+        # Tell pi to switch session (async, updates stats)
+        self._rpc_client.send_switch_session(session_path)
+
+    def _on_back_to_current(self):
+        """Exit browsing mode and restore the previously active session."""
+        target = self._active_session_path
+        self._browsing_session_path = ""
+        self.history_panel.set_browsing_mode(False)
+
+        if target:
+            self._current_session_path = target
+            self.agent_panel.clear_timeline()
+            self.context_panel.reset_stats()
+
+            messages = load_pi_messages(target)
+            for m in messages:
+                role = m.get("role", "")
+                content = m.get("content", "")
+                if role == "user":
+                    self.agent_panel._append_user_message(content)
+                elif role == "assistant":
+                    self.agent_panel._render_stored_assistant_message(m)
+
+            self._rpc_client.send_switch_session(target)
+            self.history_panel.highlight_session(target)
+        else:
+            self._current_session_path = ""
+            self.agent_panel.clear_timeline()
+
+    def _on_session_deleted(self, session_path: str):
+        self.history_panel.remove_session(session_path)
+
+        # If deleted session was the one being browsed, fall back to active
+        if session_path == self._browsing_session_path:
+            self._browsing_session_path = ""
+            self.history_panel.set_browsing_mode(False)
+            if self._active_session_path and self._active_session_path != session_path:
+                self._on_session_selected(self._active_session_path)
+                self.history_panel.set_browsing_mode(False)
+            else:
+                self._current_session_path = ""
+                self.agent_panel.clear_timeline()
+            return
+
+        # If deleted session was the active one, clear it
+        if session_path == self._active_session_path:
+            self._active_session_path = ""
+
+        if session_path == self._current_session_path:
+            self._current_session_path = ""
             self.agent_panel.clear_timeline()
 
     def refresh_theme(self):
@@ -256,32 +347,12 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
                 pass
         self.status.showMessage("  │  ".join(parts))
 
-    def _check_compression(self):
-        from edini.ui.session_store import compress_session, load_session, get_session_stats
-        if not self._current_session_id:
-            return
-        ctx_pct = getattr(self.context_panel, '_last_ctx_pct', None)
-        if ctx_pct is None or ctx_pct < 60:
-            return
-        record = load_session(self._current_session_id)
-        if record is None or record.get("compressed_summary", ""):
-            return
-        stats = get_session_stats(self._current_session_id)
-        rounds = stats.get("rounds", 0)
-        if rounds < 5:
-            return
-        messages = record.get("messages", [])
-        cutoff = max(1, int(len(messages) * 0.6))
-        early_msgs = messages[:cutoff]
-        lines = []
-        for m in early_msgs:
-            role = m.get("role", "")
-            content = m.get("content", "")[:200]
-            lines.append(f"[{role}] {content}")
-        summary = "\n".join(lines)[:500]
-        compress_session(self._current_session_id, summary, cutoff)
-
     def closeEvent(self, event):
+        from edini.ui.windows import _main_window as global_main
         self._rpc_client.stop()
         self._tool_executor.stop()
         super().closeEvent(event)
+        # Release the global singleton so reopen creates a fresh window
+        if global_main is self:
+            import edini.ui.windows as win_mod
+            win_mod._main_window = None
