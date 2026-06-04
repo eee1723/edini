@@ -1,4 +1,4 @@
-"""AgentPanel — Chat timeline with double-layer collapse, Copy buttons, smart scroll."""
+"""AgentPanel — Chat timeline + collapsible Tool Call panel + execute/abort toggle."""
 import html
 import re
 import base64
@@ -6,7 +6,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from edini.ui.theme import accent_color, fs
 
 
-# ── Bubble / UI style fragments ──
+# ── Style fragments ──
 def _bubble_user_style() -> str:
     return (
         f'color:#e5e5eb;font-size:{fs(12)};line-height:1.6;'
@@ -38,27 +38,110 @@ def _thinking_expanded_style() -> str:
         f'border-left:2px solid {a};margin:4px 32px 4px 8px;'
     )
 
-def _tool_collapsed_style() -> str:
-    return (
-        f'color:#a1a1aa;font-size:{fs(11)};cursor:pointer;'
-        f'background:rgba(0,188,212,0.06);padding:4px 8px;'
-        f'border-radius:4px;margin:4px 32px 4px 0;display:inline-block;'
-        f'border-left:2px solid #80cbc4;'
-    )
-
-def _tool_expanded_style() -> str:
-    return (
-        f'color:#94a3b8;font-size:{fs(11)};'
-        f'background:#0e0e15;padding:4px 8px;'
-        f'border-left:2px solid #06b6d4;margin:4px 32px 4px 8px;'
-    )
-
 def _separator_style() -> str:
     return (
         f'text-align:center;color:#52525b;font-size:{fs(10)};'
         f'margin:10px 0;border-top:1px solid #2a2a3c;padding-top:6px;'
     )
 
+
+# ==========================================================================
+# Tool Card Widget (real QWidget, not HTML)
+# ==========================================================================
+
+class _ToolCardWidget(QtWidgets.QFrame):
+    """A single collapsible tool call card. Added/updated in real-time."""
+
+    def __init__(self, tool_name: str, args: dict, tool_call_id: str, parent=None):
+        super().__init__(parent)
+        self._tool_call_id = tool_call_id
+        self._expanded = False
+
+        self.setFrameShape(QtWidgets.QFrame.StyledPanel)
+        self.setStyleSheet(f"""
+            _ToolCardWidget {{
+                background: rgba(0,188,212,0.05);
+                border: 1px solid #1e2e2e;
+                border-radius: 4px;
+                margin: 2px 0;
+            }}
+        """)
+        self.setCursor(QtCore.Qt.PointingHandCursor)
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(2)
+
+        # Header row: icon + name + status
+        header_row = QtWidgets.QHBoxLayout()
+        self._arrow = QtWidgets.QLabel("▸")
+        self._arrow.setStyleSheet(f"color:#80cbc4;font-size:{fs(11)};border:none;")
+        self._arrow.setFixedWidth(16)
+        header_row.addWidget(self._arrow)
+
+        self._name_label = QtWidgets.QLabel(f"🔧 {html.escape(tool_name)}")
+        self._name_label.setStyleSheet(f"color:#80cbc4;font-size:{fs(11)};font-weight:600;border:none;")
+        header_row.addWidget(self._name_label, 1)
+
+        self._status_label = QtWidgets.QLabel("⏳")
+        self._status_label.setStyleSheet(f"color:#d97706;font-size:{fs(10)};border:none;")
+        self._status_label.setFixedWidth(30)
+        self._status_label.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+        header_row.addWidget(self._status_label)
+
+        layout.addLayout(header_row)
+
+        # Detail area (hidden by default)
+        self._detail = QtWidgets.QWidget()
+        detail_layout = QtWidgets.QVBoxLayout(self._detail)
+        detail_layout.setContentsMargins(20, 2, 0, 2)
+        detail_layout.setSpacing(2)
+
+        # Args display
+        args_str = _format_args(args)
+        self._args_label = QtWidgets.QLabel(args_str)
+        self._args_label.setWordWrap(True)
+        self._args_label.setStyleSheet(f"color:#78909c;font-size:{fs(10)};font-family:monospace;border:none;")
+        detail_layout.addWidget(self._args_label)
+
+        # Result display
+        self._result_label = QtWidgets.QLabel("")
+        self._result_label.setWordWrap(True)
+        self._result_label.setStyleSheet(f"color:#94a3b8;font-size:{fs(10)};border:none;")
+        self._result_label.setVisible(False)
+        detail_layout.addWidget(self._result_label)
+
+        self._detail.setVisible(False)
+        layout.addWidget(self._detail)
+
+    def mousePressEvent(self, event):
+        self._expanded = not self._expanded
+        self._arrow.setText("▾" if self._expanded else "▸")
+        self._detail.setVisible(self._expanded)
+        super().mousePressEvent(event)
+
+    def set_result(self, result_text: str, success: bool = True):
+        self._status_label.setText("✅" if success else "❌")
+        self._status_label.setStyleSheet(
+            f"color:{'#16a34a' if success else '#ef4444'};font-size:{fs(10)};border:none;"
+        )
+        self._result_label.setText(_format_tool_result_short(result_text, success))
+        self._result_label.setVisible(True)
+
+    def set_error(self, error_msg: str):
+        self._status_label.setText("❌")
+        self._status_label.setStyleSheet(f"color:#ef4444;font-size:{fs(10)};border:none;")
+        self._result_label.setText(f"Error: {html.escape(error_msg)}")
+        self._result_label.setVisible(True)
+
+    @property
+    def tool_call_id(self) -> str:
+        return self._tool_call_id
+
+
+# ==========================================================================
+# AgentPanel
+# ==========================================================================
 
 class AgentPanel(QtWidgets.QWidget):
     submit_requested = QtCore.Signal(str, object)   # text, images
@@ -78,10 +161,10 @@ class AgentPanel(QtWidgets.QWidget):
         self._session_id = ""
         self._user_scrolled_up = False
 
-        # Pending block data for AI response unit
+        # Pending data
         self._pending_thinkings: list[str] = []
-        self._pending_tools: list[dict] = []
         self._thinking_count = 0
+        self._tool_cards: dict[str, _ToolCardWidget] = {}  # tool_call_id → widget
 
         # Screenshot
         self._screenshot_data: str | None = None
@@ -101,40 +184,84 @@ class AgentPanel(QtWidgets.QWidget):
     def _build_ui(self):
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
-        root.setSpacing(6)
+        root.setSpacing(4)
 
-        # Plan progress widget (placeholder)
+        # Plan progress + Change tree (placeholders, hidden)
         from edini.ui.plan_progress_widget import PlanProgressWidget
         self.plan_progress_widget = PlanProgressWidget(self)
         self.plan_progress_widget.setMaximumHeight(260)
         root.addWidget(self.plan_progress_widget)
 
-        # Change tree (placeholder)
         from edini.ui.change_tree_widget import ChangeTreeWidget
         self.change_tree_widget = ChangeTreeWidget(self)
         self.change_tree_widget.setMaximumHeight(200)
         root.addWidget(self.change_tree_widget)
 
-        # Timeline view
+        # ── Timeline (main area) ──
         self.timeline_view = QtWidgets.QTextBrowser(self)
         self.timeline_view.setReadOnly(True)
         self.timeline_view.setOpenLinks(False)
-        self.timeline_view.setPlaceholderText("Edini 对话时间线将在此显示...")
+        self.timeline_view.setPlaceholderText("描述你想做的事情，Edini 会帮你操作 Houdini...")
         self.timeline_view.verticalScrollBar().valueChanged.connect(self._on_user_scroll)
         root.addWidget(self.timeline_view, 1)
 
-        # Input row
+        # ── Tool Call Panel (collapsible, below timeline) ──
+        self._tool_panel = QtWidgets.QFrame()
+        self._tool_panel.setStyleSheet("""
+            QFrame {
+                background: #0a0a10;
+                border: 1px solid #1a1a28;
+                border-radius: 6px;
+            }
+        """)
+        tool_panel_layout = QtWidgets.QVBoxLayout(self._tool_panel)
+        tool_panel_layout.setContentsMargins(8, 4, 8, 4)
+        tool_panel_layout.setSpacing(2)
+
+        # Header: toggle + counter
+        tool_header = QtWidgets.QHBoxLayout()
+        self._tool_toggle = QtWidgets.QLabel("▸ Tool Calls (0)")
+        self._tool_toggle.setCursor(QtCore.Qt.PointingHandCursor)
+        self._tool_toggle.setStyleSheet(f"color:#52525b;font-size:{fs(10)};border:none;")
+        self._tool_toggle.mousePressEvent = self._toggle_tool_panel
+        tool_header.addWidget(self._tool_toggle)
+        tool_header.addStretch()
+        tool_panel_layout.addLayout(tool_header)
+
+        # Scroll area for tool cards
+        self._tool_scroll = QtWidgets.QScrollArea()
+        self._tool_scroll.setWidgetResizable(True)
+        self._tool_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        self._tool_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        self._tool_scroll.setMaximumHeight(180)
+        self._tool_scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+
+        self._tool_container = QtWidgets.QWidget()
+        self._tool_layout = QtWidgets.QVBoxLayout(self._tool_container)
+        self._tool_layout.setAlignment(QtCore.Qt.AlignTop)
+        self._tool_layout.setSpacing(2)
+        self._tool_layout.setContentsMargins(0, 0, 0, 0)
+        self._tool_layout.addStretch()
+        self._tool_scroll.setWidget(self._tool_container)
+
+        self._tool_scroll.setVisible(False)
+        tool_panel_layout.addWidget(self._tool_scroll)
+
+        self._tool_panel_expanded = False
+        root.addWidget(self._tool_panel)
+
+        # ── Input row ──
         input_row = QtWidgets.QHBoxLayout()
         self.input_edit = QtWidgets.QPlainTextEdit(self)
-        self.input_edit.setPlaceholderText("描述你希望 Edini 完成的任务...")
-        self.input_edit.setFixedHeight(72)
+        self.input_edit.setPlaceholderText("描述你希望 Edini 完成的任务... (Enter 发送)")
+        self.input_edit.setFixedHeight(64)
         input_row.addWidget(self.input_edit, 1)
 
         # Action column
         action_col = QtWidgets.QVBoxLayout()
         action_col.setSpacing(4)
 
-        # Screenshot button + remove
+        # Screenshot button
         from edini.ui.viewport import is_vision_capable
         from edini.config import get_settings
         settings = get_settings()
@@ -156,17 +283,20 @@ class AgentPanel(QtWidgets.QWidget):
 
         from edini.ui.styled_checkbox import StyledCheckBox
         self.chat_only_check = StyledCheckBox("仅对话", self)
-        self.send_btn = QtWidgets.QPushButton("执行", self)
-        self.send_btn.setObjectName("PrimaryButton")
-        self.send_btn.setMinimumWidth(80)
+
+        # Send / Abort button (toggles)
+        self._action_btn = QtWidgets.QPushButton("执行")
+        self._action_btn.setObjectName("PrimaryButton")
+        self._action_btn.setMinimumWidth(80)
+        self._action_btn.clicked.connect(self._on_action_btn)
+
         action_col.addWidget(self.chat_only_check)
-        action_col.addWidget(self.send_btn)
+        action_col.addWidget(self._action_btn)
         action_col.addStretch(1)
         input_row.addLayout(action_col)
         root.addLayout(input_row)
 
     def _bind_events(self):
-        self.send_btn.clicked.connect(self._on_send)
         self.input_edit.installEventFilter(self)
 
     def eventFilter(self, watched, event):
@@ -175,7 +305,7 @@ class AgentPanel(QtWidgets.QWidget):
                 key = int(event.key())
                 if key == int(QtCore.Qt.Key_Escape):
                     if self._busy:
-                        self.abort_requested.emit()
+                        self._on_abort()
                     return True
                 if key in (int(QtCore.Qt.Key_Return), int(QtCore.Qt.Key_Enter)):
                     modifiers = event.modifiers()
@@ -185,9 +315,25 @@ class AgentPanel(QtWidgets.QWidget):
                         self.input_edit.setTextCursor(cursor)
                         return True
                     if modifiers == QtCore.Qt.NoModifier:
-                        self._on_send()
+                        if self._busy:
+                            self._on_abort()
+                        else:
+                            self._on_send()
                         return True
         return super().eventFilter(watched, event)
+
+    # ------------------------------------------------------------------
+    # Button toggle
+    # ------------------------------------------------------------------
+
+    def _on_action_btn(self):
+        if self._busy:
+            self._on_abort()
+        else:
+            self._on_send()
+
+    def _on_abort(self):
+        self.abort_requested.emit()
 
     # ------------------------------------------------------------------
     # Send
@@ -202,6 +348,10 @@ class AgentPanel(QtWidgets.QWidget):
         self._request_count += 1
         self._raw_stream_text = ""
         self._streaming = True
+        self._user_scrolled_up = False
+
+        # Clear previous tool cards
+        self._clear_tool_cards()
 
         images = None
         if self._screenshot_data:
@@ -209,6 +359,48 @@ class AgentPanel(QtWidgets.QWidget):
             self._on_remove_screenshot()
 
         self.submit_requested.emit(text, images)
+
+    # ------------------------------------------------------------------
+    # Tool Call Panel
+    # ------------------------------------------------------------------
+
+    def _toggle_tool_panel(self, event=None):
+        self._tool_panel_expanded = not self._tool_panel_expanded
+        self._tool_scroll.setVisible(self._tool_panel_expanded)
+        arrow = "▾" if self._tool_panel_expanded else "▸"
+        count = len(self._tool_cards)
+        self._tool_toggle.setText(f"{arrow} Tool Calls ({count})")
+
+    def _add_tool_card_ui(self, tool_name: str, args: dict, tool_call_id: str):
+        """Immediately add a tool card widget to the panel."""
+        card = _ToolCardWidget(tool_name, args, tool_call_id)
+        self._tool_layout.insertWidget(self._tool_layout.count() - 1, card)
+        self._tool_cards[tool_call_id] = card
+
+        # Update counter
+        count = len(self._tool_cards)
+        arrow = "▾" if self._tool_panel_expanded else "▸"
+        self._tool_toggle.setText(f"{arrow} Tool Calls ({count})")
+
+        # Auto-expand panel when first tool arrives
+        if not self._tool_panel_expanded and count == 1:
+            self._toggle_tool_panel()
+
+    def _update_tool_card_result(self, tool_call_id: str, result_text: str, success: bool = True):
+        """Update result on an existing tool card."""
+        card = self._tool_cards.get(tool_call_id)
+        if card:
+            card.set_result(result_text, success)
+
+    def _clear_tool_cards(self):
+        """Remove all tool cards from panel."""
+        for card in self._tool_cards.values():
+            self._tool_layout.removeWidget(card)
+            card.deleteLater()
+        self._tool_cards.clear()
+        self._tool_toggle.setText("▸ Tool Calls (0)")
+        if self._tool_panel_expanded:
+            self._tool_scroll.setVisible(True)
 
     # ------------------------------------------------------------------
     # Viewport screenshot
@@ -220,12 +412,8 @@ class AgentPanel(QtWidgets.QWidget):
         if b64 is None:
             return
         self._screenshot_data = b64
-        pixmap = QtGui.QPixmap()
-        pixmap.loadFromData(base64.b64decode(b64), "JPEG")
-        # Show small preview (shown as a label in action_col area is awkward,
-        # we'll just toggle the remove button to indicate presence)
-        self._screenshot_remove_btn.setVisible(True)
         self._screenshot_btn.setText("📸")
+        self._screenshot_remove_btn.setVisible(True)
 
     def _on_remove_screenshot(self):
         self._screenshot_data = None
@@ -238,7 +426,40 @@ class AgentPanel(QtWidgets.QWidget):
 
     def set_busy(self, busy: bool):
         self._busy = busy
-        self.send_btn.setEnabled(not busy)
+        if busy:
+            self._action_btn.setText("中止")
+            self._action_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: #dc2626;
+                    color: #f1f1f1;
+                    border: none;
+                    border-radius: 5px;
+                    padding: 6px 14px;
+                    font-size: {fs(12)};
+                    font-weight: 600;
+                    min-height: 24px;
+                }}
+                QPushButton:hover {{ background-color: #ef4444; }}
+                QPushButton:pressed {{ background-color: #b91c1c; }}
+            """)
+        else:
+            self._action_btn.setText("执行")
+            self._action_btn.setObjectName("PrimaryButton")
+            # Reapply via parent stylesheet refresh or direct
+            a = accent_color()
+            self._action_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {a};
+                    color: #0a0a10;
+                    border: none;
+                    border-radius: 5px;
+                    padding: 6px 20px;
+                    font-size: {fs(12)};
+                    font-weight: 600;
+                }}
+                QPushButton:hover {{ background-color: {_lighter(a, 0.3)}; }}
+                QPushButton:pressed {{ background-color: {_darker(a, 0.15)}; }}
+            """)
 
     def set_session_id(self, sid: str):
         self._session_id = sid
@@ -250,7 +471,6 @@ class AgentPanel(QtWidgets.QWidget):
         self._raw_stream_text = ""
         self._streaming = True
         self._pending_thinkings.clear()
-        self._pending_tools.clear()
         self._thinking_count = 0
         self._ai_bubble_base = self.timeline_view.toHtml()
 
@@ -285,21 +505,15 @@ class AgentPanel(QtWidgets.QWidget):
         self._pending_thinkings.append(f"{step_num}. {text}")
 
     def add_tool_card(self, tool_name: str, args: dict, tool_call_id: str = ""):
-        self._pending_tools.append({
-            "name": tool_name,
-            "call_id": tool_call_id,
-            "args": args,
-            "result": "",
-        })
+        """Real-time: add to both pending list AND tool card panel."""
+        self._add_tool_card_ui(tool_name, args, tool_call_id)
 
     def set_tool_result(self, tool_call_id: str, result: str):
-        for tool in self._pending_tools:
-            if tool["call_id"] == tool_call_id:
-                tool["result"] = result
-                break
+        """Real-time: update tool card result."""
+        self._update_tool_card_result(tool_call_id, result, True)
 
     def finalize_ai_message(self):
-        """Build complete AI response unit with thinking/tool fold blocks + final reply."""
+        """Build complete AI response with thinking blocks + final reply."""
         parts = []
 
         # Thinking block (collapsed by default)
@@ -317,31 +531,6 @@ class AgentPanel(QtWidgets.QWidget):
                 f'<pre style="margin:0;color:#71717a;font-size:{fs(11)};white-space:pre-wrap;'
                 f'background:transparent;font-family:inherit;">'
                 f'{html.escape(thinking_text)}</pre>'
-                f'</div>'
-            )
-            parts.append(collapsed + expanded)
-
-        # Tool blocks (collapsed by default)
-        for i, tool in enumerate(self._pending_tools):
-            tid = f"c{self._request_count}_{i}"
-            tool_name = html.escape(tool["name"])
-            args_str = html.escape(str(tool.get("args", {})))
-            result = tool.get("result", "")
-            result_str = _format_tool_result(result) if result else "⏳ executing..."
-
-            collapsed = (
-                f'<div style="{_tool_collapsed_style()}" '
-                f'onclick="var e=document.getElementById(\'{tid}\');'
-                f'e.style.display=e.style.display==\'none\'?\'block\':\'none\';'
-                f'this.innerHTML=this.innerHTML.replace(\'▸\',e.style.display==\'none\'?\'▸\':\'▾\');">'
-                f'▸ 🔧 {tool_name}</div>'
-            )
-            expanded = (
-                f'<div id="{tid}" style="display:none;{_tool_expanded_style()}">'
-                f'🔧 <b>{tool_name}</b><br>'
-                f'<pre style="margin:2px 0;color:#94a3b8;font-size:{fs(11)};white-space:pre-wrap;'
-                f'background:transparent;font-family:inherit;">{args_str}</pre>'
-                f'Result: {result_str}'
                 f'</div>'
             )
             parts.append(collapsed + expanded)
@@ -369,15 +558,17 @@ class AgentPanel(QtWidgets.QWidget):
         self.timeline_view.setHtml(self.timeline_view.toHtml() + err_html)
 
     def show_aborted(self):
+        self._clear_tool_cards()
         abort_html = (
             f'<div style="text-align:center;color:#f87171;font-size:{fs(11)};'
-            f'margin:8px 0;">── Aborted ──</div>'
+            f'margin:8px 0;">── 已中止 ──</div>'
         )
         self.timeline_view.setHtml(self.timeline_view.toHtml() + abort_html)
         self.set_busy(False)
 
     def clear_timeline(self):
         self.timeline_view.clear()
+        self._clear_tool_cards()
 
     # ------------------------------------------------------------------
     # Message rendering
@@ -399,10 +590,8 @@ class AgentPanel(QtWidgets.QWidget):
         """Render a stored assistant message from session history."""
         content = msg.get("content", "")
         thinking = msg.get("thinking", [])
-        tools = msg.get("tools", [])
 
         parts = []
-
         if thinking:
             thinking_text = "\n".join(thinking)
             parts.append(
@@ -412,27 +601,12 @@ class AgentPanel(QtWidgets.QWidget):
                 f'{html.escape(thinking_text)}</pre></div>'
             )
 
-        if tools:
-            for tool in tools:
-                tool_name = html.escape(tool.get("name", ""))
-                args_str = html.escape(str(tool.get("args", {})))
-                result = tool.get("result", "")
-                result_str = _format_tool_result(result) if result else "—"
-                parts.append(
-                    f'<div style="{_tool_expanded_style()}">'
-                    f'🔧 <b>{tool_name}</b><br>'
-                    f'<pre style="margin:2px 0;color:#94a3b8;font-size:{fs(11)};'
-                    f'white-space:pre-wrap;background:transparent;font-family:inherit;">{args_str}</pre>'
-                    f'Result: {result_str}</div>'
-                )
-
         if content:
             escaped = html.escape(content)
             rendered = _format_message(escaped)
             parts.append(f'<div style="{_bubble_ai_style()}">{rendered}</div>')
 
         parts.append(f'<div style="{_separator_style()}">──</div>')
-
         self.timeline_view.setHtml(self.timeline_view.toHtml() + "".join(parts))
 
     # ------------------------------------------------------------------
@@ -458,7 +632,6 @@ def _format_message(text: str) -> str:
     """Convert plain text with markdown-ish syntax to simple HTML with Copy buttons."""
     out = text
 
-    # Code blocks with Copy button
     def _code_block_replacer(m):
         code_raw = m.group(2)
         code_escaped = html.escape(code_raw)
@@ -484,7 +657,6 @@ def _format_message(text: str) -> str:
 
     out = re.sub(r'```(\w*)\n(.*?)```', _code_block_replacer, out, flags=re.DOTALL)
 
-    # Inline code
     out = re.sub(
         r'`([^`]+)`',
         r'<code style="background:#1a1a24;color:#67e8f9;padding:1px 4px;'
@@ -492,22 +664,44 @@ def _format_message(text: str) -> str:
         out,
     )
 
-    # Bold
     out = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', out)
-
-    # Newlines
     out = out.replace("\n", "<br>")
-
     return out
 
 
-def _format_tool_result(result) -> str:
-    """Format a tool execution result for display."""
-    if isinstance(result, dict):
-        if result.get("success"):
-            return "✅ " + html.escape(str(result.get("path", result.get("output", ""))))
-        else:
-            return "❌ " + html.escape(result.get("error", "Unknown error"))
-    if isinstance(result, str):
-        return html.escape(result)
-    return html.escape(str(result))
+def _format_args(args: dict) -> str:
+    """Format tool call arguments for compact display."""
+    if not args:
+        return ""
+    parts = []
+    for k, v in args.items():
+        parts.append(f"<b>{html.escape(k)}</b>: {html.escape(str(v))}")
+    return "  ·  ".join(parts)
+
+
+def _format_tool_result_short(result: str, success: bool) -> str:
+    """Format tool result for compact card display."""
+    if not result:
+        return ""
+    try:
+        import json
+        d = json.loads(result) if isinstance(result, str) else result
+        if isinstance(d, dict):
+            if d.get("success"):
+                out = d.get("path", d.get("output", d.get("name", "")))
+                return html.escape(str(out)[:80])
+            else:
+                return html.escape(d.get("error", "Unknown error")[:80])
+    except Exception:
+        pass
+    return html.escape(str(result)[:80])
+
+
+def _lighter(h: str, a: float) -> str:
+    r, g, b = int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16)
+    return f"#{min(255,int(r+(255-r)*a)):02x}{min(255,int(g+(255-g)*a)):02x}{min(255,int(b+(255-b)*a)):02x}"
+
+
+def _darker(h: str, a: float) -> str:
+    r, g, b = int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16)
+    return f"#{max(0,int(r*(1-a))):02x}{max(0,int(g*(1-a))):02x}{max(0,int(b*(1-a))):02x}"

@@ -106,6 +106,11 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self._scene_timer.timeout.connect(self.context_panel.refresh_scene_info)
         self._scene_timer.start()
 
+        # Stats polling timer (during agent execution)
+        self._stats_poll_timer = QtCore.QTimer(self)
+        self._stats_poll_timer.setInterval(3000)
+        self._stats_poll_timer.timeout.connect(self._rpc_client.send_get_stats)
+
     def _bootstrap(self):
         self._tool_executor.start()
         self._rpc_client.start()
@@ -127,12 +132,14 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
 
     def _on_agent_started(self, _):
         self.agent_panel.set_busy(True)
+        self._stats_poll_timer.start()
         self.status.showMessage("Processing...")
 
     def _on_agent_done(self, _):
         from edini.ui.session_store import append_message
         self.agent_panel.finish_streaming()
         self.agent_panel.set_busy(False)
+        self._stats_poll_timer.stop()
         self.context_panel.refresh_scene_info()
         self._rpc_client.send_get_stats()
         self._update_statusbar()
@@ -143,7 +150,6 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
                 "role": "assistant",
                 "content": self.agent_panel._raw_stream_text,
                 "thinking": list(self.agent_panel._pending_thinkings),
-                "tools": list(self.agent_panel._pending_tools),
             }
             append_message(self._current_session_id, msg)
         # Check compression
@@ -164,6 +170,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self.agent_panel.show_aborted()
 
     def _on_error(self, msg: str):
+        self._stats_poll_timer.stop()
         self.agent_panel.add_error(msg)
         self.agent_panel.set_busy(False)
         self.status.showMessage(f"Error: {msg}")
