@@ -1,6 +1,6 @@
 # 📊 仪表盘
 
-> **当前阶段**：UI 重构 — Houdini 原生菜单 + 三栏面板 + 暗色主题 &nbsp;|&nbsp; **状态**：16 tools 就绪，Houdini 实机运行 &nbsp;|&nbsp; **最后更新**：2026-06-03
+> **当前阶段**：UI 优化 — 双层折叠思考 · 实时工具面板 · Session 管理 · Viewport 截图 &nbsp;|&nbsp; **状态**：16 tools 就绪，Houdini 实机运行 &nbsp;|&nbsp; **最后更新**：2026-06-04
 
 ## 快速导航
 
@@ -17,15 +17,17 @@
 
 | 模块 | 状态 |
 |------|------|
-| UI 面板 | ✅ 三栏布局 · 时间线 · Pi面板 · 场景面板 · 暗色主题(16px) |
+| UI 面板 | ✅ 三栏布局 · Pi CLI 风格思考交错 · 流式 Thinking · 可折叠 Tool Call 面板 · 执行/中止按钮切换 · 卡片式 Context · 统一字号(10-13pt) · 智能滚动 |
 | Houdini 集成 | ✅ MainMenuCommon.xml · 包注册 · Alt+Shift+E 热键 |
-| 工具执行器 | ✅ HTTP Server · 16 工具路由 · 健康检查 |
+| 工具执行器 | ✅ HTTP Server · 16 工具路由 · 健康检查 · 实时工具卡片 |
 | Houdini 操作 | ✅ 场景查询 · 节点 CRUD · 参数读写 · 布局 · 搜索 |
-| Pi 扩展 | ✅ 工具注册 · 系统提示注入 · TypeBox 参数校验 |
+| Pi 扩展 | ✅ 工具注册 · 系统提示注入 · TypeBox 参数校验 · thinking_delta / tool_result 事件 |
 | 安装部署 | ✅ install.py · setup_pi.bat · settings.json 持久化 |
-| 多模型 | ⚠️ DeepSeek V3/R1 ok，待加 Anthropic/Qwen |
+| Session 管理 | ✅ 会话持久化 · 自动命名 · 上下文重建 · 摘要压缩 · 历史切换 |
+| 多模型 | ✅ DeepSeek V3/R1 · Anthropic · Provider 下拉 + Model 历史记忆 |
+| 设置系统 | ✅ Provider/Model/API Key · 4 色主题实时预览 · 字体缩放 0.8-1.4 |
 | 测试 | ⬜ 无自动化测试 |
-| 多模态 | ⬜ 图片输入未实现 |
+| 多模态 | ✅ Viewport 截图（vision 模型支持） |
 
 ## 技术栈
 

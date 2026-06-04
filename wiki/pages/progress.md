@@ -1,6 +1,6 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-03 &nbsp;|&nbsp; 第二阶段：UI 重构完成，Houdini 实机运行
+> 最后更新：2026-06-04 &nbsp;|&nbsp; 第三阶段：UI 精细化 — 思考流式 · 工具面板 · Session 系统 · Viewport 截图
 
 ## 总览看板
 
@@ -85,6 +85,20 @@
 <div class="timeline">
 
 <div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-04</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第三阶段：UI 精细化 — Pi CLI 风格 · Session 系统 · 实时反馈</span>
+      <span class="status-tag status-done">完成</span>
+    </div>
+    <div class="timeline-summary">全面优化对话面板交互体验：① Thinking 流式渲染（单块实时增长 + 展开态光标，交错于文本之间，分段由 Pi 事件边界决定）② 可折叠 Tool Call 面板（QWidget 卡片、实时结果更新 ✅/❌、折叠时面板缩至 24px）③ 执行/中止按钮一体化切换 ④ Session 系统（会话持久化 JSON、自动命名、时间线切换回看、上下文重建、60% 压缩摘要）⑤ 卡片式 Context Panel（Pi Status + Scene 分组）⑥ Settings 对话框（Provider 下拉 + Model 历史记忆 + 主题/字体实时预览）⑦ 代码块 Copy 按钮 ⑧ 智能滚动（手动上滚不自动跳底）⑨ Viewport 截图（vision 模型）⑩ 状态栏信息（连接状态/模型/Nodes/Token/Cost）⑪ 统一字体 10-13pt + 紧凑间距 ⑫ thinking_delta / tool_result RPC 事件链路。修复：session 消息从未存储、tool panel 展开态残留、thinking R1 逐词碎裂。</div>
+    <div class="timeline-tags">
+      <span>Pi CLI 风格</span><span>流式Thinking</span><span>Tool Call 面板</span><span>Session 管理</span><span>Viewport 截图</span><span>Copy 按钮</span><span>智能滚动</span><span>10 文件</span>
+    </div>
+  </div>
+</div>
+
+<div class="timeline-item timeline-done">
   <div class="timeline-date">2026-06-03</div>
   <div class="timeline-card">
     <div class="timeline-card-header">
@@ -118,15 +132,12 @@
 
 | 优先级 | 任务 | 说明 |
 |------|------|------|
-| P0 | 实机验证 | 在 Houdini 21 中完整测试：安装→配置→对话→工具调用 |
-| P1 | 多模型支持 | 增加 Anthropic Claude / Qwen，模型列表 UI |
-| P1 | Viewport 截图 | 实现图片输入通道，Agent 可"看到" viewport |
 | P1 | 工具执行反馈 | 节点创建后在 viewport 高亮或选中 |
+| P1 | 思考过程格式化 | R1 输出后处理（编号清洗已实现，待加 Markdown 渲染） |
 | P2 | 单元测试 | 对 node_utils、config、tool_executor 写测试 |
-| P2 | 对话历史 | 加载/保存对话会话 |
 | P2 | Houdini 日志集成 | 工具执行结果输出到 Houdini Console |
 | P3 | Python 面板 | 支持嵌入 Houdini Pane Tab |
-| P3 | 节点推荐 | 基于上下文推荐下一步操作 |
+| P3 | 多模型优化 | Qwen 等更多 provider 快速切换 |
 
 ## 已实现功能清单
 
@@ -140,7 +151,14 @@
 - ✅ 节点帮助文档查询
 - ✅ 几何体检查 (点/面/属性/包围盒)
 - ✅ 流式响应 (打字机效果)
-- ✅ 工具调用可视化卡片
-- ✅ API Key / 模型设置 (⚙ 设置对话框)
-- ✅ Dark mode 自动跟随系统
-- ✅ 多行输入 (Ctrl+Enter 发送)
+- ✅ 流式思考展示 (实时增长、折叠展开、Pi CLI 风格交错)
+- ✅ 工具调用实时面板 (可折叠、执行状态 ✅/❌、结果预览)
+- ✅ 代码块一键 Copy 按钮
+- ✅ 会话管理 (新建/切换/回看、自动命名、上下文重建)
+- ✅ Viewport 截图 (vision 模型分析画面)
+- ✅ API Key / Provider / Model 设置 (下拉选择 + 历史记忆)
+- ✅ 4 色主题实时预览 + 字体缩放
+- ✅ 执行/中止按钮一体化切换
+- ✅ 智能滚动 (手动查看历史时不自动跳底)
+- ✅ 状态栏 (连接状态 / 模型 / 节点数)
+- ✅ 多行输入 (Ctrl+Enter 换行，Enter 发送)
