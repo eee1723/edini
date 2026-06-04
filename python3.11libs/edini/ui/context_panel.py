@@ -1,6 +1,7 @@
-"""Context panel — Pi status (top) + Scene info (bottom)."""
+"""Context panel — card-based Pi Status (top) + Scene Info (bottom)."""
 import importlib
 from PySide6 import QtCore, QtWidgets
+from edini.ui.theme import fs
 
 try:
     hou = importlib.import_module("hou")
@@ -8,88 +9,124 @@ except Exception:
     hou = None
 
 
+def _make_card(title: str, parent=None) -> tuple[QtWidgets.QFrame, QtWidgets.QVBoxLayout]:
+    """Create a card-style frame with title header and separator."""
+    card = QtWidgets.QFrame(parent)
+    card.setStyleSheet("""
+        QFrame {
+            background: #0e0e15;
+            border: 1px solid #2a2a3c;
+            border-radius: 6px;
+        }
+    """)
+    layout = QtWidgets.QVBoxLayout(card)
+    layout.setContentsMargins(10, 8, 10, 8)
+    layout.setSpacing(4)
+
+    header = QtWidgets.QLabel(title)
+    header.setStyleSheet(f"font-size:{fs(11)};font-weight:600;color:#71717a;border:none;")
+    layout.addWidget(header)
+
+    sep = QtWidgets.QFrame()
+    sep.setFrameShape(QtWidgets.QFrame.HLine)
+    sep.setStyleSheet("border:none;border-top:1px solid #2a2a3c;margin:2px 0;")
+    layout.addWidget(sep)
+
+    return card, layout
+
+
+def _card_label(text: str) -> QtWidgets.QLabel:
+    lbl = QtWidgets.QLabel(text)
+    lbl.setStyleSheet(f"color:#a1a1aa;font-size:{fs(11)};border:none;")
+    return lbl
+
+
+def _card_value(text: str) -> QtWidgets.QLabel:
+    lbl = QtWidgets.QLabel(text)
+    lbl.setStyleSheet(f"color:#e5e5eb;font-size:{fs(11)};border:none;")
+    return lbl
+
+
+def _card_row(label: str, value_widget: QtWidgets.QWidget, parent=None) -> QtWidgets.QWidget:
+    row = QtWidgets.QWidget(parent)
+    row_layout = QtWidgets.QHBoxLayout(row)
+    row_layout.setContentsMargins(0, 0, 0, 0)
+    row_layout.setSpacing(8)
+    lbl = QtWidgets.QLabel(label)
+    lbl.setStyleSheet(f"color:#a1a1aa;font-size:{fs(11)};border:none;")
+    lbl.setFixedWidth(50)
+    row_layout.addWidget(lbl)
+    row_layout.addWidget(value_widget, 1)
+    return row
+
+
+def _card_spacer(h: int = 4) -> QtWidgets.QWidget:
+    w = QtWidgets.QWidget()
+    w.setFixedHeight(h)
+    w.setStyleSheet("background:transparent;border:none;")
+    return w
+
+
 class ContextPanel(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._last_ctx_pct = None
+
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(12)
+        layout.setSpacing(8)
 
-        # ── Pi Status ──
-        pi_title = QtWidgets.QLabel("Pi Status")
-        pi_title.setStyleSheet("font-size:11px;font-weight:600;color:#71717a;")
-        layout.addWidget(pi_title)
+        # ── Card 1: Pi Status ──
+        pi_card, pi_layout = _make_card("Pi Status", self)
 
-        self.panel = QtWidgets.QWidget(self)
-        pi_layout = QtWidgets.QVBoxLayout(self.panel)
-        pi_layout.setContentsMargins(0, 0, 0, 0)
-        pi_layout.setSpacing(4)
-
-        self.status_label = QtWidgets.QLabel("● Connecting...")
-        self.status_label.setStyleSheet("color:#a1a1aa;font-size:12px;")
+        self.status_label = _card_value("● Connecting...")
         pi_layout.addWidget(self.status_label)
 
-        self.provider_model_label = QtWidgets.QLabel("Model: -")
-        self.provider_model_label.setStyleSheet("color:#71717a;font-size:11px;")
+        self.provider_model_label = QtWidgets.QLabel("deepseek / deepseek-chat")
+        self.provider_model_label.setStyleSheet(f"color:#71717a;font-size:{fs(11)};border:none;")
         pi_layout.addWidget(self.provider_model_label)
 
-        pi_layout.addWidget(_section_divider())
+        pi_layout.addWidget(_card_spacer())
 
-        self.token_in_label = QtWidgets.QLabel("Input: -")
-        self.token_out_label = QtWidgets.QLabel("Output: -")
-        self.token_total_label = QtWidgets.QLabel("Total: -")
-        self.cost_label = QtWidgets.QLabel("Cost: -")
+        self.token_in_label = _card_label("In: -")
+        self.token_out_label = _card_label("Out: -")
+        self.token_total_label = _card_label("Total: -")
+        self.cost_label = _card_label("Cost: -")
         for lbl in [self.token_in_label, self.token_out_label, self.token_total_label, self.cost_label]:
-            lbl.setStyleSheet("color:#71717a;font-size:11px;")
             pi_layout.addWidget(lbl)
 
-        pi_layout.addWidget(_section_divider())
+        pi_layout.addWidget(_card_spacer())
 
-        self.ctx_label = QtWidgets.QLabel("Context: -")
-        self.ctx_label.setStyleSheet("color:#71717a;font-size:11px;")
+        self.ctx_label = _card_label("Context: -")
         pi_layout.addWidget(self.ctx_label)
 
-        self.ctx_progress = QtWidgets.QProgressBar(self)
+        self.ctx_progress = QtWidgets.QProgressBar()
         self.ctx_progress.setMinimum(0)
         self.ctx_progress.setMaximum(100)
         self.ctx_progress.setValue(0)
         self.ctx_progress.setTextVisible(True)
         self.ctx_progress.setFormat("0%")
-        self.ctx_progress.setFixedHeight(12)
+        self.ctx_progress.setFixedHeight(14)
         pi_layout.addWidget(self.ctx_progress)
 
-        self.stream_rate_label = QtWidgets.QLabel("Stream Rate: -")
-        self.stream_rate_label.setStyleSheet("color:#71717a;font-size:11px;")
-        pi_layout.addWidget(self.stream_rate_label)
+        layout.addWidget(pi_card)
 
-        layout.addWidget(self.panel)
+        # ── Card 2: Scene ──
+        scene_card, scene_layout = _make_card("Scene", self)
 
-        # ── Scene Info ──
-        layout.addWidget(_section_divider())
-
-        scene_title = QtWidgets.QLabel("Scene Info")
-        scene_title.setStyleSheet("font-size:11px;font-weight:600;color:#71717a;")
-        layout.addWidget(scene_title)
-
-        self.scene_panel = QtWidgets.QWidget(self)
-        scene_layout = QtWidgets.QVBoxLayout(self.scene_panel)
-        scene_layout.setContentsMargins(0, 0, 0, 0)
-        scene_layout.setSpacing(4)
-
-        self.hip_label = QtWidgets.QLabel("HIP: -")
-        self.path_label = QtWidgets.QLabel("Path: -")
-        self.selected_label = QtWidgets.QLabel("Selected: -")
-        self.node_count_label = QtWidgets.QLabel("Nodes: -")
+        self.hip_label = _card_label("HIP: -")
+        self.path_label = _card_label("Path: -")
+        self.selected_label = _card_label("Selected: -")
+        self.node_count_label = _card_label("Nodes: -")
         for lbl in [self.hip_label, self.path_label, self.selected_label, self.node_count_label]:
-            lbl.setStyleSheet("color:#71717a;font-size:11px;")
             scene_layout.addWidget(lbl)
 
-        self.refresh_btn = QtWidgets.QPushButton("⟳ Refresh")
+        self.refresh_btn = QtWidgets.QPushButton("Refresh")
         self.refresh_btn.setObjectName("GhostButton")
         self.refresh_btn.clicked.connect(self.refresh_scene_info)
         scene_layout.addWidget(self.refresh_btn)
 
-        layout.addWidget(self.scene_panel)
+        layout.addWidget(scene_card)
         layout.addStretch(1)
 
     def set_pi_status(self, status: str):
@@ -103,24 +140,25 @@ class ContextPanel(QtWidgets.QWidget):
         self.status_label.setText(f"<span style='color:{color};'>●</span> {status.title()}")
 
     def set_provider_model(self, provider: str, model: str):
-        self.provider_model_label.setText(f"Model: {provider}/{model}")
+        self.provider_model_label.setText(f"{provider} / {model}")
 
     def set_usage(self, stats: dict):
         tokens = stats.get("tokens", {})
         cost = stats.get("cost", 0)
         ctx = stats.get("contextUsage")
-        self.token_in_label.setText(f"Input: {tokens.get('input', 0):,}")
-        self.token_out_label.setText(f"Output: {tokens.get('output', 0):,}")
+        self.token_in_label.setText(f"In: {tokens.get('input', 0):,}")
+        self.token_out_label.setText(f"Out: {tokens.get('output', 0):,}")
         self.token_total_label.setText(f"Total: {tokens.get('total', 0):,}")
-        self.cost_label.setText(f"Cost: ${cost:.4f}" if cost else "Cost: -")
+        self.cost_label.setText(f"Cost: ${cost:.3f}" if cost else "Cost: -")
         if ctx:
             pct = ctx.get("percent", 0)
+            self._last_ctx_pct = pct
             self.ctx_progress.setValue(int(pct))
             self.ctx_progress.setFormat(f"{pct}%")
-            self.ctx_label.setText(f"Context: {pct}% used")
+            self.ctx_label.setText(f"Context: {pct}%")
 
     def set_stream_rate(self, rate: float):
-        self.stream_rate_label.setText(f"Stream Rate: {rate:.0f} tok/s")
+        pass  # Removed for cleaner UI per spec
 
     def refresh_scene_info(self):
         if hou is None:
@@ -133,9 +171,8 @@ class ContextPanel(QtWidgets.QWidget):
             sel = hou.selectedNodes()
             if sel:
                 n = sel[0]
-                children = len(n.allSubChildren())
                 self.selected_label.setText(
-                    f"Selected: {n.path()} ({n.type().name()}, {children} children)"
+                    f"Selected: {n.name()} ({n.type().name()})"
                 )
             else:
                 self.selected_label.setText("Selected: -")
@@ -144,10 +181,3 @@ class ContextPanel(QtWidgets.QWidget):
             self.node_count_label.setText(f"Nodes: {count}")
         except Exception:
             pass
-
-
-def _section_divider():
-    div = QtWidgets.QFrame()
-    div.setFrameShape(QtWidgets.QFrame.HLine)
-    div.setStyleSheet("border:none;border-top:1px solid #2a2a3c;margin:4px 0;")
-    return div
