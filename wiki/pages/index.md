@@ -1,6 +1,6 @@
 # 📊 仪表盘
 
-> **当前阶段**：UI 优化 — 双层折叠思考 · 实时工具面板 · Session 管理 · Viewport 截图 &nbsp;|&nbsp; **状态**：16 tools 就绪，Houdini 实机运行 &nbsp;|&nbsp; **最后更新**：2026-06-04
+> **当前阶段**：UI 优化 — 独立 Thinking 面板 · 纯文本思考流 · 工具面板优化 · 智能防抖滚动 &nbsp;|&nbsp; **状态**：16 tools 就绪，Houdini 实机运行 &nbsp;|&nbsp; **最后更新**：2026-06-04
 
 ## 快速导航
 
@@ -17,7 +17,7 @@
 
 | 模块 | 状态 |
 |------|------|
-| UI 面板 | ✅ 三栏布局 · Pi CLI 风格思考交错 · 流式 Thinking · 可折叠 Tool Call 面板 · 执行/中止按钮切换 · 卡片式 Context · 统一字号(10-13pt) · 智能滚动 |
+| UI 面板 | ✅ 三栏布局 · 独立 Thinking 面板（QTextEdit 纯文本自然分段）· Tool Call 面板（fixedHeight 折叠/展开、暗色协调）· 时间线纯对话 bubble · 执行/中止按钮切换 · 卡片式 Context · 统一字号(10-13pt) · 智能防抖滚动（actionTriggered + 比例定位）· 代码 Copy（anchorClicked + base64）|
 | Houdini 集成 | ✅ MainMenuCommon.xml · 包注册 · Alt+Shift+E 热键 |
 | 工具执行器 | ✅ HTTP Server · 16 工具路由 · 健康检查 · 实时工具卡片 |
 | Houdini 操作 | ✅ 场景查询 · 节点 CRUD · 参数读写 · 布局 · 搜索 |

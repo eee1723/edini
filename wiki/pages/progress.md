@@ -1,6 +1,6 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-04 &nbsp;|&nbsp; 第三阶段：UI 精细化 — 思考流式 · 工具面板 · Session 系统 · Viewport 截图
+> 最后更新：2026-06-04 &nbsp;|&nbsp; 第四阶段：UI 稳定化 — Thinking 独立面板 · 纯文本流 · 滚动防抖 · Copy 修复
 
 ## 总览看板
 
@@ -12,7 +12,7 @@
     <span class="status-tag status-done">完成</span>
   </div>
   <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:100%"></div></div>
-  <div class="phase-card-detail">聊天视图 · 输入栏 · 设置对话框 · 状态栏 · 流式文本渲染 · 工具卡片 · 模型切换 UI</div>
+  <div class="phase-card-detail">三栏布局 · Thinking 独立面板（可折叠、QTextEdit 纯文本自然分段、实时流光标）· Tool Call 面板（fixedHeight 折叠 20px↔200px、暗色协调、自动滚底）· 时间线纯对话 bubble · 智能防抖滚动（actionTriggered + 比例定位、无闪烁）· 代码 Copy（anchorClicked + base64）· Markdown 渲染 · 流式文本</div>
 </div>
 
 <div class="phase-card">
@@ -21,7 +21,7 @@
     <span class="status-tag status-done">完成</span>
   </div>
   <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:100%"></div></div>
-  <div class="phase-card-detail">subprocess + stdin/stdout · QThread 非阻塞 · 事件分发 (text_delta/tool_call/agent_start) · 重连 · 模型热切换</div>
+  <div class="phase-card-detail">subprocess + stdin/stdout · QThread 非阻塞 · 事件分发 (text_delta/thinking_delta/tool_call/tool_result) · 重连 · 模型热切换</div>
 </div>
 
 <div class="phase-card">
@@ -72,10 +72,10 @@
 <div class="phase-card">
   <div class="phase-card-header">
     <span class="phase-card-title">🌐 多模型 & 多模态</span>
-    <span class="status-tag status-pending">计划中</span>
+    <span class="status-tag status-done">完成</span>
   </div>
-  <div class="progress-bar-bg"><div class="progress-bar-fill progress-pending" style="width:0%"></div></div>
-  <div class="phase-card-detail">⬜ Anthropic Claude · ⬜ Qwen · ⬜ 图片输入 (viewport 截图)</div>
+  <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:100%"></div></div>
+  <div class="phase-card-detail">✅ DeepSeek V3/R1 · ✅ Anthropic Claude · ✅ Viewport 截图（vision 模型）</div>
 </div>
 
 </div>
@@ -83,6 +83,20 @@
 ## 近期关键节点
 
 <div class="timeline">
+
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-04</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第四阶段：UI 稳定化 — Thinking 独立面板 · 纯文本流 · 滚动防抖</span>
+      <span class="status-tag status-done">完成</span>
+    </div>
+    <div class="timeline-summary">重构 Thinking 展示架构：① Thinking 从时间线 HTML 中完全移除，改为独立可折叠面板（QTextEdit 只读，自然段落分段，实时流 ▊ 光标，自动滚底）② Tool Call 面板移除 QSplitter，改用 fixedHeight 折叠（20px↔200px），暗色协调背景 ③ 智能滚动全面重写：actionTriggered 替代 valueChanged 防反馈、同步比例定位替代 QTimer 异步恢复（消除闪烁）、blockSignals 防信号环路 ④ 代码块 Copy 按钮从无效 JS onclick 改为 _TimelineView anchorClicked + base64 ⑤ Thinking 实时分段：add_thinking_step 检测 \n\n 即时 flush 已完成段落 ⑥ Thinking 面板和 Tool 面板均自动滚底显示最新。修复：折叠不可用、滚动抖动、内容锁定顶部、QTextBrowser 渲染残留、Copy 按钮无效。</div>
+    <div class="timeline-tags">
+      <span>Thinking 独立面板</span><span>纯文本流</span><span>防抖滚动</span><span>Copy 修复</span><span>无 Splitter</span><span>实时分段</span><span>1 文件</span>
+    </div>
+  </div>
+</div>
 
 <div class="timeline-item timeline-done">
   <div class="timeline-date">2026-06-04</div>
@@ -133,7 +147,6 @@
 | 优先级 | 任务 | 说明 |
 |------|------|------|
 | P1 | 工具执行反馈 | 节点创建后在 viewport 高亮或选中 |
-| P1 | 思考过程格式化 | R1 输出后处理（编号清洗已实现，待加 Markdown 渲染） |
 | P2 | 单元测试 | 对 node_utils、config、tool_executor 写测试 |
 | P2 | Houdini 日志集成 | 工具执行结果输出到 Houdini Console |
 | P3 | Python 面板 | 支持嵌入 Houdini Pane Tab |
@@ -151,14 +164,14 @@
 - ✅ 节点帮助文档查询
 - ✅ 几何体检查 (点/面/属性/包围盒)
 - ✅ 流式响应 (打字机效果)
-- ✅ 流式思考展示 (实时增长、折叠展开、Pi CLI 风格交错)
-- ✅ 工具调用实时面板 (可折叠、执行状态 ✅/❌、结果预览)
-- ✅ 代码块一键 Copy 按钮
+- ✅ 流式思考展示（独立 Thinking 面板、纯文本自然分段、实时流 ▊ 光标、自动滚底）
+- ✅ 工具调用实时面板（fixedHeight 折叠 20px↔200px、执行状态 ✅/❌、结果预览、自动滚底）
+- ✅ 代码块一键 Copy（_TimelineView anchorClicked + base64，无需 JS）
 - ✅ 会话管理 (新建/切换/回看、自动命名、上下文重建)
 - ✅ Viewport 截图 (vision 模型分析画面)
 - ✅ API Key / Provider / Model 设置 (下拉选择 + 历史记忆)
 - ✅ 4 色主题实时预览 + 字体缩放
 - ✅ 执行/中止按钮一体化切换
-- ✅ 智能滚动 (手动查看历史时不自动跳底)
+- ✅ 智能防抖滚动（actionTriggered 用户检测、同步比例定位、无闪烁无抖动）
 - ✅ 状态栏 (连接状态 / 模型 / 节点数)
 - ✅ 多行输入 (Ctrl+Enter 换行，Enter 发送)
