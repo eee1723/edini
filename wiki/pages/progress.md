@@ -1,6 +1,6 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-04 &nbsp;|&nbsp; 第四阶段：UI 稳定化 — Thinking 独立面板 · 纯文本流 · 滚动防抖 · Copy 修复
+> 最后更新：2026-06-04 &nbsp;|&nbsp; 第六阶段：Session 浏览模式 — 历史浏览 · 继续对话 · 回到当前 · Bug 修复
 
 ## 总览看板
 
@@ -88,6 +88,34 @@
   <div class="timeline-date">2026-06-04</div>
   <div class="timeline-card">
     <div class="timeline-card-header">
+      <span class="timeline-title">第六阶段：Session 浏览模式 + 三个 Bug 修复</span>
+      <span class="status-tag status-done">完成</span>
+    </div>
+    <div class="timeline-summary">实现会话浏览模式并修复三个关键 Bug：① HistoryPanel 新增 set_browsing_mode() / highlight_session() / back_to_current_requested 信号，浏览模式下按钮从"+ 新对话"变为"← 回到当前" ② MainWindow 新增 _active_session_path / _browsing_session_path 状态字段，_on_session_selected 进入浏览模式保存活跃会话，_on_back_to_current 恢复，_on_session_deleted 处理回退 ③ 修复 _cwd_to_dirname 未替换 Windows 盘符冒号 `:` 导致目录名不匹配（E:-edini vs E--edini）④ 修复 _parse_session_file 只认旧 "header" type 不兼容 Pi v3 "session" type（+ 字段名变更 createdAt→timestamp、content 数组化）⑤ 修复 _pi_sessions_root 优先用 HOME 而 Houdini 将其重写为 Documents 子目录，导致在 \Documents\.pi\ 找不到真正的 \Users\EEE\.pi\ 目录（改为 USERPROFILE 优先）。</div>
+    <div class="timeline-tags">
+      <span>浏览模式</span><span>回到当前</span><span>Windows路径修复</span><span>Pi v3兼容</span><span>HOME路径修复</span><span>2文件</span>
+    </div>
+  </div>
+</div>
+
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-04</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第五阶段：Session 架构重构 — pi 接管会话管理</span>
+      <span class="status-tag status-done">完成</span>
+    </div>
+    <div class="timeline-summary">彻底重构 Session 管理架构：① 删除 edini 自建的 session_store.py，pi 成为唯一真理源 ② pi 进程改用 Popen(cwd=HIP) 启动（去掉 --no-session），session JSONL 按 HIP 目录归档在 ~/.pi/agent/sessions/ ③ 新建 pi_sessions.py 模块，直接读 pi JSONL 文件获取会话列表和消息 ④ HistoryPanel 改用 pi_sessions.list_pi_sessions()，发射 pi session 路径而非 edini session ID ⑤ RpcClient 新增 send_new_session / send_switch_session / send_set_session_name / send_get_messages 方法及 session_switched / messages_received 信号 ⑥ main_window 全部 session handler 重写：新建 → new_session RPC，切换 → 本地读 JSONL 即时渲染 + switch_session RPC，发送消息不再写 edini 存储 ⑦ ContextPanel 新增 reset_stats()，session 切换时归零显示 ⑧ 修复窗口关闭后重新打开显示 disconnected 的 bug（closeEvent 清空 _main_window 全局引用）⑨ 修复 ensure_ascii=False 导致 Windows pipe 写入 Errno 22 ⑩ 修复 _bootstrap 过早 send 命令（改为 status==connected 时触发）。</div>
+    <div class="timeline-tags">
+      <span>pi 接管 Session</span><span>删除 session_store</span><span>pi_sessions</span><span>Popen cwd</span><span>RPC 新命令</span><span>窗口单例修复</span><span>5 文件</span>
+    </div>
+  </div>
+</div>
+
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-04</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
       <span class="timeline-title">第四阶段：UI 稳定化 — Thinking 独立面板 · 纯文本流 · 滚动防抖</span>
       <span class="status-tag status-done">完成</span>
     </div>
@@ -167,7 +195,7 @@
 - ✅ 流式思考展示（独立 Thinking 面板、纯文本自然分段、实时流 ▊ 光标、自动滚底）
 - ✅ 工具调用实时面板（fixedHeight 折叠 20px↔200px、执行状态 ✅/❌、结果预览、自动滚底）
 - ✅ 代码块一键 Copy（_TimelineView anchorClicked + base64，无需 JS）
-- ✅ 会话管理 (新建/切换/回看、自动命名、上下文重建)
+- ✅ 会话管理 (pi 接管：Popen cwd 按 HIP 归档 · JSONL 本地读取 · new/switch/set_name RPC · 删除 edini session_store)
 - ✅ Viewport 截图 (vision 模型分析画面)
 - ✅ API Key / Provider / Model 设置 (下拉选择 + 历史记忆)
 - ✅ 4 色主题实时预览 + 字体缩放

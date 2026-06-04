@@ -1,6 +1,6 @@
 # 📊 仪表盘
 
-> **当前阶段**：UI 优化 — 独立 Thinking 面板 · 纯文本思考流 · 工具面板优化 · 智能防抖滚动 &nbsp;|&nbsp; **状态**：16 tools 就绪，Houdini 实机运行 &nbsp;|&nbsp; **最后更新**：2026-06-04
+> **当前阶段**：Session 浏览模式 — 历史会话浏览/继续对话/回到当前 · Pi v3 格式兼容 · Houdini HOME 路径修复 &nbsp;|&nbsp; **状态**：16 tools 就绪，Houdini 实机运行 &nbsp;|&nbsp; **最后更新**：2026-06-04
 
 ## 快速导航
 
@@ -23,9 +23,10 @@
 | Houdini 操作 | ✅ 场景查询 · 节点 CRUD · 参数读写 · 布局 · 搜索 |
 | Pi 扩展 | ✅ 工具注册 · 系统提示注入 · TypeBox 参数校验 · thinking_delta / tool_result 事件 |
 | 安装部署 | ✅ install.py · setup_pi.bat · settings.json 持久化 |
-| Session 管理 | ✅ 会话持久化 · 自动命名 · 上下文重建 · 摘要压缩 · 历史切换 |
+| Session 管理 | ✅ pi 接管会话（Popen cwd 按 HIP 目录归档）· 删除 session_store · pi_sessions.py 读 JSONL（兼容 v3 format + Windows 冒号路径 + USERPROFILE 优先）· 浏览模式（历史会话继续对话 · ← 回到当前按钮切换 · 选中高亮）· new/switch/set_name RPC |
 | 多模型 | ✅ DeepSeek V3/R1 · Anthropic · Provider 下拉 + Model 历史记忆 |
 | 设置系统 | ✅ Provider/Model/API Key · 4 色主题实时预览 · 字体缩放 0.8-1.4 |
+| Session 浏览 | ✅ HistoryPanel 模式切换（普通/浏览）· back_to_current_requested 信号 · highlight_session() · MainWindow _active/_browsing 状态追踪 · 删除会话回退逻辑 |
 | 测试 | ⬜ 无自动化测试 |
 | 多模态 | ✅ Viewport 截图（vision 模型支持） |
 
