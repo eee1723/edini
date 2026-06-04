@@ -21,7 +21,9 @@ class RpcClient(QObject):
     """
 
     text_delta = Signal(str)                # Streaming text chunk
+    thinking_delta = Signal(str)            # Thinking/reasoning text chunk
     tool_call = Signal(str, str, object)    # tool_name, tool_call_id, args dict
+    tool_result = Signal(str, str, str)     # tool_name, tool_call_id, result
     agent_started = Signal()
     agent_finished = Signal()
     error_occurred = Signal(str)
@@ -49,7 +51,9 @@ class RpcClient(QObject):
         self._worker.moveToThread(self._thread)
 
         self._worker.text_delta.connect(self.text_delta)
+        self._worker.thinking_delta.connect(self.thinking_delta)
         self._worker.tool_call.connect(self.tool_call)
+        self._worker.tool_result.connect(self.tool_result)
         self._worker.agent_started.connect(self.agent_started)
         self._worker.agent_finished.connect(self.agent_finished)
         self._worker.error_occurred.connect(self.error_occurred)
@@ -118,7 +122,9 @@ class _RpcWorker(QObject):
     """Worker object running on a QThread. Manages subprocess I/O."""
 
     text_delta = Signal(str)
+    thinking_delta = Signal(str)
     tool_call = Signal(str, str, object)
+    tool_result = Signal(str, str, str)
     agent_started = Signal()
     agent_finished = Signal()
     error_occurred = Signal(str)
@@ -195,14 +201,24 @@ class _RpcWorker(QObject):
 
         if event_type == "message_update":
             delta = event.get("assistantMessageEvent", {})
-            if delta.get("type") == "text_delta":
+            delta_type = delta.get("type", "")
+            if delta_type == "text_delta":
                 self.text_delta.emit(delta.get("delta", ""))
+            elif delta_type == "thinking_delta":
+                self.thinking_delta.emit(delta.get("delta", ""))
 
         elif event_type == "tool_execution_start":
             self.tool_call.emit(
                 event.get("toolName", ""),
                 event.get("toolCallId", ""),
                 event.get("args", {}),
+            )
+
+        elif event_type == "tool_execution_end":
+            self.tool_result.emit(
+                event.get("toolName", ""),
+                event.get("toolCallId", ""),
+                json.dumps(event.get("result", {}), ensure_ascii=False),
             )
 
         elif event_type == "agent_start":

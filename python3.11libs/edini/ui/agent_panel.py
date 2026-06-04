@@ -69,11 +69,12 @@ class _ToolCardWidget(QtWidgets.QFrame):
         self.setCursor(QtCore.Qt.PointingHandCursor)
 
         layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 4)
-        layout.setSpacing(2)
+        layout.setContentsMargins(8, 2, 8, 2)
+        layout.setSpacing(1)
 
         # Header row: icon + name + status
         header_row = QtWidgets.QHBoxLayout()
+        header_row.setSpacing(2)
         self._arrow = QtWidgets.QLabel("▸")
         self._arrow.setStyleSheet(f"color:#80cbc4;font-size:{fs(11)};border:none;")
         self._arrow.setFixedWidth(16)
@@ -197,13 +198,15 @@ class AgentPanel(QtWidgets.QWidget):
         self.change_tree_widget.setMaximumHeight(200)
         root.addWidget(self.change_tree_widget)
 
-        # ── Timeline (main area) ──
-        self.timeline_view = QtWidgets.QTextBrowser(self)
+        # ── Timeline + Tool Call Panel (vertical splitter) ──
+        self._vsplitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+
+        self.timeline_view = QtWidgets.QTextBrowser()
         self.timeline_view.setReadOnly(True)
         self.timeline_view.setOpenLinks(False)
         self.timeline_view.setPlaceholderText("描述你想做的事情，Edini 会帮你操作 Houdini...")
         self.timeline_view.verticalScrollBar().valueChanged.connect(self._on_user_scroll)
-        root.addWidget(self.timeline_view, 1)
+        self._vsplitter.addWidget(self.timeline_view)
 
         # ── Tool Call Panel (collapsible, below timeline) ──
         self._tool_panel = QtWidgets.QFrame()
@@ -233,7 +236,7 @@ class AgentPanel(QtWidgets.QWidget):
         self._tool_scroll.setWidgetResizable(True)
         self._tool_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
         self._tool_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
-        self._tool_scroll.setMaximumHeight(180)
+        self._tool_scroll.setMaximumHeight(300)
         self._tool_scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
 
         self._tool_container = QtWidgets.QWidget()
@@ -248,7 +251,15 @@ class AgentPanel(QtWidgets.QWidget):
         tool_panel_layout.addWidget(self._tool_scroll)
 
         self._tool_panel_expanded = False
-        root.addWidget(self._tool_panel)
+        self._vsplitter.addWidget(self._tool_panel)
+
+        # Set default sizes: timeline gets most space, tool panel minimal
+        self._vsplitter.setSizes([700, 80])
+        self._vsplitter.setCollapsible(0, False)
+        self._vsplitter.setCollapsible(1, False)
+        self._vsplitter.setStretchFactor(0, 3)
+        self._vsplitter.setStretchFactor(1, 1)
+        root.addWidget(self._vsplitter, 1)
 
         # ── Input row ──
         input_row = QtWidgets.QHBoxLayout()

@@ -22,7 +22,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Edini Agent")
-        self.resize(1360, 860)
+        self.resize(1520, 1000)
 
         self._tool_executor = ToolExecutor()
         self._rpc_client = RpcClient()

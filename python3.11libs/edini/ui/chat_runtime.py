@@ -23,7 +23,9 @@ class ChatRuntime(QObject):
     def _bind(self):
         r = self._rpc
         r.text_delta.connect(self._on_text_delta)
+        r.thinking_delta.connect(self._on_thinking_delta)
         r.tool_call.connect(self._on_tool_call)
+        r.tool_result.connect(self._on_tool_result)
         r.agent_started.connect(self._on_agent_start)
         r.agent_finished.connect(self._on_agent_finish)
         r.error_occurred.connect(self._on_error)
@@ -37,6 +39,9 @@ class ChatRuntime(QObject):
 
     def _on_tool_call(self, tool_name: str, tool_call_id: str, args: dict):
         self.tool_started.emit(tool_name, tool_call_id, args)
+
+    def _on_tool_result(self, tool_name: str, tool_call_id: str, result: str):
+        self.tool_completed.emit(tool_name, tool_call_id, result)
 
     def _on_agent_start(self):
         self.started.emit({})
