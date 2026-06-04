@@ -165,6 +165,11 @@ class AgentPanel(QtWidgets.QWidget):
 
         # Pending data
         self._thinking_count = 0
+        self._thinking_buf = ""  # accumulate R1 word-chunks
+        self._thinking_buf_timer = QtCore.QTimer(self)
+        self._thinking_buf_timer.setSingleShot(True)
+        self._thinking_buf_timer.setInterval(200)
+        self._thinking_buf_timer.timeout.connect(self._flush_thinking_buf)
         self._tool_cards: dict[str, _ToolCardWidget] = {}
 
         # Screenshot
@@ -254,7 +259,7 @@ class AgentPanel(QtWidgets.QWidget):
         self._vsplitter.addWidget(self._tool_panel)
 
         # Set default sizes: timeline gets most space, tool panel minimal
-        self._vsplitter.setSizes([700, 80])
+        self._vsplitter.setSizes([-1, 28])
         self._vsplitter.setCollapsible(0, False)
         self._vsplitter.setCollapsible(1, False)
         self._vsplitter.setStretchFactor(0, 3)
@@ -363,10 +368,14 @@ class AgentPanel(QtWidgets.QWidget):
         self._thinking_count = 0
         self._user_scrolled_up = False
 
-        # Clear and collapse tool panel
+        # Reset tool panel to collapsed state
         self._clear_tool_cards()
-        if self._tool_panel_expanded:
-            self._toggle_tool_panel()
+        self._tool_panel_expanded = False
+        self._tool_scroll.setVisible(False)
+        self._tool_toggle.setText("▸ Tool Calls (0)")
+        self._vsplitter.setSizes([-1, 28])
+        if hasattr(self, '_saved_sizes'):
+            del self._saved_sizes
 
         images = None
         if self._screenshot_data:
@@ -492,6 +501,7 @@ class AgentPanel(QtWidgets.QWidget):
     def begin_assistant_message(self):
         self._stream_segments.clear()
         self._current_text = ""
+        self._thinking_buf = ""
         self._streaming = True
         self._thinking_count = 0
         self._ai_bubble_base = self.timeline_view.toHtml()
@@ -511,19 +521,40 @@ class AgentPanel(QtWidgets.QWidget):
     def finish_streaming(self):
         self._streaming = False
         self._stream_flush_timer.stop()
+        self._thinking_buf_timer.stop()
+        self._flush_thinking_buf()
         if self._current_text.strip():
             self._stream_segments.append({"type": "text", "content": self._current_text})
             self._current_text = ""
         self._render_final()
 
+    def add_tool_card(self, tool_name: str, args: dict, tool_call_id: str = ""):
+        """Real-time: add tool card widget to panel."""
+        self._add_tool_card_ui(tool_name, args, tool_call_id)
+
+    def set_tool_result(self, tool_call_id: str, result: str):
+        """Real-time: update tool card result."""
+        self._update_tool_card_result(tool_call_id, result, True)
+
     def add_thinking_step(self, step_num: int, text: str):
-        """Real-time: push current text as segment, add thinking segment individually."""
+        """Accumulate thinking chunks (R1 sends one word per event), flush after 200ms idle."""
         self._thinking_count += 1
         clean = _clean_thinking(text)
+        if self._thinking_buf:
+            self._thinking_buf += " " + clean
+        else:
+            self._thinking_buf = clean
+        self._thinking_buf_timer.start()  # restart 200ms timer
+
+    def _flush_thinking_buf(self):
+        """Flush accumulated thinking buffer as a single segment."""
+        if not self._thinking_buf.strip():
+            return
         if self._current_text.strip():
             self._stream_segments.append({"type": "text", "content": self._current_text})
             self._current_text = ""
-        self._stream_segments.append({"type": "thinking", "content": clean})
+        self._stream_segments.append({"type": "thinking", "content": self._thinking_buf})
+        self._thinking_buf = ""
         self._render_segments()
 
     def _render_segments(self):
@@ -536,12 +567,13 @@ class AgentPanel(QtWidgets.QWidget):
                 parts.append(f'<div style="{_bubble_ai_style()}">{rendered}</div>')
             elif seg["type"] == "thinking":
                 tid = f"th{self._request_count}_{i}"
+                preview = html.escape(seg["content"][:40])
                 parts.append(
                     f'<div style="{_thinking_collapsed_style()}" '
                     f'onclick="var e=document.getElementById(\'{tid}\');'
                     f'e.style.display=e.style.display==\'none\'?\'block\':\'none\';'
                     f'this.innerHTML=this.innerHTML.replace(\'▸\',e.style.display==\'none\'?\'▸\':\'▾\');">'
-                    f'▸ Thinking</div>'
+                    f'▸ {preview}</div>'
                 )
                 parts.append(
                     f'<div id="{tid}" style="display:none;{_thinking_expanded_style()}">'
@@ -572,12 +604,13 @@ class AgentPanel(QtWidgets.QWidget):
                 parts.append(f'<div style="{_bubble_ai_style()}">{rendered}</div>')
             elif seg["type"] == "thinking":
                 tid = f"thf{self._request_count}_{i}"
+                preview = html.escape(seg["content"][:40])
                 parts.append(
                     f'<div style="{_thinking_collapsed_style()}" '
                     f'onclick="var e=document.getElementById(\'{tid}\');'
                     f'e.style.display=e.style.display==\'none\'?\'block\':\'none\';'
                     f'this.innerHTML=this.innerHTML.replace(\'▸\',e.style.display==\'none\'?\'▸\':\'▾\');">'
-                    f'▸ Thinking</div>'
+                    f'▸ {preview}</div>'
                 )
                 parts.append(
                     f'<div id="{tid}" style="display:none;{_thinking_expanded_style()}">'
@@ -637,12 +670,13 @@ class AgentPanel(QtWidgets.QWidget):
         # Simple: thinking first, then content
         for i, t in enumerate(thinking):
             tid = f"sth_{id(msg)}_{i}"
+            preview = html.escape(t[:40])
             parts.append(
                 f'<div style="{_thinking_collapsed_style()}" '
                 f'onclick="var e=document.getElementById(\'{tid}\');'
                 f'e.style.display=e.style.display==\'none\'?\'block\':\'none\';'
                 f'this.innerHTML=this.innerHTML.replace(\'▸\',e.style.display==\'none\'?\'▸\':\'▾\');">'
-                f'▸ Thinking</div>'
+                f'▸ {preview}</div>'
             )
             parts.append(
                 f'<div id="{tid}" style="display:none;{_thinking_expanded_style()}">'
