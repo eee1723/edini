@@ -127,7 +127,15 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
     # ── Signal handlers ──
 
     def _on_agent_submit(self, text: str, images=None):
+        from edini.ui.session_store import append_message, rename_session, load_session
         self.agent_panel.begin_assistant_message()
+        # Store user message + auto-name session on first message
+        if self._current_session_id:
+            record = load_session(self._current_session_id)
+            if record and len(record.get("messages", [])) == 0:
+                rename_session(self._current_session_id, text[:40])
+                self.history_panel.load_sessions()
+            append_message(self._current_session_id, {"role": "user", "content": text})
         self._rpc_client.send_prompt(text, images=images)
 
     def _on_agent_started(self, _):
@@ -137,6 +145,24 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
 
     def _on_agent_done(self, _):
         from edini.ui.session_store import append_message
+        # Store assistant message BEFORE finish_streaming clears data
+        if self._current_session_id:
+            content = self.agent_panel._current_text
+            if self.agent_panel._stream_segments:
+                content = "\n".join(
+                    seg["content"] for seg in self.agent_panel._stream_segments
+                    if seg["type"] == "text"
+                ) + "\n" + content
+            thinkings = [
+                seg["content"] for seg in self.agent_panel._stream_segments
+                if seg["type"] == "thinking"
+            ]
+            msg = {
+                "role": "assistant",
+                "content": content,
+                "thinking": thinkings,
+            }
+            append_message(self._current_session_id, msg)
         self.agent_panel.finish_streaming()
         self.agent_panel.set_busy(False)
         self._stats_poll_timer.stop()
@@ -144,14 +170,6 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self._rpc_client.send_get_stats()
         self._update_statusbar()
         self.status.showMessage("Ready")
-        # Store assistant message
-        if self._current_session_id:
-            msg = {
-                "role": "assistant",
-                "content": self.agent_panel._raw_stream_text,
-                "thinking": list(self.agent_panel._pending_thinkings),
-            }
-            append_message(self._current_session_id, msg)
         # Check compression
         self._check_compression()
 

@@ -155,7 +155,8 @@ class AgentPanel(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._busy = False
-        self._raw_stream_text = ""
+        self._stream_segments: list[dict] = []  # [{type: text|thinking, content: str}]
+        self._current_text = ""
         self._streaming = False
         self._ai_bubble_base = ""
         self._request_count = 0
@@ -163,9 +164,8 @@ class AgentPanel(QtWidgets.QWidget):
         self._user_scrolled_up = False
 
         # Pending data
-        self._pending_thinkings: list[str] = []
         self._thinking_count = 0
-        self._tool_cards: dict[str, _ToolCardWidget] = {}  # tool_call_id → widget
+        self._tool_cards: dict[str, _ToolCardWidget] = {}
 
         # Screenshot
         self._screenshot_data: str | None = None
@@ -211,10 +211,10 @@ class AgentPanel(QtWidgets.QWidget):
         # ── Tool Call Panel (collapsible, below timeline) ──
         self._tool_panel = QtWidgets.QFrame()
         self._tool_panel.setStyleSheet("""
-            QFrame {
-                background: #0a0a10;
-                border: 1px solid #1a1a28;
-                border-radius: 6px;
+            _ToolCardWidget {
+                background: #0e0e15;
+                border: 1px solid #1c1c28;
+                border-radius: 4px;
             }
         """)
         tool_panel_layout = QtWidgets.QVBoxLayout(self._tool_panel)
@@ -357,12 +357,16 @@ class AgentPanel(QtWidgets.QWidget):
         self.input_edit.clear()
         self._append_user_message(text)
         self._request_count += 1
-        self._raw_stream_text = ""
+        self._stream_segments.clear()
+        self._current_text = ""
         self._streaming = True
+        self._thinking_count = 0
         self._user_scrolled_up = False
 
-        # Clear previous tool cards
+        # Clear and collapse tool panel
         self._clear_tool_cards()
+        if self._tool_panel_expanded:
+            self._toggle_tool_panel()
 
         images = None
         if self._screenshot_data:
@@ -486,101 +490,102 @@ class AgentPanel(QtWidgets.QWidget):
         self._request_count = count
 
     def begin_assistant_message(self):
-        self._raw_stream_text = ""
+        self._stream_segments.clear()
+        self._current_text = ""
         self._streaming = True
-        self._pending_thinkings.clear()
         self._thinking_count = 0
         self._ai_bubble_base = self.timeline_view.toHtml()
 
     def append_stream_chunk(self, text: str):
-        self._raw_stream_text += text
-        if len(self._raw_stream_text) >= self.STREAM_FLUSH_CHARS:
+        self._current_text += text
+        if len(self._current_text) >= self.STREAM_FLUSH_CHARS:
             self._flush_stream()
         elif not self._stream_flush_timer.isActive():
             self._stream_flush_timer.start()
 
     def _flush_stream(self):
-        if not self._raw_stream_text:
+        if not self._stream_segments and not self._current_text:
             return
-        self._render_stream_with_thinking()
+        self._render_segments()
 
     def finish_streaming(self):
         self._streaming = False
         self._stream_flush_timer.stop()
-        self.finalize_ai_message()
-        self._raw_stream_text = ""
+        if self._current_text.strip():
+            self._stream_segments.append({"type": "text", "content": self._current_text})
+            self._current_text = ""
+        self._render_final()
 
     def add_thinking_step(self, step_num: int, text: str):
-        """Real-time: append thinking step and immediately render."""
+        """Real-time: push current text as segment, add thinking segment individually."""
         self._thinking_count += 1
-        # Clean up DeepSeek R1 word-numbering pattern: "1. word 2. word" → "word word"
         clean = _clean_thinking(text)
-        self._pending_thinkings.append(clean)
-        # Rebuild timeline to show thinking live
-        self._render_stream_with_thinking()
+        if self._current_text.strip():
+            self._stream_segments.append({"type": "text", "content": self._current_text})
+            self._current_text = ""
+        self._stream_segments.append({"type": "thinking", "content": clean})
+        self._render_segments()
 
-    def _render_stream_with_thinking(self):
-        """Rebuild current AI bubble with thinking block + streaming text."""
+    def _render_segments(self):
+        """Render segments with interleaved thinking + live cursor."""
         parts = []
-        if self._pending_thinkings:
-            thinking_text = "\n".join(self._pending_thinkings)
+        for i, seg in enumerate(self._stream_segments):
+            if seg["type"] == "text":
+                escaped = html.escape(seg["content"])
+                rendered = _format_message(escaped)
+                parts.append(f'<div style="{_bubble_ai_style()}">{rendered}</div>')
+            elif seg["type"] == "thinking":
+                tid = f"th{self._request_count}_{i}"
+                parts.append(
+                    f'<div style="{_thinking_collapsed_style()}" '
+                    f'onclick="var e=document.getElementById(\'{tid}\');'
+                    f'e.style.display=e.style.display==\'none\'?\'block\':\'none\';'
+                    f'this.innerHTML=this.innerHTML.replace(\'▸\',e.style.display==\'none\'?\'▸\':\'▾\');">'
+                    f'▸ Thinking</div>'
+                )
+                parts.append(
+                    f'<div id="{tid}" style="display:none;{_thinking_expanded_style()}">'
+                    f'<pre style="margin:0;color:#71717a;font-size:{fs(11)};white-space:pre-wrap;'
+                    f'background:transparent;font-family:inherit;">'
+                    f'{html.escape(seg["content"])}</pre>'
+                    f'</div>'
+                )
+        if self._current_text:
             a = accent_color()
-            parts.append(
-                f'<div style="{_thinking_collapsed_style()}" '
-                f'onclick="var e=document.getElementById(\'t{self._request_count}\');'
-                f'e.style.display=e.style.display==\'none\'?\'block\':\'none\';'
-                f'this.innerHTML=this.innerHTML.replace(\'▸\',e.style.display==\'none\'?\'▸\':\'▾\');">'
-                f'▸ Thinking ({self._thinking_count} steps)</div>'
-            )
-            parts.append(
-                f'<div id="t{self._request_count}" style="display:none;{_thinking_expanded_style()}">'
-                f'<pre style="margin:0;color:#71717a;font-size:{fs(11)};white-space:pre-wrap;'
-                f'background:transparent;font-family:inherit;">'
-                f'{html.escape(thinking_text)}</pre>'
-                f'</div>'
-            )
-        if self._raw_stream_text:
-            a = accent_color()
-            escaped = html.escape(self._raw_stream_text)
+            escaped = html.escape(self._current_text)
             rendered = _format_message(escaped)
             parts.append(
                 f'<div style="{_bubble_ai_style()}">{rendered}'
                 f'<span style="color:{a};">▊</span></div>'
             )
-        self.timeline_view.setHtml(self._ai_bubble_base + "".join(parts))
-        self._scroll_to_bottom()
+        if parts:
+            self.timeline_view.setHtml(self._ai_bubble_base + "".join(parts))
+            self._scroll_to_bottom()
 
-    def add_tool_card(self, tool_name: str, args: dict, tool_call_id: str = ""):
-        """Real-time: add to both pending list AND tool card panel."""
-        self._add_tool_card_ui(tool_name, args, tool_call_id)
-
-    def set_tool_result(self, tool_call_id: str, result: str):
-        """Real-time: update tool card result."""
-        self._update_tool_card_result(tool_call_id, result, True)
-
-    def finalize_ai_message(self):
-        """Final render: same as live but without cursor."""
+    def _render_final(self):
+        """Final render without cursor + separator."""
         parts = []
-        if self._pending_thinkings:
-            thinking_text = "\n".join(self._pending_thinkings)
-            parts.append(
-                f'<div style="{_thinking_collapsed_style()}" '
-                f'onclick="var e=document.getElementById(\'t{self._request_count}\');'
-                f'e.style.display=e.style.display==\'none\'?\'block\':\'none\';'
-                f'this.innerHTML=this.innerHTML.replace(\'▸\',e.style.display==\'none\'?\'▸\':\'▾\');">'
-                f'▸ Thinking ({self._thinking_count} steps)</div>'
-            )
-            parts.append(
-                f'<div id="t{self._request_count}" style="display:none;{_thinking_expanded_style()}">'
-                f'<pre style="margin:0;color:#71717a;font-size:{fs(11)};white-space:pre-wrap;'
-                f'background:transparent;font-family:inherit;">'
-                f'{html.escape(thinking_text)}</pre>'
-                f'</div>'
-            )
-        if self._raw_stream_text:
-            escaped = html.escape(self._raw_stream_text)
-            rendered = _format_message(escaped)
-            parts.append(f'<div style="{_bubble_ai_style()}">{rendered}</div>')
+        for i, seg in enumerate(self._stream_segments):
+            if seg["type"] == "text":
+                escaped = html.escape(seg["content"])
+                rendered = _format_message(escaped)
+                parts.append(f'<div style="{_bubble_ai_style()}">{rendered}</div>')
+            elif seg["type"] == "thinking":
+                tid = f"thf{self._request_count}_{i}"
+                parts.append(
+                    f'<div style="{_thinking_collapsed_style()}" '
+                    f'onclick="var e=document.getElementById(\'{tid}\');'
+                    f'e.style.display=e.style.display==\'none\'?\'block\':\'none\';'
+                    f'this.innerHTML=this.innerHTML.replace(\'▸\',e.style.display==\'none\'?\'▸\':\'▾\');">'
+                    f'▸ Thinking</div>'
+                )
+                parts.append(
+                    f'<div id="{tid}" style="display:none;{_thinking_expanded_style()}">'
+                    f'<pre style="margin:0;color:#71717a;font-size:{fs(11)};white-space:pre-wrap;'
+                    f'background:transparent;font-family:inherit;">'
+                    f'{html.escape(seg["content"])}</pre>'
+                    f'</div>'
+                )
         parts.append(f'<div style="{_separator_style()}">── 本轮结束 ──</div>')
         self.timeline_view.setHtml(self._ai_bubble_base + "".join(parts))
         self._scroll_to_bottom()
@@ -625,25 +630,30 @@ class AgentPanel(QtWidgets.QWidget):
         self.timeline_view.setHtml(self.timeline_view.toHtml() + bubble_html)
 
     def _render_stored_assistant_message(self, msg: dict):
-        """Render a stored assistant message from session history."""
+        """Render stored message with interleaved thinking blocks."""
         content = msg.get("content", "")
         thinking = msg.get("thinking", [])
-
         parts = []
-        if thinking:
-            thinking_text = "\n".join(thinking)
+        # Simple: thinking first, then content
+        for i, t in enumerate(thinking):
+            tid = f"sth_{id(msg)}_{i}"
             parts.append(
-                f'<div style="{_thinking_expanded_style()}">'
-                f'<pre style="margin:0;color:#71717a;font-size:{fs(11)};'
-                f'white-space:pre-wrap;background:transparent;font-family:inherit;">'
-                f'{html.escape(thinking_text)}</pre></div>'
+                f'<div style="{_thinking_collapsed_style()}" '
+                f'onclick="var e=document.getElementById(\'{tid}\');'
+                f'e.style.display=e.style.display==\'none\'?\'block\':\'none\';'
+                f'this.innerHTML=this.innerHTML.replace(\'▸\',e.style.display==\'none\'?\'▸\':\'▾\');">'
+                f'▸ Thinking</div>'
             )
-
+            parts.append(
+                f'<div id="{tid}" style="display:none;{_thinking_expanded_style()}">'
+                f'<pre style="margin:0;color:#71717a;font-size:{fs(11)};white-space:pre-wrap;'
+                f'background:transparent;font-family:inherit;">'
+                f'{html.escape(t)}</pre></div>'
+            )
         if content:
             escaped = html.escape(content)
             rendered = _format_message(escaped)
             parts.append(f'<div style="{_bubble_ai_style()}">{rendered}</div>')
-
         parts.append(f'<div style="{_separator_style()}">──</div>')
         self.timeline_view.setHtml(self.timeline_view.toHtml() + "".join(parts))
 
