@@ -541,15 +541,16 @@ class AgentPanel(QtWidgets.QWidget):
         self._update_tool_card_result(tool_call_id, result, True)
 
     def add_thinking_step(self, step_num: int, text: str):
-        """Accumulate thinking chunks. Flushed when text arrives (Pi event boundary)."""
+        """Stream thinking live: accumulate in buffer, render as one growing block."""
         self._thinking_count += 1
         clean = _clean_thinking(text)
         if self._thinking_buf:
-            # Smart join: no double spaces
             sep = "" if clean.startswith((" ", "\n", ",", ".", "!", "?", "，", "。", "、")) else " "
             self._thinking_buf += sep + clean
         else:
             self._thinking_buf = clean
+        # Live render: one growing thinking block
+        self._render_segments()
 
     def _flush_thinking_buf(self):
         """Flush accumulated thinking buffer as a single segment."""
@@ -563,7 +564,7 @@ class AgentPanel(QtWidgets.QWidget):
         self._render_segments()
 
     def _render_segments(self):
-        """Render segments with interleaved thinking + live cursor."""
+        """Render segments + live thinking block + streaming text."""
         parts = []
         for i, seg in enumerate(self._stream_segments):
             if seg["type"] == "text":
@@ -572,13 +573,12 @@ class AgentPanel(QtWidgets.QWidget):
                 parts.append(f'<div style="{_bubble_ai_style()}">{rendered}</div>')
             elif seg["type"] == "thinking":
                 tid = f"th{self._request_count}_{i}"
-                preview = html.escape(seg["content"][:40])
                 parts.append(
                     f'<div style="{_thinking_collapsed_style()}" '
                     f'onclick="var e=document.getElementById(\'{tid}\');'
                     f'e.style.display=e.style.display==\'none\'?\'block\':\'none\';'
                     f'this.innerHTML=this.innerHTML.replace(\'▸\',e.style.display==\'none\'?\'▸\':\'▾\');">'
-                    f'▸ {preview}</div>'
+                    f'▸ {html.escape(seg["content"][:40])}</div>'
                 )
                 parts.append(
                     f'<div id="{tid}" style="display:none;{_thinking_expanded_style()}">'
@@ -587,6 +587,19 @@ class AgentPanel(QtWidgets.QWidget):
                     f'{html.escape(seg["content"])}</pre>'
                     f'</div>'
                 )
+        # Live thinking block (growing in real-time)
+        if self._thinking_buf:
+            tid = f"th_live{self._request_count}"
+            preview = html.escape(self._thinking_buf[:40])
+            # Always show expanded when actively streaming
+            parts.append(
+                f'<div style="{_thinking_expanded_style()}">'
+                f'<pre style="margin:0;color:#71717a;font-size:{fs(11)};white-space:pre-wrap;'
+                f'background:transparent;font-family:inherit;">'
+                f'{html.escape(self._thinking_buf)}<span style="color:#06b6d4;">▊</span></pre>'
+                f'</div>'
+            )
+        # Current streaming text
         if self._current_text:
             a = accent_color()
             escaped = html.escape(self._current_text)
@@ -600,7 +613,7 @@ class AgentPanel(QtWidgets.QWidget):
             self._scroll_to_bottom()
 
     def _render_final(self):
-        """Final render without cursor + separator."""
+        """Final render without cursors + separator."""
         parts = []
         for i, seg in enumerate(self._stream_segments):
             if seg["type"] == "text":
@@ -624,6 +637,26 @@ class AgentPanel(QtWidgets.QWidget):
                     f'{html.escape(seg["content"])}</pre>'
                     f'</div>'
                 )
+        # Any remaining thinking that wasn't flushed (text arrived before thinking finished)
+        if self._thinking_buf.strip():
+            self._stream_segments.append({"type": "thinking", "content": self._thinking_buf})
+            tid = f"thf{self._request_count}_{len(self._stream_segments)}"
+            preview = html.escape(self._thinking_buf[:40])
+            parts.append(
+                f'<div style="{_thinking_collapsed_style()}" '
+                f'onclick="var e=document.getElementById(\'{tid}\');'
+                f'e.style.display=e.style.display==\'none\'?\'block\':\'none\';'
+                f'this.innerHTML=this.innerHTML.replace(\'▸\',e.style.display==\'none\'?\'▸\':\'▾\');">'
+                f'▸ {preview}</div>'
+            )
+            parts.append(
+                f'<div id="{tid}" style="display:none;{_thinking_expanded_style()}">'
+                f'<pre style="margin:0;color:#71717a;font-size:{fs(11)};white-space:pre-wrap;'
+                f'background:transparent;font-family:inherit;">'
+                f'{html.escape(self._thinking_buf)}</pre>'
+                f'</div>'
+            )
+            self._thinking_buf = ""
         parts.append(f'<div style="{_separator_style()}">── 本轮结束 ──</div>')
         self.timeline_view.setHtml(self._ai_bubble_base + "".join(parts))
         self._scroll_to_bottom()
