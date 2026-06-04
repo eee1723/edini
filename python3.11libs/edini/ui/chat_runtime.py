@@ -7,9 +7,11 @@ class ChatRuntime(QObject):
 
     started = Signal(dict)
     stream_chunk = Signal(str)
+    thinking_chunk = Signal(str)
     completed = Signal(dict)
     failed = Signal(str)
     tool_started = Signal(str, str, dict)
+    tool_completed = Signal(str, str, str)
     stats_updated = Signal(dict)
     busy_changed = Signal(bool)
 
@@ -29,6 +31,9 @@ class ChatRuntime(QObject):
 
     def _on_text_delta(self, text: str):
         self.stream_chunk.emit(text)
+
+    def _on_thinking_delta(self, text: str):
+        self.thinking_chunk.emit(text)
 
     def _on_tool_call(self, tool_name: str, tool_call_id: str, args: dict):
         self.tool_started.emit(tool_name, tool_call_id, args)

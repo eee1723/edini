@@ -80,7 +80,9 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         # Chat runtime signals
         self._chat_runtime.started.connect(self._on_agent_started)
         self._chat_runtime.stream_chunk.connect(self.agent_panel.append_stream_chunk)
+        self._chat_runtime.thinking_chunk.connect(self._on_thinking)
         self._chat_runtime.tool_started.connect(self._on_tool_call)
+        self._chat_runtime.tool_completed.connect(self._on_tool_result)
         self._chat_runtime.completed.connect(self._on_agent_done)
         self._chat_runtime.failed.connect(self._on_error)
         self._chat_runtime.busy_changed.connect(self._on_busy_changed)
@@ -88,6 +90,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
 
         # Agent panel signals
         self.agent_panel.submit_requested.connect(self._on_agent_submit)
+        self.agent_panel.abort_requested.connect(self._on_abort_request)
 
         # History panel signals
         self.history_panel.new_session_requested.connect(self._on_new_session)
@@ -118,23 +121,47 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
 
     # ── Signal handlers ──
 
-    def _on_agent_submit(self, text: str):
+    def _on_agent_submit(self, text: str, images=None):
         self.agent_panel.begin_assistant_message()
-        self._rpc_client.send_prompt(text)
+        self._rpc_client.send_prompt(text, images=images)
 
     def _on_agent_started(self, _):
         self.agent_panel.set_busy(True)
         self.status.showMessage("Processing...")
 
     def _on_agent_done(self, _):
+        from edini.ui.session_store import append_message
         self.agent_panel.finish_streaming()
         self.agent_panel.set_busy(False)
         self.context_panel.refresh_scene_info()
         self._rpc_client.send_get_stats()
+        self._update_statusbar()
         self.status.showMessage("Ready")
+        # Store assistant message
+        if self._current_session_id:
+            msg = {
+                "role": "assistant",
+                "content": self.agent_panel._raw_stream_text,
+                "thinking": list(self.agent_panel._pending_thinkings),
+                "tools": list(self.agent_panel._pending_tools),
+            }
+            append_message(self._current_session_id, msg)
+        # Check compression
+        self._check_compression()
 
     def _on_tool_call(self, tool_name: str, tool_call_id: str, args: dict):
-        self.agent_panel.add_tool_card(tool_name, args)
+        self.agent_panel.add_tool_card(tool_name, args, tool_call_id)
+
+    def _on_tool_result(self, tool_name: str, tool_call_id: str, result: str):
+        self.agent_panel.set_tool_result(tool_call_id, result)
+
+    def _on_thinking(self, text: str):
+        self.agent_panel.add_thinking_step(
+            self.agent_panel._thinking_count + 1, text)
+
+    def _on_abort_request(self):
+        self._rpc_client.send_abort()
+        self.agent_panel.show_aborted()
 
     def _on_error(self, msg: str):
         self.agent_panel.add_error(msg)
@@ -145,8 +172,9 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         pass
 
     def _on_status_changed(self, status: str):
+        self._last_pi_status = status
         self.context_panel.set_pi_status(status)
-        self.status.showMessage(f"Pi: {status}")
+        self._update_statusbar()
 
     def _on_new_session(self):
         from edini.ui.session_store import create_session
@@ -158,17 +186,21 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self.agent_panel.set_session_id(sid)
 
     def _on_session_selected(self, sid: str):
-        from edini.ui.session_store import load_messages
+        from edini.ui.session_store import load_session, build_context_messages
         self._current_session_id = sid
         self.agent_panel.clear_timeline()
-        msgs = load_messages(sid)
+        record = load_session(sid)
+        if record is None:
+            self.agent_panel.set_session_id(sid)
+            return
+        msgs = record.get("messages", [])
         for m in msgs:
             role = m.get("role", "")
             content = m.get("content", "")
             if role == "user":
                 self.agent_panel._append_user_message(content)
             elif role == "assistant":
-                self.agent_panel._append_assistant_message(content)
+                self.agent_panel._render_stored_assistant_message(m)
         self.agent_panel.set_session_id(sid)
 
     def _on_session_deleted(self, sid: str):
@@ -182,6 +214,47 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         from edini.ui.theme import init_theme_from_config, refresh_window_theme
         init_theme_from_config()
         refresh_window_theme(self)
+
+    def _update_statusbar(self):
+        parts = []
+        status = getattr(self, '_last_pi_status', 'connecting')
+        icons = {"connected": "●", "connecting": "◌", "disconnected": "○"}
+        parts.append(f"{icons.get(status, '●')} {status}")
+        settings = get_settings()
+        parts.append(f"{settings.get('provider','?')}/{settings.get('model_id','?')}")
+        if hou:
+            try:
+                root = hou.node("/")
+                count = len(root.allSubChildren()) if root else 0
+                parts.append(f"Nodes:{count}")
+            except Exception:
+                pass
+        self.status.showMessage("  │  ".join(parts))
+
+    def _check_compression(self):
+        from edini.ui.session_store import compress_session, load_session, get_session_stats
+        if not self._current_session_id:
+            return
+        ctx_pct = getattr(self.context_panel, '_last_ctx_pct', None)
+        if ctx_pct is None or ctx_pct < 60:
+            return
+        record = load_session(self._current_session_id)
+        if record is None or record.get("compressed_summary", ""):
+            return
+        stats = get_session_stats(self._current_session_id)
+        rounds = stats.get("rounds", 0)
+        if rounds < 5:
+            return
+        messages = record.get("messages", [])
+        cutoff = max(1, int(len(messages) * 0.6))
+        early_msgs = messages[:cutoff]
+        lines = []
+        for m in early_msgs:
+            role = m.get("role", "")
+            content = m.get("content", "")[:200]
+            lines.append(f"[{role}] {content}")
+        summary = "\n".join(lines)[:500]
+        compress_session(self._current_session_id, summary, cutoff)
 
     def closeEvent(self, event):
         self._rpc_client.stop()
