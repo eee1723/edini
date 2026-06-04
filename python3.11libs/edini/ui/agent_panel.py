@@ -507,6 +507,9 @@ class AgentPanel(QtWidgets.QWidget):
         self._ai_bubble_base = self.timeline_view.toHtml()
 
     def append_stream_chunk(self, text: str):
+        # Flush thinking buffer when text arrives (natural boundary from Pi)
+        if self._thinking_buf.strip():
+            self._flush_thinking_buf()
         self._current_text += text
         if len(self._current_text) >= self.STREAM_FLUSH_CHARS:
             self._flush_stream()
@@ -521,8 +524,9 @@ class AgentPanel(QtWidgets.QWidget):
     def finish_streaming(self):
         self._streaming = False
         self._stream_flush_timer.stop()
-        self._thinking_buf_timer.stop()
-        self._flush_thinking_buf()
+        # Flush residual thinking
+        if self._thinking_buf.strip():
+            self._flush_thinking_buf()
         if self._current_text.strip():
             self._stream_segments.append({"type": "text", "content": self._current_text})
             self._current_text = ""
@@ -537,18 +541,15 @@ class AgentPanel(QtWidgets.QWidget):
         self._update_tool_card_result(tool_call_id, result, True)
 
     def add_thinking_step(self, step_num: int, text: str):
-        """Accumulate thinking chunks (R1 sends one word per event), flush after 600ms idle or 300 chars."""
+        """Accumulate thinking chunks. Flushed when text arrives (Pi event boundary)."""
         self._thinking_count += 1
         clean = _clean_thinking(text)
         if self._thinking_buf:
-            self._thinking_buf += clean if clean.startswith(" ") or not clean else " " + clean
+            # Smart join: no double spaces
+            sep = "" if clean.startswith((" ", "\n", ",", ".", "!", "?", "，", "。", "、")) else " "
+            self._thinking_buf += sep + clean
         else:
             self._thinking_buf = clean
-        # Flush immediately if buffer gets large
-        if len(self._thinking_buf) >= 300:
-            self._flush_thinking_buf()
-        else:
-            self._thinking_buf_timer.start()
 
     def _flush_thinking_buf(self):
         """Flush accumulated thinking buffer as a single segment."""
