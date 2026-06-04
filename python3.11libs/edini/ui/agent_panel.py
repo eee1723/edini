@@ -256,14 +256,16 @@ class AgentPanel(QtWidgets.QWidget):
         tool_panel_layout.addWidget(self._tool_scroll)
 
         self._tool_panel_expanded = False
+        self._tool_panel.setMinimumHeight(24)
+        self._tool_panel.setMaximumHeight(24)
         self._vsplitter.addWidget(self._tool_panel)
 
         # Set default sizes: timeline gets most space, tool panel minimal
-        self._vsplitter.setSizes([-1, 28])
+        self._vsplitter.setSizes([700, 24])
         self._vsplitter.setCollapsible(0, False)
         self._vsplitter.setCollapsible(1, False)
-        self._vsplitter.setStretchFactor(0, 3)
-        self._vsplitter.setStretchFactor(1, 1)
+        self._vsplitter.setStretchFactor(0, 1)
+        self._vsplitter.setStretchFactor(1, 0)
         root.addWidget(self._vsplitter, 1)
 
         # ── Input row ──
@@ -373,9 +375,8 @@ class AgentPanel(QtWidgets.QWidget):
         self._tool_panel_expanded = False
         self._tool_scroll.setVisible(False)
         self._tool_toggle.setText("▸ Tool Calls (0)")
-        self._vsplitter.setSizes([-1, 28])
-        if hasattr(self, '_saved_sizes'):
-            del self._saved_sizes
+        self._tool_panel.setMinimumHeight(24)
+        self._tool_panel.setMaximumHeight(24)
 
         images = None
         if self._screenshot_data:
@@ -394,13 +395,12 @@ class AgentPanel(QtWidgets.QWidget):
         arrow = "▾" if self._tool_panel_expanded else "▸"
         count = len(self._tool_cards)
         self._tool_toggle.setText(f"{arrow} Tool Calls ({count})")
-        # Resize splitter: collapse tool panel to header-only, or restore
         if self._tool_panel_expanded:
-            if hasattr(self, '_saved_sizes'):
-                self._vsplitter.setSizes(self._saved_sizes)
+            self._tool_panel.setMinimumHeight(0)
+            self._tool_panel.setMaximumHeight(16777215)
         else:
-            self._saved_sizes = list(self._vsplitter.sizes())
-            self._vsplitter.setSizes([self._vsplitter.height() - 28, 28])
+            self._tool_panel.setMinimumHeight(24)
+            self._tool_panel.setMaximumHeight(24)
 
     def _add_tool_card_ui(self, tool_name: str, args: dict, tool_call_id: str):
         """Immediately add a tool card widget to the panel."""
