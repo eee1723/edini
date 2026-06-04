@@ -34,6 +34,8 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self._bootstrap()
 
     def _build_ui(self):
+        from edini.ui.theme import init_theme_from_config
+        init_theme_from_config()
         apply_theme(self)
 
         central = QtWidgets.QWidget(self)
@@ -174,6 +176,12 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         if sid == self._current_session_id:
             self._current_session_id = ""
             self.agent_panel.clear_timeline()
+
+    def refresh_theme(self):
+        """Called externally after settings change to reapply theme."""
+        from edini.ui.theme import init_theme_from_config, refresh_window_theme
+        init_theme_from_config()
+        refresh_window_theme(self)
 
     def closeEvent(self, event):
         self._rpc_client.stop()
