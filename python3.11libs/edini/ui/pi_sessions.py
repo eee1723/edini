@@ -14,8 +14,12 @@ from typing import Optional
 
 
 def _pi_sessions_root() -> Path:
-    """Get the pi sessions root directory."""
-    home = os.environ.get("HOME") or os.environ.get("USERPROFILE") or "~"
+    """Get the pi sessions root directory.
+
+    Pi (Node.js) uses os.homedir() which on Windows returns USERPROFILE.
+    We must match this; Houdini overrides HOME to a Documents subfolder.
+    """
+    home = os.environ.get("USERPROFILE") or os.environ.get("HOME") or "~"
     return Path(home) / ".pi" / "agent" / "sessions"
 
 
