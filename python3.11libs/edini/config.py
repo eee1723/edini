@@ -53,6 +53,8 @@ _DEFAULTS: dict[str, Any] = {
     "api_key": "",
     "provider": "deepseek",
     "model_id": "deepseek-chat",
+    "theme_color": "cyan",
+    "font_scale": 1.0,
 }
 
 # ---- Env var overrides (highest priority) ----
@@ -119,3 +121,30 @@ def get_pi_command() -> list[str]:
         "-e", str(PI_EXTENSIONS_DIR / "edini-tools" / "index.ts"),
         "-e", str(PI_EXTENSIONS_DIR / "edini-context" / "index.ts"),
     ]
+
+
+# ---- Model History (user input memory) ----
+_MODEL_HISTORY_FILE = Path(__file__).resolve().parent / "model_history.json"
+_MAX_MODEL_HISTORY = 10
+
+
+def get_model_history() -> list[str]:
+    """Return list of previously used model names, newest first."""
+    if _MODEL_HISTORY_FILE.exists():
+        try:
+            with open(_MODEL_HISTORY_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+    return []
+
+
+def add_model_history(model_name: str) -> None:
+    """Add a model name to history, keeping last 10 unique entries."""
+    history = get_model_history()
+    if model_name in history:
+        history.remove(model_name)
+    history.insert(0, model_name)
+    history = history[:_MAX_MODEL_HISTORY]
+    with open(_MODEL_HISTORY_FILE, "w", encoding="utf-8") as f:
+        json.dump(history, f, indent=2, ensure_ascii=False)
