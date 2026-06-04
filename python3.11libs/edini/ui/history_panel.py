@@ -1,17 +1,24 @@
-"""Sessions panel — session list with metadata, rename, delete."""
+"""Sessions panel — session list with metadata, rename, delete.
+
+Reads pi session files from ~/.pi/agent/sessions/.
+"""
 from PySide6 import QtCore, QtWidgets
-from edini.ui.session_store import (
-    list_sessions, delete_session, rename_session, get_session_stats,
+from edini.ui.pi_sessions import (
+    list_pi_sessions, delete_pi_session,
 )
 
 
 class HistoryPanel(QtWidgets.QWidget):
+    # Emits pi session file path (not edini session id)
     session_selected = QtCore.Signal(str)
     session_deleted = QtCore.Signal(str)
     new_session_requested = QtCore.Signal()
+    back_to_current_requested = QtCore.Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._cwd = ""
+        self._browsing = False
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
@@ -50,60 +57,45 @@ class HistoryPanel(QtWidgets.QWidget):
 
         self._bind()
 
+    def set_cwd(self, cwd: str):
+        """Set the working directory for session discovery."""
+        self._cwd = cwd
+
     def _bind(self):
         self.new_btn.clicked.connect(self._on_new)
         self.session_list.itemClicked.connect(self._on_select)
-        self.session_list.itemDoubleClicked.connect(self._on_double_click)
         self.session_list.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.session_list.customContextMenuRequested.connect(self._on_context_menu)
 
     def _on_new(self):
-        self.new_session_requested.emit()
+        if self._browsing:
+            self.back_to_current_requested.emit()
+        else:
+            self.new_session_requested.emit()
 
     def _on_select(self, item):
         if item and item.data(QtCore.Qt.UserRole):
             self.session_selected.emit(item.data(QtCore.Qt.UserRole))
 
-    def _on_double_click(self, item):
-        sid = item.data(QtCore.Qt.UserRole)
-        if sid:
-            self._rename_dialog(sid)
-
     def _on_context_menu(self, pos):
         item = self.session_list.itemAt(pos)
         if not item:
             return
-        sid = item.data(QtCore.Qt.UserRole)
-        if not sid:
+        session_path = item.data(QtCore.Qt.UserRole)
+        if not session_path:
             return
         menu = QtWidgets.QMenu(self)
-        rename_action = menu.addAction("Rename")
         delete_action = menu.addAction("Delete")
         action = menu.exec(self.session_list.mapToGlobal(pos))
         if action == delete_action:
-            delete_session(sid)
-            self.session_deleted.emit(sid)
-        elif action == rename_action:
-            self._rename_dialog(sid)
+            if delete_pi_session(session_path):
+                self.session_deleted.emit(session_path)
 
-    def _rename_dialog(self, sid: str):
-        from edini.ui.session_store import load_session
-        record = load_session(sid)
-        if record is None:
-            return
-        current = record.get("title", "")
-        text, ok = QtWidgets.QInputDialog.getText(
-            self, "Rename Session", "Name:", text=current
-        )
-        if ok and text.strip():
-            rename_session(sid, text.strip())
-            self.load_sessions()
-
-    def add_session(self, sid: str, title: str, created: str,
-                     updated: str, rounds: int, compressed: bool):
-        """Add a session item with full metadata in two-line format."""
+    def add_session(self, session_path: str, title: str, created: str,
+                     updated: str, msg_count: int):
+        """Add a session item with metadata."""
         item = QtWidgets.QListWidgetItem()
-        item.setData(QtCore.Qt.UserRole, sid)
+        item.setData(QtCore.Qt.UserRole, session_path)
         item.setSizeHint(QtCore.QSize(0, 60))
 
         widget = QtWidgets.QWidget()
@@ -117,9 +109,7 @@ class HistoryPanel(QtWidgets.QWidget):
 
         created_short = _fmt_time(created)
         updated_short = _fmt_time(updated)
-        meta = f"Created: {created_short}  ·  {rounds} rounds"
-        if compressed:
-            meta += "  ·  compressed"
+        meta = f"Created: {created_short}  ·  {msg_count} messages"
         meta_label = QtWidgets.QLabel(meta)
         meta_label.setStyleSheet("font-size:10pt;color:#71717a;border:none;")
         w_layout.addWidget(meta_label)
@@ -131,27 +121,47 @@ class HistoryPanel(QtWidgets.QWidget):
         self.session_list.addItem(item)
         self.session_list.setItemWidget(item, widget)
 
-    def remove_session(self, sid: str):
+    def remove_session(self, session_path: str):
         for i in range(self.session_list.count()):
             item = self.session_list.item(i)
-            if item and item.data(QtCore.Qt.UserRole) == sid:
+            if item and item.data(QtCore.Qt.UserRole) == session_path:
                 self.session_list.takeItem(i)
                 break
 
-    def load_sessions(self):
+    def set_browsing_mode(self, enabled: bool):
+        """Toggle between normal mode (+ New Session) and browsing mode (← Back to Current)."""
+        self._browsing = enabled
+        if enabled:
+            self.new_btn.setText("← 回到当前")
+        else:
+            self.new_btn.setText("+ 新对话")
+
+    def highlight_session(self, session_path: str):
+        """Highlight a specific session item in the list by its path."""
+        self.session_list.clearSelection()
+        if not session_path:
+            return
+        for i in range(self.session_list.count()):
+            item = self.session_list.item(i)
+            if item and item.data(QtCore.Qt.UserRole) == session_path:
+                self.session_list.setCurrentItem(item)
+                break
+
+    def load_sessions(self, highlight_path: str = ""):
         self.session_list.clear()
-        sessions = list_sessions()
+        if not self._cwd:
+            return
+        sessions = list_pi_sessions(self._cwd)
         for s in sessions:
-            sid = s["session_id"]
-            stats = get_session_stats(sid)
             self.add_session(
-                sid,
+                s["path"],
                 s.get("title", "New Session"),
-                stats.get("created_at", ""),
-                stats.get("updated_at", ""),
-                stats.get("rounds", 0),
-                stats.get("compressed", False),
+                s.get("created_at", ""),
+                s.get("updated_at", ""),
+                s.get("message_count", 0),
             )
+        if highlight_path:
+            self.highlight_session(highlight_path)
 
 
 def _fmt_time(iso_str: str) -> str:
