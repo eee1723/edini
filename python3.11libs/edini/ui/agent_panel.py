@@ -168,7 +168,7 @@ class AgentPanel(QtWidgets.QWidget):
         self._thinking_buf = ""  # accumulate R1 word-chunks
         self._thinking_buf_timer = QtCore.QTimer(self)
         self._thinking_buf_timer.setSingleShot(True)
-        self._thinking_buf_timer.setInterval(200)
+        self._thinking_buf_timer.setInterval(600)  # wait 600ms for R1 word chunks
         self._thinking_buf_timer.timeout.connect(self._flush_thinking_buf)
         self._tool_cards: dict[str, _ToolCardWidget] = {}
 
@@ -537,14 +537,18 @@ class AgentPanel(QtWidgets.QWidget):
         self._update_tool_card_result(tool_call_id, result, True)
 
     def add_thinking_step(self, step_num: int, text: str):
-        """Accumulate thinking chunks (R1 sends one word per event), flush after 200ms idle."""
+        """Accumulate thinking chunks (R1 sends one word per event), flush after 600ms idle or 300 chars."""
         self._thinking_count += 1
         clean = _clean_thinking(text)
         if self._thinking_buf:
-            self._thinking_buf += " " + clean
+            self._thinking_buf += clean if clean.startswith(" ") or not clean else " " + clean
         else:
             self._thinking_buf = clean
-        self._thinking_buf_timer.start()  # restart 200ms timer
+        # Flush immediately if buffer gets large
+        if len(self._thinking_buf) >= 300:
+            self._flush_thinking_buf()
+        else:
+            self._thinking_buf_timer.start()
 
     def _flush_thinking_buf(self):
         """Flush accumulated thinking buffer as a single segment."""
