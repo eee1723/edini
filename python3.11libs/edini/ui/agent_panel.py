@@ -381,6 +381,13 @@ class AgentPanel(QtWidgets.QWidget):
         arrow = "▾" if self._tool_panel_expanded else "▸"
         count = len(self._tool_cards)
         self._tool_toggle.setText(f"{arrow} Tool Calls ({count})")
+        # Resize splitter: collapse tool panel to header-only, or restore
+        if self._tool_panel_expanded:
+            if hasattr(self, '_saved_sizes'):
+                self._vsplitter.setSizes(self._saved_sizes)
+        else:
+            self._saved_sizes = list(self._vsplitter.sizes())
+            self._vsplitter.setSizes([self._vsplitter.height() - 28, 28])
 
     def _add_tool_card_ui(self, tool_name: str, args: dict, tool_call_id: str):
         """Immediately add a tool card widget to the panel."""
@@ -495,15 +502,7 @@ class AgentPanel(QtWidgets.QWidget):
     def _flush_stream(self):
         if not self._raw_stream_text:
             return
-        a = accent_color()
-        escaped = html.escape(self._raw_stream_text)
-        rendered = _format_message(escaped)
-        bubble = (
-            f'<div style="{_bubble_ai_style()}">{rendered}'
-            f'<span style="color:{a};">▊</span></div>'
-        )
-        self.timeline_view.setHtml(self._ai_bubble_base + bubble)
-        self._scroll_to_bottom()
+        self._render_stream_with_thinking()
 
     def finish_streaming(self):
         self._streaming = False
@@ -512,8 +511,44 @@ class AgentPanel(QtWidgets.QWidget):
         self._raw_stream_text = ""
 
     def add_thinking_step(self, step_num: int, text: str):
+        """Real-time: append thinking step and immediately render."""
         self._thinking_count += 1
-        self._pending_thinkings.append(f"{step_num}. {text}")
+        # Clean up DeepSeek R1 word-numbering pattern: "1. word 2. word" → "word word"
+        clean = _clean_thinking(text)
+        self._pending_thinkings.append(clean)
+        # Rebuild timeline to show thinking live
+        self._render_stream_with_thinking()
+
+    def _render_stream_with_thinking(self):
+        """Rebuild current AI bubble with thinking block + streaming text."""
+        parts = []
+        if self._pending_thinkings:
+            thinking_text = "\n".join(self._pending_thinkings)
+            a = accent_color()
+            parts.append(
+                f'<div style="{_thinking_collapsed_style()}" '
+                f'onclick="var e=document.getElementById(\'t{self._request_count}\');'
+                f'e.style.display=e.style.display==\'none\'?\'block\':\'none\';'
+                f'this.innerHTML=this.innerHTML.replace(\'▸\',e.style.display==\'none\'?\'▸\':\'▾\');">'
+                f'▸ Thinking ({self._thinking_count} steps)</div>'
+            )
+            parts.append(
+                f'<div id="t{self._request_count}" style="display:none;{_thinking_expanded_style()}">'
+                f'<pre style="margin:0;color:#71717a;font-size:{fs(11)};white-space:pre-wrap;'
+                f'background:transparent;font-family:inherit;">'
+                f'{html.escape(thinking_text)}</pre>'
+                f'</div>'
+            )
+        if self._raw_stream_text:
+            a = accent_color()
+            escaped = html.escape(self._raw_stream_text)
+            rendered = _format_message(escaped)
+            parts.append(
+                f'<div style="{_bubble_ai_style()}">{rendered}'
+                f'<span style="color:{a};">▊</span></div>'
+            )
+        self.timeline_view.setHtml(self._ai_bubble_base + "".join(parts))
+        self._scroll_to_bottom()
 
     def add_tool_card(self, tool_name: str, args: dict, tool_call_id: str = ""):
         """Real-time: add to both pending list AND tool card panel."""
@@ -524,37 +559,29 @@ class AgentPanel(QtWidgets.QWidget):
         self._update_tool_card_result(tool_call_id, result, True)
 
     def finalize_ai_message(self):
-        """Build complete AI response with thinking blocks + final reply."""
+        """Final render: same as live but without cursor."""
         parts = []
-
-        # Thinking block (collapsed by default)
         if self._pending_thinkings:
             thinking_text = "\n".join(self._pending_thinkings)
-            collapsed = (
+            parts.append(
                 f'<div style="{_thinking_collapsed_style()}" '
                 f'onclick="var e=document.getElementById(\'t{self._request_count}\');'
                 f'e.style.display=e.style.display==\'none\'?\'block\':\'none\';'
                 f'this.innerHTML=this.innerHTML.replace(\'▸\',e.style.display==\'none\'?\'▸\':\'▾\');">'
                 f'▸ Thinking ({self._thinking_count} steps)</div>'
             )
-            expanded = (
+            parts.append(
                 f'<div id="t{self._request_count}" style="display:none;{_thinking_expanded_style()}">'
                 f'<pre style="margin:0;color:#71717a;font-size:{fs(11)};white-space:pre-wrap;'
                 f'background:transparent;font-family:inherit;">'
                 f'{html.escape(thinking_text)}</pre>'
                 f'</div>'
             )
-            parts.append(collapsed + expanded)
-
-        # Final reply text
         if self._raw_stream_text:
             escaped = html.escape(self._raw_stream_text)
             rendered = _format_message(escaped)
             parts.append(f'<div style="{_bubble_ai_style()}">{rendered}</div>')
-
-        # Separator
         parts.append(f'<div style="{_separator_style()}">── 本轮结束 ──</div>')
-
         self.timeline_view.setHtml(self._ai_bubble_base + "".join(parts))
         self._scroll_to_bottom()
 
@@ -678,6 +705,14 @@ def _format_message(text: str) -> str:
     out = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', out)
     out = out.replace("\n", "<br>")
     return out
+
+
+def _clean_thinking(text: str) -> str:
+    """Remove DeepSeek R1 word-numbering pattern: '1. word 2. word' → 'word word'."""
+    # Pattern: number + dot + space + word, repeated
+    if re.match(r'^(\d+\.\s+\w+\s*)+$', text):
+        return re.sub(r'\d+\.\s+', '', text).strip()
+    return text
 
 
 def _format_args(args: dict) -> str:
