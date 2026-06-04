@@ -1,5 +1,7 @@
 {
   "api_key": "sk-ba5acd12e0014246a3ffa210d24e1b58",
   "provider": "deepseek",
-  "model_id": "deepseek-v4-pro"
+  "model_id": "deepseek-v4-pro",
+  "theme_color": "purple",
+  "font_scale": 0.9
 }

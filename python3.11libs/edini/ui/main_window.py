@@ -48,6 +48,11 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self._current_session_path = ""
         self._active_session_path = ""
         self._browsing_session_path = ""
+        self._extracting_knowledge = False
+        self._round_elapsed = QtCore.QElapsedTimer()
+        self._round_timer = QtCore.QTimer(self)
+        self._round_timer.setInterval(1000)
+        self._round_timer.timeout.connect(self._on_round_tick)
 
         self._build_ui()
         self._bind_events()
@@ -120,6 +125,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
 
         # Pi status
         self._rpc_client.status_changed.connect(self._on_status_changed)
+        self._rpc_client.notification_received.connect(self._on_notification)
 
         # Pi session management responses
         self._rpc_client.session_switched.connect(self._on_pi_session_switched)
@@ -150,6 +156,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
             settings.get("provider", "deepseek"),
             settings.get("model_id", "deepseek-chat"),
         )
+        self.context_panel.refresh_knowledge()
         from edini.ui.hotkey import install_event_filter
         install_event_filter()
 
@@ -162,18 +169,28 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
     def _on_agent_started(self, _):
         self.agent_panel.set_busy(True)
         self._stats_poll_timer.start()
+        self._round_elapsed.start()
+        self._round_timer.start()
         self.status.showMessage("Processing...")
 
     def _on_agent_done(self, _):
         self.agent_panel.finish_streaming()
         self.agent_panel.set_busy(False)
         self._stats_poll_timer.stop()
+        self._round_timer.stop()
+        self._on_round_tick()  # final update
         self.context_panel.refresh_scene_info()
         self._rpc_client.send_get_stats()
         self._update_statusbar()
         self.status.showMessage("Ready")
         # Refresh session list (message count updated)
         self.history_panel.load_sessions()
+
+        # Auto knowledge extraction
+        if self._extracting_knowledge:
+            self._process_extraction()
+        else:
+            self._maybe_extract_knowledge()
 
     def _on_tool_call(self, tool_name: str, tool_call_id: str, args: dict):
         self.agent_panel.add_tool_card(tool_name, args, tool_call_id)
@@ -182,18 +199,93 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self.agent_panel.set_tool_result(tool_call_id, result)
 
     def _on_thinking(self, text: str):
-        self.agent_panel.add_thinking_step(
-            self.agent_panel._thinking_count + 1, text)
+        self.agent_panel.add_thinking_step(text=text)
 
     def _on_abort_request(self):
         self._rpc_client.send_abort()
         self.agent_panel.show_aborted()
+        self._round_timer.stop()
+        self._on_round_tick()  # final time snapshot
 
     def _on_error(self, msg: str):
         self._stats_poll_timer.stop()
+        self._round_timer.stop()
         self.agent_panel.add_error(msg)
         self.agent_panel.set_busy(False)
         self.status.showMessage(f"Error: {msg}")
+
+    def _on_notification(self, notify_type: str, message: str):
+        """Handle info/warning notifications from Pi extensions."""
+        # Skip the "tools loaded" spam — shown once in Pi Status card instead
+        self.context_panel.set_notification(notify_type, message)
+
+    def _on_round_tick(self):
+        """Update the round elapsed time display."""
+        if self._round_elapsed.isValid():
+            elapsed = self._round_elapsed.elapsed() / 1000.0
+            self.context_panel.set_round_time(elapsed)
+
+    # ── Knowledge Extraction ──
+
+    def _maybe_extract_knowledge(self):
+        """After user conversation finishes, optionally trigger knowledge extraction."""
+        settings = get_settings()
+        if not settings.get("knowledge_enabled", True):
+            return
+        if self._extracting_knowledge:
+            return
+        self._extracting_knowledge = True
+        self.status.showMessage("Extracting knowledge...")
+
+        prompt = (
+            "Based on the conversation above, extract reusable knowledge for Houdini work.\n"
+            "Return ONLY a JSON array of objects with these fields:\n"
+            '- category: one of "避坑" (pitfall), "技巧" (tip), "工作流" (workflow), "模型局限" (model limitation)\n'
+            '- title: short summary in Chinese (max 20 chars)\n'
+            '- content: detailed description in Chinese (1-2 sentences)\n\n'
+            "Focus on concrete, actionable knowledge. Skip generic advice.\n"
+            "If nothing worth extracting, return an empty array [].\n\n"
+            "Example: [{\"category\":\"避坑\",\"title\":\"Pyro解算爆炸\",\"content\":\"关掉GasTurbulence微解算器，否则大尺度烟雾会数值爆炸\"}]"
+        )
+        # Start a new silent round for extraction
+        self.agent_panel.begin_assistant_message()
+        QtCore.QTimer.singleShot(300, lambda: self._rpc_client.send_prompt(prompt))
+
+    def _process_extraction(self):
+        """Parse the agent's extraction response and save knowledge entries."""
+        self._extracting_knowledge = False
+        from edini.ui.knowledge_store import parse_agent_response, add_entry
+
+        # Read the full plain text from the timeline
+        text = self.agent_panel.timeline_view.toPlainText()
+        if not text:
+            self.status.showMessage("Ready")
+            return
+
+        # The extraction response is between the last two "── 本轮结束 ──" separators.
+        # Search backward: find last separator, extract text between second-to-last and last.
+        sep = "── 本轮结束 ──"
+        first_sep = text.find(sep)
+        last_sep = text.rfind(sep)
+        if first_sep >= 0 and last_sep > first_sep:
+            # Text between the two separators (this is the extraction response)
+            text = text[first_sep + len(sep):last_sep].strip()
+        # Fallback: if only one separator, search whole text (extraction rfind will find last JSON)
+
+        entries = parse_agent_response(text)
+        saved = 0
+        for e in entries:
+            add_entry(e["category"], e["title"], e["content"],
+                      source_session=self._current_session_path)
+            saved += 1
+
+        if saved > 0:
+            self.status.showMessage(f"Knowledge: {saved} entries extracted")
+        else:
+            self.status.showMessage("Ready")
+
+        self.context_panel.refresh_knowledge()
+        self.history_panel.load_sessions()
 
     def _on_busy_changed(self, busy: bool):
         pass

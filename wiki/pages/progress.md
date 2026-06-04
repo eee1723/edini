@@ -1,6 +1,6 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-04 &nbsp;|&nbsp; 第六阶段：Session 浏览模式 — 历史浏览 · 继续对话 · 回到当前 · Bug 修复
+> 最后更新：2026-06-04 &nbsp;|&nbsp; 第七阶段：知识沉淀系统 — 自动提取 · 上下文注入 · Thinking 独立面板 · 部署配置
 
 ## 总览看板
 
@@ -78,11 +78,34 @@
   <div class="phase-card-detail">✅ DeepSeek V3/R1 · ✅ Anthropic Claude · ✅ Viewport 截图（vision 模型）</div>
 </div>
 
+<div class="phase-card">
+  <div class="phase-card-header">
+    <span class="phase-card-title">🧠 知识沉淀系统</span>
+    <span class="status-tag status-done">完成</span>
+  </div>
+  <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:100%"></div></div>
+  <div class="phase-card-detail">✅ 对话结束自动提取避坑/技巧/工作流/模型局限 · ✅ JSON 存储 (~/.pi/agent/edini-knowledge.json) · ✅ 新会话上下文注入 · ✅ 管理弹窗（筛选/删除/清空） · ✅ 设置开关</div>
+</div>
+
 </div>
 
 ## 近期关键节点
 
 <div class="timeline">
+
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-04</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第七阶段：知识沉淀系统 + Thinking 独立面板 + Windows 部署</span>
+      <span class="status-tag status-done">完成</span>
+    </div>
+    <div class="timeline-summary">实现知识沉淀闭环：① 新建 knowledge_store.py 全局知识 JSON 存储（~/.pi/agent/edini-knowledge.json），支持 4 分类（避坑/技巧/工作流/模型局限）、去重、LRU 100 条上限 ② 对话结束后自动发送反思 prompt，Agent 返回 JSON 自动解析存储（balanced bracket 状态机 + 双分隔符定位）③ edini-context 扩展读取 JSON 注入系统提示（before_agent_start 钩子）④ 新建 knowledge_dialog.py 管理弹窗（分类筛选/删除/清空）⑤ Settings 新增 knowledge_enabled 开关 ⑥ Context Panel 新增 Knowledge 卡片。Thinking 真正独立：新建 _ThinkingPanelWidget（QTextEdit 纯文本，_apply_expanded_state 管理高度，流式自动展开/结束自动收拢），从时间线 HTML 中完全剥离。部署完善：install.py 自动安装包 + MainMenuCommon.xml hconfig 注册 · Pi models.json 自动创建 · 隐藏 Windows 控制台窗口（CREATE_NO_WINDOW）· 进程终止加固。通知分流：extension_ui_request info → notification_received 信号 → Pi Status 卡片 8s 自动消失。新增对话轮次计时器（QElapsedTimer + 每秒刷新 Context Panel）。修复：History Panel 标题裁切（word wrap + 压缩时间标签）、Pi 终端多开（subprocess 窗口隐藏 + kill 兜底）。</div>
+    <div class="timeline-tags">
+      <span>知识沉淀</span><span>Thinking独立面板</span><span>QTextEdit</span><span>上下文注入</span><span>部署配置</span><span>通知分流</span><span>Windows修复</span><span>计时器</span><span>8文件</span>
+    </div>
+  </div>
+</div>
 
 <div class="timeline-item timeline-done">
   <div class="timeline-date">2026-06-04</div>

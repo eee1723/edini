@@ -1,7 +1,51 @@
 // pi-extensions/edini-context/index.ts
-// Injects Houdini context into the system prompt.
+// Injects Houdini context + knowledge base into the system prompt.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import * as fs from "fs";
+import * as path from "path";
+import * as os from "os";
+
+const KNOWLEDGE_FILE = path.join(os.homedir(), ".pi", "agent", "edini-knowledge.json");
+
+interface KnowledgeEntry {
+  id: string;
+  category: string;
+  title: string;
+  content: string;
+  created_at: string;
+}
+
+const CATEGORY_ICONS: Record<string, string> = {
+  "避坑": "🐛",
+  "技巧": "💡",
+  "工作流": "📋",
+  "模型局限": "⚠️",
+};
+
+function loadKnowledge(): KnowledgeEntry[] {
+  try {
+    if (fs.existsSync(KNOWLEDGE_FILE)) {
+      const raw = fs.readFileSync(KNOWLEDGE_FILE, "utf-8");
+      return JSON.parse(raw);
+    }
+  } catch (_) {
+    // ignore
+  }
+  return [];
+}
+
+function buildKnowledgeContext(): string {
+  const entries = loadKnowledge();
+  if (entries.length === 0) return "";
+
+  const lines: string[] = ["", "## 知识库（来自之前对话的沉淀）", ""];
+  for (const e of entries) {
+    const icon = CATEGORY_ICONS[e.category] || "📌";
+    lines.push(`- [${icon} ${e.category}] ${e.title}: ${e.content}`);
+  }
+  return lines.join("\n");
+}
 
 export default function (pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event, ctx) => {
@@ -29,6 +73,9 @@ The user is interacting with you through a panel inside Houdini. They can see th
 7. Fetch scene info with houdini_get_scene_info when you need context.
 `.trim();
 
-    return { systemPrompt: event.systemPrompt + "\n\n" + houdiniContext };
+    // Inject knowledge base (from previous conversations)
+    const knowledgeText = buildKnowledgeContext();
+
+    return { systemPrompt: event.systemPrompt + "\n\n" + houdiniContext + knowledgeText };
   });
 }

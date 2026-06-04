@@ -1,0 +1,36 @@
+{
+  "project": {
+    "name": "Edini",
+    "description": "Houdini AI Assistant — 自然语言驱动 Houdini 21，基于 Pi Coding Agent",
+    "repo_root": "..",
+    "lang": "zh-CN",
+    "tech_stack": ["Python", "PySide6", "Houdini 21", "Node.js", "TypeScript", "Pi Agent", "DeepSeek", "Anthropic"]
+  },
+  "wiki": {
+    "version": "1.0",
+    "created": "2026-06-03",
+    "last_updated": "2026-06-03-init"
+  },
+  "features": {
+    "search": true,
+    "dark_mode": true,
+    "copy_buttons": true,
+    "toc": true,
+    "filterable_lists": true
+  },
+  "raw": {
+    "enabled": true,
+    "path": "raw",
+    "log_file": "raw/log.md",
+    "index_file": "raw/index.md"
+  },
+  "pages": [
+    {"id": "index", "title": "仪表盘", "icon": "📊", "order": 1},
+    {"id": "architecture", "title": "架构地图", "icon": "🏗️", "order": 2},
+    {"id": "progress", "title": "开发进度", "icon": "🚀", "order": 3, "filterable": true},
+    {"id": "tools", "title": "工具清单", "icon": "🔧", "order": 4},
+    {"id": "pitfalls", "title": "踩坑记录", "icon": "⚠️", "order": 5, "filterable": true},
+    {"id": "references", "title": "参考资料", "icon": "📚", "order": 6},
+    {"id": "handoff", "title": "Agent交接", "icon": "🤖", "order": 7}
+  ]
+}

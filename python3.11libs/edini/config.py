@@ -55,6 +55,7 @@ _DEFAULTS: dict[str, Any] = {
     "model_id": "deepseek-chat",
     "theme_color": "cyan",
     "font_scale": 1.0,
+    "knowledge_enabled": True,
 }
 
 # ---- Env var overrides (highest priority) ----
@@ -117,7 +118,6 @@ def get_pi_command() -> list[str]:
     return [
         PI_EXECUTABLE,
         "--mode", "rpc",
-        "--no-session",
         "-e", str(PI_EXTENSIONS_DIR / "edini-tools" / "index.ts"),
         "-e", str(PI_EXTENSIONS_DIR / "edini-context" / "index.ts"),
     ]

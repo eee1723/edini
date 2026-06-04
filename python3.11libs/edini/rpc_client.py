@@ -6,6 +6,8 @@ Runs on a QThread to avoid blocking the Houdini UI.
 from __future__ import annotations
 
 import json
+import os
+import sys
 import subprocess
 from typing import Any
 
@@ -29,6 +31,9 @@ class RpcClient(QObject):
     error_occurred = Signal(str)
     status_changed = Signal(str)
     stats_updated = Signal(object)          # dict: tokens, cost, contextUsage
+    notification_received = Signal(str, str) # (notify_type, message) for info/warning
+    session_switched = Signal(str)          # new session path after switch
+    messages_received = Signal(object)      # list of messages from pi session
 
     def __init__(self, parent: QObject | None = None):
         super().__init__(parent)
@@ -36,6 +41,7 @@ class RpcClient(QObject):
         self._thread: QThread | None = None
         self._worker: _RpcWorker | None = None
         self._is_running = False
+        self._cwd: str | None = None
 
     @property
     def is_running(self) -> bool:
@@ -59,6 +65,12 @@ class RpcClient(QObject):
         self._worker.error_occurred.connect(self.error_occurred)
         self._worker.status_changed.connect(self.status_changed)
         self._worker.stats_received.connect(self.stats_updated)
+        self._worker.notification_received.connect(self.notification_received)
+        self._worker.session_switched.connect(self.session_switched)
+        self._worker.messages_received.connect(self.messages_received)
+
+        if self._cwd:
+            self._worker.set_cwd(self._cwd)
 
         self._thread.started.connect(self._worker.run)
         self._thread.start()
@@ -110,6 +122,31 @@ class RpcClient(QObject):
         if self._worker:
             self._worker.send_command({"type": "get_session_stats"})
 
+    def set_cwd(self, cwd: str) -> None:
+        """Set the working directory for the Pi subprocess."""
+        self._cwd = cwd
+
+    def send_new_session(self) -> None:
+        """Tell Pi to start a new session."""
+        if self._worker:
+            self._worker.send_command({"type": "new_session"})
+
+    def send_switch_session(self, session_path: str) -> None:
+        """Tell Pi to switch to an existing session."""
+        if self._worker:
+            self._worker.send_command({
+                "type": "switch_session",
+                "sessionPath": session_path,
+            })
+
+    def send_set_session_name(self, name: str) -> None:
+        """Set a display name for the current session."""
+        if self._worker:
+            self._worker.send_command({
+                "type": "set_session_name",
+                "name": name,
+            })
+
     def restart(self) -> None:
         """Restart the Pi subprocess (needed after API key change)."""
         was_running = self._is_running
@@ -130,6 +167,9 @@ class _RpcWorker(QObject):
     error_occurred = Signal(str)
     status_changed = Signal(str)
     stats_received = Signal(object)
+    notification_received = Signal(str, str)
+    session_switched = Signal(str)
+    messages_received = Signal(object)
 
     def __init__(self, pi_cmd: list[str], tool_port: int):
         super().__init__()
@@ -137,19 +177,34 @@ class _RpcWorker(QObject):
         self._tool_port = tool_port
         self._process: subprocess.Popen | None = None
         self._should_stop = False
+        self._cwd: str | None = None
+
+    def set_cwd(self, cwd: str) -> None:
+        """Set working directory for the subprocess."""
+        self._cwd = cwd
 
     def run(self) -> None:
         """Start Pi subprocess and read stdout JSONL events."""
         try:
-            self._process = subprocess.Popen(
-                self._pi_cmd,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1,
-                env=get_pi_env(),
-            )
+            popen_kwargs: dict[str, Any] = {
+                "stdin": subprocess.PIPE,
+                "stdout": subprocess.PIPE,
+                "stderr": subprocess.PIPE,
+                "text": True,
+                "bufsize": 1,
+                "env": get_pi_env(),
+                "cwd": self._cwd,
+            }
+            # On Windows, suppress console window when spawning pi.cmd
+            if sys.platform == "win32":
+                popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+                # Also hide via startupinfo
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+                popen_kwargs["startupinfo"] = startupinfo
+
+            self._process = subprocess.Popen(self._pi_cmd, **popen_kwargs)
             self.status_changed.emit("connected")
 
             for line in self._process.stdout:
@@ -182,9 +237,16 @@ class _RpcWorker(QObject):
         if self._process:
             try:
                 self._process.terminate()
-                self._process.wait(timeout=3)
+                try:
+                    self._process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    self._process.kill()
+                    self._process.wait(timeout=2)
             except Exception:
-                self._process.kill()
+                try:
+                    self._process.kill()
+                except Exception:
+                    pass
 
     def send_command(self, cmd: dict[str, Any]) -> None:
         """Send a JSON command to Pi's stdin."""
@@ -230,14 +292,24 @@ class _RpcWorker(QObject):
         elif event_type == "response":
             if not event.get("success", True):
                 self.error_occurred.emit(event.get("error", "Unknown error"))
-            elif event.get("command") == "get_session_stats":
+            command = event.get("command", "")
+            if command == "get_session_stats":
                 self.stats_received.emit(event.get("data", {}))
+            elif command in ("new_session", "switch_session"):
+                data = event.get("data", {})
+                session_path = data.get("sessionPath", "") if isinstance(data, dict) else ""
+                self.session_switched.emit(session_path)
+            elif command == "get_messages":
+                self.messages_received.emit(event.get("data", []))
 
         elif event_type == "extension_error":
             self.error_occurred.emit(f"Extension: {event.get('error', '')}")
 
         elif event_type == "extension_ui_request":
             if event.get("method") == "notify":
-                self.error_occurred.emit(
-                    f"[{event.get('notifyType', 'info')}] {event.get('message', '')}"
-                )
+                notify_type = event.get("notifyType", "info")
+                message = event.get("message", "")
+                if notify_type == "error":
+                    self.error_occurred.emit(f"[{notify_type}] {message}")
+                else:
+                    self.notification_received.emit(notify_type, message)

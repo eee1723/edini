@@ -1,6 +1,6 @@
 # 📊 仪表盘
 
-> **当前阶段**：Session 浏览模式 — 历史会话浏览/继续对话/回到当前 · Pi v3 格式兼容 · Houdini HOME 路径修复 &nbsp;|&nbsp; **状态**：16 tools 就绪，Houdini 实机运行 &nbsp;|&nbsp; **最后更新**：2026-06-04
+> **当前阶段**：知识沉淀系统 — 自动提取避坑/技巧/工作流/模型局限 · Thinking 独立面板 · Windows 部署 &nbsp;|&nbsp; **状态**：16 tools 就绪，Houdini 实机运行 &nbsp;|&nbsp; **最后更新**：2026-06-04
 
 ## 快速导航
 
@@ -27,6 +27,7 @@
 | 多模型 | ✅ DeepSeek V3/R1 · Anthropic · Provider 下拉 + Model 历史记忆 |
 | 设置系统 | ✅ Provider/Model/API Key · 4 色主题实时预览 · 字体缩放 0.8-1.4 |
 | Session 浏览 | ✅ HistoryPanel 模式切换（普通/浏览）· back_to_current_requested 信号 · highlight_session() · MainWindow _active/_browsing 状态追踪 · 删除会话回退逻辑 |
+| 知识沉淀 | ✅ 对话结束自动提取 · 4 分类 JSON 存储 · 上下文注入 · 管理弹窗 · 设置开关 |
 | 测试 | ⬜ 无自动化测试 |
 | 多模态 | ✅ Viewport 截图（vision 模型支持） |
 

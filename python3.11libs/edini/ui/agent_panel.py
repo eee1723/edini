@@ -1,7 +1,6 @@
-"""AgentPanel — Chat timeline + collapsible Tool Call panel + execute/abort toggle."""
+"""AgentPanel — Chat timeline + Thinking Panel + Tool Call Panel + execute/abort toggle."""
 import html
 import re
-import base64
 from PySide6 import QtCore, QtGui, QtWidgets
 from edini.ui.theme import accent_color, fs
 
@@ -21,28 +20,110 @@ def _bubble_ai_style() -> str:
         f'margin:6px 48px 6px 0;'
     )
 
-def _thinking_collapsed_style() -> str:
-    a = accent_color()
-    return (
-        f'color:#a1a1aa;font-size:{fs(11)};cursor:pointer;'
-        f'background:rgba(0,188,212,0.06);padding:4px 8px;'
-        f'border-radius:4px;margin:4px 32px 4px 0;display:inline-block;'
-        f'border-left:2px solid {a};'
-    )
-
-def _thinking_expanded_style() -> str:
-    a = accent_color()
-    return (
-        f'color:#71717a;font-size:{fs(11)};'
-        f'background:#0e0e15;padding:4px 8px;'
-        f'border-left:2px solid {a};margin:4px 32px 4px 8px;'
-    )
-
 def _separator_style() -> str:
     return (
         f'text-align:center;color:#52525b;font-size:{fs(10)};'
         f'margin:10px 0;border-top:1px solid #2a2a3c;padding-top:6px;'
     )
+
+
+# ==========================================================================
+# Thinking Panel Widget (real QWidget, separate from timeline)
+# ==========================================================================
+
+class _ThinkingPanelWidget(QtWidgets.QFrame):
+    """Collapsible thinking panel with QTextEdit for pure text streaming.
+    
+    Lives between the timeline and the tool panel in the vertical splitter.
+    When streaming: auto-expands, shows live text with cursor.
+    When done: auto-collapses to a thin header bar.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._expanded = False
+        self._content = ""
+
+        self.setFrameShape(QtWidgets.QFrame.StyledPanel)
+        self.setStyleSheet("""
+            _ThinkingPanelWidget {
+                background: #0e0e15;
+                border: 1px solid #1c1c28;
+                border-radius: 4px;
+            }
+        """)
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(8, 2, 8, 2)
+        layout.setSpacing(0)
+
+        # Header toggle
+        self._toggle = QtWidgets.QLabel("▸ Thinking")
+        self._toggle.setCursor(QtCore.Qt.PointingHandCursor)
+        self._toggle.setStyleSheet(f"color:#52525b;font-size:{fs(10)};border:none;")
+        self._toggle.mousePressEvent = self._on_toggle
+        layout.addWidget(self._toggle)
+
+        # QTextEdit for pure text streaming
+        self._text_edit = QtWidgets.QTextEdit()
+        self._text_edit.setReadOnly(True)
+        self._text_edit.setFrameShape(QtWidgets.QFrame.NoFrame)
+        self._text_edit.setStyleSheet(f"""
+            QTextEdit {{
+                color: #71717a;
+                font-size: {fs(11)};
+                background: transparent;
+                border: none;
+                padding: 4px 8px;
+            }}
+            QScrollBar:vertical {{
+                background: transparent;
+                width: 6px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: #2a2a3c;
+                border-radius: 3px;
+                min-height: 20px;
+            }}
+        """)
+        self._text_edit.setMaximumHeight(200)
+        self._text_edit.setVisible(False)
+        layout.addWidget(self._text_edit)
+
+    def _on_toggle(self, event=None):
+        self._expanded = not self._expanded
+        self._text_edit.setVisible(self._expanded)
+        self._toggle.setText("▾ Thinking" if self._expanded else "▸ Thinking")
+
+    def set_streaming(self):
+        """Prepare for a new streaming session: expand and clear."""
+        self._content = ""
+        self._text_edit.clear()
+        self._text_edit.setVisible(True)
+        self._expanded = True
+        self._toggle.setText("▾ Thinking")
+
+    def append_text(self, text: str):
+        """Append text to the thinking panel, auto-scroll to bottom."""
+        self._content += text
+        self._text_edit.setPlainText(self._content)
+        sb = self._text_edit.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def finish_streaming(self):
+        """Finalize: write final content, collapse panel."""
+        self._text_edit.setPlainText(self._content)
+        self._expanded = False
+        self._text_edit.setVisible(False)
+        self._toggle.setText("▸ Thinking")
+
+    def clear(self):
+        """Reset the panel completely."""
+        self._content = ""
+        self._text_edit.clear()
+        self._expanded = False
+        self._text_edit.setVisible(False)
+        self._toggle.setText("▸ Thinking")
 
 
 # ==========================================================================
@@ -155,7 +236,7 @@ class AgentPanel(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._busy = False
-        self._stream_segments: list[dict] = []  # [{type: text|thinking, content: str}]
+        self._stream_segments: list[dict] = []  # [{type: text, content: str}] — text only, no thinking
         self._current_text = ""
         self._streaming = False
         self._ai_bubble_base = ""
@@ -163,9 +244,9 @@ class AgentPanel(QtWidgets.QWidget):
         self._session_id = ""
         self._user_scrolled_up = False
 
-        # Pending data
+        # Pending data (thinking now lives in thinking_panel, buffer still used for accumulation)
         self._thinking_count = 0
-        self._thinking_buf = ""  # accumulate R1 word-chunks
+        self._thinking_buf = ""  # accumulate R1 word-chunks before flushing to panel
         self._thinking_buf_timer = QtCore.QTimer(self)
         self._thinking_buf_timer.setSingleShot(True)
         self._thinking_buf_timer.setInterval(600)  # wait 600ms for R1 word chunks
@@ -203,7 +284,7 @@ class AgentPanel(QtWidgets.QWidget):
         self.change_tree_widget.setMaximumHeight(200)
         root.addWidget(self.change_tree_widget)
 
-        # ── Timeline + Tool Call Panel (vertical splitter) ──
+        # ── Timeline + Thinking Panel + Tool Call Panel (vertical splitter) ──
         self._vsplitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
 
         self.timeline_view = QtWidgets.QTextBrowser()
@@ -213,7 +294,11 @@ class AgentPanel(QtWidgets.QWidget):
         self.timeline_view.verticalScrollBar().valueChanged.connect(self._on_user_scroll)
         self._vsplitter.addWidget(self.timeline_view)
 
-        # ── Tool Call Panel (collapsible, below timeline) ──
+        # ── Thinking Panel (collapsible, between timeline and tool panel) ──
+        self.thinking_panel = _ThinkingPanelWidget()
+        self._vsplitter.addWidget(self.thinking_panel)
+
+        # ── Tool Call Panel (collapsible, below thinking panel) ──
         self._tool_panel = QtWidgets.QFrame()
         self._tool_panel.setStyleSheet("""
             _ToolCardWidget {
@@ -260,12 +345,14 @@ class AgentPanel(QtWidgets.QWidget):
         self._tool_panel.setMaximumHeight(24)
         self._vsplitter.addWidget(self._tool_panel)
 
-        # Set default sizes: timeline gets most space, tool panel minimal
-        self._vsplitter.setSizes([700, 24])
+        # Set default sizes: timeline gets most space, panels minimal
+        self._vsplitter.setSizes([700, 22, 24])
         self._vsplitter.setCollapsible(0, False)
         self._vsplitter.setCollapsible(1, False)
+        self._vsplitter.setCollapsible(2, False)
         self._vsplitter.setStretchFactor(0, 1)
         self._vsplitter.setStretchFactor(1, 0)
+        self._vsplitter.setStretchFactor(2, 0)
         root.addWidget(self._vsplitter, 1)
 
         # ── Input row ──
@@ -369,6 +456,9 @@ class AgentPanel(QtWidgets.QWidget):
         self._streaming = True
         self._thinking_count = 0
         self._user_scrolled_up = False
+
+        # Reset thinking panel
+        self.thinking_panel.clear()
 
         # Reset tool panel to collapsed state
         self._clear_tool_cards()
@@ -505,6 +595,8 @@ class AgentPanel(QtWidgets.QWidget):
         self._streaming = True
         self._thinking_count = 0
         self._ai_bubble_base = self.timeline_view.toHtml()
+        # Prepare thinking panel for streaming
+        self.thinking_panel.set_streaming()
 
     def append_stream_chunk(self, text: str):
         # Flush thinking buffer when text arrives (natural boundary from Pi)
@@ -524,13 +616,15 @@ class AgentPanel(QtWidgets.QWidget):
     def finish_streaming(self):
         self._streaming = False
         self._stream_flush_timer.stop()
-        # Flush residual thinking
+        # Flush residual thinking to panel
         if self._thinking_buf.strip():
             self._flush_thinking_buf()
         if self._current_text.strip():
             self._stream_segments.append({"type": "text", "content": self._current_text})
             self._current_text = ""
         self._render_final()
+        # Finalize thinking panel (collapse)
+        self.thinking_panel.finish_streaming()
 
     def add_tool_card(self, tool_name: str, args: dict, tool_call_id: str = ""):
         """Real-time: add tool card widget to panel."""
@@ -540,8 +634,8 @@ class AgentPanel(QtWidgets.QWidget):
         """Real-time: update tool card result."""
         self._update_tool_card_result(tool_call_id, result, True)
 
-    def add_thinking_step(self, step_num: int, text: str):
-        """Stream thinking live: accumulate in buffer, render as one growing block."""
+    def add_thinking_step(self, step_num: int = 0, text: str = ""):
+        """Stream thinking live to the separate thinking panel (QTextEdit)."""
         self._thinking_count += 1
         clean = _clean_thinking(text)
         if self._thinking_buf:
@@ -549,56 +643,28 @@ class AgentPanel(QtWidgets.QWidget):
             self._thinking_buf += sep + clean
         else:
             self._thinking_buf = clean
-        # Live render: one growing thinking block
-        self._render_segments()
+        # Update the thinking panel in real-time
+        self.thinking_panel.append_text(clean)
 
     def _flush_thinking_buf(self):
-        """Flush accumulated thinking buffer as a single segment."""
+        """Flush accumulated thinking buffer — panel already has the live text."""
         if not self._thinking_buf.strip():
             return
-        if self._current_text.strip():
-            self._stream_segments.append({"type": "text", "content": self._current_text})
-            self._current_text = ""
-        self._stream_segments.append({"type": "thinking", "content": self._thinking_buf})
+        # Panel already shows the content live; just clear buffer
         self._thinking_buf = ""
-        self._render_segments()
+        # Store a thinking marker in segments (for stored message replay)
+        if len(self._stream_segments) == 0 or self._stream_segments[-1]["type"] != "thinking":
+            self._stream_segments.append({"type": "thinking", "content": ""})
 
     def _render_segments(self):
-        """Render segments + live thinking block + streaming text."""
+        """Render text-only segments (thinking lives in separate panel)."""
         parts = []
         for i, seg in enumerate(self._stream_segments):
             if seg["type"] == "text":
                 escaped = html.escape(seg["content"])
                 rendered = _format_message(escaped)
                 parts.append(f'<div style="{_bubble_ai_style()}">{rendered}</div>')
-            elif seg["type"] == "thinking":
-                tid = f"th{self._request_count}_{i}"
-                parts.append(
-                    f'<div style="{_thinking_collapsed_style()}" '
-                    f'onclick="var e=document.getElementById(\'{tid}\');'
-                    f'e.style.display=e.style.display==\'none\'?\'block\':\'none\';'
-                    f'this.innerHTML=this.innerHTML.replace(\'▸\',e.style.display==\'none\'?\'▸\':\'▾\');">'
-                    f'▸ {html.escape(seg["content"][:40])}</div>'
-                )
-                parts.append(
-                    f'<div id="{tid}" style="display:none;{_thinking_expanded_style()}">'
-                    f'<pre style="margin:0;color:#71717a;font-size:{fs(11)};white-space:pre-wrap;'
-                    f'background:transparent;font-family:inherit;">'
-                    f'{html.escape(seg["content"])}</pre>'
-                    f'</div>'
-                )
-        # Live thinking block (growing in real-time)
-        if self._thinking_buf:
-            tid = f"th_live{self._request_count}"
-            preview = html.escape(self._thinking_buf[:40])
-            # Always show expanded when actively streaming
-            parts.append(
-                f'<div style="{_thinking_expanded_style()}">'
-                f'<pre style="margin:0;color:#71717a;font-size:{fs(11)};white-space:pre-wrap;'
-                f'background:transparent;font-family:inherit;">'
-                f'{html.escape(self._thinking_buf)}<span style="color:#06b6d4;">▊</span></pre>'
-                f'</div>'
-            )
+            # Skip thinking segments — rendered in thinking_panel
         # Current streaming text
         if self._current_text:
             a = accent_color()
@@ -613,50 +679,14 @@ class AgentPanel(QtWidgets.QWidget):
             self._scroll_to_bottom()
 
     def _render_final(self):
-        """Final render without cursors + separator."""
+        """Final render without cursors + separator. Text only."""
         parts = []
         for i, seg in enumerate(self._stream_segments):
             if seg["type"] == "text":
                 escaped = html.escape(seg["content"])
                 rendered = _format_message(escaped)
                 parts.append(f'<div style="{_bubble_ai_style()}">{rendered}</div>')
-            elif seg["type"] == "thinking":
-                tid = f"thf{self._request_count}_{i}"
-                preview = html.escape(seg["content"][:40])
-                parts.append(
-                    f'<div style="{_thinking_collapsed_style()}" '
-                    f'onclick="var e=document.getElementById(\'{tid}\');'
-                    f'e.style.display=e.style.display==\'none\'?\'block\':\'none\';'
-                    f'this.innerHTML=this.innerHTML.replace(\'▸\',e.style.display==\'none\'?\'▸\':\'▾\');">'
-                    f'▸ {preview}</div>'
-                )
-                parts.append(
-                    f'<div id="{tid}" style="display:none;{_thinking_expanded_style()}">'
-                    f'<pre style="margin:0;color:#71717a;font-size:{fs(11)};white-space:pre-wrap;'
-                    f'background:transparent;font-family:inherit;">'
-                    f'{html.escape(seg["content"])}</pre>'
-                    f'</div>'
-                )
-        # Any remaining thinking that wasn't flushed (text arrived before thinking finished)
-        if self._thinking_buf.strip():
-            self._stream_segments.append({"type": "thinking", "content": self._thinking_buf})
-            tid = f"thf{self._request_count}_{len(self._stream_segments)}"
-            preview = html.escape(self._thinking_buf[:40])
-            parts.append(
-                f'<div style="{_thinking_collapsed_style()}" '
-                f'onclick="var e=document.getElementById(\'{tid}\');'
-                f'e.style.display=e.style.display==\'none\'?\'block\':\'none\';'
-                f'this.innerHTML=this.innerHTML.replace(\'▸\',e.style.display==\'none\'?\'▸\':\'▾\');">'
-                f'▸ {preview}</div>'
-            )
-            parts.append(
-                f'<div id="{tid}" style="display:none;{_thinking_expanded_style()}">'
-                f'<pre style="margin:0;color:#71717a;font-size:{fs(11)};white-space:pre-wrap;'
-                f'background:transparent;font-family:inherit;">'
-                f'{html.escape(self._thinking_buf)}</pre>'
-                f'</div>'
-            )
-            self._thinking_buf = ""
+            # Thinking rendered in separate panel, skip here
         parts.append(f'<div style="{_separator_style()}">── 本轮结束 ──</div>')
         self.timeline_view.setHtml(self._ai_bubble_base + "".join(parts))
         self._scroll_to_bottom()
@@ -673,6 +703,7 @@ class AgentPanel(QtWidgets.QWidget):
 
     def show_aborted(self):
         self._clear_tool_cards()
+        self.thinking_panel.finish_streaming()
         abort_html = (
             f'<div style="text-align:center;color:#f87171;font-size:{fs(11)};'
             f'margin:8px 0;">── 已中止 ──</div>'
@@ -683,6 +714,7 @@ class AgentPanel(QtWidgets.QWidget):
     def clear_timeline(self):
         self.timeline_view.clear()
         self._clear_tool_cards()
+        self.thinking_panel.clear()
 
     # ------------------------------------------------------------------
     # Message rendering
@@ -701,27 +733,19 @@ class AgentPanel(QtWidgets.QWidget):
         self.timeline_view.setHtml(self.timeline_view.toHtml() + bubble_html)
 
     def _render_stored_assistant_message(self, msg: dict):
-        """Render stored message with interleaved thinking blocks."""
+        """Render stored message. Thinking stored separately in panel, text in timeline."""
         content = msg.get("content", "")
         thinking = msg.get("thinking", [])
+        # Show thinking in the panel if present
+        if thinking:
+            thinking_text = "\n\n".join(thinking)
+            self.thinking_panel.clear()
+            self.thinking_panel._content = thinking_text
+            self.thinking_panel._text_edit.setPlainText(thinking_text)
+            self.thinking_panel._toggle.setText("▸ Thinking")
+            self.thinking_panel._expanded = False
+            self.thinking_panel._text_edit.setVisible(False)
         parts = []
-        # Simple: thinking first, then content
-        for i, t in enumerate(thinking):
-            tid = f"sth_{id(msg)}_{i}"
-            preview = html.escape(t[:40])
-            parts.append(
-                f'<div style="{_thinking_collapsed_style()}" '
-                f'onclick="var e=document.getElementById(\'{tid}\');'
-                f'e.style.display=e.style.display==\'none\'?\'block\':\'none\';'
-                f'this.innerHTML=this.innerHTML.replace(\'▸\',e.style.display==\'none\'?\'▸\':\'▾\');">'
-                f'▸ {preview}</div>'
-            )
-            parts.append(
-                f'<div id="{tid}" style="display:none;{_thinking_expanded_style()}">'
-                f'<pre style="margin:0;color:#71717a;font-size:{fs(11)};white-space:pre-wrap;'
-                f'background:transparent;font-family:inherit;">'
-                f'{html.escape(t)}</pre></div>'
-            )
         if content:
             escaped = html.escape(content)
             rendered = _format_message(escaped)
@@ -791,7 +815,6 @@ def _format_message(text: str) -> str:
 
 def _clean_thinking(text: str) -> str:
     """Remove DeepSeek R1 word-numbering pattern: '1. word 2. word' → 'word word'."""
-    # Pattern: number + dot + space + word, repeated
     if re.match(r'^(\d+\.\s+\w+\s*)+$', text):
         return re.sub(r'\d+\.\s+', '', text).strip()
     return text

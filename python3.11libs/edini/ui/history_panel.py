@@ -96,7 +96,7 @@ class HistoryPanel(QtWidgets.QWidget):
         """Add a session item with metadata."""
         item = QtWidgets.QListWidgetItem()
         item.setData(QtCore.Qt.UserRole, session_path)
-        item.setSizeHint(QtCore.QSize(0, 60))
+        item.setSizeHint(QtCore.QSize(0, 68))
 
         widget = QtWidgets.QWidget()
         w_layout = QtWidgets.QVBoxLayout(widget)
@@ -104,17 +104,18 @@ class HistoryPanel(QtWidgets.QWidget):
         w_layout.setSpacing(1)
 
         title_label = QtWidgets.QLabel(title)
-        title_label.setStyleSheet("font-size:12pt;color:#e5e5eb;font-weight:600;border:none;")
+        title_label.setWordWrap(True)
+        title_label.setStyleSheet("font-size:11pt;color:#e5e5eb;font-weight:600;border:none;")
         w_layout.addWidget(title_label)
 
         created_short = _fmt_time(created)
         updated_short = _fmt_time(updated)
-        meta = f"Created: {created_short}  ·  {msg_count} messages"
+        meta = f"{created_short}  ·  {msg_count} msgs"
         meta_label = QtWidgets.QLabel(meta)
         meta_label.setStyleSheet("font-size:10pt;color:#71717a;border:none;")
         w_layout.addWidget(meta_label)
 
-        updated_label = QtWidgets.QLabel(f"Updated: {updated_short}")
+        updated_label = QtWidgets.QLabel(updated_short)
         updated_label.setStyleSheet("font-size:10pt;color:#52525b;border:none;")
         w_layout.addWidget(updated_label)
 

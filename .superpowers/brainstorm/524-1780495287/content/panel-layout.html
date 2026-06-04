@@ -1,0 +1,37 @@
+<h2>面板布局设计 — 什么样的"高级感"？</h2>
+<p class="subtitle">当前是单一聊天面板。高级工具面板可以有多种布局方向。你希望 Edini 面板内部是什么样的？</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>极简聊天 + 快捷指令栏</h3>
+      <p>保持聊天为主体，但在输入栏上方增加一行快捷操作按钮（"创建节点""检查场景""写 VEX"等），点击填入提示词模板。底部是简洁输入+发送。</p>
+      <p style="color:#60a5fa;">学习成本最低，专注对话</p>
+    </div>
+  </div>
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>左右分栏：聊天 + 场景信息</h3>
+      <p>左侧聊天区，右侧实时显示当前 Houdini 场景信息（节点树、选中节点参数、最近日志）。聊天和场景状态并行可见。</p>
+      <p style="color:#f59e0b;">信息密度高，专业感强</p>
+    </div>
+  </div>
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>多标签页 (Chat / Tools / History / Settings)</h3>
+      <p>顶部 Tab 切换：Chat（对话）、Tools（16 个工具目录+直接调用）、History（对话历史）、Settings（模型/API 配置）。可扩展。</p>
+      <p style="color:#16a34a;">组织清晰，功能分区明确</p>
+    </div>
+  </div>
+  <div class="option" data-choice="d" onclick="toggleSelect(this)">
+    <div class="letter">D</div>
+    <div class="content">
+      <h3>混合布局：标签页 + 聊天底栏 + 右侧上下文</h3>
+      <p>Chat 为主标签页，右侧可折叠的上下文面板（显示场景状态/工具结果），底部是带快捷指令的输入区。最全面但也最复杂。</p>
+      <p style="color:#8b5cf6;">功能最全，适合专业用户</p>
+    </div>
+  </div>
+</div>

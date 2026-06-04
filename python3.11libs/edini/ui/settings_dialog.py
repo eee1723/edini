@@ -122,6 +122,28 @@ class SettingsDialog(QtWidgets.QDialog):
         appear_row.addWidget(self._font_scale)
         layout.addLayout(appear_row)
 
+        # ── Knowledge ──
+        layout.addWidget(_section_label("Knowledge"))
+        self._knowledge_check = QtWidgets.QCheckBox("自动知识沉淀（对话结束后提取技巧/避坑）")
+        self._knowledge_check.setChecked(settings.get("knowledge_enabled", True))
+        self._knowledge_check.setStyleSheet(f"QCheckBox {{ color:#a1a1aa; font-size:{fs(11)}; spacing:8px; }}")
+        layout.addWidget(self._knowledge_check)
+
+        manage_knowledge_btn = QtWidgets.QPushButton("管理知识库")
+        manage_knowledge_btn.clicked.connect(self._open_knowledge_manager)
+        manage_knowledge_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent;
+                color: #80cbc4;
+                border: 1px solid #1e2e2e;
+                border-radius: 4px;
+                padding: 4px 12px;
+                font-size: {fs(11)};
+            }}
+            QPushButton:hover {{ background: rgba(128,203,196,0.08); }}
+        """)
+        layout.addWidget(manage_knowledge_btn)
+
         # Separator
         sep = QtWidgets.QFrame()
         sep.setFrameShape(QtWidgets.QFrame.HLine)
@@ -150,6 +172,12 @@ class SettingsDialog(QtWidgets.QDialog):
             f"→ {self._provider.currentText()} / {text.strip()}"
         )
 
+    def _open_knowledge_manager(self):
+        """Open the knowledge management dialog."""
+        from edini.ui.knowledge_dialog import KnowledgeDialog
+        dlg = KnowledgeDialog(self)
+        dlg.exec()
+
     def _on_save(self):
         provider = self._provider.currentText().strip()
         model = self._model_combo.currentText().strip()
@@ -158,6 +186,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "api_key": self._api_key.text().strip(),
             "provider": provider,
             "model_id": model,
+            "knowledge_enabled": self._knowledge_check.isChecked(),
         })
 
         # Model history
