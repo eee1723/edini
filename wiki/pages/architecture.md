@@ -1,6 +1,6 @@
 # 🏗️ 架构地图
 
-> Edini 三层架构全景及数据流。最后更新：2026-06-05（QScrollArea Widget 时间线重构）。
+> Edini 三层架构全景及数据流。最后更新：2026-06-05（UI 字体协调优化：4层统一字号体系）。
 
 ## 架构总览
 
@@ -60,7 +60,7 @@ Edini/
 │       ├── history_panel.py  # 会话列表（浏览模式 + 新建/切换/删除）
 │       ├── settings_dialog.py # 设置（General + Knowledge 双标签）
 │       ├── chat_runtime.py   # Pi 事件适配层
-│       ├── theme.py          # 暗色主题系统 + 字体缩放
+│       ├── theme.py          # 暗色主题系统 + 4层字体缩放（header/body/detail/caption）
 │       ├── hotkey.py         # 快捷键
 │       ├── viewport.py       # Houdini Viewport 截图
 │       ├── pi_sessions.py    # Pi JSONL 会话读取
@@ -154,6 +154,7 @@ Pi Agent 决定调用工具
 | QThread 管理子进程 | 避免阻塞 Houdini UI 主线程 |
 | Pi 以 cwd=HIP 启动 | Session JSONL 按项目目录归档 |
 | 知识两层架构 | 铁律（通用原则，≤20条，每次注入）vs 知识库（细节知识，可检索） |
+| 4层字体体系 | header(13pt)/body(12pt)/detail(11pt)/caption(10pt)，fs() 全局缩放，消除硬编码 pt |
 | 用户确认提取结果 | 避免 AI 判断不准，最终决定权在用户 |
 | 提取响应不渲染进时间线 | get_raw_stream_text + cancel_current_stream，避免 HTML 解析脆弱 |
 | settings.json 本地持久化 | API key 不应写入 Houdini 包文件 |

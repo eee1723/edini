@@ -1,6 +1,6 @@
 # 📊 仪表盘
 
-> **当前阶段**：变更树 QTreeWidget 面板 + SnapshotEngine · Undo/Redo 栈 · Shelf Tool 预设 · 节点 namespace 解析 &nbsp;|&nbsp; **状态**：16 tools 就绪，Houdini 实机运行 &nbsp;|&nbsp; **最后更新**：2026-06-05
+> **当前阶段**：变更树 QTreeWidget 面板 + SnapshotEngine · Undo/Redo 栈 · Shelf Tool 预设 · 节点 namespace 解析 · UI 字体协调优化 &nbsp;|&nbsp; **状态**：16 tools 就绪，Houdini 实机运行 &nbsp;|&nbsp; **最后更新**：2026-06-05
 
 ## 快速导航
 
@@ -17,7 +17,7 @@
 
 | 模块 | 状态 |
 |------|------|
-| UI 面板 | ✅ 三栏布局 · Thinking 面板（内联 QTextEdit，可折叠，实时流展开/收拢）· Tool Call 面板（fixedHeight 折叠/展开）· 时间线 QScrollArea + Widget bubble（_UserBubble / _AiBubble / _Separator / _ErrorBanner）· 知识确认区（铁律/知识徽章可切换 + ✓✕）· 卡片式 Context · 智能滚动（rangeChanged + _pinned_to_bottom）· 代码 Copy（QLabel linkActivated + base64）· 气泡窗口自适应（Expanding + margin）· 完成后自动折叠面板 |
+| UI 面板 | ✅ 三栏布局 · Thinking 面板（内联 QTextEdit，可折叠，实时流展开/收拢）· Tool Call 面板（fixedHeight 折叠/展开）· 时间线 QScrollArea + Widget bubble（_UserBubble / _AiBubble / _Separator / _ErrorBanner）· 知识确认区（铁律/知识徽章可切换 + ✓✕）· 卡片式 Context · 智能滚动（rangeChanged + _pinned_to_bottom）· 代码 Copy（QLabel linkActivated + base64）· 气泡窗口自适应（Expanding + margin）· 完成后自动折叠面板 · 4 层统一字号体系（header fs13 / body fs12 / detail fs11 / caption fs10）· 全局 fs() 缩放 · 无文字裁切 |
 | Houdini 集成 | ✅ MainMenuCommon.xml · 包注册 |
 | 工具执行器 | ✅ HTTP Server · 16 工具路由 · 健康检查 · 实时工具卡片 |
 | Houdini 操作 | ✅ 场景查询 · 节点 CRUD · 参数读写 · 布局 · 搜索 |

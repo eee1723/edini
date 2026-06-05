@@ -62,6 +62,15 @@
 
 <div class="phase-card">
   <div class="phase-card-header">
+    <span class="phase-card-title">🎨 UI 字体</span>
+    <span class="status-tag status-done">完成</span>
+  </div>
+  <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:100%"></div></div>
+  <div class="phase-card-detail">4层统一字号（header 13pt/body 12pt/detail 11pt/caption 10pt）· 全局 fs() 缩放 · 消除硬编码 pt · 面板高度/宽度适配 · 6 文件精确修改</div>
+</div>
+
+<div class="phase-card">
+  <div class="phase-card-header">
     <span class="phase-card-title">🧪 测试</span>
     <span class="status-tag status-pending">计划中</span>
   </div>
@@ -92,6 +101,20 @@
 ## 近期关键节点
 
 <div class="timeline">
+
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-05</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第十一阶段：UI 字体协调优化</span>
+      <span class="status-tag status-done">完成</span>
+    </div>
+    <div class="timeline-summary">统一整个 Edini UI 的字号层级为 4 层体系：① header (fs13) — 面板标题、section 标签 ② body (fs12) — 聊天气泡、标签、按钮、菜单、列表 ③ detail (fs11) — Thinking 内容、工具卡片、树节点、知识详情 ④ caption (fs10) — 状态栏、进度条、折叠头、徽章小字、tooltip。消除全部 fs(9) 和硬编码 pt 值（history_panel 原使用 raw "12pt"/"11pt"）。代码块和行内代码字号改用 fs() 缩放。放宽固定尺寸（知识徽章 36→40px，分类标签 32→40px，卡片行标签 50→56px，面板 COLLAPSED_H 22→24 / EXPANDED_H 260→280）。6 个文件精确修改，零裁切回归。</div>
+    <div class="timeline-tags">
+      <span>字号体系</span><span>4层统一</span><span>fs()缩放</span><span>消除硬编码pt</span><span>视觉协调</span>
+    </div>
+  </div>
+</div>
 
 <div class="timeline-item timeline-done">
   <div class="timeline-date">2026-06-05</div>
@@ -247,6 +270,10 @@
 - ✅ AI 反思 → 用户确认面板（✓✕ + 全部接受/放弃 + 类型切换）
 - ✅ Settings Knowledge 标签页（开关 + 统计 + 管理按钮）
 - ✅ 变更树 QTreeWidget 面板（按轮次分组：创建/修改/删除三级树，可折叠，对话结束自动展开）
+- ✅ 4 层统一字号体系（header 13pt / body 12pt / detail 11pt / caption 10pt）
+- ✅ 全局 fs() 缩放（历史面板、代码块等之前硬编码 pt 的元素全部改用 fs()）
+- ✅ 消除 fs(9) 极小字号（全部提升至 fs(10)）
+- ✅ 面板固定高度 + 徽章固定宽度与字号适配
 - ✅ SnapshotEngine 场景快照 Diff（snapshot / diff / 三阶段节点级 restore）
 - ✅ Undo/Redo 栈（每轮一个事务，撤销=整轮回滚重建，手动修改自动清空栈）
 - ✅ 节点视图跳转（点击变更树路径 → hou.node.setCurrent + frame viewport）
