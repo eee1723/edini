@@ -16,6 +16,7 @@ from edini.ui.history_panel import HistoryPanel
 from edini.ui.context_panel import ContextPanel
 from edini.ui.pi_sessions import load_pi_messages
 from edini.config import get_settings
+from edini.ui.snapshot_engine import snapshot as snap_scene, diff as diff_snapshots, restore as restore_snapshot
 
 try:
     hou = importlib.import_module("hou")
@@ -49,6 +50,13 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self._active_session_path = ""
         self._browsing_session_path = ""
         self._extracting_knowledge = False
+
+        # Undo/redo stack for change tree
+        self._pre_snapshot: dict = {}
+        self._undo_stack: list[dict] = []
+        self._undo_pointer = -1
+        self._round_counter = 0
+
         self._round_elapsed = QtCore.QElapsedTimer()
         self._round_timer = QtCore.QTimer(self)
         self._round_timer.setInterval(1000)
@@ -119,6 +127,14 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self.agent_panel.knowledge_accepted.connect(self._on_knowledge_accepted)
         self.agent_panel.knowledge_rejected.connect(self._on_knowledge_rejected)
 
+        # Change tree signals
+        self.agent_panel.change_tree_widget.undo_round_requested.connect(
+            self._on_change_undo)
+        self.agent_panel.change_tree_widget.redo_requested.connect(
+            self._on_change_redo)
+        self.agent_panel.change_tree_widget.node_path_requested.connect(
+            self._on_change_node_requested)
+
         # History panel signals
         self.history_panel.new_session_requested.connect(self._on_new_session)
         self.history_panel.session_selected.connect(self._on_session_selected)
@@ -165,6 +181,8 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
     # ── Signal handlers ──
 
     def _on_agent_submit(self, text: str, images=None):
+        # Take pre-snapshot for change tracking
+        self._pre_snapshot = snap_scene()
         self.agent_panel.begin_assistant_message()
         self._rpc_client.send_prompt(text, images=images)
 
@@ -179,6 +197,52 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self._stats_poll_timer.stop()
         self._round_timer.stop()
         self._on_round_tick()  # final update
+
+        # ── Change tree: take post-snapshot and diff ──
+        post_snapshot = snap_scene()
+        if self._pre_snapshot:
+            change_diff = diff_snapshots(self._pre_snapshot, post_snapshot)
+            summary = change_diff.get("summary", {})
+            has_changes = (
+                summary.get("created", 0) > 0 or
+                summary.get("deleted", 0) > 0 or
+                summary.get("modified", 0) > 0
+            )
+            if has_changes:
+                # Detect manual modifications between rounds
+                if self._undo_stack and self._undo_pointer >= 0:
+                    last_post = self._undo_stack[self._undo_pointer].get("post", {})
+                    manual_check = diff_snapshots(last_post, self._pre_snapshot)
+                    ms = manual_check.get("summary", {})
+                    if (ms.get("created", 0) > 0 or ms.get("deleted", 0) > 0 or
+                            ms.get("modified", 0) > 0):
+                        self._undo_stack.clear()
+                        self._undo_pointer = -1
+                        self.agent_panel.change_tree_widget.clear_all()
+                        self.status.showMessage("场景被手动修改，撤销历史已清空", 3000)
+
+                # Truncate redo entries if pointer not at top
+                if self._undo_pointer < len(self._undo_stack) - 1:
+                    self._undo_stack = self._undo_stack[:self._undo_pointer + 1]
+
+                self._round_counter += 1
+                self._undo_stack.append({
+                    "pre": dict(self._pre_snapshot),
+                    "post": post_snapshot,
+                    "diff": change_diff,
+                    "round_num": self._round_counter,
+                })
+                self._undo_pointer = len(self._undo_stack) - 1
+
+                self.agent_panel.change_tree_widget.add_round(
+                    change_diff, self._round_counter)
+                self.agent_panel.change_tree_widget.set_undo_pointer(
+                    self._undo_pointer)
+
+            self._pre_snapshot = {}
+
+        # Expand change tree after conversation
+        self.agent_panel.change_tree_widget.expand()
 
         # If this was an extraction response, handle separately
         if self._extracting_knowledge:
@@ -212,6 +276,31 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self.agent_panel.show_aborted()
         self._round_timer.stop()
 
+        # Take post-snapshot on abort too (partial changes may exist)
+        post_snapshot = snap_scene()
+        if self._pre_snapshot:
+            change_diff = diff_snapshots(self._pre_snapshot, post_snapshot)
+            summary = change_diff.get("summary", {})
+            if (summary.get("created", 0) > 0 or
+                    summary.get("deleted", 0) > 0 or
+                    summary.get("modified", 0) > 0):
+                if self._undo_pointer < len(self._undo_stack) - 1:
+                    self._undo_stack = self._undo_stack[:self._undo_pointer + 1]
+                self._round_counter += 1
+                self._undo_stack.append({
+                    "pre": dict(self._pre_snapshot),
+                    "post": post_snapshot,
+                    "diff": change_diff,
+                    "round_num": self._round_counter,
+                })
+                self._undo_pointer = len(self._undo_stack) - 1
+                self.agent_panel.change_tree_widget.add_round(
+                    change_diff, self._round_counter)
+                self.agent_panel.change_tree_widget.set_undo_pointer(
+                    self._undo_pointer)
+            self._pre_snapshot = {}
+        self.agent_panel.change_tree_widget.expand()
+
     def _on_error(self, msg: str):
         self._stats_poll_timer.stop()
         self._round_timer.stop()
@@ -224,6 +313,47 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         if self._round_elapsed.isValid():
             elapsed = self._round_elapsed.elapsed() / 1000.0
             self.context_panel.set_round_time(elapsed)
+
+    # ── Knowledge Extraction ──
+
+    # ── Change Tree undo/redo / navigation ──
+
+    def _on_change_undo(self, round_num: int):
+        """Undo a specific round: restore post → pre state."""
+        for entry in self._undo_stack:
+            if entry.get("round_num") == round_num:
+                restore_snapshot(entry["post"], entry["pre"])
+                self._undo_pointer -= 1
+                self.agent_panel.change_tree_widget.mark_undone(round_num)
+                self.agent_panel.change_tree_widget.set_undo_pointer(
+                    self._undo_pointer)
+                self.status.showMessage(f"已撤销 Round {round_num}", 2000)
+                return
+
+    def _on_change_redo(self):
+        """Redo the next undone round: restore pre → post state."""
+        if self._undo_pointer + 1 < len(self._undo_stack):
+            self._undo_pointer += 1
+            entry = self._undo_stack[self._undo_pointer]
+            restore_snapshot(entry["pre"], entry["post"])
+            round_num = entry.get("round_num", 0)
+            self.agent_panel.change_tree_widget.mark_redone(round_num)
+            self.agent_panel.change_tree_widget.set_undo_pointer(
+                self._undo_pointer)
+            self.status.showMessage(f"已重做 Round {round_num}", 2000)
+
+    def _on_change_node_requested(self, node_path: str):
+        """Navigate Houdini viewport to the requested node path."""
+        try:
+            import hou
+            node = hou.node(node_path)
+            if node:
+                node.setCurrent(True, clear_all_selected=True)
+                self.status.showMessage(f"已跳转到节点: {node_path}", 1800)
+            else:
+                self.status.showMessage(f"未找到节点: {node_path}", 2200)
+        except Exception:
+            pass
 
     # ── Knowledge Extraction ──
 
