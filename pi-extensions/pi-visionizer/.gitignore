@@ -1,0 +1,6 @@
+node_modules/
+pi-sessions/
+*.log
+.env
+.env.local
+.env.*
