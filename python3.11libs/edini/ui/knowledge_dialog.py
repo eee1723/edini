@@ -27,7 +27,7 @@ class _KnowledgeTab(QtWidgets.QWidget):
                 border: 1px solid #2a2a3c;
                 border-radius: 4px;
                 padding: 4px 8px;
-                font-size: {fs(11)};
+                font-size: {fs(12)};
             }}
         """)
         self._search.textChanged.connect(self._on_search)
@@ -44,7 +44,7 @@ class _KnowledgeTab(QtWidgets.QWidget):
                 border: 1px solid #2a2a3c;
                 border-radius: 4px;
                 padding: 4px 8px;
-                font-size: {fs(11)};
+                font-size: {fs(12)};
             }}
             QComboBox::drop-down {{ border: none; }}
         """)
@@ -59,7 +59,7 @@ class _KnowledgeTab(QtWidgets.QWidget):
                 background: #0e0e15;
                 border: 1px solid #2a2a3c;
                 border-radius: 4px;
-                font-size: {fs(11)};
+                font-size: {fs(12)};
             }}
             QListWidget::item {{
                 color: #e5e5eb;
@@ -336,14 +336,14 @@ class _ItemEditDialog(QtWidgets.QDialog):
     def _apply_styles(self):
         s = f"""
             QDialog {{ background: #0e0e18; color: #e5e5eb; }}
-            QLabel {{ color: #a1a1aa; font-size: {fs(11)}; }}
+            QLabel {{ color: #a1a1aa; font-size: {fs(12)}; }}
             QLineEdit, QPlainTextEdit, QComboBox {{
                 background: #1a1a24;
                 color: #e5e5eb;
                 border: 1px solid #2a2a3c;
                 border-radius: 4px;
                 padding: 4px 8px;
-                font-size: {fs(11)};
+                font-size: {fs(12)};
             }}
             QComboBox::drop-down {{ border: none; }}
         """
@@ -385,7 +385,7 @@ class KnowledgeDialog(QtWidgets.QDialog):
                 background: #1a1a24;
                 color: #a1a1aa;
                 padding: 6px 16px;
-                font-size: {fs(11)};
+                font-size: {fs(12)};
                 border: 1px solid #2a2a3c;
                 border-bottom: none;
             }}
@@ -429,7 +429,7 @@ def _btn_style(color: str = "#1E40AF") -> str:
             border: none;
             border-radius: 4px;
             padding: 4px 12px;
-            font-size: {fs(11)};
+            font-size: {fs(12)};
         }}
         QPushButton:hover {{ background: {_lighter(color, 0.15)}; }}
         QPushButton:pressed {{ background: {_darker(color, 0.15)}; }}
