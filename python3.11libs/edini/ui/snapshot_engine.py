@@ -72,6 +72,27 @@ def _collect_nodes(node, state: dict[str, dict[str, Any]]) -> None:
         _collect_nodes(child, state)
 
 
+# Params that Houdini auto-updates — not user modifications
+_AUTO_PARAM_PATTERNS = [
+    "time",
+    "frame",
+    "*frame*",
+    "*seed*",
+    "*cache*",
+    "*t*",          # shorthand for time
+    "display*",     # viewport display flags
+]
+
+
+def _is_auto_param(name: str) -> bool:
+    """Return True if param is auto-managed by Houdini (not user-visible change)."""
+    import fnmatch
+    for pat in _AUTO_PARAM_PATTERNS:
+        if fnmatch.fnmatch(name, pat):
+            return True
+    return False
+
+
 def diff(before: dict, after: dict) -> dict:
     """Compare two snapshots and return structured change report.
 
@@ -130,6 +151,16 @@ def diff(before: dict, after: dict) -> dict:
             old_val = b.get("params", {}).get(parm)
             new_val = a.get("params", {}).get(parm)
             if old_val != new_val:
+                # Skip Houdini auto-managed params (time, frame, seed, etc.)
+                if _is_auto_param(parm):
+                    continue
+                # Skip tiny floating-point differences (< 1e-6)
+                if isinstance(old_val, (int, float)) and isinstance(new_val, (int, float)):
+                    try:
+                        if abs(float(new_val) - float(old_val)) < 1e-6:
+                            continue
+                    except (ValueError, TypeError):
+                        pass
                 changes.append({"param": parm, "old": old_val, "new": new_val})
 
         # Input changes

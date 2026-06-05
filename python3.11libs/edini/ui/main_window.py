@@ -464,6 +464,8 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
     def _on_pi_messages_received(self, messages: list):
         """Render messages from pi in the agent panel."""
         # This is a fallback; normally we load from local file synchronously
+        messages = self._merge_consecutive_assistants(messages)
+        messages = self._filter_knowledge_extraction(messages)
         self.agent_panel.clear_timeline()
         for m in messages:
             role = m.get("role", "")
@@ -471,7 +473,84 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
             if role == "user":
                 self.agent_panel._append_user_message(content)
             elif role == "assistant":
-                self.agent_panel._render_stored_assistant_message(m)
+                thinking = m.get("thinking", [])
+                for t in thinking:
+                    self.agent_panel._append_thinking_text(t)
+                if content:
+                    self.agent_panel._append_assistant_message(content)
+
+    _KNOWLEDGE_PROMPT_PREFIX = "Review the conversation above and identify mistakes"
+
+    def _filter_knowledge_extraction(self, messages: list) -> list:
+        """Remove knowledge extraction prompt/response pairs from display."""
+        result = []
+        skip_next = False
+        for m in messages:
+            role = m.get("role", "")
+            content = m.get("content", "")
+            if role == "user" and isinstance(content, str):
+                if content.startswith(self._KNOWLEDGE_PROMPT_PREFIX):
+                    skip_next = True
+                    continue
+            if skip_next and role == "assistant":
+                skip_next = False
+                continue
+            result.append(m)
+        return result
+
+    def _merge_consecutive_assistants(self, messages: list) -> list:
+        """Merge consecutive assistant messages into single entries.
+
+        Pi stores each assistant content block as a separate JSONL entry
+        when tool calls split the response. For display, consecutive
+        assistant messages (no user between them) should render as one bubble.
+        """
+        merged = []
+        i = 0
+        while i < len(messages):
+            m = messages[i]
+            role = m.get("role", "")
+            if role != "assistant":
+                merged.append(m)
+                i += 1
+                continue
+
+            # Collect consecutive assistant messages
+            texts = []
+            thinkings = []
+
+            content = m.get("content", "")
+            if content:
+                texts.append(content)
+            for t in m.get("thinking", []):
+                if t.strip():
+                    thinkings.append(t.strip())
+
+            j = i + 1
+            while j < len(messages) and messages[j].get("role") == "assistant":
+                nm = messages[j]
+                nc = nm.get("content", "")
+                if nc:
+                    texts.append(nc)
+                for t in nm.get("thinking", []):
+                    if t.strip():
+                        thinkings.append(t.strip())
+                j += 1
+
+            merged.append({
+                "role": "assistant",
+                "content": "\n\n".join(texts),
+                "thinking": thinkings,
+            })
+            i = j
+        return merged
+
+    def _reset_change_tree(self):
+        """Clear change tree and undo stack (on session switch)."""
+        self.agent_panel.change_tree_widget.clear_all()
+        self._undo_stack.clear()
+        self._undo_pointer = -1
+        self._round_counter = 0
 
     def _on_new_session(self):
         # Save current session as active before creating new one (only if not already browsing)
@@ -482,6 +561,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
 
         self._current_session_path = ""
         self.agent_panel.clear_timeline()
+        self._reset_change_tree()
         self.context_panel.reset_stats()
         self._rpc_client.send_new_session()
         # Schedule a reload after pi creates the session
@@ -500,17 +580,24 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
 
         self._current_session_path = session_path
         self.agent_panel.clear_timeline()
+        self._reset_change_tree()
         self.context_panel.reset_stats()
 
         # Load messages directly from local JSONL for instant rendering
         messages = load_pi_messages(session_path)
+        messages = self._merge_consecutive_assistants(messages)
+        messages = self._filter_knowledge_extraction(messages)
         for m in messages:
             role = m.get("role", "")
             content = m.get("content", "")
             if role == "user":
                 self.agent_panel._append_user_message(content)
             elif role == "assistant":
-                self.agent_panel._render_stored_assistant_message(m)
+                thinking = m.get("thinking", [])
+                for t in thinking:
+                    self.agent_panel._append_thinking_text(t)
+                if content:
+                    self.agent_panel._append_assistant_message(content)
 
         # Tell pi to switch session (async, updates stats)
         self._rpc_client.send_switch_session(session_path)
@@ -524,16 +611,23 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         if target:
             self._current_session_path = target
             self.agent_panel.clear_timeline()
+            self._reset_change_tree()
             self.context_panel.reset_stats()
 
             messages = load_pi_messages(target)
+            messages = self._merge_consecutive_assistants(messages)
+            messages = self._filter_knowledge_extraction(messages)
             for m in messages:
                 role = m.get("role", "")
                 content = m.get("content", "")
                 if role == "user":
                     self.agent_panel._append_user_message(content)
                 elif role == "assistant":
-                    self.agent_panel._render_stored_assistant_message(m)
+                    thinking = m.get("thinking", [])
+                    for t in thinking:
+                        self.agent_panel._append_thinking_text(t)
+                    if content:
+                        self.agent_panel._append_assistant_message(content)
 
             self._rpc_client.send_switch_session(target)
             self.history_panel.highlight_session(target)
