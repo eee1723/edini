@@ -31,7 +31,7 @@ def _ai_bubble_style() -> str:
 def _thinking_collapsed_style() -> str:
     a = accent_color()
     return (
-        f'color:#a1a1aa;font-size:{fs(11)};cursor:pointer;'
+        f'color:#a1a1aa;font-size:{fs(10)};cursor:pointer;'
         f'background:rgba(0,188,212,0.06);padding:4px 8px;'
         f'border-radius:4px;margin:4px 32px 4px 0;display:block;'
         f'border-left:2px solid {a};'
@@ -40,7 +40,7 @@ def _thinking_collapsed_style() -> str:
 def _thinking_expanded_style() -> str:
     a = accent_color()
     return (
-        f'color:#71717a;font-size:{fs(11)};display:block;'
+        f'color:#71717a;font-size:{fs(10)};display:block;'
         f'background:#0e0e15;padding:4px 8px;'
         f'border-left:2px solid {a};margin:4px 32px 4px 8px;'
     )
@@ -408,7 +408,7 @@ class _TypeToggleBadge(QtWidgets.QLabel):
         self._callback = callback
         self.setCursor(QtCore.Qt.PointingHandCursor)
         self.setToolTip("点击切换铁律 / 知识")
-        self.setFixedWidth(36)
+        self.setFixedWidth(40)
         self.setAlignment(QtCore.Qt.AlignCenter)
         self._update_style()
 
@@ -418,7 +418,7 @@ class _TypeToggleBadge(QtWidgets.QLabel):
         bg = "rgba(167,139,250,0.15)" if self._is_rule else "rgba(128,203,196,0.12)"
         self.setText(text)
         self.setStyleSheet(
-            f"color:{color};font-size:{fs(9)};font-weight:600;"
+            f"color:{color};font-size:{fs(10)};font-weight:600;"
             f"background:{bg};padding:1px 4px;border-radius:3px;border:1px solid {color}44;"
         )
 
@@ -891,8 +891,8 @@ class AgentPanel(QtWidgets.QWidget):
         badge = _TypeToggleBadge(is_rule, index, self._on_toggle_item_type)
         layout.addWidget(badge)
         cat_label = QtWidgets.QLabel(item.get("category", ""))
-        cat_label.setStyleSheet(f"color:#71717a;font-size:{fs(9)};border:none;")
-        cat_label.setFixedWidth(32)
+        cat_label.setStyleSheet(f"color:#71717a;font-size:{fs(10)};border:none;")
+        cat_label.setFixedWidth(40)
         layout.addWidget(cat_label)
         content_text = QtWidgets.QWidget()
         cl = QtWidgets.QVBoxLayout(content_text)
@@ -1234,10 +1234,10 @@ def _format_message(text: str) -> str:
             f'<a href="edini:copy:{encoded}" '
             'style="position:absolute;right:4px;top:4px;background:#2a2a3c;'
             'color:#a1a1aa;text-decoration:none;border-radius:3px;padding:2px 8px;'
-            'font-size:10pt;">'
+            f'font-size:{fs(10)};">'
             '📋 Copy</a>'
             '<pre style="background:#0e0e15;color:#d4d4d4;padding:8px;'
-            'border-radius:4px;font-family:monospace;font-size:11pt;'
+            f'border-radius:4px;font-family:monospace;font-size:{fs(11)};'
             'overflow-x:auto;margin:0;padding-top:24px;"><code>' + code_escaped + '</code></pre>'
             '</div>'
         )
@@ -1247,7 +1247,7 @@ def _format_message(text: str) -> str:
     out = re.sub(
         r'`([^`]+)`',
         r'<code style="background:#1a1a24;color:#67e8f9;padding:1px 4px;'
-        r'border-radius:3px;font-family:monospace;font-size:11pt;">\1</code>',
+        f'border-radius:3px;font-family:monospace;{fs(11)};">\1</code>',
         out,
     )
 
