@@ -166,15 +166,14 @@ class ChangeTreeWidget(QtWidgets.QFrame):
 
         for row in rows:
             path = row.get("path", "")
-            node_type = row.get("type", "")
             detail = self._format_detail(action, row)
 
-            label = f"  {path}"
+            # Compact label: path + brief description
+            label = f"  {path}  · {detail}"
             item = QtWidgets.QTreeWidgetItem([label])
             item.setData(0, ROLE_ITEM_KIND, "change-node")
             item.setData(0, ROLE_ACTION_KEY, action)
             item.setData(1, ROLE_NODE_PATH, path)
-            item.setToolTip(0, detail)
             _style_path_item(item)
             group.addChild(item)
 
@@ -183,36 +182,45 @@ class ChangeTreeWidget(QtWidgets.QFrame):
                 for change in changes:
                     old_str = _fmt_val(change.get("old"))
                     new_str = _fmt_val(change.get("new"))
-                    parm_label = f"    · {change['param']}: {old_str} → {new_str}"
+                    parm_label = f"    {change['param']}: {old_str} → {new_str}"
                     parm_item = QtWidgets.QTreeWidgetItem([parm_label])
                     parm_item.setData(0, ROLE_ITEM_KIND, "param-change")
                     parm_item.setData(1, ROLE_NODE_PATH, path)
+                    parm_item.setForeground(0, QtGui.QBrush(QtGui.QColor("#8b8fa8")))
                     item.addChild(parm_item)
+                # Collapse modified nodes by default — user clicks to see params
+                item.setExpanded(False)
 
         group.setExpanded(True)
 
     @staticmethod
     def _format_detail(action: str, row: dict) -> str:
-        node_type = row.get("type", "")
         if action == "创建":
+            node_type = row.get("type", "")
             parent = row.get("parent", "")
             if node_type and parent:
-                return f"创建 {node_type} 节点，位于 {parent}"
+                return f"创建 {node_type}，位于 {parent}"
             if node_type:
-                return f"创建 {node_type} 节点"
+                return f"创建 {node_type}"
             return "创建节点"
         if action == "删除":
+            node_type = row.get("type", "")
             if node_type:
-                return f"删除 {node_type} 节点"
+                return f"删除 {node_type}"
             return "删除节点"
-        # modified
+        # Modified: show first 2 param names, or count
         changes = row.get("changes", [])
-        if len(changes) == 1:
-            c = changes[0]
-            old_str = _fmt_val(c.get("old"))
-            new_str = _fmt_val(c.get("new"))
-            return f"参数 {c['param']}: {old_str} → {new_str}"
-        return f"修改 {len(changes)} 个参数"
+        if not changes:
+            return "修改参数"
+        if len(changes) <= 2:
+            parts = []
+            for c in changes:
+                old_str = _fmt_val(c.get("old"))
+                new_str = _fmt_val(c.get("new"))
+                parts.append(f"{c['param']}: {old_str} → {new_str}")
+            return ", ".join(parts)
+        names = [c["param"] for c in changes[:3]]
+        return f"{', '.join(names)} 等 {len(changes)} 个参数"
 
     # ── Undo/Redo state ──
 
