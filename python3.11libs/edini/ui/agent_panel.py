@@ -1279,23 +1279,92 @@ def _format_full(text: str) -> str:
 
     # ── Step 3: Classify and render each paragraph ──
     rendered: list[str] = []
+
+    def _build_table_rows(rows, cell_tag):
+        result = ''
+        for row in rows:
+            cells = row.strip().strip('|').split('|')
+            result += '<tr>'
+            for cell in cells:
+                result += (
+                    f'<{cell_tag} style="padding:2px 8px;text-align:left;'
+                    f'border:1px solid #2a2a3c;">{cell.strip()}</{cell_tag}>'
+                )
+            result += '</tr>'
+        return result
+
+    def _render_body(body_lines: list[str]):
+        """Render non-header body lines — try table/list, fall back to paragraph."""
+        bl = [l for l in body_lines if l.strip()]
+        if not bl:
+            return
+        n = len(bl)
+
+        # Table
+        if n >= 2 and all('|' in l for l in bl):
+            has_sep = any(re.match(r'^[\|\s\-\:]+$', l.strip()) for l in bl)
+            if has_sep:
+                sep_idx = None
+                for i, l in enumerate(bl):
+                    if re.match(r'^[\|\s\-\:]+$', l.strip()):
+                        sep_idx = i
+                        break
+                if sep_idx is not None:
+                    header_rows = bl[:sep_idx]
+                    body_rows = bl[sep_idx + 1:]
+                    rendered.append(
+                        '<table style="border-collapse:collapse;margin:4px 0;'
+                        f'font-size:{fs(11)};width:100%;">'
+                        f'<thead>{_build_table_rows(header_rows, "th")}</thead>'
+                        f'<tbody>{_build_table_rows(body_rows, "td")}</tbody>'
+                        '</table>'
+                    )
+                    return
+
+        # Unordered list
+        if all(re.match(r'^[\-\*]\s+', l) for l in bl):
+            items = ''.join(
+                '<li style="margin:1px 0;line-height:1.45;">'
+                + re.sub(r'^[\-\*]\s+', '', l) + '</li>'
+                for l in bl
+            )
+            rendered.append(f'<ul style="padding-left:20px;margin:2px 0;">{items}</ul>')
+            return
+
+        # Ordered list
+        if all(re.match(r'^\d+\.\s+', l) for l in bl):
+            items = ''.join(
+                '<li style="margin:1px 0;line-height:1.45;">'
+                + re.sub(r'^\d+\.\s+', '', l) + '</li>'
+                for l in bl
+            )
+            rendered.append(f'<ol style="padding-left:20px;margin:2px 0;">{items}</ol>')
+            return
+
+        # Plain paragraph
+        body = '\n'.join(body_lines)
+        rendered.append(f'<p style="margin:2px 0;line-height:1.45;">{body}</p>')
+
     for para in paragraphs:
         if not para.strip():
             continue
         lines = para.strip().split('\n')
 
-        # Header: # / ## / ###
-        if len(lines) == 1:
-            m = re.match(r'^(#{1,3})\s+(.+)$', lines[0])
-            if m:
-                level = len(m.group(1))
+        # Header as first line of paragraph (with body following)
+        if len(lines) >= 1:
+            hm = re.match(r'^(#{1,3})\s+(.+)$', lines[0])
+            if hm:
+                level = len(hm.group(1))
                 size = {1: f'{fs(20)}', 2: f'{fs(17)}', 3: f'{fs(15)}'}[level]
                 margin = {1: '10px 0 4px 0', 2: '8px 0 3px 0', 3: '6px 0 2px 0'}[level]
                 rendered.append(
                     f'<h{level} style="font-size:{size};font-weight:600;'
                     f'color:#e5e5eb;margin:{margin};line-height:1.3;">'
-                    f'{m.group(2)}</h{level}>'
+                    f'{hm.group(2)}</h{level}>'
                 )
+                remaining = lines[1:]
+                if remaining:
+                    _render_body(remaining)
                 continue
 
         # Horizontal rule: ---
@@ -1305,72 +1374,8 @@ def _format_full(text: str) -> str:
             )
             continue
 
-        # Unordered list: all lines start with - or *
-        if all(re.match(r'^[\-\*]\s+', line) for line in lines):
-            items = ''.join(
-                '<li style="margin:1px 0;line-height:1.45;">'
-                + re.sub(r'^[\-\*]\s+', '', line) + '</li>'
-                for line in lines
-            )
-            rendered.append(
-                f'<ul style="padding-left:20px;margin:2px 0;">{items}</ul>'
-            )
-            continue
-
-        # Ordered list: all lines start with N.
-        if all(re.match(r'^\d+\.\s+', line) for line in lines):
-            items = ''.join(
-                '<li style="margin:1px 0;line-height:1.45;">'
-                + re.sub(r'^\d+\.\s+', '', line) + '</li>'
-                for line in lines
-            )
-            rendered.append(
-                f'<ol style="padding-left:20px;margin:2px 0;">{items}</ol>'
-            )
-            continue
-
-        # Table: has | separators and a header-separator row
-        if len(lines) >= 2 and all('|' in line for line in lines):
-            has_sep = any(
-                re.match(r'^[\|\s\-\:]+$', line.strip()) for line in lines
-            )
-            if has_sep:
-                sep_idx = None
-                for i, line in enumerate(lines):
-                    if re.match(r'^[\|\s\-\:]+$', line.strip()):
-                        sep_idx = i
-                        break
-                if sep_idx is not None:
-                    header_rows = lines[:sep_idx]
-                    body_rows = lines[sep_idx + 1:]
-
-                    def _build_table_rows(rows, cell_tag):
-                        result = ''
-                        for row in rows:
-                            cells = row.strip().strip('|').split('|')
-                            result += '<tr>'
-                            for cell in cells:
-                                result += (
-                                    f'<{cell_tag} style="padding:2px 8px;text-align:left;'
-                                    f'border:1px solid #2a2a3c;">{cell.strip()}</{cell_tag}>'
-                                )
-                            result += '</tr>'
-                        return result
-
-                    rendered.append(
-                        '<table style="border-collapse:collapse;margin:4px 0;'
-                        f'font-size:{fs(11)};width:100%;">'
-                        f'<thead>{_build_table_rows(header_rows, "th")}</thead>'
-                        f'<tbody>{_build_table_rows(body_rows, "td")}</tbody>'
-                        '</table>'
-                    )
-                    continue
-
-        # Plain paragraph
-        body = '\n'.join(lines)
-        rendered.append(
-            f'<p style="margin:2px 0;line-height:1.45;">{body}</p>'
-        )
+        # Everything else: table, list, or paragraph
+        _render_body(lines)
 
     out = ''.join(rendered)
 
