@@ -241,8 +241,9 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
 
             self._pre_snapshot = {}
 
-        # Expand change tree after conversation
-        self.agent_panel.change_tree_widget.expand()
+        # Expand change tree after conversation (only if there are changes)
+        if self._undo_stack:
+            self.agent_panel.change_tree_widget.expand()
 
         # If this was an extraction response, handle separately
         if self._extracting_knowledge:
@@ -299,7 +300,8 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
                 self.agent_panel.change_tree_widget.set_undo_pointer(
                     self._undo_pointer)
             self._pre_snapshot = {}
-        self.agent_panel.change_tree_widget.expand()
+        if self._undo_stack:
+            self.agent_panel.change_tree_widget.expand()
 
     def _on_error(self, msg: str):
         self._stats_poll_timer.stop()

@@ -1,7 +1,6 @@
 """AgentPanel — Chat timeline (QScrollArea + widgets) + collapsible panels."""
 import html
 import re
-import base64
 from PySide6 import QtCore, QtGui, QtWidgets
 from edini.ui.theme import accent_color, fs
 
@@ -191,9 +190,8 @@ class _AiBubble(QtWidgets.QFrame):
         self._label.setWordWrap(True)
         self._label.setTextFormat(QtCore.Qt.RichText)
         self._label.setOpenExternalLinks(False)
-        self._label.linkActivated.connect(self._on_link)
         self._label.setTextInteractionFlags(
-            QtCore.Qt.TextSelectableByMouse | QtCore.Qt.LinksAccessibleByMouse
+            QtCore.Qt.TextSelectableByMouse
         )
         self._label.setStyleSheet(
             f"QLabel {{ "
@@ -237,13 +235,7 @@ class _AiBubble(QtWidgets.QFrame):
 
     @staticmethod
     def _on_link(url: str):
-        if url.startswith('edini:copy:'):
-            try:
-                encoded = url[len('edini:copy:'):]
-                text = base64.b64decode(encoded).decode('utf-8')
-                QtWidgets.QApplication.clipboard().setText(text)
-            except Exception:
-                pass
+        pass
 
 
 class _Separator(QtWidgets.QFrame):
@@ -532,7 +524,7 @@ class AgentPanel(QtWidgets.QWidget):
         tp_layout.addWidget(self._thinking_view)
 
         self._thinking_panel_expanded = False
-        self._THINKING_COLLAPSED_H = 20
+        self._THINKING_COLLAPSED_H = 24
         self._THINKING_EXPANDED_H = 200
         self._thinking_panel.setFixedHeight(self._THINKING_COLLAPSED_H)
         root.addWidget(self._thinking_panel)
@@ -589,7 +581,7 @@ class AgentPanel(QtWidgets.QWidget):
         tool_panel_layout.addWidget(self._tool_scroll)
 
         self._tool_panel_expanded = False
-        self._TOOL_PANEL_COLLAPSED_H = 20
+        self._TOOL_PANEL_COLLAPSED_H = 24
         self._TOOL_PANEL_EXPANDED_H = 200
         self._tool_panel.setFixedHeight(self._TOOL_PANEL_COLLAPSED_H)
         root.addWidget(self._tool_panel)
@@ -1271,19 +1263,11 @@ def _format_full(text: str) -> str:
         lang = m.group(1)
         code_raw = m.group(2)
         code_escaped = html.escape(code_raw)
-        encoded = base64.b64encode(code_raw.encode('utf-8')).decode('ascii')
         idx = len(code_blocks)
         html_block = (
-            '<div style="position:relative;margin:4px 0;">'
-            f'<a href="edini:copy:{encoded}" '
-            'style="position:absolute;right:4px;top:4px;background:#2a2a3c;'
-            'color:#a1a1aa;text-decoration:none;border-radius:3px;padding:2px 8px;'
-            f'font-size:{fs(10)};">'
-            '📋 Copy</a>'
-            '<pre style="background:#0e0e15;color:#d4d4d4;padding:8px 24px 8px 8px;'
+            '<pre style="background:#0e0e15;color:#d4d4d4;padding:8px;'
             f'border-radius:4px;font-family:monospace;font-size:{fs(11)};'
-            'overflow-x:auto;margin:0;"><code>' + code_escaped + '</code></pre>'
-            '</div>'
+            'overflow-x:auto;margin:4px 0;"><code>' + code_escaped + '</code></pre>'
         )
         code_blocks.append(html_block)
         return f'__CODE_BLOCK_{idx}__'

@@ -3,5 +3,6 @@
   "provider": "deepseek",
   "model_id": "deepseek-v4-pro",
   "theme_color": "purple",
-  "font_scale": 0.9
+  "font_scale": 0.8,
+  "knowledge_enabled": true
 }
