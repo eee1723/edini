@@ -24,7 +24,7 @@ def _make_card(title: str, parent=None) -> tuple[QtWidgets.QFrame, QtWidgets.QVB
     layout.setSpacing(4)
 
     header = QtWidgets.QLabel(title)
-    header.setStyleSheet(f"font-size:{fs(11)};font-weight:600;color:#71717a;border:none;")
+    header.setStyleSheet(f"font-size:{fs(12)};font-weight:600;color:#71717a;border:none;")
     layout.addWidget(header)
 
     sep = QtWidgets.QFrame()
@@ -54,7 +54,7 @@ def _card_row(label: str, value_widget: QtWidgets.QWidget, parent=None) -> QtWid
     row_layout.setSpacing(8)
     lbl = QtWidgets.QLabel(label)
     lbl.setStyleSheet(f"color:#a1a1aa;font-size:{fs(11)};border:none;")
-    lbl.setFixedWidth(50)
+    lbl.setFixedWidth(56)
     row_layout.addWidget(lbl)
     row_layout.addWidget(value_widget, 1)
     return row
