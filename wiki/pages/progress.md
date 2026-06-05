@@ -1,6 +1,6 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-05 &nbsp;|&nbsp; 第十三阶段：多模态扩展 — pi-visionizer + Qwen-VL 视觉代理
+> 最后更新：2026-06-05 &nbsp;|&nbsp; 第十三阶段：多模态扩展 — 全渠道图片输入 + Qwen-VL 视觉代理 ✅
 
 ## 总览看板
 
@@ -81,10 +81,10 @@
 <div class="phase-card">
   <div class="phase-card-header">
     <span class="phase-card-title">🌐 多模型 & 多模态</span>
-    <span class="status-tag status-wip">进行中</span>
+    <span class="status-tag status-done">完成</span>
   </div>
-  <div class="progress-bar-bg"><div class="progress-bar-fill progress-wip" style="width:70%"></div></div>
-  <div class="phase-card-detail">✅ DeepSeek V4 Pro/V3/R1 · ✅ Anthropic Claude · ✅ Viewport 截图按钮（始终可见）· ✅ pi-visionizer 视觉代理 · ✅ Qwen-VL Max 模型配置 · 🔄 截图链路调试中（capture_viewport 返回 None）· ⬜ 多模态交互（拖拽图片、实时视口分析）</div>
+  <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:100%"></div></div>
+  <div class="phase-card-detail">✅ DeepSeek V4 Pro/V3/R1 · ✅ Anthropic Claude · ✅ Viewport 截图（三级降级修复）· ✅ pi-visionizer 视觉代理（Qwen-VL Max）· ✅ 全渠道图片输入（截图/拖拽/粘贴/文件选择）· ✅ 附件预览栏（最多5张缩略图）· ✅ 视觉描述气泡（时间线内可折叠）· ✅ AI 工具主动读图（describe_image）</div>
 </div>
 
 <div class="phase-card">
@@ -106,10 +106,10 @@
   <div class="timeline-date">2026-06-05</div>
   <div class="timeline-card">
     <div class="timeline-card-header">
-      <span class="timeline-title">第十三阶段：多模态扩展 — pi-visionizer + Qwen-VL</span>
-      <span class="status-tag status-wip">进行中</span>
+      <span class="timeline-title">第十三阶段：多模态扩展 — 全渠道图片输入 + Qwen-VL</span>
+      <span class="status-tag status-done">完成</span>
     </div>
-    <div class="timeline-summary">① 安装 pi-visionizer 扩展（Oyaxira/pi-visionizer），透明代理图片到视觉模型，纯文本 DeepSeek 也能"看懂"截图 ② 配置 Qwen-VL Max（阿里通义千问视觉模型）作为视觉代理 ③ 修复截图按钮可见性（去掉 is_vision_capable 限制，visionizer 接管后始终可用）④ 修复图片 RPC 格式（type/mimeType 字段规范）⑤ 添加截图失败反馈（按钮 ❌ 闪烁）⑥ 🔄 截图链路待修复：capture_viewport 返回 None</div>
+    <div class="timeline-summary">① 全渠道图片输入：截图（三级降级修复 saveImage→grabFrameBuffer→flipbook）、拖拽（仅拦截图片 MIME）、粘贴（Ctrl+V 剪贴板图片）、文件选择（📁 按钮 + 多选过滤）② ImageAttachmentWidget 附件预览栏（缩略图 120×68 + 来源图标 + ✕ 删除，最多 5 张）③ VisionDescriptionBubble 视觉描述气泡（可折叠、查看原图、错误变体）④ pi-visionizer 默认视觉模型改为 aliyun/qwen-vl-max ⑤ pi-visionizer 写入 vision-description custom entry + extension_ui_request 实时通知 Edini ⑥ MediaManager 统一管理所有图片输入渠道 ⑦ rpc_client 新增 vision_description 信号</div>
     <div class="timeline-tags">
       <span>pi-visionizer</span><span>Qwen-VL</span><span>视觉代理</span><span>截图按钮</span><span>多模态</span>
     </div>
@@ -264,7 +264,7 @@
 |------|------|------|
 | P1 | ~~时间线渲染~~ | ✅ Markdown 完整解析 + 气泡合并 + 文本选择 |
 | P1 | ~~多模态视觉代理~~ | ✅ pi-visionizer 安装 + Qwen-VL 模型配置完成 |
-| P1 | 截图链路修复 | viewport capture 返回 None，需排查 Houdini 环境下 capture 逻辑 |
+| P1 | ~~截图链路修复~~ | ✅ 三级降级修复完成（saveImage → grabFrameBuffer → flipbook）|
 | P2 | 知识库检索工具 | 为 Agent 添加 search_knowledge 工具调用 |
 | P2 | 知识库检索工具 | 为 Agent 添加 search_knowledge 工具调用 |
 | P2 | 单元测试 | 对 node_utils、config、tool_executor 写测试 |
@@ -287,7 +287,10 @@
 - ✅ 工具调用实时面板（fixedHeight 折叠 20px↔200px、执行状态 ✅/❌、结果预览、自动滚底）
 - ✅ JavaScript-Free 文本选择（QLabel TextSelectableByMouse）
 - ✅ 会话管理 (pi 接管：Popen cwd 按 HIP 归档 · JSONL 本地读取 · new/switch/set_name RPC)
-- ✅ Viewport 截图（vision 模型 + pi-visionizer 视觉代理）
+- ✅ Viewport 截图（三级降级：saveImage → grabFrameBuffer → flipbook）
+- ✅ 全渠道图片输入（截图 / 拖拽 / 粘贴 / 文件选择）
+- ✅ 图片附件预览栏（缩略图 120×68，最多 5 张）
+- ✅ 视觉描述气泡（可折叠，显示 Qwen-VL 分析结果）
 - ✅ API Key / Provider / Model 设置 (下拉选择 + 历史记忆)
 - ✅ 4 色主题实时预览 + 字体缩放
 - ✅ 执行/中止按钮一体化切换
@@ -311,10 +314,11 @@
 - ✅ 历史气泡合并（连续 assistant entry 合并为单个大气泡）
 - ✅ 知识提取过滤（隐藏提取对话轮次）
 - ✅ 文本选择（TextSelectableByMouse，所有气泡）
-- ✅ pi-visionizer 视觉代理扩展（图片透明路由到 Qwen-VL，纯文本模型"看懂"截图）
-- ✅ 截图按钮始终可见（visionizer 代理后无需 is_vision_capable 检查）
+- ✅ pi-visionizer 视觉代理扩展（图片透明路由到 Qwen-VL Max，纯文本模型"看懂"截图）
+- ✅ pi-visionizer 默认视觉模型改为 aliyun/qwen-vl-max
+- ✅ pi-visionizer 写入 vision-description custom entry + 实时通知 Edini
+- ✅ VisionDescriptionBubble 时间线内渲染（可折叠、查看原图、错误变体）
 - ✅ 多模型视觉方案（DeepSeek V4 Pro 主模型 + Qwen-VL Max 视觉代理）
-- ⚠️ Viewport 截图链路待修复（capture_viewport 在 Houdini 环境返回 None）
 - ✅ SnapshotEngine 场景快照 Diff（snapshot / diff / 三阶段节点级 restore）
 - ✅ Undo/Redo 栈（每轮一个事务，撤销=整轮回滚重建，手动修改自动清空栈）
 - ✅ 节点视图跳转（点击变更树路径 → hou.node.setCurrent + frame viewport）

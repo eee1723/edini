@@ -34,6 +34,7 @@ class RpcClient(QObject):
     messages_received = Signal(object)       # list: messages from get_messages
     session_switched = Signal(str)           # session path after switch
     extension_info = Signal(str)            # info/warning from pi extensions (tools loaded, etc.)
+    vision_description = Signal(object)     # vision model descriptions from pi-visionizer
 
     def __init__(self, parent: QObject | None = None):
         super().__init__(parent)
@@ -73,6 +74,7 @@ class RpcClient(QObject):
         self._worker.messages_received.connect(self.messages_received)
         self._worker.session_switched.connect(self.session_switched)
         self._worker.extension_info.connect(self.extension_info)
+        self._worker.vision_description.connect(self.vision_description)
 
         self._thread.started.connect(self._worker.run)
         self._thread.start()
@@ -178,6 +180,7 @@ class _RpcWorker(QObject):
     messages_received = Signal(object)
     session_switched = Signal(str)
     extension_info = Signal(str)            # info/warning from pi extensions (tools loaded, etc.)
+    vision_description = Signal(object)      # vision model descriptions from pi-visionizer
 
     def __init__(self, pi_cmd: list[str], tool_port: int, cwd: str | None = None):
         super().__init__()
@@ -321,6 +324,14 @@ class _RpcWorker(QObject):
             if event.get("method") == "notify":
                 notify_type = event.get("notifyType", "info")
                 message = event.get("message", "")
+                # Check for vision_description payload from pi-visionizer
+                try:
+                    payload = json.loads(message)
+                    if isinstance(payload, dict) and payload.get("event") == "vision_description":
+                        self.vision_description.emit(payload.get("descriptions", []))
+                        return
+                except (json.JSONDecodeError, TypeError):
+                    pass
                 if notify_type == "error":
                     self.error_occurred.emit(f"[{notify_type}] {message}")
                 else:

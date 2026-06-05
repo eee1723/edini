@@ -22,8 +22,8 @@ export interface VisionizerConfig {
 /** Hardcoded default vision model — fallback when no persisted config found.
  *  Change provider/modelId to your preferred vision model. */
 export const DEFAULT_VISION_MODEL: VisionizerConfig = {
-  provider: "google",
-  modelId: "gemini-3.1-flash-lite",
+  provider: "aliyun",
+  modelId: "qwen-vl-max",
 };
 
 export const DEFAULT_PROMPT = [
