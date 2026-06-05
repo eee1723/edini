@@ -684,12 +684,12 @@ class AgentPanel(QtWidgets.QWidget):
         if watched is self.input_edit and event is not None:
             if int(event.type()) == int(QtCore.QEvent.KeyPress):
                 key = int(event.key())
+                modifiers = event.modifiers()
                 if key == int(QtCore.Qt.Key_Escape):
                     if self._busy:
                         self._on_abort()
                     return True
                 if key in (int(QtCore.Qt.Key_Return), int(QtCore.Qt.Key_Enter)):
-                    modifiers = event.modifiers()
                     if modifiers & (QtCore.Qt.ControlModifier | QtCore.Qt.ShiftModifier):
                         cursor = self.input_edit.textCursor()
                         cursor.insertText("\n")
