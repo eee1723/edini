@@ -18,13 +18,13 @@ def _ai_bubble_bg() -> str:
 
 def _user_bubble_style() -> str:
     return (
-        f'color:#e5e5eb;font-size:{fs(12)};line-height:1.55;'
+        f'color:#e5e5eb;font-size:{fs(12)};line-height:1.45;'
         f'padding:8px 14px;background:{_user_bubble_bg()};border-radius:8px;'
     )
 
 def _ai_bubble_style() -> str:
     return (
-        f'color:#e5e5eb;font-size:{fs(12)};line-height:1.55;'
+        f'color:#e5e5eb;font-size:{fs(12)};line-height:1.45;'
         f'padding:8px 14px;background:{_ai_bubble_bg()};border-radius:8px;'
     )
 
@@ -162,11 +162,14 @@ class _UserBubble(QtWidgets.QFrame):
 
         self._label = QtWidgets.QLabel(html.escape(text))
         self._label.setWordWrap(True)
-        self._label.setTextFormat(QtCore.Qt.PlainText)
+        self._label.setTextFormat(QtCore.Qt.RichText)
+        self._label.setTextInteractionFlags(
+            QtCore.Qt.TextSelectableByMouse
+        )
         self._label.setStyleSheet(
             f"QLabel {{ "
-            f"color:#e5e5eb; font-size:{fs(12)}; line-height:1.55; "
-            f"padding:10px 16px; background:{_user_bubble_bg()}; "
+            f"color:#e5e5eb; font-size:{fs(12)}; line-height:1.45; "
+            f"padding:8px 14px; background:{_user_bubble_bg()}; "
             f"border-radius:10px; border:none; "
             f"}}"
         )
@@ -189,10 +192,13 @@ class _AiBubble(QtWidgets.QFrame):
         self._label.setTextFormat(QtCore.Qt.RichText)
         self._label.setOpenExternalLinks(False)
         self._label.linkActivated.connect(self._on_link)
+        self._label.setTextInteractionFlags(
+            QtCore.Qt.TextSelectableByMouse | QtCore.Qt.LinksAccessibleByMouse
+        )
         self._label.setStyleSheet(
             f"QLabel {{ "
-            f"color:#e5e5eb; font-size:{fs(12)}; line-height:1.55; "
-            f"padding:10px 16px; background:{_ai_bubble_bg()}; "
+            f"color:#e5e5eb; font-size:{fs(12)}; line-height:1.45; "
+            f"padding:8px 14px; background:{_ai_bubble_bg()}; "
             f"border-radius:10px; border:none; "
             f"}}"
         )
@@ -207,9 +213,9 @@ class _AiBubble(QtWidgets.QFrame):
         self.setStyleSheet("QFrame { background: transparent; border: none; }")
 
     def update_streaming(self, full_text: str):
-        """Update with full accumulated text during streaming. Re-renders markdown."""
+        """Update with full accumulated text during streaming. Uses light formatter."""
         self._raw_text = full_text
-        rendered = _format_message(html.escape(full_text))
+        rendered = _format_lite(full_text)
         wrapped = f'<div style="{_ai_bubble_style()}">{rendered}</div>'
         self._label.setText(wrapped)
 
@@ -217,15 +223,15 @@ class _AiBubble(QtWidgets.QFrame):
         return self._raw_text
 
     def finalize(self):
-        """Called when streaming is complete."""
-        rendered = _format_message(html.escape(self._raw_text))
+        """Called when streaming is complete. Applies full Markdown formatting."""
+        rendered = _format_full(self._raw_text)
         wrapped = f'<div style="{_ai_bubble_style()}">{rendered}</div>'
         self._label.setText(wrapped)
 
     def set_stored_content(self, content: str):
-        """Set content from a stored message (already plain text, no streaming)."""
+        """Set content from a stored message. Applies full Markdown formatting."""
         self._raw_text = content
-        rendered = _format_message(html.escape(content))
+        rendered = _format_full(content)
         wrapped = f'<div style="{_ai_bubble_style()}">{rendered}</div>'
         self._label.setText(wrapped)
 
@@ -1221,38 +1227,193 @@ class AgentPanel(QtWidgets.QWidget):
 # Formatting helpers (unchanged)
 # ═══════════════════════════════════════════════════════════════════════
 
-def _format_message(text: str) -> str:
-    """Convert text with markdown-ish syntax to HTML for QLabel rich text."""
-    out = text
+def _format_lite(text: str) -> str:
+    """Lightweight streaming-safe formatter.
 
-    def _code_block_replacer(m):
+    Only applies inline formatting that works on incomplete text.
+    Does NOT parse code blocks, lists, headers, or tables — incomplete
+    versions of these would produce broken HTML.
+    """
+    out = html.escape(text)
+
+    # **bold** (after escape, the ** are literal)
+    out = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', out)
+
+    # *italic* — but not **, and not * inside words
+    out = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'<i>\1</i>', out)
+
+    # `inline code`
+    out = re.sub(
+        r'`([^`]+)`',
+        r'<code style="background:#1a1a24;color:#67e8f9;padding:1px 4px;'
+        r'border-radius:3px;font-family:monospace;font-size:11px;">\1</code>',
+        out,
+    )
+
+    # newlines → <br>
+    out = out.replace('\n', '<br>')
+
+    return out
+
+
+def _format_full(text: str) -> str:
+    """Convert Markdown-ish text to rich HTML for final display.
+
+    Supports: headers (# ## ###), bold, italic, inline code, code blocks,
+    unordered/ordered lists, tables, horizontal rules.
+    """
+    esc = html.escape(text)
+
+    # ── Step 1: Extract code blocks and protect with placeholders ──
+    code_blocks: list[str] = []
+
+    def _extract_code_block(m):
+        lang = m.group(1)
         code_raw = m.group(2)
         code_escaped = html.escape(code_raw)
         encoded = base64.b64encode(code_raw.encode('utf-8')).decode('ascii')
-        return (
+        idx = len(code_blocks)
+        html_block = (
             '<div style="position:relative;margin:4px 0;">'
             f'<a href="edini:copy:{encoded}" '
             'style="position:absolute;right:4px;top:4px;background:#2a2a3c;'
             'color:#a1a1aa;text-decoration:none;border-radius:3px;padding:2px 8px;'
             f'font-size:{fs(10)};">'
             '📋 Copy</a>'
-            '<pre style="background:#0e0e15;color:#d4d4d4;padding:8px;'
+            '<pre style="background:#0e0e15;color:#d4d4d4;padding:8px 24px 8px 8px;'
             f'border-radius:4px;font-family:monospace;font-size:{fs(11)};'
-            'overflow-x:auto;margin:0;padding-top:24px;"><code>' + code_escaped + '</code></pre>'
+            'overflow-x:auto;margin:0;"><code>' + code_escaped + '</code></pre>'
             '</div>'
         )
+        code_blocks.append(html_block)
+        return f'__CODE_BLOCK_{idx}__'
 
-    out = re.sub(r'```(\w*)\n(.*?)```', _code_block_replacer, out, flags=re.DOTALL)
+    esc = re.sub(r'```(\w*)\n(.*?)```', _extract_code_block, esc, flags=re.DOTALL)
 
+    # ── Step 2: Split into paragraphs ──
+    paragraphs = esc.split('\n\n')
+
+    # ── Step 3: Classify and render each paragraph ──
+    rendered: list[str] = []
+    for para in paragraphs:
+        if not para.strip():
+            continue
+        lines = para.strip().split('\n')
+
+        # Header: # / ## / ###
+        if len(lines) == 1:
+            m = re.match(r'^(#{1,3})\s+(.+)$', lines[0])
+            if m:
+                level = len(m.group(1))
+                size = {1: f'{fs(20)}', 2: f'{fs(17)}', 3: f'{fs(15)}'}[level]
+                margin = {1: '10px 0 4px 0', 2: '8px 0 3px 0', 3: '6px 0 2px 0'}[level]
+                rendered.append(
+                    f'<h{level} style="font-size:{size};font-weight:600;'
+                    f'color:#e5e5eb;margin:{margin};line-height:1.3;">'
+                    f'{m.group(2)}</h{level}>'
+                )
+                continue
+
+        # Horizontal rule: ---
+        if len(lines) == 1 and re.match(r'^-{3,}$', lines[0].strip()):
+            rendered.append(
+                '<hr style="border:none;border-top:1px solid #2a2a3c;margin:6px 0;">'
+            )
+            continue
+
+        # Unordered list: all lines start with - or *
+        if all(re.match(r'^[\-\*]\s+', line) for line in lines):
+            items = ''.join(
+                '<li style="margin:1px 0;line-height:1.45;">'
+                + re.sub(r'^[\-\*]\s+', '', line) + '</li>'
+                for line in lines
+            )
+            rendered.append(
+                f'<ul style="padding-left:20px;margin:2px 0;">{items}</ul>'
+            )
+            continue
+
+        # Ordered list: all lines start with N.
+        if all(re.match(r'^\d+\.\s+', line) for line in lines):
+            items = ''.join(
+                '<li style="margin:1px 0;line-height:1.45;">'
+                + re.sub(r'^\d+\.\s+', '', line) + '</li>'
+                for line in lines
+            )
+            rendered.append(
+                f'<ol style="padding-left:20px;margin:2px 0;">{items}</ol>'
+            )
+            continue
+
+        # Table: has | separators and a header-separator row
+        if len(lines) >= 2 and all('|' in line for line in lines):
+            has_sep = any(
+                re.match(r'^[\|\s\-\:]+$', line.strip()) for line in lines
+            )
+            if has_sep:
+                sep_idx = None
+                for i, line in enumerate(lines):
+                    if re.match(r'^[\|\s\-\:]+$', line.strip()):
+                        sep_idx = i
+                        break
+                if sep_idx is not None:
+                    header_rows = lines[:sep_idx]
+                    body_rows = lines[sep_idx + 1:]
+
+                    def _build_table_rows(rows, cell_tag):
+                        result = ''
+                        for row in rows:
+                            cells = row.strip().strip('|').split('|')
+                            result += '<tr>'
+                            for cell in cells:
+                                result += (
+                                    f'<{cell_tag} style="padding:2px 8px;text-align:left;'
+                                    f'border:1px solid #2a2a3c;">{cell.strip()}</{cell_tag}>'
+                                )
+                            result += '</tr>'
+                        return result
+
+                    rendered.append(
+                        '<table style="border-collapse:collapse;margin:4px 0;'
+                        f'font-size:{fs(11)};width:100%;">'
+                        f'<thead>{_build_table_rows(header_rows, "th")}</thead>'
+                        f'<tbody>{_build_table_rows(body_rows, "td")}</tbody>'
+                        '</table>'
+                    )
+                    continue
+
+        # Plain paragraph
+        body = '\n'.join(lines)
+        rendered.append(
+            f'<p style="margin:2px 0;line-height:1.45;">{body}</p>'
+        )
+
+    out = ''.join(rendered)
+
+    # ── Step 4: Inline formatting on the assembled HTML ──
+    # (applied after block-level rendering so inline code inside lists works)
+
+    # **bold**
+    out = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', out)
+
+    # *italic* — careful not to match ** or * inside words
+    out = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'<i>\1</i>', out)
+
+    # `inline code` (NOT inside <pre> blocks — resolved already)
     out = re.sub(
         r'`([^`]+)`',
         r'<code style="background:#1a1a24;color:#67e8f9;padding:1px 4px;'
-        f'border-radius:3px;font-family:monospace;{fs(11)};">\1</code>',
+        r'border-radius:3px;font-family:monospace;font-size:11px;">\1</code>',
         out,
     )
 
-    out = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', out)
-    out = out.replace("\n", "<br>")
+    # ── Step 5: Restore code block placeholders ──
+    for i, block_html in enumerate(code_blocks):
+        out = out.replace(f'__CODE_BLOCK_{i}__', block_html)
+
+    # ── Step 6: Remaining single newlines → <br> ──
+    out = out.replace('\n', '<br>')
+
     return out
 
 
