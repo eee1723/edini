@@ -645,15 +645,12 @@ class AgentPanel(QtWidgets.QWidget):
         action_col = QtWidgets.QVBoxLayout()
         action_col.setSpacing(4)
 
-        from edini.ui.viewport import is_vision_capable
-        from edini.config import get_settings
-        settings = get_settings()
         self._screenshot_btn = QtWidgets.QPushButton("📷")
         self._screenshot_btn.setToolTip("Capture viewport screenshot")
         self._screenshot_btn.setFixedSize(32, 32)
         self._screenshot_btn.clicked.connect(self._on_capture_viewport)
-        self._screenshot_btn.setVisible(is_vision_capable(
-            settings.get("provider", ""), settings.get("model_id", "")))
+        # Always show screenshot button — pi-visionizer routes images to vision model
+        self._screenshot_btn.setVisible(True)
         action_col.addWidget(self._screenshot_btn)
 
         self._screenshot_remove_btn = QtWidgets.QPushButton("✕")
