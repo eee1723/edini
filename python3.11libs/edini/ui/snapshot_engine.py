@@ -100,6 +100,10 @@ def diff(before: dict, after: dict) -> dict:
             "parent": info.get("parent", ""),
         })
 
+    # Filter: remove child nodes when parent was also created
+    # (Houdini auto-creates internal children with node types)
+    created = _filter_descendants(created)
+
     deleted = []
     for p in deleted_paths:
         info = before[p]
@@ -107,6 +111,12 @@ def diff(before: dict, after: dict) -> dict:
             "path": p,
             "type": info.get("type", ""),
         })
+
+    # Filter: removing a parent deletes all children implicitly
+    deleted = _filter_descendants(deleted)
+
+    # Build set of created paths for modified filtering
+    created_path_set = {item["path"] for item in created}
 
     modified = []
     for p in common_paths:
@@ -140,6 +150,16 @@ def diff(before: dict, after: dict) -> dict:
                 "type": b.get("type", a.get("type", "")),
                 "changes": changes,
             })
+
+    # Filter: skip nodes whose parent was created this round
+    # (they're children of new nodes, not genuine modifications)
+    modified = [
+        m for m in modified
+        if not any(
+            m["path"].startswith(cp + "/")
+            for cp in created_path_set
+        )
+    ]
 
     return {
         "created": created,
@@ -261,6 +281,31 @@ def _rebuild_node(path: str, state: dict) -> None:
                     node.setInput(idx, src_node)
             except Exception:
                 pass
+
+
+def _filter_descendants(items: list[dict]) -> list[dict]:
+    """Remove items whose path is a descendant of another item in the list.
+
+    For created/deleted: if parent A was created, its auto-generated children
+    should not appear separately. Only the top-most nodes in each branch are kept.
+    """
+    if len(items) <= 1:
+        return items
+    # Sort by path depth ascending (parents before children)
+    sorted_items = sorted(items, key=lambda x: x["path"].count("/"))
+    result = []
+    kept_paths: set[str] = set()
+    for item in sorted_items:
+        path = item["path"]
+        # Check if path is a descendant of any already-kept path
+        is_descendant = any(
+            path.startswith(kp + "/")
+            for kp in kept_paths
+        )
+        if not is_descendant:
+            result.append(item)
+            kept_paths.add(path)
+    return result
 
 
 def _path_sort_key(path: str) -> tuple[int, str]:
