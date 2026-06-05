@@ -58,33 +58,135 @@ def create_node(
 
 
 def _create_with_namespace_fallback(parent, node_type: str, name: str | None):
-    """Try creating a node with bare type name, falling back to namespace resolution."""
+    """Try creating a node with bare type name, falling back to namespace resolution.
+
+    After creation, applies any Tab-menu tool presets by finding matching
+    shelf tools and executing their post-creation parameter modifications.
+    """
     # Attempt 1: bare name
+    node = None
     try:
-        return parent.createNode(node_type, node_name=name if name else None)
+        node = parent.createNode(node_type, node_name=name if name else None)
     except hou.OperationFailed:
         pass
 
     # Attempt 2: resolve via namespaceOrder across all categories
-    for cat in [
-        hou.sopNodeTypeCategory(),
-        hou.objNodeTypeCategory(),
-        hou.dopNodeTypeCategory(),
-        hou.vopNodeTypeCategory(),
-        hou.shopNodeTypeCategory(),
-        hou.ropNodeTypeCategory(),
-    ]:
-        nt = hou.nodeType(cat, node_type)
-        if nt is not None:
-            namespaces = nt.namespaceOrder()
-            for ns in namespaces:
-                try:
-                    return parent.createNode(ns, node_name=name if name else None)
-                except hou.OperationFailed:
-                    continue
+    if node is None:
+        for cat in [
+            hou.sopNodeTypeCategory(),
+            hou.objNodeTypeCategory(),
+            hou.dopNodeTypeCategory(),
+            hou.vopNodeTypeCategory(),
+            hou.shopNodeTypeCategory(),
+            hou.ropNodeTypeCategory(),
+        ]:
+            nt = hou.nodeType(cat, node_type)
+            if nt is not None:
+                namespaces = nt.namespaceOrder()
+                for ns in namespaces:
+                    try:
+                        node = parent.createNode(ns, node_name=name if name else None)
+                        break
+                    except hou.OperationFailed:
+                        continue
+            if node is not None:
+                break
 
     # All attempts failed — let original exception propagate
-    return parent.createNode(node_type, node_name=name if name else None)
+    if node is None:
+        return parent.createNode(node_type, node_name=name if name else None)
+
+    # Apply Tab-menu presets from matching shelf tool
+    _apply_tool_presets(node)
+    return node
+
+
+def _apply_tool_presets(node) -> None:
+    """Apply post-creation parameter presets from shelf tools matching this node type.
+
+    The Tab menu runs shelf tools that often call pressButton() or parm().set()
+    after creating the node (e.g. 'resettargetattribs' for copytopoints).
+    This function finds matching tools and applies those post-creation actions.
+    """
+    import re
+
+    try:
+        node_type_name = node.type().name()  # e.g. 'copytopoints::2.0'
+    except Exception:
+        return
+
+    # Build candidate tool name patterns
+    # e.g. for 'copytopoints::2.0': 'sop_copytopoints::2.0', 'sop_copytopoints'
+    # for 'copytopoints': 'sop_copytopoints'
+    base = node_type_name.split('::')[0]
+    candidates = []
+    for suffix in ['::2.0', '::1.0', '::3.0', '']:
+        candidates.append(f'sop_{base}{suffix}')
+        candidates.append(f'obj_{base}{suffix}')
+        candidates.append(f'dop_{base}{suffix}')
+
+    # Also try the exact node type name
+    candidates.insert(0, f'sop_{node_type_name}')
+
+    for tool_name in candidates:
+        tool = hou.shelves.tool(tool_name)
+        if tool is None:
+            continue
+        script = tool.script()
+        if not script:
+            continue
+
+        # Extract post-creation actions: pressButton() and parm().set() calls
+        # that appear after node creation (genericTool / createNode)
+        lines = script.split('\n')
+        in_post_creation = False
+        for line in lines:
+            stripped = line.strip()
+            if not stripped or stripped.startswith('#'):
+                continue
+
+            # Detect the creation line
+            if 'genericTool' in stripped or 'createNode' in stripped:
+                in_post_creation = True
+                continue
+
+            if not in_post_creation:
+                continue
+
+            # pressButton('xxx') or .pressButton()
+            pm = re.search(r"\.parm\(['\"]([^'\"]+)['\"]\)\.pressButton\(\)", stripped)
+            if pm:
+                parm_name = pm.group(1)
+                try:
+                    p = node.parm(parm_name)
+                    if p is not None:
+                        p.pressButton()
+                except Exception:
+                    pass
+                continue
+
+            # parm('xxx').set(value)
+            sm = re.search(
+                r"\.parm\(['\"]([^'\"]+)['\"]\)\.set\((.+?)\)",
+                stripped
+            )
+            if sm:
+                parm_name = sm.group(1)
+                value_expr = sm.group(2).strip()
+                # Try to eval simple literals
+                try:
+                    import ast
+                    value = ast.literal_eval(value_expr)
+                except (ValueError, SyntaxError):
+                    continue
+                try:
+                    p = node.parm(parm_name)
+                    if p is not None:
+                        p.set(value)
+                except Exception:
+                    pass
+
+        break  # Found and processed first matching tool
 
 
 def delete_node(node_path: str) -> dict[str, Any]:
