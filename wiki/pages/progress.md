@@ -1,6 +1,6 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-05 &nbsp;|&nbsp; 第九阶段：时间线稳定性重构 — QScrollArea Widget 架构 · 智能滚动 · 流式持久化 · 气泡自适应
+> 最后更新：2026-06-05 &nbsp;|&nbsp; 第十阶段：变更树 QTreeWidget 面板 + SnapshotEngine Diff · Undo/Redo 栈 · Shelf Tool 预设 · 节点创建 namespace 解析
 
 ## 总览看板
 
@@ -92,6 +92,20 @@
 ## 近期关键节点
 
 <div class="timeline">
+
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-05</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第十阶段：变更树 + Undo/Redo + 节点创建预设修复</span>
+      <span class="status-tag status-done">完成</span>
+    </div>
+    <div class="timeline-summary">① SnapshotEngine（snapshot / diff / restore 三阶段节点级回滚）② ChangeTreeWidget 重写（QTreeWidget，按轮次分组，创建/修改/删除三级树，节点路径可点击跳转 viewport）③ Undo/Redo 栈（每轮对话一个事务，撤销=整轮回滚重建，重做=重放，手动修改场景自动清空栈）④ 对话中自动折叠、对话结束自动展开 ⑤ 节点创建 namespace 自动解析（裸名失败 → namespaceOrder → 全限定名）⑥ Shelf tool 预设自动应用（创建后查找匹配 tool 脚本，执行 pressButton/set 后处理操作）⑦ diff 过滤 Houdini 自动生成的子节点 ⑧ 参数紧凑显示（≤2参数全显示，3+ 收起为摘要，点击展开）</div>
+    <div class="timeline-tags">
+      <span>SnapshotEngine</span><span>变更树</span><span>Undo/Redo</span><span>视图跳转</span><span>namespace解析</span><span>tool预设</span><span>紧凑显示</span>
+    </div>
+  </div>
+</div>
 
 <div class="timeline-item timeline-done">
   <div class="timeline-date">2026-06-05</div>
@@ -197,7 +211,7 @@
 
 | 优先级 | 任务 | 说明 |
 |------|------|------|
-| P1 | 工具执行反馈 | 节点创建后在 viewport 高亮或选中 |
+| P1 | ~~工具执行反馈~~ | ✅ 变更树 + Undo/Redo + 节点跳转 viewport |
 | P2 | 知识库检索工具 | 为 Agent 添加 search_knowledge 工具调用 |
 | P2 | 单元测试 | 对 node_utils、config、tool_executor 写测试 |
 | P3 | Python 面板 | 支持嵌入 Houdini Pane Tab |
@@ -232,3 +246,11 @@
 - ✅ 知识沉淀两层架构：铁律 (≤20, 上下文注入) + 知识库 (细节, 可检索)
 - ✅ AI 反思 → 用户确认面板（✓✕ + 全部接受/放弃 + 类型切换）
 - ✅ Settings Knowledge 标签页（开关 + 统计 + 管理按钮）
+- ✅ 变更树 QTreeWidget 面板（按轮次分组：创建/修改/删除三级树，可折叠，对话结束自动展开）
+- ✅ SnapshotEngine 场景快照 Diff（snapshot / diff / 三阶段节点级 restore）
+- ✅ Undo/Redo 栈（每轮一个事务，撤销=整轮回滚重建，手动修改自动清空栈）
+- ✅ 节点视图跳转（点击变更树路径 → hou.node.setCurrent + frame viewport）
+- ✅ 节点创建 namespace 自动解析（裸名如 copytopoints → namespaceOrder → copytopoints::2.0）
+- ✅ Shelf tool 预设自动应用（创建后匹配 tool 脚本，执行 pressButton/set）
+- ✅ 变更树参数紧凑显示（≤2 参数全显，3+ 折叠摘要）
+- ✅ diff 自动过滤 Houdini 内部生成的子节点

@@ -1,6 +1,6 @@
 # 📊 仪表盘
 
-> **当前阶段**：时间线稳定性重构 — QScrollArea + Widget 架构 · 智能滚动(范围驱动) · 流式内容持久化 · 气泡自适应窗口 &nbsp;|&nbsp; **状态**：16 tools 就绪，Houdini 实机运行 &nbsp;|&nbsp; **最后更新**：2026-06-05
+> **当前阶段**：变更树 QTreeWidget 面板 + SnapshotEngine · Undo/Redo 栈 · Shelf Tool 预设 · 节点 namespace 解析 &nbsp;|&nbsp; **状态**：16 tools 就绪，Houdini 实机运行 &nbsp;|&nbsp; **最后更新**：2026-06-05
 
 ## 快速导航
 
@@ -28,6 +28,8 @@
 | 设置系统 | ✅ General + Knowledge 双标签 · 主题/字体 · 知识开关/统计/管理 |
 | 知识沉淀 | ✅ 两层架构（铁律 rules.json ≤20 + 知识库 entries.json）· AI 反思 → 用户确认 · 类型可切换 · 只提取会重复犯的错 |
 | 多模态 | ✅ Viewport 截图（vision 模型） |
+| 变更树 | ✅ QTreeWidget 面板（snapshot diff · undo/redo 栈 · 节点跳转 · 参数折叠显示 · 自动折叠/展开） |
+| 节点创建 | ✅ namespace 自动解析 · shelf tool 预设应用 · diff 过滤内部子节点 |
 | 测试 | ⬜ 无自动化测试 |
 | 知识检索 | ⬜ search_knowledge 工具待实现 |
 
