@@ -196,6 +196,14 @@ export default function (pi: ExtensionAPI) {
       const prompt = cfg.prompt || DEFAULT_PROMPT;
       const requireHttps = cfg.requireHttps !== false; // default true
 
+      // Track descriptions for custom entry + notification
+      const descriptions: Array<{
+        mimeType: string;
+        description: string;
+        model: string;
+        elapsedMs: number;
+      }> = [];
+
       // Process messages: replace image blocks with text descriptions
       const processed = await processMessages(
         event.messages,
@@ -203,7 +211,38 @@ export default function (pi: ExtensionAPI) {
         auth.apiKey,
         prompt,
         requireHttps,
+        descriptions,
       );
+
+      // Write custom entry for persistence
+      if (descriptions.length > 0) {
+        try {
+          ctx.sessionManager.appendEntry({
+            type: "custom",
+            customType: "vision-description",
+            data: {
+              timestamp: Date.now(),
+              descriptions,
+            },
+          });
+        } catch {
+          // Never block the conversation because of entry write failure
+        }
+
+        // Notify Edini UI via extension_ui_request
+        try {
+          await pi.sendUiRequest({
+            method: "notify",
+            notifyType: "info",
+            message: JSON.stringify({
+              event: "vision_description",
+              descriptions,
+            }),
+          });
+        } catch {
+          // Notification is best-effort; don't block
+        }
+      }
 
       return { messages: processed };
     } catch {
@@ -244,6 +283,7 @@ async function processMessages(
   apiKey: string,
   prompt: string,
   requireHttps: boolean,
+  descriptionsOut?: Array<{ mimeType: string; description: string; model: string; elapsedMs: number }>,
 ): Promise<ContextMessage[]> {
   const result: ContextMessage[] = [];
 
@@ -265,6 +305,7 @@ async function processMessages(
         let description = getCached(imgKey);
 
         if (!description) {
+          const t0 = Date.now();
           const visionResult = await describeImage({
             imageBase64: block.data,
             mediaType: mimeType,
@@ -273,6 +314,16 @@ async function processMessages(
             prompt,
             requireHttps,
           });
+          const elapsedMs = Date.now() - t0;
+
+          if (descriptionsOut) {
+            descriptionsOut.push({
+              mimeType,
+              description: visionResult.description || visionResult.error || "",
+              model: `${visionModel.provider}/${visionModel.id}`,
+              elapsedMs,
+            });
+          }
 
           if (visionResult.error && !visionResult.description) {
             description = `[Image: unable to describe — ${visionResult.error}]`;
