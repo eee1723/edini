@@ -245,3 +245,107 @@ def _capture_flipbook(vp) -> MediaItem | None:
 def is_viewport_available() -> bool:
     """Check if a Scene Viewer is currently available."""
     return _find_scene_viewer() is not None
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# File Selection, Clipboard, Drag-Drop
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def from_files(paths: list[str]) -> list:
+    """Read one or more image files from disk.
+
+    Skips non-image extensions and files over MAX_SIZE_BYTES.
+    Returns list of MediaItem (may be empty).
+    """
+    items: list = []
+    for p in paths:
+        if not os.path.isfile(p):
+            continue
+        ext = os.path.splitext(p)[1].lower()
+        if ext not in ALLOWED_EXTENSIONS:
+            continue
+        try:
+            b64, size = _read_file_base64(p)
+        except (OSError, PermissionError):
+            continue
+        if size == 0 or size > MAX_SIZE_BYTES:
+            continue
+        mime = _guess_mime(p)
+        filename = os.path.basename(p)
+        thumb = make_thumbnail(b64, mime)
+        items.append(MediaItem(
+            base64=b64, mime_type=mime, source=MediaSource.FILE_PICK,
+            filename=filename, thumbnail=thumb, file_path=p,
+            size_bytes=size,
+        ))
+    return items
+
+
+def from_clipboard() -> MediaItem | None:
+    """Read an image from the system clipboard.
+
+    Returns MediaItem with source=CLIPBOARD, or None if no image on clipboard.
+    """
+    try:
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance()
+        if app is None:
+            return None
+        clipboard = app.clipboard()
+        image = clipboard.image()
+        if image.isNull():
+            return None
+        buf = io.BytesIO()
+        image.save(buf, "PNG")
+        data = buf.getvalue()
+        if len(data) == 0:
+            return None
+        b64 = base64.b64encode(data).decode("ascii")
+        return _make_media_item(
+            b64, MediaSource.CLIPBOARD, "clipboard.png",
+            mime_type="image/png", size_bytes=len(data),
+        )
+    except Exception:
+        return None
+
+
+def clipboard_has_image() -> bool:
+    """Check if the clipboard currently contains an image."""
+    try:
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance()
+        if app is None:
+            return False
+        return not app.clipboard().image().isNull()
+    except Exception:
+        return False
+
+
+def from_mime_data(mime_data) -> list:
+    """Extract image files from a QMimeData (drag-drop event).
+
+    Only processes file URLs that have image extensions.
+    """
+    paths: list[str] = []
+    if mime_data.hasUrls():
+        for url in mime_data.urls():
+            local_path = url.toLocalFile()
+            if local_path and os.path.isfile(local_path):
+                paths.append(local_path)
+    if not paths:
+        return []
+    return from_files(paths)
+
+
+def mime_has_images(mime_data) -> bool:
+    """Check if a QMimeData contains any image file URLs."""
+    if not mime_data.hasUrls():
+        return False
+    for url in mime_data.urls():
+        local_path = url.toLocalFile()
+        if local_path:
+            ext = os.path.splitext(local_path)[1].lower()
+            if ext in ALLOWED_EXTENSIONS:
+                return True
+    return False
