@@ -3,6 +3,7 @@
 Reads pi session files from ~/.pi/agent/sessions/.
 """
 from PySide6 import QtCore, QtWidgets
+from edini.ui.theme import fs
 from edini.ui.pi_sessions import (
     list_pi_sessions, delete_pi_session,
 )
@@ -24,7 +25,7 @@ class HistoryPanel(QtWidgets.QWidget):
         layout.setSpacing(6)
 
         title = QtWidgets.QLabel("Sessions")
-        title.setStyleSheet("font-size:12pt;font-weight:700;color:#e5e5eb;")
+        title.setStyleSheet(f"font-size:{fs(13)};font-weight:700;color:#e5e5eb;")
         layout.addWidget(title)
 
         self.new_btn = QtWidgets.QPushButton("+ New Session")
@@ -32,26 +33,26 @@ class HistoryPanel(QtWidgets.QWidget):
         layout.addWidget(self.new_btn)
 
         self.session_list = QtWidgets.QListWidget(self)
-        self.session_list.setStyleSheet("""
-            QListWidget {
+        self.session_list.setStyleSheet(f"""
+            QListWidget {{
                 background-color: #0e0e15;
                 border: 1px solid #1a1a24;
                 border-radius: 4px;
                 color: #a1a1aa;
-                font-size: 12pt;
-            }
-            QListWidget::item {
+                font-size: {fs(12)};
+            }}
+            QListWidget::item {{
                 padding: 8px 12px;
                 border-bottom: 1px solid #1a1a24;
-            }
-            QListWidget::item:selected {
+            }}
+            QListWidget::item:selected {{
                 background-color: rgba(6, 182, 212, 0.12);
                 color: #67e8f9;
                 border-left: 2px solid #06b6d4;
-            }
-            QListWidget::item:hover {
+            }}
+            QListWidget::item:hover {{
                 background-color: #141420;
-            }
+            }}
         """)
         layout.addWidget(self.session_list, 1)
 
@@ -105,18 +106,18 @@ class HistoryPanel(QtWidgets.QWidget):
 
         title_label = QtWidgets.QLabel(title)
         title_label.setWordWrap(True)
-        title_label.setStyleSheet("font-size:11pt;color:#e5e5eb;font-weight:600;border:none;")
+        title_label.setStyleSheet(f"font-size:{fs(12)};color:#e5e5eb;font-weight:600;border:none;")
         w_layout.addWidget(title_label)
 
         created_short = _fmt_time(created)
         updated_short = _fmt_time(updated)
         meta = f"{created_short}  ·  {msg_count} msgs"
         meta_label = QtWidgets.QLabel(meta)
-        meta_label.setStyleSheet("font-size:10pt;color:#71717a;border:none;")
+        meta_label.setStyleSheet(f"font-size:{fs(11)};color:#71717a;border:none;")
         w_layout.addWidget(meta_label)
 
         updated_label = QtWidgets.QLabel(updated_short)
-        updated_label.setStyleSheet("font-size:10pt;color:#52525b;border:none;")
+        updated_label.setStyleSheet(f"font-size:{fs(10)};color:#52525b;border:none;")
         w_layout.addWidget(updated_label)
 
         self.session_list.addItem(item)
