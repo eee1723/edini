@@ -31,9 +31,9 @@ class RpcClient(QObject):
     error_occurred = Signal(str)
     status_changed = Signal(str)
     stats_updated = Signal(object)          # dict: tokens, cost, contextUsage
-    notification_received = Signal(str, str) # (notify_type, message) for info/warning
-    session_switched = Signal(str)          # new session path after switch
-    messages_received = Signal(object)      # list of messages from pi session
+    messages_received = Signal(object)       # list: messages from get_messages
+    session_switched = Signal(str)           # session path after switch
+    extension_info = Signal(str)            # info/warning from pi extensions (tools loaded, etc.)
 
     def __init__(self, parent: QObject | None = None):
         super().__init__(parent)
@@ -42,6 +42,10 @@ class RpcClient(QObject):
         self._worker: _RpcWorker | None = None
         self._is_running = False
         self._cwd: str | None = None
+
+    def set_cwd(self, cwd: str) -> None:
+        """Set the working directory (must be called before start)."""
+        self._cwd = cwd
 
     @property
     def is_running(self) -> bool:
@@ -52,8 +56,9 @@ class RpcClient(QObject):
         if self._is_running:
             return
 
+        pi_cmd = get_pi_command()
         self._thread = QThread()
-        self._worker = _RpcWorker(get_pi_command(), TOOL_EXECUTOR_PORT)
+        self._worker = _RpcWorker(pi_cmd, TOOL_EXECUTOR_PORT, self._cwd)
         self._worker.moveToThread(self._thread)
 
         self._worker.text_delta.connect(self.text_delta)
@@ -65,12 +70,9 @@ class RpcClient(QObject):
         self._worker.error_occurred.connect(self.error_occurred)
         self._worker.status_changed.connect(self.status_changed)
         self._worker.stats_received.connect(self.stats_updated)
-        self._worker.notification_received.connect(self.notification_received)
-        self._worker.session_switched.connect(self.session_switched)
         self._worker.messages_received.connect(self.messages_received)
-
-        if self._cwd:
-            self._worker.set_cwd(self._cwd)
+        self._worker.session_switched.connect(self.session_switched)
+        self._worker.extension_info.connect(self.extension_info)
 
         self._thread.started.connect(self._worker.run)
         self._thread.start()
@@ -122,17 +124,13 @@ class RpcClient(QObject):
         if self._worker:
             self._worker.send_command({"type": "get_session_stats"})
 
-    def set_cwd(self, cwd: str) -> None:
-        """Set the working directory for the Pi subprocess."""
-        self._cwd = cwd
-
     def send_new_session(self) -> None:
-        """Tell Pi to start a new session."""
+        """Tell Pi to start a new session (equivalent to /new)."""
         if self._worker:
             self._worker.send_command({"type": "new_session"})
 
     def send_switch_session(self, session_path: str) -> None:
-        """Tell Pi to switch to an existing session."""
+        """Tell Pi to switch to a different session (equivalent to /resume)."""
         if self._worker:
             self._worker.send_command({
                 "type": "switch_session",
@@ -146,6 +144,16 @@ class RpcClient(QObject):
                 "type": "set_session_name",
                 "name": name,
             })
+
+    def send_get_state(self) -> None:
+        """Request current session state from Pi."""
+        if self._worker:
+            self._worker.send_command({"type": "get_state"})
+
+    def send_get_messages(self) -> None:
+        """Request all messages from Pi's current session."""
+        if self._worker:
+            self._worker.send_command({"type": "get_messages"})
 
     def restart(self) -> None:
         """Restart the Pi subprocess (needed after API key change)."""
@@ -167,21 +175,17 @@ class _RpcWorker(QObject):
     error_occurred = Signal(str)
     status_changed = Signal(str)
     stats_received = Signal(object)
-    notification_received = Signal(str, str)
-    session_switched = Signal(str)
     messages_received = Signal(object)
+    session_switched = Signal(str)
+    extension_info = Signal(str)            # info/warning from pi extensions (tools loaded, etc.)
 
-    def __init__(self, pi_cmd: list[str], tool_port: int):
+    def __init__(self, pi_cmd: list[str], tool_port: int, cwd: str | None = None):
         super().__init__()
         self._pi_cmd = pi_cmd
         self._tool_port = tool_port
+        self._cwd = cwd
         self._process: subprocess.Popen | None = None
         self._should_stop = False
-        self._cwd: str | None = None
-
-    def set_cwd(self, cwd: str) -> None:
-        """Set working directory for the subprocess."""
-        self._cwd = cwd
 
     def run(self) -> None:
         """Start Pi subprocess and read stdout JSONL events."""
@@ -198,7 +202,6 @@ class _RpcWorker(QObject):
             # On Windows, suppress console window when spawning pi.cmd
             if sys.platform == "win32":
                 popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-                # Also hide via startupinfo
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                 startupinfo.wShowWindow = subprocess.SW_HIDE
@@ -252,7 +255,7 @@ class _RpcWorker(QObject):
         """Send a JSON command to Pi's stdin."""
         if self._process and self._process.stdin:
             try:
-                self._process.stdin.write(json.dumps(cmd, ensure_ascii=False) + "\n")
+                self._process.stdin.write(json.dumps(cmd, ensure_ascii=True) + "\n")
                 self._process.stdin.flush()
             except (BrokenPipeError, OSError) as e:
                 self.error_occurred.emit(f"Failed to send command: {e}")
@@ -280,7 +283,7 @@ class _RpcWorker(QObject):
             self.tool_result.emit(
                 event.get("toolName", ""),
                 event.get("toolCallId", ""),
-                json.dumps(event.get("result", {}), ensure_ascii=False),
+                json.dumps(event.get("result", {}), ensure_ascii=True),
             )
 
         elif event_type == "agent_start":
@@ -292,15 +295,24 @@ class _RpcWorker(QObject):
         elif event_type == "response":
             if not event.get("success", True):
                 self.error_occurred.emit(event.get("error", "Unknown error"))
-            command = event.get("command", "")
-            if command == "get_session_stats":
+            elif event.get("command") == "get_session_stats":
                 self.stats_received.emit(event.get("data", {}))
-            elif command in ("new_session", "switch_session"):
+            elif event.get("command") == "get_messages":
                 data = event.get("data", {})
-                session_path = data.get("sessionPath", "") if isinstance(data, dict) else ""
-                self.session_switched.emit(session_path)
-            elif command == "get_messages":
-                self.messages_received.emit(event.get("data", []))
+                self.messages_received.emit(data.get("messages", []))
+            elif event.get("command") == "new_session":
+                data = event.get("data", {})
+                if not data.get("cancelled", False):
+                    self.send_command({"type": "get_state"})
+            elif event.get("command") == "switch_session":
+                data = event.get("data", {})
+                if not data.get("cancelled", False):
+                    self.send_command({"type": "get_state"})
+            elif event.get("command") == "get_state":
+                data = event.get("data", {})
+                session_file = data.get("sessionFile", "")
+                if session_file:
+                    self.session_switched.emit(session_file)
 
         elif event_type == "extension_error":
             self.error_occurred.emit(f"Extension: {event.get('error', '')}")
@@ -312,4 +324,4 @@ class _RpcWorker(QObject):
                 if notify_type == "error":
                     self.error_occurred.emit(f"[{notify_type}] {message}")
                 else:
-                    self.notification_received.emit(notify_type, message)
+                    self.extension_info.emit(message)

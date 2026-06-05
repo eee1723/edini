@@ -1,6 +1,6 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-04 &nbsp;|&nbsp; 第七阶段：知识沉淀系统 — 自动提取 · 上下文注入 · Thinking 独立面板 · 部署配置
+> 最后更新：2026-06-05 &nbsp;|&nbsp; 第九阶段：时间线稳定性重构 — QScrollArea Widget 架构 · 智能滚动 · 流式持久化 · 气泡自适应
 
 ## 总览看板
 
@@ -12,7 +12,7 @@
     <span class="status-tag status-done">完成</span>
   </div>
   <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:100%"></div></div>
-  <div class="phase-card-detail">三栏布局 · Thinking 独立面板（可折叠、QTextEdit 纯文本自然分段、实时流光标）· Tool Call 面板（fixedHeight 折叠 20px↔200px、暗色协调、自动滚底）· 时间线纯对话 bubble · 智能防抖滚动（actionTriggered + 比例定位、无闪烁）· 代码 Copy（anchorClicked + base64）· Markdown 渲染 · 流式文本</div>
+  <div class="phase-card-detail">三栏布局 · Thinking 面板（可折叠、QTextEdit 纯文本流、实时展开/收拢）· Tool Call 面板（fixedHeight 折叠 20px↔200px、暗色协调、自动滚底）· 时间线 QScrollArea + Widget（_UserBubble / _AiBubble / _Separator / _ErrorBanner）· 智能滚动（rangeChanged valueChanged + _pinned_to_bottom 标志位）· 代码 Copy（QLabel linkActivated + base64）· Markdown 渲染 · 知识提取确认区（铁律/知识卡片 + ✓✕ + 全部接受/放弃 + 类型切换）· 气泡 Expanding 填满窗口 · 完成后自动折叠面板</div>
 </div>
 
 <div class="phase-card">
@@ -21,7 +21,7 @@
     <span class="status-tag status-done">完成</span>
   </div>
   <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:100%"></div></div>
-  <div class="phase-card-detail">subprocess + stdin/stdout · QThread 非阻塞 · 事件分发 (text_delta/thinking_delta/tool_call/tool_result) · 重连 · 模型热切换</div>
+  <div class="phase-card-detail">subprocess + stdin/stdout · QThread 非阻塞 · 事件分发 (text_delta/thinking_delta/tool_call/tool_result) · 会话 RPC (new/switch/set_name/get_state) · extension_info 信号 · cwd 支持 · ensure_ascii=True · CREATE_NO_WINDOW</div>
 </div>
 
 <div class="phase-card">
@@ -48,7 +48,7 @@
     <span class="status-tag status-done">完成</span>
   </div>
   <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:100%"></div></div>
-  <div class="phase-card-detail">16 tools (TypeBox schema) · 系统提示注入 · forwardTool HTTP 转发 · session_start 通知</div>
+  <div class="phase-card-detail">16 tools (TypeBox schema) · edini-context 注入铁律（rules.json）+ Houdini 上下文 · forwardTool HTTP 转发</div>
 </div>
 
 <div class="phase-card">
@@ -57,7 +57,7 @@
     <span class="status-tag status-done">完成</span>
   </div>
   <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:100%"></div></div>
-  <div class="phase-card-detail">install.py (Houdini 包注册) · setup_pi.bat · settings.json · Pi 路径自动检测 · env var 覆盖</div>
+  <div class="phase-card-detail">install.py (Houdini 包注册) · setup_pi.bat · settings.json · Pi 路径自动检测 · env var 覆盖 · 隐藏 Windows 控制台</div>
 </div>
 
 <div class="phase-card">
@@ -84,7 +84,7 @@
     <span class="status-tag status-done">完成</span>
   </div>
   <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:100%"></div></div>
-  <div class="phase-card-detail">✅ 对话结束自动提取避坑/技巧/工作流/模型局限 · ✅ JSON 存储 (~/.pi/agent/edini-knowledge.json) · ✅ 新会话上下文注入 · ✅ 管理弹窗（筛选/删除/清空） · ✅ 设置开关</div>
+  <div class="phase-card-detail">✅ 两层架构（铁律 rules.json ≤20条 + 知识库 entries.json）· ✅ 对话结束 AI 反思 → 用户确认（面板内 ✓✕）· ✅ 铁律自动注入 system prompt · ✅ 管理弹窗（双标签增删改搜索）· ✅ Settings Knowledge 标签页 · ✅ 类型可切换（铁律↔知识）· ✅ 只提取会重复犯的错</div>
 </div>
 
 </div>
@@ -94,15 +94,43 @@
 <div class="timeline">
 
 <div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-05</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第九阶段：时间线稳定性重构 — QScrollArea Widget 架构</span>
+      <span class="status-tag status-done">完成</span>
+    </div>
+    <div class="timeline-summary">彻底重构时间线渲染引擎：① 从 QTextBrowser + setHtml 全量重绘 重构为 QScrollArea + 独立 Widget（_UserBubble / _AiBubble / _Separator / _ErrorBanner）② 智能滚动从 actionTriggered + 比例定位 改为 rangeChanged + valueChanged + _pinned_to_bottom 标志位（彻底消除抖动）③ 修复流式内容丢失 bug：_flush_thinking_buf 清空 _current_text 导致气泡只显示新 chunk，新增 _streaming_full_text 永不清空的累加器 ④ Thinking 面板实时更新：add_thinking_step 直接调用 _update_live_thinking，不再等待文字 chunk ⑤ 气泡大小固定：去掉 setMaximumWidth + stretch，改用 layout margin + Expanding sizePolicy 填满窗口 ⑥ 完成后自动折叠：_collapse_tool_panel + _collapse_thinking_panel 在 finish_streaming 和 show_aborted 中调用。修复：双 deleteLater、QLabel 选择器兼容、_raw_text 追踪。</div>
+    <div class="timeline-tags">
+      <span>QScrollArea</span><span>Widget架构</span><span>智能滚动</span><span>流式持久化</span><span>气泡自适应</span><span>自动折叠</span>
+    </div>
+  </div>
+</div>
+
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-05</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第八阶段：知识沉淀系统重构 — 两层架构</span>
+      <span class="status-tag status-done">完成</span>
+    </div>
+    <div class="timeline-summary">完全重构知识系统为两层架构：① 铁律层（rules.json，≤20条，每次会话自动注入 system prompt）② 知识库层（entries.json，无上限，细节化知识）③ 提取流程改为 AI 反思 → JSON 解析 → 聊天面板内确认区展示 → 用户逐条 ✓✕ 或全部接受/放弃 ④ 铁律/知识类型徽章可点击切换 ⑤ 提取 prompt 严格限制：只有会重复犯的错才提取，排除 LLM 已知的通用知识 ⑥ Settings Dialog 改为 General + Knowledge 双标签 ⑦ Context Panel 新增 Pi Status 工具信息 + 对话计时器 + Knowledge 卡片 ⑧ JSON 解析加固：代码块提取、单引号修复、尾逗号修复 ⑨ 提取响应不再渲染进时间线（get_raw_stream_text + cancel_current_stream）⑩ 移除调试 stderr 输出。修复：3 位 hex 颜色解析、knowledge_dialog 空指针、时间线消失 bug。</div>
+    <div class="timeline-tags">
+      <span>两层架构</span><span>用户确认面板</span><span>铁律上限20</span><span>类型切换</span><span>提取prompt优化</span><span>Settings双标签</span><span>JSON加固</span><span>12文件</span>
+    </div>
+  </div>
+</div>
+
+<div class="timeline-item timeline-done">
   <div class="timeline-date">2026-06-04</div>
   <div class="timeline-card">
     <div class="timeline-card-header">
-      <span class="timeline-title">第七阶段：知识沉淀系统 + Thinking 独立面板 + Windows 部署</span>
-      <span class="status-tag status-done">完成</span>
+      <span class="timeline-title">第七阶段：知识沉淀系统初版 + Thinking 独立面板 + Windows 部署</span>
+      <span class="status-tag status-done">已重构</span>
     </div>
-    <div class="timeline-summary">实现知识沉淀闭环：① 新建 knowledge_store.py 全局知识 JSON 存储（~/.pi/agent/edini-knowledge.json），支持 4 分类（避坑/技巧/工作流/模型局限）、去重、LRU 100 条上限 ② 对话结束后自动发送反思 prompt，Agent 返回 JSON 自动解析存储（balanced bracket 状态机 + 双分隔符定位）③ edini-context 扩展读取 JSON 注入系统提示（before_agent_start 钩子）④ 新建 knowledge_dialog.py 管理弹窗（分类筛选/删除/清空）⑤ Settings 新增 knowledge_enabled 开关 ⑥ Context Panel 新增 Knowledge 卡片。Thinking 真正独立：新建 _ThinkingPanelWidget（QTextEdit 纯文本，_apply_expanded_state 管理高度，流式自动展开/结束自动收拢），从时间线 HTML 中完全剥离。部署完善：install.py 自动安装包 + MainMenuCommon.xml hconfig 注册 · Pi models.json 自动创建 · 隐藏 Windows 控制台窗口（CREATE_NO_WINDOW）· 进程终止加固。通知分流：extension_ui_request info → notification_received 信号 → Pi Status 卡片 8s 自动消失。新增对话轮次计时器（QElapsedTimer + 每秒刷新 Context Panel）。修复：History Panel 标题裁切（word wrap + 压缩时间标签）、Pi 终端多开（subprocess 窗口隐藏 + kill 兜底）。</div>
+    <div class="timeline-summary">初版知识沉淀系统（单文件 JSON、自动存储、无用户确认），已在第八阶段重构为两层架构。Thinking 面板从 _ThinkingPanelWidget 独立类重构为 AgentPanel 内联实现。部署完善：install.py + MainMenuCommon.xml + CREATE_NO_WINDOW + 进程终止加固。</div>
     <div class="timeline-tags">
-      <span>知识沉淀</span><span>Thinking独立面板</span><span>QTextEdit</span><span>上下文注入</span><span>部署配置</span><span>通知分流</span><span>Windows修复</span><span>计时器</span><span>8文件</span>
+      <span>已重构</span><span>初版v1</span><span>Thinking面板</span><span>部署配置</span>
     </div>
   </div>
 </div>
@@ -114,9 +142,9 @@
       <span class="timeline-title">第六阶段：Session 浏览模式 + 三个 Bug 修复</span>
       <span class="status-tag status-done">完成</span>
     </div>
-    <div class="timeline-summary">实现会话浏览模式并修复三个关键 Bug：① HistoryPanel 新增 set_browsing_mode() / highlight_session() / back_to_current_requested 信号，浏览模式下按钮从"+ 新对话"变为"← 回到当前" ② MainWindow 新增 _active_session_path / _browsing_session_path 状态字段，_on_session_selected 进入浏览模式保存活跃会话，_on_back_to_current 恢复，_on_session_deleted 处理回退 ③ 修复 _cwd_to_dirname 未替换 Windows 盘符冒号 `:` 导致目录名不匹配（E:-edini vs E--edini）④ 修复 _parse_session_file 只认旧 "header" type 不兼容 Pi v3 "session" type（+ 字段名变更 createdAt→timestamp、content 数组化）⑤ 修复 _pi_sessions_root 优先用 HOME 而 Houdini 将其重写为 Documents 子目录，导致在 \Documents\.pi\ 找不到真正的 \Users\EEE\.pi\ 目录（改为 USERPROFILE 优先）。</div>
+    <div class="timeline-summary">实现会话浏览模式并修复三个关键 Bug：① HistoryPanel 新增 set_browsing_mode() / highlight_session() / back_to_current_requested 信号 ② MainWindow 新增 _active_session_path / _browsing_session_path 状态字段 ③ 修复 Windows 盘符冒号 ④ 修复 Pi v3 session 格式兼容 ⑤ 修复 HOME vs USERPROFILE 路径问题。</div>
     <div class="timeline-tags">
-      <span>浏览模式</span><span>回到当前</span><span>Windows路径修复</span><span>Pi v3兼容</span><span>HOME路径修复</span><span>2文件</span>
+      <span>浏览模式</span><span>回到当前</span><span>Windows路径修复</span><span>Pi v3兼容</span><span>HOME路径修复</span>
     </div>
   </div>
 </div>
@@ -128,9 +156,9 @@
       <span class="timeline-title">第五阶段：Session 架构重构 — pi 接管会话管理</span>
       <span class="status-tag status-done">完成</span>
     </div>
-    <div class="timeline-summary">彻底重构 Session 管理架构：① 删除 edini 自建的 session_store.py，pi 成为唯一真理源 ② pi 进程改用 Popen(cwd=HIP) 启动（去掉 --no-session），session JSONL 按 HIP 目录归档在 ~/.pi/agent/sessions/ ③ 新建 pi_sessions.py 模块，直接读 pi JSONL 文件获取会话列表和消息 ④ HistoryPanel 改用 pi_sessions.list_pi_sessions()，发射 pi session 路径而非 edini session ID ⑤ RpcClient 新增 send_new_session / send_switch_session / send_set_session_name / send_get_messages 方法及 session_switched / messages_received 信号 ⑥ main_window 全部 session handler 重写：新建 → new_session RPC，切换 → 本地读 JSONL 即时渲染 + switch_session RPC，发送消息不再写 edini 存储 ⑦ ContextPanel 新增 reset_stats()，session 切换时归零显示 ⑧ 修复窗口关闭后重新打开显示 disconnected 的 bug（closeEvent 清空 _main_window 全局引用）⑨ 修复 ensure_ascii=False 导致 Windows pipe 写入 Errno 22 ⑩ 修复 _bootstrap 过早 send 命令（改为 status==connected 时触发）。</div>
+    <div class="timeline-summary">彻底重构 Session 管理：① 删除 edini session_store.py，pi 成为唯一真理源 ② Popen(cwd=HIP) 启动（去掉 --no-session）③ 新建 pi_sessions.py 读 pi JSONL ④ RpcClient 新增 new/switch/set_name/get_state ⑤ ContextPanel reset_stats() ⑥ 修复窗口单例、ensure_ascii、_bootstrap 时序问题。</div>
     <div class="timeline-tags">
-      <span>pi 接管 Session</span><span>删除 session_store</span><span>pi_sessions</span><span>Popen cwd</span><span>RPC 新命令</span><span>窗口单例修复</span><span>5 文件</span>
+      <span>pi 接管 Session</span><span>删除 session_store</span><span>pi_sessions</span><span>Popen cwd</span><span>RPC 新命令</span>
     </div>
   </div>
 </div>
@@ -142,51 +170,23 @@
       <span class="timeline-title">第四阶段：UI 稳定化 — Thinking 独立面板 · 纯文本流 · 滚动防抖</span>
       <span class="status-tag status-done">完成</span>
     </div>
-    <div class="timeline-summary">重构 Thinking 展示架构：① Thinking 从时间线 HTML 中完全移除，改为独立可折叠面板（QTextEdit 只读，自然段落分段，实时流 ▊ 光标，自动滚底）② Tool Call 面板移除 QSplitter，改用 fixedHeight 折叠（20px↔200px），暗色协调背景 ③ 智能滚动全面重写：actionTriggered 替代 valueChanged 防反馈、同步比例定位替代 QTimer 异步恢复（消除闪烁）、blockSignals 防信号环路 ④ 代码块 Copy 按钮从无效 JS onclick 改为 _TimelineView anchorClicked + base64 ⑤ Thinking 实时分段：add_thinking_step 检测 \n\n 即时 flush 已完成段落 ⑥ Thinking 面板和 Tool 面板均自动滚底显示最新。修复：折叠不可用、滚动抖动、内容锁定顶部、QTextBrowser 渲染残留、Copy 按钮无效。</div>
+    <div class="timeline-summary">重构 Thinking 展示：独立可折叠面板（QTextEdit 只读，自然段落分段，实时流 ▊ 光标，自动滚底）· Tool Call 面板 fixedHeight 折叠 · 智能滚动 actionTriggered + 同步比例定位 · TimelineView anchorClicked + base64 Copy · Thinking 实时分段。</div>
     <div class="timeline-tags">
-      <span>Thinking 独立面板</span><span>纯文本流</span><span>防抖滚动</span><span>Copy 修复</span><span>无 Splitter</span><span>实时分段</span><span>1 文件</span>
+      <span>Thinking 独立面板</span><span>纯文本流</span><span>防抖滚动</span><span>Copy 修复</span>
     </div>
   </div>
 </div>
 
 <div class="timeline-item timeline-done">
-  <div class="timeline-date">2026-06-04</div>
+  <div class="timeline-date">2026-06-04 · 06-03</div>
   <div class="timeline-card">
     <div class="timeline-card-header">
-      <span class="timeline-title">第三阶段：UI 精细化 — Pi CLI 风格 · Session 系统 · 实时反馈</span>
+      <span class="timeline-title">第一~三阶段：基础架构 → UI 重构 → UI 精细化</span>
       <span class="status-tag status-done">完成</span>
     </div>
-    <div class="timeline-summary">全面优化对话面板交互体验：① Thinking 流式渲染（单块实时增长 + 展开态光标，交错于文本之间，分段由 Pi 事件边界决定）② 可折叠 Tool Call 面板（QWidget 卡片、实时结果更新 ✅/❌、折叠时面板缩至 24px）③ 执行/中止按钮一体化切换 ④ Session 系统（会话持久化 JSON、自动命名、时间线切换回看、上下文重建、60% 压缩摘要）⑤ 卡片式 Context Panel（Pi Status + Scene 分组）⑥ Settings 对话框（Provider 下拉 + Model 历史记忆 + 主题/字体实时预览）⑦ 代码块 Copy 按钮 ⑧ 智能滚动（手动上滚不自动跳底）⑨ Viewport 截图（vision 模型）⑩ 状态栏信息（连接状态/模型/Nodes/Token/Cost）⑪ 统一字体 10-13pt + 紧凑间距 ⑫ thinking_delta / tool_result RPC 事件链路。修复：session 消息从未存储、tool panel 展开态残留、thinking R1 逐词碎裂。</div>
+    <div class="timeline-summary">第一阶段：PySide6 + JSON-RPC + HTTP 工具执行器 + 16 tools + DeepSeek。第二阶段：Houdini 原生菜单 + QSplitter 三栏 + 暗色主题。第三阶段：Pi CLI 风格双层折叠 + Session 系统 + Viewport 截图 + 智能滚动。</div>
     <div class="timeline-tags">
-      <span>Pi CLI 风格</span><span>流式Thinking</span><span>Tool Call 面板</span><span>Session 管理</span><span>Viewport 截图</span><span>Copy 按钮</span><span>智能滚动</span><span>10 文件</span>
-    </div>
-  </div>
-</div>
-
-<div class="timeline-item timeline-done">
-  <div class="timeline-date">2026-06-03</div>
-  <div class="timeline-card">
-    <div class="timeline-card-header">
-      <span class="timeline-title">第二阶段：UI 重构 — Houdini 原生菜单 + 三栏高级面板 ✅ 实机运行</span>
-      <span class="status-tag status-done">完成</span>
-    </div>
-    <div class="timeline-summary">全面 UI 重构完成并在 Houdini 实机验证通过：① python3.11libs 标准目录 + MainMenuCommon.xml 主菜单注册 ② QMainWindow + QSplitter 三栏（History | Timeline | Pi+Scene）③ 暗色主题系统（4 色预设、统一 16px 字号、8px 网格间距）④ AgentPanel 单气泡流式渲染（Tool Card / Markdown / 错误横幅）⑤ ChatRuntime Pi 事件层 ⑥ HistoryPanel + session_store 会话持久化 ⑦ ContextPanel 双面板 ⑧ SettingsDialog 双标签 ⑨ QKeySequence 热键 ⑩ 窗口单例管理。修复：流式渲染多气泡 bug、热键参数透传、import 缺失。</div>
-    <div class="timeline-tags">
-      <span>MainMenuCommon.xml</span><span>QSplitter三栏</span><span>暗色主题16px</span><span>单气泡流式</span><span>实机验证</span><span>19文件</span>
-    </div>
-  </div>
-</div>
-
-<div class="timeline-item timeline-done">
-  <div class="timeline-date">2026-06-03</div>
-  <div class="timeline-card">
-    <div class="timeline-card-header">
-      <span class="timeline-title">第一阶段：基础架构搭建完成</span>
-      <span class="status-tag status-done">16 tools 就绪</span>
-    </div>
-    <div class="timeline-summary">完成 Edini 完整底层架构：PySide6 聊天面板 UI（流式文本、工具卡片、设置对话框）、JSON-RPC 通信层（QThread + subprocess stdin/stdout 非阻塞管理）、HTTP 工具执行器（127.0.0.1:9876，16 个 Houdini 操作 handler）、node_utils 纯 Python houp API 封装、16 个 Pi 扩展工具（TypeBox 参数校验 + HTTP 转发）、edini-context 系统提示注入、安装脚本（install.py + setup_pi.bat）、配置持久化（settings.json + env var 覆盖）。DeepSeek V3/R1 两种模型可选。</div>
-    <div class="timeline-tags">
-      <span>PySide6</span><span>JSON-RPC</span><span>HTTP</span><span>16 tools</span><span>DeepSeek</span><span>安装部署</span>
+      <span>PySide6</span><span>JSON-RPC</span><span>16 tools</span><span>三栏布局</span><span>Session管理</span>
     </div>
   </div>
 </div>
@@ -198,8 +198,8 @@
 | 优先级 | 任务 | 说明 |
 |------|------|------|
 | P1 | 工具执行反馈 | 节点创建后在 viewport 高亮或选中 |
+| P2 | 知识库检索工具 | 为 Agent 添加 search_knowledge 工具调用 |
 | P2 | 单元测试 | 对 node_utils、config、tool_executor 写测试 |
-| P2 | Houdini 日志集成 | 工具执行结果输出到 Houdini Console |
 | P3 | Python 面板 | 支持嵌入 Houdini Pane Tab |
 | P3 | 多模型优化 | Qwen 等更多 provider 快速切换 |
 
@@ -218,11 +218,17 @@
 - ✅ 流式思考展示（独立 Thinking 面板、纯文本自然分段、实时流 ▊ 光标、自动滚底）
 - ✅ 工具调用实时面板（fixedHeight 折叠 20px↔200px、执行状态 ✅/❌、结果预览、自动滚底）
 - ✅ 代码块一键 Copy（_TimelineView anchorClicked + base64，无需 JS）
-- ✅ 会话管理 (pi 接管：Popen cwd 按 HIP 归档 · JSONL 本地读取 · new/switch/set_name RPC · 删除 edini session_store)
+- ✅ 会话管理 (pi 接管：Popen cwd 按 HIP 归档 · JSONL 本地读取 · new/switch/set_name RPC)
 - ✅ Viewport 截图 (vision 模型分析画面)
 - ✅ API Key / Provider / Model 设置 (下拉选择 + 历史记忆)
 - ✅ 4 色主题实时预览 + 字体缩放
 - ✅ 执行/中止按钮一体化切换
-- ✅ 智能防抖滚动（actionTriggered 用户检测、同步比例定位、无闪烁无抖动）
+- ✅ 智能滚动（rangeChanged + valueChanged + _pinned_to_bottom 标志位，零抖动）
 - ✅ 状态栏 (连接状态 / 模型 / 节点数)
 - ✅ 多行输入 (Ctrl+Enter 换行，Enter 发送)
+- ✅ 会话浏览模式（历史回看 + 回到当前）
+- ✅ 对话轮次计时器（Pi Status 卡片实时显示 Round 时间）
+- ✅ Pi Status 工具信息（Tools: 16 loaded, port 9876）
+- ✅ 知识沉淀两层架构：铁律 (≤20, 上下文注入) + 知识库 (细节, 可检索)
+- ✅ AI 反思 → 用户确认面板（✓✕ + 全部接受/放弃 + 类型切换）
+- ✅ Settings Knowledge 标签页（开关 + 统计 + 管理按钮）

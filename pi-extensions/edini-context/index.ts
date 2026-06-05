@@ -1,48 +1,51 @@
 // pi-extensions/edini-context/index.ts
-// Injects Houdini context + knowledge base into the system prompt.
+// Injects Houdini context + iron rules (铁律) into the system prompt.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 
-const KNOWLEDGE_FILE = path.join(os.homedir(), ".pi", "agent", "edini-knowledge.json");
+const KNOWLEDGE_DIR = path.join(os.homedir(), ".pi", "agent", "edini-knowledge");
+const RULES_FILE = path.join(KNOWLEDGE_DIR, "rules.json");
 
-interface KnowledgeEntry {
+interface IronRule {
   id: string;
   category: string;
   title: string;
   content: string;
+  enabled: boolean;
   created_at: string;
 }
 
 const CATEGORY_ICONS: Record<string, string> = {
-  "避坑": "🐛",
+  "避坑": "⚠️",
   "技巧": "💡",
   "工作流": "📋",
-  "模型局限": "⚠️",
+  "配置": "⚙️",
 };
 
-function loadKnowledge(): KnowledgeEntry[] {
+function loadEnabledRules(): IronRule[] {
   try {
-    if (fs.existsSync(KNOWLEDGE_FILE)) {
-      const raw = fs.readFileSync(KNOWLEDGE_FILE, "utf-8");
-      return JSON.parse(raw);
+    if (fs.existsSync(RULES_FILE)) {
+      const raw = fs.readFileSync(RULES_FILE, "utf-8");
+      const rules: IronRule[] = JSON.parse(raw);
+      return rules.filter((r) => r.enabled !== false);
     }
   } catch (_) {
-    // ignore
+    // ignore — first run won't have the file yet
   }
   return [];
 }
 
-function buildKnowledgeContext(): string {
-  const entries = loadKnowledge();
-  if (entries.length === 0) return "";
+function buildRulesContext(): string {
+  const rules = loadEnabledRules();
+  if (rules.length === 0) return "";
 
-  const lines: string[] = ["", "## 知识库（来自之前对话的沉淀）", ""];
-  for (const e of entries) {
-    const icon = CATEGORY_ICONS[e.category] || "📌";
-    lines.push(`- [${icon} ${e.category}] ${e.title}: ${e.content}`);
+  const lines: string[] = ["", "## 铁律（必须遵守的知识）", ""];
+  for (const r of rules) {
+    const icon = CATEGORY_ICONS[r.category] || "📌";
+    lines.push(`- [${icon} ${r.category}] **${r.title}**: ${r.content}`);
   }
   return lines.join("\n");
 }
@@ -73,9 +76,9 @@ The user is interacting with you through a panel inside Houdini. They can see th
 7. Fetch scene info with houdini_get_scene_info when you need context.
 `.trim();
 
-    // Inject knowledge base (from previous conversations)
-    const knowledgeText = buildKnowledgeContext();
+    // Inject iron rules (enabled rules from knowledge store)
+    const rulesText = buildRulesContext();
 
-    return { systemPrompt: event.systemPrompt + "\n\n" + houdiniContext + knowledgeText };
+    return { systemPrompt: event.systemPrompt + "\n\n" + houdiniContext + rulesText };
   });
 }

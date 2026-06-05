@@ -65,6 +65,8 @@ class EdiniPanel(QWidget):
         self._chat_layout.addStretch()
 
         self._chat_scroll.setWidget(self._chat_container)
+        self._chat_scroll.verticalScrollBar().actionTriggered.connect(self._on_user_scroll_action)
+        self._user_scrolled_up = False
         main_layout.addWidget(self._chat_scroll, stretch=1)
 
         # --- Header bar (settings button) ---
@@ -171,6 +173,7 @@ class EdiniPanel(QWidget):
         if not text:
             return
         self._input_field.clear()
+        self._user_scrolled_up = False
         self._add_user_message(text)
 
         self._current_assistant_bubble = self._add_assistant_message("")
@@ -277,10 +280,18 @@ class EdiniPanel(QWidget):
         self._scroll_to_bottom()
         return bubble
 
+    def _on_user_scroll_action(self, action: int) -> None:
+        """Called ONLY on user-initiated scroll (wheel, drag, arrow keys)."""
+        sb = self._chat_scroll.verticalScrollBar()
+        self._user_scrolled_up = (sb.maximum() - sb.value()) > 30
+
     def _scroll_to_bottom(self) -> None:
-        QTimer.singleShot(10, lambda: self._chat_scroll.verticalScrollBar().setValue(
-            self._chat_scroll.verticalScrollBar().maximum()
-        ))
+        if self._user_scrolled_up:
+            return
+        sb = self._chat_scroll.verticalScrollBar()
+        sb.blockSignals(True)
+        sb.setValue(sb.maximum())
+        sb.blockSignals(False)
 
     def _refresh_node_count(self) -> None:
         try:

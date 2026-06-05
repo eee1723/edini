@@ -9,7 +9,7 @@
   "wiki": {
     "version": "1.0",
     "created": "2026-06-03",
-    "last_updated": "2026-06-03-init"
+    "last_updated": "2026-06-05-timeline-widget-refactor"
   },
   "features": {
     "search": true,

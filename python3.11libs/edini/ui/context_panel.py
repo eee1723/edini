@@ -86,12 +86,6 @@ class ContextPanel(QtWidgets.QWidget):
         self.provider_model_label.setStyleSheet(f"color:#71717a;font-size:{fs(11)};border:none;")
         pi_layout.addWidget(self.provider_model_label)
 
-        self.notification_label = QtWidgets.QLabel("")
-        self.notification_label.setWordWrap(True)
-        self.notification_label.setStyleSheet(f"color:#80cbc4;font-size:{fs(10)};border:none;padding:2px 0;")
-        self.notification_label.setVisible(False)
-        pi_layout.addWidget(self.notification_label)
-
         pi_layout.addWidget(_card_spacer())
 
         self.token_in_label = _card_label("In: -")
@@ -102,6 +96,14 @@ class ContextPanel(QtWidgets.QWidget):
             pi_layout.addWidget(lbl)
 
         pi_layout.addWidget(_card_spacer())
+
+        pi_layout.addWidget(_card_spacer())
+
+        self.tools_label = _card_label("Tools: -")
+        pi_layout.addWidget(self.tools_label)
+
+        self.round_time_label = _card_label("Round: —")
+        pi_layout.addWidget(self.round_time_label)
 
         self.ctx_label = _card_label("Context: -")
         pi_layout.addWidget(self.ctx_label)
@@ -114,11 +116,6 @@ class ContextPanel(QtWidgets.QWidget):
         self.ctx_progress.setFormat("0%")
         self.ctx_progress.setFixedHeight(14)
         pi_layout.addWidget(self.ctx_progress)
-
-        pi_layout.addWidget(_card_spacer())
-
-        self.round_time_label = _card_label("Round: —")
-        pi_layout.addWidget(self.round_time_label)
 
         layout.addWidget(pi_card)
 
@@ -141,13 +138,17 @@ class ContextPanel(QtWidgets.QWidget):
 
         # ── Card 3: Knowledge ──
         kn_card, kn_layout = _make_card("Knowledge", self)
-        self.knowledge_count_label = _card_label("Entries: -")
-        kn_layout.addWidget(self.knowledge_count_label)
 
-        self.refresh_knowledge_btn = QtWidgets.QPushButton("管理")
-        self.refresh_knowledge_btn.setObjectName("GhostButton")
-        self.refresh_knowledge_btn.clicked.connect(self._open_knowledge_manager)
-        kn_layout.addWidget(self.refresh_knowledge_btn)
+        self.rules_count_label = _card_label("Rules: -")
+        kn_layout.addWidget(self.rules_count_label)
+
+        self.entries_count_label = _card_label("Entries: -")
+        kn_layout.addWidget(self.entries_count_label)
+
+        manage_btn = QtWidgets.QPushButton("管理")
+        manage_btn.setObjectName("GhostButton")
+        manage_btn.clicked.connect(self._open_knowledge_manager)
+        kn_layout.addWidget(manage_btn)
 
         layout.addWidget(kn_card)
         layout.addStretch(1)
@@ -180,13 +181,9 @@ class ContextPanel(QtWidgets.QWidget):
             self.ctx_progress.setFormat(f"{pct}%")
             self.ctx_label.setText(f"Context: {pct}%")
 
-    def set_notification(self, notify_type: str, message: str):
-        """Show an info/warning notification in the Pi Status card."""
-        color = {"info": "#80cbc4", "warning": "#fbbf24"}.get(notify_type, "#80cbc4")
-        self.notification_label.setText(f"<span style='color:{color};'>ℹ {message}</span>")
-        self.notification_label.setVisible(True)
-        # Auto-hide after 8 seconds
-        QtCore.QTimer.singleShot(8000, lambda: self.notification_label.setVisible(False))
+    def set_tools_info(self, info: str):
+        """Set tools info in Pi Status card (e.g., '16 tools, port 9876')."""
+        self.tools_label.setText(f"Tools: {info}")
 
     def set_round_time(self, elapsed_sec: float):
         """Show the current round duration."""
@@ -198,29 +195,34 @@ class ContextPanel(QtWidgets.QWidget):
         """Clear the round time display."""
         self.round_time_label.setText("Round: —")
 
-    def reset_stats(self):
-        """Reset all usage stats to defaults."""
-        self.token_in_label.setText("In: -")
-        self.token_out_label.setText("Out: -")
-        self.token_total_label.setText("Total: -")
-        self.cost_label.setText("Cost: -")
-        self.ctx_progress.setValue(0)
-        self.ctx_progress.setFormat("0%")
-        self.ctx_label.setText("Context: -")
-        self._last_ctx_pct = None
-        self.reset_round_time()
-
     def refresh_knowledge(self):
-        """Update knowledge count display."""
-        from edini.ui.knowledge_store import count
-        c = count()
-        self.knowledge_count_label.setText(f"Entries: {c}" if c else "Entries: -")
+        """Update knowledge counts in the card."""
+        from edini.ui.knowledge_store import rules_count, entries_count
+        r = rules_count()
+        e = entries_count()
+        self.rules_count_label.setText(f"Rules: {r}" if r else "Rules: -")
+        self.entries_count_label.setText(f"Entries: {e}" if e else "Entries: -")
 
     def _open_knowledge_manager(self):
         from edini.ui.knowledge_dialog import KnowledgeDialog
         dlg = KnowledgeDialog(self)
         dlg.exec()
         self.refresh_knowledge()
+
+    def reset_stats(self):
+        """Reset all stats labels to defaults (used on session create/switch)."""
+        self.token_in_label.setText("In: -")
+        self.token_out_label.setText("Out: -")
+        self.token_total_label.setText("Total: -")
+        self.cost_label.setText("Cost: -")
+        self.ctx_label.setText("Context: -")
+        self.ctx_progress.setValue(0)
+        self.ctx_progress.setFormat("0%")
+        self._last_ctx_pct = None
+        self.reset_round_time()
+
+    def set_stream_rate(self, rate: float):
+        pass  # Removed for cleaner UI per spec
 
     def refresh_scene_info(self):
         if hou is None:

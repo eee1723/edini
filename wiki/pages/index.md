@@ -1,6 +1,6 @@
 # 📊 仪表盘
 
-> **当前阶段**：知识沉淀系统 — 自动提取避坑/技巧/工作流/模型局限 · Thinking 独立面板 · Windows 部署 &nbsp;|&nbsp; **状态**：16 tools 就绪，Houdini 实机运行 &nbsp;|&nbsp; **最后更新**：2026-06-04
+> **当前阶段**：时间线稳定性重构 — QScrollArea + Widget 架构 · 智能滚动(范围驱动) · 流式内容持久化 · 气泡自适应窗口 &nbsp;|&nbsp; **状态**：16 tools 就绪，Houdini 实机运行 &nbsp;|&nbsp; **最后更新**：2026-06-05
 
 ## 快速导航
 
@@ -17,30 +17,31 @@
 
 | 模块 | 状态 |
 |------|------|
-| UI 面板 | ✅ 三栏布局 · 独立 Thinking 面板（QTextEdit 纯文本自然分段）· Tool Call 面板（fixedHeight 折叠/展开、暗色协调）· 时间线纯对话 bubble · 执行/中止按钮切换 · 卡片式 Context · 统一字号(10-13pt) · 智能防抖滚动（actionTriggered + 比例定位）· 代码 Copy（anchorClicked + base64）|
-| Houdini 集成 | ✅ MainMenuCommon.xml · 包注册 · Alt+Shift+E 热键 |
+| UI 面板 | ✅ 三栏布局 · Thinking 面板（内联 QTextEdit，可折叠，实时流展开/收拢）· Tool Call 面板（fixedHeight 折叠/展开）· 时间线 QScrollArea + Widget bubble（_UserBubble / _AiBubble / _Separator / _ErrorBanner）· 知识确认区（铁律/知识徽章可切换 + ✓✕）· 卡片式 Context · 智能滚动（rangeChanged + _pinned_to_bottom）· 代码 Copy（QLabel linkActivated + base64）· 气泡窗口自适应（Expanding + margin）· 完成后自动折叠面板 |
+| Houdini 集成 | ✅ MainMenuCommon.xml · 包注册 |
 | 工具执行器 | ✅ HTTP Server · 16 工具路由 · 健康检查 · 实时工具卡片 |
 | Houdini 操作 | ✅ 场景查询 · 节点 CRUD · 参数读写 · 布局 · 搜索 |
-| Pi 扩展 | ✅ 工具注册 · 系统提示注入 · TypeBox 参数校验 · thinking_delta / tool_result 事件 |
+| Pi 扩展 | ✅ 16 tools (TypeBox) · edini-context 铁律注入 + Houdini 上下文 |
 | 安装部署 | ✅ install.py · setup_pi.bat · settings.json 持久化 |
-| Session 管理 | ✅ pi 接管会话（Popen cwd 按 HIP 目录归档）· 删除 session_store · pi_sessions.py 读 JSONL（兼容 v3 format + Windows 冒号路径 + USERPROFILE 优先）· 浏览模式（历史会话继续对话 · ← 回到当前按钮切换 · 选中高亮）· new/switch/set_name RPC |
+| Session 管理 | ✅ pi 接管会话（cwd=HIP）· pi_sessions.py 读 JSONL · 浏览模式 · new/switch/set_name/get_state RPC |
 | 多模型 | ✅ DeepSeek V3/R1 · Anthropic · Provider 下拉 + Model 历史记忆 |
-| 设置系统 | ✅ Provider/Model/API Key · 4 色主题实时预览 · 字体缩放 0.8-1.4 |
-| Session 浏览 | ✅ HistoryPanel 模式切换（普通/浏览）· back_to_current_requested 信号 · highlight_session() · MainWindow _active/_browsing 状态追踪 · 删除会话回退逻辑 |
-| 知识沉淀 | ✅ 对话结束自动提取 · 4 分类 JSON 存储 · 上下文注入 · 管理弹窗 · 设置开关 |
+| 设置系统 | ✅ General + Knowledge 双标签 · 主题/字体 · 知识开关/统计/管理 |
+| 知识沉淀 | ✅ 两层架构（铁律 rules.json ≤20 + 知识库 entries.json）· AI 反思 → 用户确认 · 类型可切换 · 只提取会重复犯的错 |
+| 多模态 | ✅ Viewport 截图（vision 模型） |
 | 测试 | ⬜ 无自动化测试 |
-| 多模态 | ✅ Viewport 截图（vision 模型支持） |
+| 知识检索 | ⬜ search_knowledge 工具待实现 |
 
 ## 技术栈
 
 | 层级 | 技术 |
 |------|------|
 | 宿主应用 | Houdini 21 / Python 3 / PySide6 |
-| UI 层 | QWidget · QScrollArea · QLineEdit · QThread |
+| UI 层 | QMainWindow · QSplitter · QTextEdit · QThread |
 | 通信层 | JSON-RPC (stdin/stdout) · HTTP (localhost:9876) |
 | AI 后端 | Pi Coding Agent (Node.js) · DeepSeek V3/R1 · TypeBox |
 | 扩展 | Pi Extensions (TypeScript) · edini-tools · edini-context |
-| 部署 | npm global · install.py 包注册 · settings.json |
+| 存储 | settings.json · rules.json · entries.json · pi JSONL sessions |
+| 部署 | npm global · install.py 包注册 |
 
 ---
 

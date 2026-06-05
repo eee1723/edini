@@ -116,6 +116,8 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         # Agent panel signals
         self.agent_panel.submit_requested.connect(self._on_agent_submit)
         self.agent_panel.abort_requested.connect(self._on_abort_request)
+        self.agent_panel.knowledge_accepted.connect(self._on_knowledge_accepted)
+        self.agent_panel.knowledge_rejected.connect(self._on_knowledge_rejected)
 
         # History panel signals
         self.history_panel.new_session_requested.connect(self._on_new_session)
@@ -125,8 +127,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
 
         # Pi status
         self._rpc_client.status_changed.connect(self._on_status_changed)
-        self._rpc_client.notification_received.connect(self._on_notification)
-
+        self._rpc_client.extension_info.connect(self.context_panel.set_tools_info)
         # Pi session management responses
         self._rpc_client.session_switched.connect(self._on_pi_session_switched)
         self._rpc_client.messages_received.connect(self._on_pi_messages_received)
@@ -151,12 +152,13 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self._rpc_client.start()
         self.history_panel.load_sessions()
         self.context_panel.refresh_scene_info()
+        self.context_panel.refresh_knowledge()
         settings = get_settings()
         self.context_panel.set_provider_model(
             settings.get("provider", "deepseek"),
             settings.get("model_id", "deepseek-chat"),
         )
-        self.context_panel.refresh_knowledge()
+        self.context_panel.set_tools_info("16 loaded, port 9876")
         from edini.ui.hotkey import install_event_filter
         install_event_filter()
 
@@ -174,11 +176,18 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self.status.showMessage("Processing...")
 
     def _on_agent_done(self, _):
-        self.agent_panel.finish_streaming()
-        self.agent_panel.set_busy(False)
         self._stats_poll_timer.stop()
         self._round_timer.stop()
         self._on_round_tick()  # final update
+
+        # If this was an extraction response, handle separately
+        if self._extracting_knowledge:
+            self._handle_extraction_response()
+            return
+
+        self.agent_panel.finish_streaming()
+        self.agent_panel.set_busy(False)
+
         self.context_panel.refresh_scene_info()
         self._rpc_client.send_get_stats()
         self._update_statusbar()
@@ -187,10 +196,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self.history_panel.load_sessions()
 
         # Auto knowledge extraction
-        if self._extracting_knowledge:
-            self._process_extraction()
-        else:
-            self._maybe_extract_knowledge()
+        self._maybe_extract_knowledge()
 
     def _on_tool_call(self, tool_name: str, tool_call_id: str, args: dict):
         self.agent_panel.add_tool_card(tool_name, args, tool_call_id)
@@ -199,13 +205,12 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self.agent_panel.set_tool_result(tool_call_id, result)
 
     def _on_thinking(self, text: str):
-        self.agent_panel.add_thinking_step(text=text)
+        self.agent_panel.add_thinking_step(0, text)
 
     def _on_abort_request(self):
         self._rpc_client.send_abort()
         self.agent_panel.show_aborted()
         self._round_timer.stop()
-        self._on_round_tick()  # final time snapshot
 
     def _on_error(self, msg: str):
         self._stats_poll_timer.stop()
@@ -214,13 +219,8 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self.agent_panel.set_busy(False)
         self.status.showMessage(f"Error: {msg}")
 
-    def _on_notification(self, notify_type: str, message: str):
-        """Handle info/warning notifications from Pi extensions."""
-        # Skip the "tools loaded" spam — shown once in Pi Status card instead
-        self.context_panel.set_notification(notify_type, message)
-
     def _on_round_tick(self):
-        """Update the round elapsed time display."""
+        """Update the round elapsed time display in Pi Status."""
         if self._round_elapsed.isValid():
             elapsed = self._round_elapsed.elapsed() / 1000.0
             self.context_panel.set_round_time(elapsed)
@@ -228,7 +228,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
     # ── Knowledge Extraction ──
 
     def _maybe_extract_knowledge(self):
-        """After user conversation finishes, optionally trigger knowledge extraction."""
+        """After conversation finishes, optionally trigger knowledge extraction."""
         settings = get_settings()
         if not settings.get("knowledge_enabled", True):
             return
@@ -238,54 +238,71 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self.status.showMessage("Extracting knowledge...")
 
         prompt = (
-            "Based on the conversation above, extract reusable knowledge for Houdini work.\n"
-            "Return ONLY a JSON array of objects with these fields:\n"
-            '- category: one of "避坑" (pitfall), "技巧" (tip), "工作流" (workflow), "模型局限" (model limitation)\n'
-            '- title: short summary in Chinese (max 20 chars)\n'
-            '- content: detailed description in Chinese (1-2 sentences)\n\n'
-            "Focus on concrete, actionable knowledge. Skip generic advice.\n"
-            "If nothing worth extracting, return an empty array [].\n\n"
-            "Example: [{\"category\":\"避坑\",\"title\":\"Pyro解算爆炸\",\"content\":\"关掉GasTurbulence微解算器，否则大尺度烟雾会数值爆炸\"}]"
+            "Review the conversation above and identify mistakes, pitfalls, or tricky situations "
+            "that are LIKELY TO BE REPEATED in future Houdini work.\n\n"
+            "🔴 ONLY extract if ALL of these are true:\n"
+            "1. A concrete mistake was made, or something unexpectedly failed\n"
+            "2. The solution was non-obvious — an experienced Houdini user might also forget this\n"
+            "3. Without this reminder, the same mistake would likely happen again\n\n"
+            "✋ DO NOT extract:\n"
+            "- Generic Houdini knowledge that any LLM already knows (node types, basic workflows)\n"
+            "- Things that worked correctly the first time\n"
+            "- Standard API documentation facts\n"
+            "- Obvious tips like 'check your parameters before rendering'\n\n"
+            "Return a JSON array. If nothing qualifies, return [].\n\n"
+            "Each object:\n"
+            '- type: "rule" OR "entry". Use this test: "If I start a brand new Houdini project tomorrow, '
+            'will this still apply?" YES → "rule", NO (only applies to this specific case/tool) → "entry"\n'
+            '- category: prefer "避坑", use "配置" for config issues, "工作流" for workflow gotchas\n'
+            '- title: short summary in Chinese (max 30 chars)\n'
+            '- content: WHAT went wrong + WHY + HOW to avoid next time (1-3 sentences)\n'
+            '- tags: optional search keywords\n\n'
+            'Rule examples: "Node creation order matters for DOP networks" (applies to all DOPs)\n'
+            'Entry examples: "第3个Resample节点需要关闭MaxSegments否则崩" (applies to this one setup)\n\n'
+            'Examples: [{"type":"rule","category":"避坑","title":"DOP解算中节点顺序影响结果","content":"在DOP网络中，解算器顺序改变会完全改变模拟结果。GasTurbulence必须关闭否则大尺度烟雾数值爆炸。所有DOP项目适用。","tags":["dop","sim"]}]'
         )
-        # Start a new silent round for extraction
         self.agent_panel.begin_assistant_message()
         QtCore.QTimer.singleShot(300, lambda: self._rpc_client.send_prompt(prompt))
 
-    def _process_extraction(self):
-        """Parse the agent's extraction response and save knowledge entries."""
-        self._extracting_knowledge = False
-        from edini.ui.knowledge_store import parse_agent_response, add_entry
+    def _handle_extraction_response(self):
+        """Capture extraction response directly (not from timeline HTML)."""
+        from edini.ui.knowledge_store import parse_extraction_response
 
-        # Read the full plain text from the timeline
-        text = self.agent_panel.timeline_view.toPlainText()
-        if not text:
-            self.status.showMessage("Ready")
-            return
+        raw_text = self.agent_panel.get_raw_stream_text()
+        self.agent_panel.cancel_current_stream()
+        self.agent_panel.set_busy(False)
 
-        # The extraction response is between the last two "── 本轮结束 ──" separators.
-        # Search backward: find last separator, extract text between second-to-last and last.
-        sep = "── 本轮结束 ──"
-        first_sep = text.find(sep)
-        last_sep = text.rfind(sep)
-        if first_sep >= 0 and last_sep > first_sep:
-            # Text between the two separators (this is the extraction response)
-            text = text[first_sep + len(sep):last_sep].strip()
-        # Fallback: if only one separator, search whole text (extraction rfind will find last JSON)
+        items, error_text = parse_extraction_response(raw_text)
 
-        entries = parse_agent_response(text)
-        saved = 0
-        for e in entries:
-            add_entry(e["category"], e["title"], e["content"],
-                      source_session=self._current_session_path)
-            saved += 1
-
-        if saved > 0:
-            self.status.showMessage(f"Knowledge: {saved} entries extracted")
+        if items:
+            self.agent_panel.show_extraction_results(items)
+            self.status.showMessage(
+                f"Knowledge: {len(items)} items found — review below")
         else:
-            self.status.showMessage("Ready")
+            self._extracting_knowledge = False
+            if error_text:
+                self.status.showMessage(
+                    "Knowledge extraction failed — check Houdini Console")
+            else:
+                self.status.showMessage("No new knowledge to extract")
 
+    def _on_knowledge_accepted(self, items: list):
+        """User accepted extracted knowledge items — save them."""
+        self._extracting_knowledge = False
+        from edini.ui.knowledge_store import accept_extracted
+        r, e = accept_extracted(items, self._current_session_path)
+        parts = []
+        if r:
+            parts.append(f"{r} 条铁律")
+        if e:
+            parts.append(f"{e} 条知识")
+        self.status.showMessage(f"Knowledge saved: {' + '.join(parts)}" if parts else "Ready")
         self.context_panel.refresh_knowledge()
-        self.history_panel.load_sessions()
+
+    def _on_knowledge_rejected(self):
+        """User rejected all extracted knowledge."""
+        self._extracting_knowledge = False
+        self.status.showMessage("Ready")
 
     def _on_busy_changed(self, busy: bool):
         pass
