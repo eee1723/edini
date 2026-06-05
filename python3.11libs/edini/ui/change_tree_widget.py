@@ -24,8 +24,8 @@ class ChangeTreeWidget(QtWidgets.QFrame):
     undo_round_requested = QtCore.Signal(int)
     redo_requested = QtCore.Signal()
 
-    COLLAPSED_H = 22
-    EXPANDED_H = 260
+    COLLAPSED_H = 24
+    EXPANDED_H = 280
 
     def __init__(self, parent=None):
         super().__init__(parent)
