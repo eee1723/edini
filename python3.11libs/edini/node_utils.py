@@ -34,13 +34,17 @@ def create_node(
     name: str | None = None,
     parent_path: str = "/obj",
 ) -> dict[str, Any]:
-    """Create a new node in the scene."""
+    """Create a new node in the scene.
+
+    Automatically resolves the preferred namespace (e.g. 'copytopoints'
+    → 'copytopoints::2.0') to match Tab-menu creation behavior.
+    """
     try:
         parent = hou.node(parent_path)
         if parent is None:
             return {"success": False, "error": f"Parent path not found: {parent_path}"}
 
-        node = parent.createNode(node_type, node_name=name if name else None)
+        node = _create_with_namespace_fallback(parent, node_type, name)
         return {
             "success": True,
             "path": node.path(),
@@ -51,6 +55,36 @@ def create_node(
         return {"success": False, "error": f"Failed to create node '{node_type}': {e}"}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+def _create_with_namespace_fallback(parent, node_type: str, name: str | None):
+    """Try creating a node with bare type name, falling back to namespace resolution."""
+    # Attempt 1: bare name
+    try:
+        return parent.createNode(node_type, node_name=name if name else None)
+    except hou.OperationFailed:
+        pass
+
+    # Attempt 2: resolve via namespaceOrder across all categories
+    for cat in [
+        hou.sopNodeTypeCategory(),
+        hou.objNodeTypeCategory(),
+        hou.dopNodeTypeCategory(),
+        hou.vopNodeTypeCategory(),
+        hou.shopNodeTypeCategory(),
+        hou.ropNodeTypeCategory(),
+    ]:
+        nt = hou.nodeType(cat, node_type)
+        if nt is not None:
+            namespaces = nt.namespaceOrder()
+            for ns in namespaces:
+                try:
+                    return parent.createNode(ns, node_name=name if name else None)
+                except hou.OperationFailed:
+                    continue
+
+    # All attempts failed — let original exception propagate
+    return parent.createNode(node_type, node_name=name if name else None)
 
 
 def delete_node(node_path: str) -> dict[str, Any]:
