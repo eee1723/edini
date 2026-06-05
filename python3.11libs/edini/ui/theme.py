@@ -72,7 +72,7 @@ QMenu           {{ background-color:#101018; border:1px solid #1e1e2c; padding:4
 QMenu::item     {{ padding:4px 24px 4px 12px; font-size:{fs(12)}; }}
 QMenu::item:selected {{ background-color:#1a1a2a; color:{a}; }}
 QMenu::separator {{ height:1px; background:#1e1e2c; margin:4px 8px; }}
-QStatusBar      {{ background-color:#0a0a10; color:#6a6e76; border-top:1px solid #1e1e2c; font-size:{fs(11)}; padding:0 8px; }}
+QStatusBar      {{ background-color:#0a0a10; color:#6a6e76; border-top:1px solid #1e1e2c; font-size:{fs(10)}; padding:0 8px; }}
 QSplitter::handle {{ background-color:#1a1a28; width:1px; }}
 QSplitter::handle:hover {{ background-color:{a}; }}
 QScrollBar:vertical     {{ background:#0c0c14; width:8px; margin:0; }}
@@ -112,7 +112,7 @@ QComboBox:hover {{ border-color:#2a2a3c; }}
 QComboBox:focus {{ border-color:{a}; }}
 QComboBox::drop-down {{ border:none; width:20px; }}
 QComboBox QAbstractItemView {{ background-color:#101018; border:1px solid #1e1e2c; selection-background-color:#1a1a2a; selection-color:{a}; font-size:{fs(12)}; }}
-QCheckBox       {{ color:#8a8f98; font-size:{fs(11)}; spacing:6px; }}
+QCheckBox       {{ color:#8a8f98; font-size:{fs(10)}; spacing:6px; }}
 QCheckBox::indicator {{ width:14px; height:14px; border:1px solid #2a2a3a; border-radius:3px; background:#10101a; }}
 QCheckBox::indicator:checked {{ background:{a}; border-color:{a}; }}
 QCheckBox::indicator:hover {{ border-color:#3a3a4a; }}
