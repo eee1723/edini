@@ -491,17 +491,6 @@ class AgentPanel(QtWidgets.QWidget):
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(4)
 
-        # Plan progress + Change tree (placeholders, hidden)
-        from edini.ui.plan_progress_widget import PlanProgressWidget
-        self.plan_progress_widget = PlanProgressWidget(self)
-        self.plan_progress_widget.setMaximumHeight(260)
-        root.addWidget(self.plan_progress_widget)
-
-        from edini.ui.change_tree_widget import ChangeTreeWidget
-        self.change_tree_widget = ChangeTreeWidget(self)
-        self.change_tree_widget.setMaximumHeight(200)
-        root.addWidget(self.change_tree_widget)
-
         # ── Timeline (QScrollArea + widgets) ──
         self.timeline_view = _TimelineView()
         root.addWidget(self.timeline_view, 1)
@@ -643,6 +632,11 @@ class AgentPanel(QtWidgets.QWidget):
         self._knowledge_area.setVisible(False)
         root.addWidget(self._knowledge_area)
 
+        # ── Change Tree Panel (collapsible) ──
+        from edini.ui.change_tree_widget import ChangeTreeWidget
+        self.change_tree_widget = ChangeTreeWidget()
+        root.addWidget(self.change_tree_widget)
+
         # ── Input row ──
         input_row = QtWidgets.QHBoxLayout()
         self.input_edit = QtWidgets.QPlainTextEdit(self)
@@ -755,6 +749,9 @@ class AgentPanel(QtWidgets.QWidget):
         self._thinking_toggle.setText("▸ Thinking (0)")
         self._tool_panel.setFixedHeight(self._TOOL_PANEL_COLLAPSED_H)
         self._thinking_panel.setFixedHeight(self._THINKING_COLLAPSED_H)
+
+        # Collapse change tree during conversation
+        self.change_tree_widget.collapse()
 
         images = None
         if self._screenshot_data:
