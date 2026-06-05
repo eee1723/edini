@@ -1,6 +1,6 @@
 # 📊 仪表盘
 
-> **当前阶段**：变更树 QTreeWidget 面板 + SnapshotEngine · Undo/Redo 栈 · Shelf Tool 预设 · 节点 namespace 解析 · UI 字体协调优化 &nbsp;|&nbsp; **状态**：16 tools 就绪，Houdini 实机运行 &nbsp;|&nbsp; **最后更新**：2026-06-05
+> **当前阶段**：时间线 Markdown 渲染升级 + 历史气泡合并 + 变更树修复 &nbsp;|&nbsp; **状态**：16 tools 就绪，Houdini 实机运行 &nbsp;|&nbsp; **最后更新**：2026-06-05
 
 ## 快速导航
 
@@ -17,7 +17,7 @@
 
 | 模块 | 状态 |
 |------|------|
-| UI 面板 | ✅ 三栏布局 · Thinking 面板（内联 QTextEdit，可折叠，实时流展开/收拢）· Tool Call 面板（fixedHeight 折叠/展开）· 时间线 QScrollArea + Widget bubble（_UserBubble / _AiBubble / _Separator / _ErrorBanner）· 知识确认区（铁律/知识徽章可切换 + ✓✕）· 卡片式 Context · 智能滚动（rangeChanged + _pinned_to_bottom）· 代码 Copy（QLabel linkActivated + base64）· 气泡窗口自适应（Expanding + margin）· 完成后自动折叠面板 · 4 层统一字号体系（header fs13 / body fs12 / detail fs11 / caption fs10）· 全局 fs() 缩放 · 无文字裁切 |
+| UI 面板 | ✅ 三栏布局 · Thinking 面板 · Tool Call 面板 · 时间线 Widget bubble · Markdown 双格式化器（完整解析 + 流式安全）· 文本选择 · 历史气泡合并 · 知识过滤 · 智能滚动 · 4 层统一字号 · 无文字裁切 |
 | Houdini 集成 | ✅ MainMenuCommon.xml · 包注册 |
 | 工具执行器 | ✅ HTTP Server · 16 工具路由 · 健康检查 · 实时工具卡片 |
 | Houdini 操作 | ✅ 场景查询 · 节点 CRUD · 参数读写 · 布局 · 搜索 |
@@ -27,8 +27,8 @@
 | 多模型 | ✅ DeepSeek V3/R1 · Anthropic · Provider 下拉 + Model 历史记忆 |
 | 设置系统 | ✅ General + Knowledge 双标签 · 主题/字体 · 知识开关/统计/管理 |
 | 知识沉淀 | ✅ 两层架构（铁律 rules.json ≤20 + 知识库 entries.json）· AI 反思 → 用户确认 · 类型可切换 · 只提取会重复犯的错 |
-| 多模态 | ✅ Viewport 截图（vision 模型） |
-| 变更树 | ✅ QTreeWidget 面板（snapshot diff · undo/redo 栈 · 节点跳转 · 参数折叠显示 · 自动折叠/展开） |
+| 多模态 | 🔄 Viewport 截图（vision 模型）· ⬜ 多模态交互扩展 |
+| 变更树 | ✅ QTreeWidget 面板（diff · undo/redo · 节点跳转 · 参数折叠 · 空时不展开 · 自变参数过滤 · 切换清除） |
 | 节点创建 | ✅ namespace 自动解析 · shelf tool 预设应用 · diff 过滤内部子节点 |
 | 测试 | ⬜ 无自动化测试 |
 | 知识检索 | ⬜ search_knowledge 工具待实现 |

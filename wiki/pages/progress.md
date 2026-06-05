@@ -1,6 +1,6 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-05 &nbsp;|&nbsp; 第十阶段：变更树 QTreeWidget 面板 + SnapshotEngine Diff · Undo/Redo 栈 · Shelf Tool 预设 · 节点创建 namespace 解析
+> 最后更新：2026-06-05 &nbsp;|&nbsp; 第十二阶段：时间线 Markdown 渲染升级 + 历史气泡合并 + 变更树修复
 
 ## 总览看板
 
@@ -12,7 +12,7 @@
     <span class="status-tag status-done">完成</span>
   </div>
   <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:100%"></div></div>
-  <div class="phase-card-detail">三栏布局 · Thinking 面板（可折叠、QTextEdit 纯文本流、实时展开/收拢）· Tool Call 面板（fixedHeight 折叠 20px↔200px、暗色协调、自动滚底）· 时间线 QScrollArea + Widget（_UserBubble / _AiBubble / _Separator / _ErrorBanner）· 智能滚动（rangeChanged valueChanged + _pinned_to_bottom 标志位）· 代码 Copy（QLabel linkActivated + base64）· Markdown 渲染 · 知识提取确认区（铁律/知识卡片 + ✓✕ + 全部接受/放弃 + 类型切换）· 气泡 Expanding 填满窗口 · 完成后自动折叠面板</div>
+  <div class="phase-card-detail">三栏布局 · Thinking 面板（可折叠、QTextEdit 纯文本流、实时展开/收拢）· Tool Call 面板（fixedHeight 折叠 24px↔200px、暗色协调、自动滚底）· 时间线 QScrollArea + Widget（_UserBubble / _AiBubble / _Separator / _ErrorBanner）· 智能滚动（rangeChanged valueChanged + _pinned_to_bottom 标志位）· Markdown 完整渲染（双格式化器 _format_full / _format_lite，标题/列表/表格/代码块/分隔线）· 文本选择（TextSelectableByMouse）· 知识提取确认区（铁律/知识卡片 + ✓✕ + 全部接受/放弃 + 类型切换）· 气泡 Expanding 填满窗口 · 完成后自动折叠面板 · 4 层统一字号 · 历史气泡合并 · 知识提取过滤</div>
 </div>
 
 <div class="phase-card">
@@ -81,10 +81,10 @@
 <div class="phase-card">
   <div class="phase-card-header">
     <span class="phase-card-title">🌐 多模型 & 多模态</span>
-    <span class="status-tag status-done">完成</span>
+    <span class="status-tag status-wip">进行中</span>
   </div>
-  <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:100%"></div></div>
-  <div class="phase-card-detail">✅ DeepSeek V3/R1 · ✅ Anthropic Claude · ✅ Viewport 截图（vision 模型）</div>
+  <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:60%"></div></div>
+  <div class="phase-card-detail">✅ DeepSeek V3/R1 · ✅ Anthropic Claude · ✅ Viewport 截图（vision 模型）· ⬜ 多模态交互（拖拽图片、实时视口分析）</div>
 </div>
 
 <div class="phase-card">
@@ -101,6 +101,20 @@
 ## 近期关键节点
 
 <div class="timeline">
+
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-05</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第十二阶段：时间线 Markdown 渲染 + 变更树修复</span>
+      <span class="status-tag status-done">完成</span>
+    </div>
+    <div class="timeline-summary">① Markdown 双格式化器：_format_full（标题/列表/表格/代码块/p 段落）用于最终+历史，_format_lite（仅行内 bold/italic/code）用于流式 ② _render_body 统一 body 渲染（table/list/paragraph），header+body 组合支持（### 下跟表格/列表）③ 历史气泡合并：_merge_consecutive_assistants 合并 JSONL 中连续的 assistant entry 为单个气泡 ④ 知识提取过滤：_filter_knowledge_extraction 隐藏提取对话 ⑤ 文本选择：AiBubble/UserBubble 加 TextSelectableByMouse，UserBubble→RichText ⑥ 移除代码 Copy 按钮 ⑦ 间距收紧（line-height 1.55→1.45, padding 10/16→8/14）⑧ 标题裁切修复（COLLAPSED_H 20→24）⑨ 变更树空时不展开 ⑩ 快照 diff 过滤自变参数（time/frame/seed/cache）⑪ 切换/新建对话清除变更树+undo</div>
+    <div class="timeline-tags">
+      <span>双格式化器</span><span>完整Markdown</span><span>气泡合并</span><span>知识过滤</span><span>文本选择</span><span>变更树修复</span>
+    </div>
+  </div>
+</div>
 
 <div class="timeline-item timeline-done">
   <div class="timeline-date">2026-06-05</div>
@@ -234,7 +248,8 @@
 
 | 优先级 | 任务 | 说明 |
 |------|------|------|
-| P1 | ~~工具执行反馈~~ | ✅ 变更树 + Undo/Redo + 节点跳转 viewport |
+| P1 | ~~时间线渲染~~ | ✅ Markdown 完整解析 + 气泡合并 + 文本选择 |
+| P1 | 多模态能力扩展 | Viewport 实时分析、图片拖拽粘贴、区域截图 |
 | P2 | 知识库检索工具 | 为 Agent 添加 search_knowledge 工具调用 |
 | P2 | 单元测试 | 对 node_utils、config、tool_executor 写测试 |
 | P3 | Python 面板 | 支持嵌入 Houdini Pane Tab |
@@ -274,6 +289,12 @@
 - ✅ 全局 fs() 缩放（历史面板、代码块等之前硬编码 pt 的元素全部改用 fs()）
 - ✅ 消除 fs(9) 极小字号（全部提升至 fs(10)）
 - ✅ 面板固定高度 + 徽章固定宽度与字号适配
+- ✅ Markdown 双格式化器（_format_full 完整解析 + _format_lite 流式安全）
+- ✅ 标题 #/##/### + 有序/无序列表 + 表格 + 代码块 + 分隔线 + 段落 p 分隔
+- ✅ header+body 组合（### 标题下跟随表格/列表）
+- ✅ 历史气泡合并（连续 assistant entry 合并为单个大气泡）
+- ✅ 知识提取过滤（隐藏提取对话轮次）
+- ✅ 文本选择（TextSelectableByMouse，所有气泡）
 - ✅ SnapshotEngine 场景快照 Diff（snapshot / diff / 三阶段节点级 restore）
 - ✅ Undo/Redo 栈（每轮一个事务，撤销=整轮回滚重建，手动修改自动清空栈）
 - ✅ 节点视图跳转（点击变更树路径 → hou.node.setCurrent + frame viewport）
