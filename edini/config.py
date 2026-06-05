@@ -117,4 +117,5 @@ def get_pi_command() -> list[str]:
         "--mode", "rpc",
         "-e", str(PI_EXTENSIONS_DIR / "edini-tools" / "index.ts"),
         "-e", str(PI_EXTENSIONS_DIR / "edini-context" / "index.ts"),
+        "-e", str(PI_EXTENSIONS_DIR / "pi-visionizer" / "src" / "index.ts"),
     ]
