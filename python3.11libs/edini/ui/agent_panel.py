@@ -3,6 +3,13 @@ import html
 import re
 from PySide6 import QtCore, QtGui, QtWidgets
 from edini.ui.theme import accent_color, fs
+from edini.media_manager import (
+    MediaItem, MediaSource, capture_viewport,
+    from_files, from_clipboard, from_mime_data,
+    mime_has_images, MAX_ATTACHMENTS, clipboard_has_image,
+)
+from edini.ui.image_attachment import ImageAttachmentWidget
+from edini.ui.vision_overlay import VisionDescriptionBubble
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -469,8 +476,8 @@ class AgentPanel(QtWidgets.QWidget):
         # Tool cards
         self._tool_cards: dict[str, _ToolCardWidget] = {}
 
-        # Screenshot
-        self._screenshot_data: str | None = None
+        # Screenshot (kept as separate quick-capture, stored as MediaItem)
+        self._screenshot_item: MediaItem | None = None
 
         self._stream_flush_timer = QtCore.QTimer(self)
         self._stream_flush_timer.setSingleShot(True)
@@ -635,6 +642,10 @@ class AgentPanel(QtWidgets.QWidget):
         self.change_tree_widget = ChangeTreeWidget()
         root.addWidget(self.change_tree_widget)
 
+        # ── Attachment preview bar ──
+        self._attachment_bar = ImageAttachmentWidget()
+        root.addWidget(self._attachment_bar)
+
         # ── Input row ──
         input_row = QtWidgets.QHBoxLayout()
         self.input_edit = QtWidgets.QPlainTextEdit(self)
@@ -645,13 +656,30 @@ class AgentPanel(QtWidgets.QWidget):
         action_col = QtWidgets.QVBoxLayout()
         action_col.setSpacing(4)
 
+        btn_row = QtWidgets.QHBoxLayout()
+        btn_row.setSpacing(2)
+
         self._screenshot_btn = QtWidgets.QPushButton("📷")
         self._screenshot_btn.setToolTip("Capture viewport screenshot")
         self._screenshot_btn.setFixedSize(32, 32)
         self._screenshot_btn.clicked.connect(self._on_capture_viewport)
         # Always show screenshot button — pi-visionizer routes images to vision model
         self._screenshot_btn.setVisible(True)
-        action_col.addWidget(self._screenshot_btn)
+        btn_row.addWidget(self._screenshot_btn)
+
+        self._file_pick_btn = QtWidgets.QPushButton("📁")
+        self._file_pick_btn.setToolTip("Select image files")
+        self._file_pick_btn.setFixedSize(32, 32)
+        self._file_pick_btn.clicked.connect(self._on_pick_files)
+        btn_row.addWidget(self._file_pick_btn)
+
+        self._paste_btn = QtWidgets.QPushButton("📋")
+        self._paste_btn.setToolTip("Paste image from clipboard")
+        self._paste_btn.setFixedSize(32, 32)
+        self._paste_btn.clicked.connect(self._on_paste_image)
+        btn_row.addWidget(self._paste_btn)
+
+        action_col.addLayout(btn_row)
 
         self._screenshot_remove_btn = QtWidgets.QPushButton("✕")
         self._screenshot_remove_btn.setObjectName("GhostButton")
@@ -680,6 +708,12 @@ class AgentPanel(QtWidgets.QWidget):
         self._knowledge_accept_all.clicked.connect(self._on_knowledge_accept_all)
         self._knowledge_reject_all.clicked.connect(self._on_knowledge_reject_all)
 
+        # Drag-drop on input_edit
+        self.input_edit.setAcceptDrops(True)
+        self.input_edit.dragEnterEvent = self._on_drag_enter
+        self.input_edit.dragMoveEvent = self._on_drag_move
+        self.input_edit.dropEvent = self._on_drop
+
     def eventFilter(self, watched, event):
         if watched is self.input_edit and event is not None:
             if int(event.type()) == int(QtCore.QEvent.KeyPress):
@@ -701,6 +735,11 @@ class AgentPanel(QtWidgets.QWidget):
                         else:
                             self._on_send()
                         return True
+                if key == int(QtCore.Qt.Key_V):
+                    if modifiers & QtCore.Qt.ControlModifier:
+                        if clipboard_has_image():
+                            self._on_paste_image()
+                            return True
         return super().eventFilter(watched, event)
 
     # ------------------------------------------------------------------
@@ -748,12 +787,25 @@ class AgentPanel(QtWidgets.QWidget):
         # Collapse change tree during conversation
         self.change_tree_widget.collapse()
 
-        images = None
-        if self._screenshot_data:
-            images = [{"type": "image", "data": self._screenshot_data, "mimeType": "image/jpeg"}]
+        # Collect all images: attachment bar items + screenshot
+        images: list[dict] = []
+        for item in self._attachment_bar.items():
+            images.append({
+                "type": "image",
+                "data": item.base64,
+                "mimeType": item.mime_type,
+            })
+        if self._screenshot_item:
+            images.append({
+                "type": "image",
+                "data": self._screenshot_item.base64,
+                "mimeType": self._screenshot_item.mime_type,
+            })
             self._on_remove_screenshot()
 
-        self.submit_requested.emit(text, images)
+        self._attachment_bar.clear()
+
+        self.submit_requested.emit(text, images if images else None)
 
     # ------------------------------------------------------------------
     # Tool Call Panel (unchanged)
@@ -806,20 +858,76 @@ class AgentPanel(QtWidgets.QWidget):
     # ------------------------------------------------------------------
 
     def _on_capture_viewport(self):
-        from edini.ui.viewport import capture_viewport
-        b64 = capture_viewport()
-        if b64 is None:
+        item = capture_viewport()
+        if item is None:
             self._screenshot_btn.setText("❌")
             QtCore.QTimer.singleShot(1500, lambda: self._screenshot_btn.setText("📷"))
             return
-        self._screenshot_data = b64
-        self._screenshot_btn.setText("📸")
-        self._screenshot_remove_btn.setVisible(True)
+        # If attachment bar has room, add there instead of old screenshot slot
+        if not self._attachment_bar.is_full():
+            self._attachment_bar.add(item)
+        else:
+            self._screenshot_item = item
+            self._screenshot_btn.setText("📸")
+            self._screenshot_remove_btn.setVisible(True)
 
     def _on_remove_screenshot(self):
-        self._screenshot_data = None
+        self._screenshot_item = None
         self._screenshot_btn.setText("📷")
         self._screenshot_remove_btn.setVisible(False)
+
+    def _on_pick_files(self):
+        """Open file dialog to select image files."""
+        paths, _ = QtWidgets.QFileDialog.getOpenFileNames(
+            self,
+            "Select Images",
+            "",
+            "Images (*.png *.jpg *.jpeg *.gif *.webp *.bmp);;All Files (*)",
+        )
+        if not paths:
+            return
+        items = from_files(paths)
+        added = 0
+        for item in items:
+            if self._attachment_bar.is_full():
+                break
+            if self._attachment_bar.add(item):
+                added += 1
+        if added == 0 and self._attachment_bar.is_full():
+            self.add_error(f"最多 {MAX_ATTACHMENTS} 张图片")
+
+    def _on_paste_image(self):
+        """Paste image from clipboard into attachment bar."""
+        if self._attachment_bar.is_full():
+            self.add_error(f"最多 {MAX_ATTACHMENTS} 张图片")
+            return
+        item = from_clipboard()
+        if item is None:
+            return
+        self._attachment_bar.add(item)
+
+    def _on_drag_enter(self, event):
+        if mime_has_images(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def _on_drag_move(self, event):
+        if mime_has_images(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def _on_drop(self, event):
+        items = from_mime_data(event.mimeData())
+        for item in items:
+            if self._attachment_bar.is_full():
+                break
+            self._attachment_bar.add(item)
+        if items:
+            event.acceptProposedAction()
+        else:
+            event.ignore()
 
     def get_raw_stream_text(self) -> str:
         """Get the raw accumulated text of the current streaming response."""

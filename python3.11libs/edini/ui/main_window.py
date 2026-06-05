@@ -14,6 +14,7 @@ from edini.ui.theme import apply_theme, accent_color
 from edini.ui.agent_panel import AgentPanel
 from edini.ui.history_panel import HistoryPanel
 from edini.ui.context_panel import ContextPanel
+from edini.ui.vision_overlay import VisionDescriptionBubble
 from edini.ui.pi_sessions import load_pi_messages
 from edini.config import get_settings
 from edini.ui.snapshot_engine import snapshot as snap_scene, diff as diff_snapshots, restore as restore_snapshot
@@ -144,6 +145,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         # Pi status
         self._rpc_client.status_changed.connect(self._on_status_changed)
         self._rpc_client.extension_info.connect(self.context_panel.set_tools_info)
+        self._rpc_client.vision_description.connect(self._on_vision_description)
         # Pi session management responses
         self._rpc_client.session_switched.connect(self._on_pi_session_switched)
         self._rpc_client.messages_received.connect(self._on_pi_messages_received)
@@ -309,6 +311,23 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self.agent_panel.add_error(msg)
         self.agent_panel.set_busy(False)
         self.status.showMessage(f"Error: {msg}")
+
+    def _on_vision_description(self, descriptions: list):
+        """Handle vision_description notification from pi-visionizer."""
+        if not descriptions:
+            return
+        # Check if any description is an error
+        has_error = any(
+            d.get("description", "").startswith("[Error:")
+            or d.get("description", "").startswith("[Image: unable")
+            for d in descriptions
+        )
+        if has_error:
+            error_msg = descriptions[0].get("description", "Vision model error")
+            bubble = VisionDescriptionBubble.create_error_bubble(error_msg)
+        else:
+            bubble = VisionDescriptionBubble.create_from_notification(descriptions)
+        self.agent_panel.timeline_view.add_widget(bubble)
 
     def _on_round_tick(self):
         """Update the round elapsed time display in Pi Status."""
