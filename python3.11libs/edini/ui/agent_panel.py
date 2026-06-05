@@ -750,7 +750,7 @@ class AgentPanel(QtWidgets.QWidget):
 
         images = None
         if self._screenshot_data:
-            images = [{"type": "image/jpeg", "data": self._screenshot_data}]
+            images = [{"type": "image", "data": self._screenshot_data, "mimeType": "image/jpeg"}]
             self._on_remove_screenshot()
 
         self.submit_requested.emit(text, images)
@@ -809,6 +809,8 @@ class AgentPanel(QtWidgets.QWidget):
         from edini.ui.viewport import capture_viewport
         b64 = capture_viewport()
         if b64 is None:
+            self._screenshot_btn.setText("❌")
+            QtCore.QTimer.singleShot(1500, lambda: self._screenshot_btn.setText("📷"))
             return
         self._screenshot_data = b64
         self._screenshot_btn.setText("📸")
