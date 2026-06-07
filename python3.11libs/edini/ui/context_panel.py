@@ -241,7 +241,8 @@ class ContextPanel(QtWidgets.QWidget):
             else:
                 self.selected_label.setText("Selected: -")
             root = hou.node("/")
-            count = len(root.allSubChildren()) if root else 0
-            self.node_count_label.setText(f"Nodes: {count}")
+            all_nodes = len(root.allSubChildren()) if root else 0
+            cur_children = len(pwd.children()) if pwd else 0
+            self.node_count_label.setText(f"Nodes: {cur_children} here / {all_nodes} total")
         except Exception:
             pass

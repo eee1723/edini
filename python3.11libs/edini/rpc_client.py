@@ -213,6 +213,21 @@ class _RpcWorker(QObject):
             self._process = subprocess.Popen(self._pi_cmd, **popen_kwargs)
             self.status_changed.emit("connected")
 
+            # ── Read stderr in a daemon thread for debug logging ──
+            import threading
+            def _read_stderr():
+                try:
+                    for line in self._process.stderr:
+                        if self._should_stop:
+                            break
+                        line = line.strip()
+                        if line:
+                            # Print to Houdini console for debugging
+                            print(f"[pi:stderr] {line}", flush=True)
+                except Exception:
+                    pass
+            threading.Thread(target=_read_stderr, daemon=True).start()
+
             for line in self._process.stdout:
                 if self._should_stop:
                     break

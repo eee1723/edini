@@ -25,11 +25,17 @@ def open_chat_window(toggle=False):
         from edini.ui.main_window import EdiniMainWindow
         _main_window = EdiniMainWindow(_main_parent())
 
-    if toggle and _main_window.isVisible() and _main_window.isActiveWindow():
-        _main_window.showMinimized()
-        return _main_window
+    if toggle:
+        if _main_window.isMinimized():
+            _main_window.showNormal()
+            _main_window.raise_()
+            _main_window.activateWindow()
+            return _main_window
+        if _main_window.isVisible() and _main_window.isActiveWindow():
+            _main_window.showMinimized()
+            return _main_window
 
-    _main_window.show()
+    _main_window.showNormal()
     _main_window.raise_()
     _main_window.activateWindow()
     return _main_window

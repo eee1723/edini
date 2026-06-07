@@ -71,24 +71,65 @@ def validate(item: MediaItem) -> tuple[bool, str]:
 # ── Thumbnail ──
 
 def make_thumbnail(full_base64: str, mime_type: str = "image/jpeg") -> str:
-    """Generate a 120px-wide JPEG thumbnail (quality 30) from a base64 image.
+    """Generate a 120px-wide JPEG thumbnail from a base64 image.
 
-    Returns base64 string (no data: prefix).
+    Uses QPixmap with safety try/except. Returns empty string on failure.
+    Houdini PySide6 QPixmap segfaults are rare and usually only happen with
+    certain GPU drivers. If crashes occur, this function can be disabled.
     """
+    if not full_base64:
+        return ""
     try:
         raw = base64.b64decode(full_base64)
-        img = QtGui.QImage()
-        if not img.loadFromData(raw):
+        pixmap = QtGui.QPixmap()
+        if not pixmap.loadFromData(raw):
             return ""
-        scaled = img.scaledToWidth(120, Qt.SmoothTransformation)
-        buf = io.BytesIO()
-        scaled.save(buf, "JPEG", quality=30)
-        return base64.b64encode(buf.getvalue()).decode("ascii")
+        if pixmap.isNull():
+            return ""
+        # Scale down aggressively to avoid memory issues
+        scaled = pixmap.scaledToWidth(120, QtCore.Qt.TransformationMode.SmoothTransformation)
+        if scaled.isNull():
+            return ""
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".jpg", prefix="edini_thumb_")
+        os.close(tmp_fd)
+        scaled.save(tmp_path, "JPEG", 30)
+        with open(tmp_path, "rb") as f:
+            data = f.read()
+        os.unlink(tmp_path)
+        return base64.b64encode(data).decode("ascii") if data else ""
     except Exception:
         return ""
 
 
 # ── Helpers ──
+
+def _image_to_bytes(image, fmt: str = "PNG", quality: int = -1) -> bytes:
+    """Convert a QImage or QPixmap to raw bytes.
+
+    Saves to temp file then reads back. Format is auto-detected from
+    file extension — no explicit format parameter needed, avoiding all
+    PySide6 cross-version compatibility issues.
+    """
+    import tempfile
+    ext = fmt.lower()
+    suffix = f".{ext}" if ext in ("png", "jpg", "jpeg", "bmp", "webp") else ".png"
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=suffix, prefix="edini_img_")
+    os.close(tmp_fd)
+    try:
+        # QImage.save(str) — Qt auto-detects format from file extension.
+        # Passing format/quality as positional args causes ValueError on
+        # some PySide6 builds (e.g. Houdini 20's bundled Qt).
+        ok = image.save(tmp_path)
+        if not ok:
+            return b""
+        with open(tmp_path, "rb") as f:
+            return f.read()
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
 
 def _guess_mime(path: str) -> str:
     ext = os.path.splitext(path)[1].lower()
@@ -132,6 +173,7 @@ def capture_viewport() -> MediaItem | None:
 
     Returns MediaItem with source=VIEWPORT, or None if all methods fail.
     """
+
     if hou is None:
         return None
 
@@ -167,11 +209,25 @@ def _find_scene_viewer():
 
 
 def _capture_save_image(vp) -> MediaItem | None:
-    """Method 1: viewport.saveImage → BytesIO → base64."""
+    """Method 1: viewport.saveImage → BytesIO → base64.
+    Works on Houdini 19.x; removed in Houdini 20.x."""
     try:
+        # Houdini 20.x: saveImage moved to flipbookSettings or viewport
+        # Try multiple API paths
         buf = io.BytesIO()
-        vp.saveImage(buf, "JPEG", width=1280, height=720)
-        if buf.tell() == 0:
+        if hasattr(vp, 'saveImage'):
+            vp.saveImage(buf, "JPEG", width=1280, height=720)
+        elif hasattr(vp, 'flipbookSettings'):
+            # Houdini 20+: use flipbookSettings().saveImage()
+            fb_settings = vp.flipbookSettings()
+            if hasattr(fb_settings, 'saveImage'):
+                fb_settings.saveImage(buf, "JPEG", width=1280, height=720)
+            else:
+                raise AttributeError("saveImage not available on flipbookSettings")
+        else:
+            raise AttributeError("saveImage not available")
+        size = buf.tell()
+        if size == 0:
             return None
         buf.seek(0)
         data = buf.getvalue()
@@ -180,22 +236,23 @@ def _capture_save_image(vp) -> MediaItem | None:
             b64, MediaSource.VIEWPORT, "viewport.jpg",
             mime_type="image/jpeg", size_bytes=len(data),
         )
-    except Exception:
+    except Exception as e:
         return None
 
 
 def _capture_framebuffer(vp) -> MediaItem | None:
-    """Method 2: grabFrameBuffer → QImage → JPEG bytes → base64."""
+    """Method 2: grabFrameBuffer → QImage → JPEG bytes → base64.
+    Works on Houdini 19.x; removed in Houdini 20.x."""
     try:
+        if not hasattr(vp, 'grabFrameBuffer'):
+            return None
         fb = vp.grabFrameBuffer()
         if fb is None:
             return None
         img = fb.image()
         if img is None or img.isNull():
             return None
-        buf = io.BytesIO()
-        img.save(buf, "JPEG", quality=85)
-        data = buf.getvalue()
+        data = _image_to_bytes(img, "JPEG", 85)
         if len(data) == 0:
             return None
         b64 = base64.b64encode(data).decode("ascii")
@@ -203,7 +260,9 @@ def _capture_framebuffer(vp) -> MediaItem | None:
             b64, MediaSource.VIEWPORT, "viewport.jpg",
             mime_type="image/jpeg", size_bytes=len(data),
         )
-    except Exception:
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
         return None
 
 
@@ -216,7 +275,7 @@ def _capture_flipbook(vp) -> MediaItem | None:
 
         settings = vp.flipbookSettings()
         settings.output(tmp_path)
-        settings.frameRange(1, 1)             # single frame
+        settings.frameRange([1.0, 1.0])             # single frame (list of doubles)
         settings.resolution((1280, 720))
         settings.useResolution(True)
         vp.flipbook(settings=settings, open_dialog=False)
@@ -224,6 +283,7 @@ def _capture_flipbook(vp) -> MediaItem | None:
         if not os.path.exists(tmp_path):
             return None
 
+        file_size = os.path.getsize(tmp_path)
         b64, size = _read_file_base64(tmp_path)
         if size == 0:
             return None
@@ -232,13 +292,15 @@ def _capture_flipbook(vp) -> MediaItem | None:
             b64, MediaSource.VIEWPORT, "viewport.jpg",
             mime_type="image/jpeg", size_bytes=size,
         )
-    except Exception:
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
         return None
     finally:
         if tmp_path and os.path.exists(tmp_path):
             try:
                 os.unlink(tmp_path)
-            except OSError:
+            except OSError as e:
                 pass
 
 
@@ -286,27 +348,114 @@ def from_clipboard() -> MediaItem | None:
     """Read an image from the system clipboard.
 
     Returns MediaItem with source=CLIPBOARD, or None if no image on clipboard.
+    Tries multiple approaches for Houdini compatibility:
+    1. clipboard.image() — direct QImage (screenshot tools, paint programs)
+    2. clipboard.mimeData() — HTML/image URLs (browsers, file explorers)
     """
     try:
         from PySide6.QtWidgets import QApplication
         app = QApplication.instance()
         if app is None:
             return None
+
         clipboard = app.clipboard()
+
+        # ── Approach 1: clipboard.image() ──
         image = clipboard.image()
-        if image.isNull():
-            return None
-        buf = io.BytesIO()
-        image.save(buf, "PNG")
-        data = buf.getvalue()
-        if len(data) == 0:
-            return None
-        b64 = base64.b64encode(data).decode("ascii")
-        return _make_media_item(
-            b64, MediaSource.CLIPBOARD, "clipboard.png",
-            mime_type="image/png", size_bytes=len(data),
-        )
-    except Exception:
+        if not image.isNull():
+            data = _image_to_bytes(image, "PNG")
+            if len(data) > 0:
+                b64 = base64.b64encode(data).decode("ascii")
+                item = _make_media_item(
+                    b64, MediaSource.CLIPBOARD, "clipboard.png",
+                    mime_type="image/png", size_bytes=len(data),
+                )
+                return item
+        else:
+            pass
+
+        # ── Approach 2: mimeData — try all clipboard modes ──
+        # Use integer mode values to avoid Houdini PySide6 enum compat issues
+        # QClipboard::Mode: Clipboard=0, Selection=1, FindBuffer=2
+        for mode_name, mode_val in [
+            ("Clipboard", 0),
+            ("Selection", 1),
+            ("FindBuffer", 2),
+        ]:
+            try:
+                mime = clipboard.mimeData(mode=mode_val)
+                if mime is None:
+                    continue
+
+
+                if mime.hasImage():
+                    img_data = mime.imageData()
+                    if img_data is not None and not img_data.isNull():
+                        data = _image_to_bytes(img_data, "PNG")
+                        if len(data) > 0:
+                            b64 = base64.b64encode(data).decode("ascii")
+                            item = _make_media_item(
+                                b64, MediaSource.CLIPBOARD, "clipboard.png",
+                                mime_type="image/png", size_bytes=len(data),
+                            )
+                            return item
+
+                # Try reading image URLs (e.g., from browser copy-image)
+                if mime.hasUrls():
+                    urls = mime.urls()
+                    for url in urls:
+                        local = url.toLocalFile()
+                        if local and os.path.isfile(local):
+                            ext = os.path.splitext(local)[1].lower()
+                            if ext in ALLOWED_EXTENSIONS:
+                                b64, size = _read_file_base64(local)
+                                if size > 0 and size <= MAX_SIZE_BYTES:
+                                    mime_type = _guess_mime(local)
+                                    filename = os.path.basename(local)
+                                    thumb = make_thumbnail(b64, mime_type)
+                                    item = MediaItem(
+                                        base64=b64, mime_type=mime_type, source=MediaSource.CLIPBOARD,
+                                        filename=filename, thumbnail=thumb, file_path=local,
+                                        size_bytes=size,
+                                    )
+                                    return item
+
+                # Try reading raw image bytes from mimeData
+                if mime.hasFormat("image/png"):
+                    raw = mime.data("image/png")
+                    if raw:
+                        data = bytes(raw)
+                        if len(data) > 0 and len(data) <= MAX_SIZE_BYTES:
+                            b64 = base64.b64encode(data).decode("ascii")
+                            thumb = make_thumbnail(b64, "image/png")
+                            item = MediaItem(
+                                base64=b64, mime_type="image/png", source=MediaSource.CLIPBOARD,
+                                filename="clipboard.png", thumbnail=thumb,
+                                size_bytes=len(data),
+                            )
+                            return item
+
+                if mime.hasFormat("image/jpeg"):
+                    raw = mime.data("image/jpeg")
+                    if raw:
+                        data = bytes(raw)
+                        if len(data) > 0 and len(data) <= MAX_SIZE_BYTES:
+                            b64 = base64.b64encode(data).decode("ascii")
+                            thumb = make_thumbnail(b64, "image/jpeg")
+                            item = MediaItem(
+                                base64=b64, mime_type="image/jpeg", source=MediaSource.CLIPBOARD,
+                                filename="clipboard.jpg", thumbnail=thumb,
+                                size_bytes=len(data),
+                            )
+                            return item
+
+            except Exception as e:
+
+                pass
+        return None
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
         return None
 
 
@@ -317,8 +466,35 @@ def clipboard_has_image() -> bool:
         app = QApplication.instance()
         if app is None:
             return False
-        return not app.clipboard().image().isNull()
-    except Exception:
+        clipboard = app.clipboard()
+
+        # Check direct image first (fast path)
+        has_img = not clipboard.image().isNull()
+        if has_img:
+            return True
+
+        # Check mimeData for image formats (e.g. browser copy)
+        mime = clipboard.mimeData()
+        has_img_mime = mime.hasImage()
+        if has_img_mime:
+            return True
+
+        # Check for raw image data formats
+        for fmt in ["image/png", "image/jpeg", "image/bmp", "image/gif", "image/webp"]:
+            if mime.hasFormat(fmt):
+                return True
+
+        # Check for URLs pointing to local image files
+        if mime.hasUrls():
+            for url in mime.urls():
+                local = url.toLocalFile()
+                if local:
+                    ext = os.path.splitext(local)[1].lower()
+                    if ext in ALLOWED_EXTENSIONS:
+                        return True
+
+        return False
+    except Exception as e:
         return False
 
 

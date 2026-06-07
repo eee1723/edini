@@ -26,6 +26,9 @@ export const houdiniGetSceneInfo = {
   description:
     "Get an overview of the current Houdini scene: hip file name, root children, total node count, current path, and /obj children.",
   promptSnippet: "Get Houdini scene overview",
+  promptGuidelines: [
+    "Use houdini_get_scene_info at the start of a task when you need to understand the current scene structure. The user may also have injected context about the current network and selected nodes in their message.",
+  ],
   parameters: Type.Object({}),
   async execute(_toolCallId: string, _params: {}) {
     return forwardTool("houdini_get_scene_info", {});
@@ -154,6 +157,9 @@ export const houdiniLayoutNodes = {
   label: "Layout Houdini Nodes",
   description: "Auto-layout nodes in a network.",
   promptSnippet: "Auto-layout Houdini nodes in a network",
+  promptGuidelines: [
+    "After creating or connecting nodes, use houdini_layout_nodes to organize the network graph so the user can see the structure clearly.",
+  ],
   parameters: Type.Object({
     parent_path: Type.Optional(
       Type.String({ description: "Parent path, default /obj" })
@@ -161,6 +167,113 @@ export const houdiniLayoutNodes = {
   }),
   async execute(_toolCallId: string, params: { parent_path?: string }) {
     return forwardTool("houdini_layout_nodes", params);
+  },
+};
+
+export const houdiniGetSelection = {
+  name: "houdini_get_selection",
+  label: "Get Selected Nodes",
+  description:
+    "Get the list of nodes currently selected by the user in Houdini. " +
+    "Returns each node's name, full path, and type. Use this when the user " +
+    "refers to 'this node' or 'the selected node' without specifying a path.",
+  promptSnippet: "Get user's currently selected Houdini nodes",
+  promptGuidelines: [
+    "When the user says 'modify this node' or 'change the selected', use houdini_get_selection to find which nodes they mean. The user's message may also contain [Current Houdini Context] with selected nodes.",
+  ],
+  parameters: Type.Object({}),
+  async execute(_toolCallId: string, _params: {}) {
+    return forwardTool("houdini_get_selection", {});
+  },
+};
+
+export const houdiniCheckErrors = {
+  name: "houdini_check_errors",
+  label: "Check Houdini Node Errors",
+  description:
+    "Check for errors and warnings on a specific node or across the entire scene. " +
+    "Returns error messages, warning messages, and node paths. Essential for debugging.",
+  promptSnippet: "Check Houdini node errors (single node or full scene)",
+  promptGuidelines: [
+    "When the user reports unexpected behavior (blank viewport, missing geometry, render issues), use houdini_check_errors to scan for node errors before making changes.",
+  ],
+  parameters: Type.Object({
+    node_path: Type.Optional(
+      Type.String({ description: "Optional: check a specific node. Omit to scan entire scene." })
+    ),
+  }),
+  async execute(
+    _toolCallId: string,
+    params: { node_path?: string }
+  ) {
+    return forwardTool("houdini_check_errors", params);
+  },
+};
+
+export const houdiniSetDisplayFlag = {
+  name: "houdini_set_display_flag",
+  label: "Set Display Flag",
+  description:
+    "Set a node as the display/render flag node, making it the one shown in the viewport. " +
+    "Use this after creating geometry to ensure the user sees your result.",
+  promptSnippet: "Set a node to be displayed in the viewport",
+  promptGuidelines: [
+    "After creating or modifying geometry nodes, use houdini_set_display_flag on the final output node so the user sees the result in the viewport.",
+  ],
+  parameters: Type.Object({
+    node_path: Type.String({ description: "Full path of the node to display" }),
+  }),
+  async execute(_toolCallId: string, params: { node_path: string }) {
+    return forwardTool("houdini_set_display_flag", params);
+  },
+};
+
+export const houdiniCaptureViewport = {
+  name: "houdini_capture_viewport",
+  label: "Capture Houdini Viewport",
+  description:
+    "Capture the active Houdini scene viewport as an image file. " +
+    "Saves a PNG screenshot of what the user currently sees in the viewport. " +
+    "Use this after creating or modifying nodes to verify visual results. " +
+    "Combine with describe_image to let the vision model check the output.",
+  promptSnippet: "Capture Houdini viewport screenshot to a PNG file",
+  promptGuidelines: [
+    "After making visual changes in Houdini, use houdini_capture_viewport to take a screenshot, then use describe_image on the saved file to verify the result matches expectations. This is especially useful when the user provides a reference image.",
+  ],
+  parameters: Type.Object({
+    filepath: Type.String({
+      description: "Output file path for the screenshot (e.g. 'screenshots/viewport_001.png')",
+    }),
+  }),
+  async execute(_toolCallId: string, params: { filepath: string }) {
+    return forwardTool("houdini_capture_viewport", params);
+  },
+};
+
+export const houdiniCaptureNetwork = {
+  name: "houdini_capture_network",
+  label: "Capture Houdini Node Network",
+  description:
+    "Capture the Houdini node network editor as an image file. " +
+    "Saves a PNG screenshot showing the node graph at the specified parent path. " +
+    "Use this to verify node layouts, connections, and network structure.",
+  promptSnippet: "Capture Houdini node network screenshot to a PNG file",
+  promptGuidelines: [
+    "Use houdini_capture_network to take screenshots of the node graph for documentation or to verify that nodes are connected correctly. Combine with describe_image for visual verification.",
+  ],
+  parameters: Type.Object({
+    filepath: Type.String({
+      description: "Output file path for the screenshot (e.g. 'screenshots/network_001.png')",
+    }),
+    parent_path: Type.Optional(
+      Type.String({ description: "Network path to capture, default /obj" })
+    ),
+  }),
+  async execute(
+    _toolCallId: string,
+    params: { filepath: string; parent_path?: string }
+  ) {
+    return forwardTool("houdini_capture_network", params);
   },
 };
 
@@ -173,4 +286,9 @@ export const sceneTools = [
   houdiniGetParam,
   houdiniListNodes,
   houdiniLayoutNodes,
+  houdiniGetSelection,
+  houdiniCheckErrors,
+  houdiniSetDisplayFlag,
+  houdiniCaptureViewport,
+  houdiniCaptureNetwork,
 ];

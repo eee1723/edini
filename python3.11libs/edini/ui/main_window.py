@@ -3,6 +3,7 @@
 Pi manages all sessions via RPC. Edini is a thin UI wrapper.
 """
 import importlib
+import json
 import os
 
 from PySide6 import QtCore, QtWidgets
@@ -15,7 +16,7 @@ from edini.ui.agent_panel import AgentPanel
 from edini.ui.history_panel import HistoryPanel
 from edini.ui.context_panel import ContextPanel
 from edini.ui.vision_overlay import VisionDescriptionBubble
-from edini.ui.pi_sessions import load_pi_messages
+from edini.ui.pi_sessions import load_pi_messages, load_pi_messages_with_images
 from edini.config import get_settings
 from edini.ui.snapshot_engine import snapshot as snap_scene, diff as diff_snapshots, restore as restore_snapshot
 
@@ -51,6 +52,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self._active_session_path = ""
         self._browsing_session_path = ""
         self._extracting_knowledge = False
+        self._last_capture_path = ""  # track capture→describe pairing
 
         # Undo/redo stack for change tree
         self._pre_snapshot: dict = {}
@@ -62,6 +64,12 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self._round_timer = QtCore.QTimer(self)
         self._round_timer.setInterval(1000)
         self._round_timer.timeout.connect(self._on_round_tick)
+
+        # Multimodal state
+        self._pending_images: list[dict] | None = None   # images from current request
+        self._pending_cache_meta: list[dict] | None = None  # metadata pending cache write
+        self._pending_descriptions: list[dict] | None = None  # descriptions pending cache write
+        self._recognizing_placeholder: QtWidgets.QWidget | None = None
 
         self._build_ui()
         self._bind_events()
@@ -152,7 +160,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
 
         # Scene refresh timer
         self._scene_timer = QtCore.QTimer(self)
-        self._scene_timer.setInterval(3000)
+        self._scene_timer.setInterval(1500)
         self._scene_timer.timeout.connect(self.context_panel.refresh_scene_info)
         self._scene_timer.start()
 
@@ -162,6 +170,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self._stats_poll_timer.timeout.connect(self._rpc_client.send_get_stats)
 
     def _bootstrap(self):
+        # Startup banner (comment out prints for production)
         cwd = _get_working_dir()
         self._rpc_client.set_cwd(cwd)
         self.history_panel.set_cwd(cwd)
@@ -186,6 +195,60 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         # Take pre-snapshot for change tracking
         self._pre_snapshot = snap_scene()
         self.agent_panel.begin_assistant_message()
+
+        # Save images for vision_description bubble
+        self._pending_images = images
+
+        # Build image metadata and show in user bubble
+        if images:
+            # Build metadata with inline base64 for "view original" fallback
+            import base64 as _b64
+            image_meta: list[dict] = []
+            for i, img in enumerate(images):
+                b64_data = img.get("data", "")
+                raw_size = len(_b64.b64decode(b64_data)) if b64_data else 0
+                mime = img.get("mimeType", "image/png")
+                ext = mime.split("/")[-1] if "/" in mime else "png"
+                # Use original filename if available, otherwise generate one
+                orig_name = img.get("filename", "")
+                if orig_name:
+                    display_name = orig_name
+                else:
+                    display_name = f"image_{i+1}.{ext}"
+                image_meta.append({
+                    "index": i,
+                    "mime_type": mime,
+                    "filename": display_name,
+                    "size_bytes": raw_size,
+                    "source": img.get("source", "unknown"),
+                    "cache_path": "",  # filled when session path known
+                    "_b64_pending": b64_data,  # fallback for "view original" before cache write
+                })
+
+            # Try to save to cache now; defer if session path not yet known
+            if self._current_session_path:
+                from edini.image_cache import save_images
+                saved_meta = save_images(self._current_session_path, images)
+                # Merge cache_path back into image_meta
+                for sm in saved_meta:
+                    idx = sm.get("index", -1)
+                    if 0 <= idx < len(image_meta):
+                        image_meta[idx]["cache_path"] = sm.get("cache_path", "")
+                        image_meta[idx]["filename"] = sm.get("filename", image_meta[idx]["filename"])
+                        image_meta[idx].pop("_b64_pending", None)  # no longer needed
+                self._pending_cache_meta = None
+            else:
+                self._pending_cache_meta = image_meta  # will write in _on_pi_session_switched
+
+            self.agent_panel._append_user_message(text, image_meta)
+        else:
+            self.agent_panel._append_user_message(text)
+
+        # Add "recognizing" placeholder if images are attached
+        if images:
+            self._recognizing_placeholder = _RecognizingPlaceholder()
+            self.agent_panel.timeline_view.add_widget(self._recognizing_placeholder)
+
         self._rpc_client.send_prompt(text, images=images)
 
     def _on_agent_started(self, _):
@@ -195,7 +258,21 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self._round_timer.start()
         self.status.showMessage("Processing...")
 
+    def _cleanup_recognizing(self):
+        """Remove recognizing placeholder if still present.
+
+        Does NOT clear _pending_images — that data is still needed for
+        deferred cache writes that happen after session path arrives.
+        """
+        if self._recognizing_placeholder:
+            self._recognizing_placeholder.deleteLater()
+            self._recognizing_placeholder = None
+
     def _on_agent_done(self, _):
+        self._cleanup_recognizing()
+        self._pending_images = None  # safe to clear now — agent round complete
+        self._pending_cache_meta = None
+        self._pending_descriptions = None
         self._stats_poll_timer.stop()
         self._round_timer.stop()
         self._on_round_tick()  # final update
@@ -271,10 +348,42 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
     def _on_tool_result(self, tool_name: str, tool_call_id: str, result: str):
         self.agent_panel.set_tool_result(tool_call_id, result)
 
+        # ── Inline rendering for capture and describe tools ──
+        try:
+            data = json.loads(result)
+        except (json.JSONDecodeError, TypeError):
+            data = {}
+
+        if tool_name == "houdini_capture_viewport" and data.get("success"):
+            path = data.get("path", "")
+            w = data.get("width", 0)
+            h = data.get("height", 0)
+            if path:
+                self._last_capture_path = path
+                self.agent_panel.add_inline_capture_image(path, w, h)
+
+        elif tool_name == "houdini_capture_network" and data.get("success"):
+            path = data.get("path", "")
+            w = data.get("width", 0)
+            h = data.get("height", 0)
+            if path:
+                self._last_capture_path = path
+                self.agent_panel.add_inline_capture_image(path, w, h)
+
+        elif tool_name == "describe_image":
+            content = data.get("content", [])
+            if isinstance(content, list) and len(content) > 0:
+                text = content[0].get("text", "")
+            else:
+                text = data.get("description", "") or str(data)
+            if text:
+                self.agent_panel.add_inline_description(text)
+
     def _on_thinking(self, text: str):
         self.agent_panel.add_thinking_step(0, text)
 
     def _on_abort_request(self):
+        self._cleanup_recognizing()
         self._rpc_client.send_abort()
         self.agent_panel.show_aborted()
         self._round_timer.stop()
@@ -306,17 +415,28 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
             self.agent_panel.change_tree_widget.expand()
 
     def _on_error(self, msg: str):
+        self._cleanup_recognizing()
         self._stats_poll_timer.stop()
         self._round_timer.stop()
         self.agent_panel.add_error(msg)
         self.agent_panel.set_busy(False)
         self.status.showMessage(f"Error: {msg}")
 
-    def _on_vision_description(self, descriptions: list):
-        """Handle vision_description notification from pi-visionizer."""
+    def _flush_pending_descriptions(self, session_path: str):
+        """Save any pending vision descriptions to cache."""
+        if self._pending_descriptions and session_path:
+            try:
+                from edini.image_cache import save_descriptions
+                ok = save_descriptions(session_path, self._pending_descriptions)
+                self._pending_descriptions = None
+            except Exception as e:
+                pass
+
+    def _render_vision_description(self, m: dict):
+        """Render a cached vision_description entry in the timeline."""
+        descriptions = m.get("descriptions", [])
         if not descriptions:
             return
-        # Check if any description is an error
         has_error = any(
             d.get("description", "").startswith("[Error:")
             or d.get("description", "").startswith("[Image: unable")
@@ -327,6 +447,47 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
             bubble = VisionDescriptionBubble.create_error_bubble(error_msg)
         else:
             bubble = VisionDescriptionBubble.create_from_notification(descriptions)
+        self.agent_panel.timeline_view.add_widget(bubble)
+
+    def _on_vision_description(self, descriptions: list):
+        """Handle vision_description notification from pi-visionizer."""
+        # Save all image data before cleanup
+        all_image_data: list[str] = []
+        if self._pending_images:
+            all_image_data = [
+                img.get("data", "") for img in self._pending_images
+                if img.get("data")
+            ]
+
+        # Persist descriptions to cache for history loading
+        if descriptions:
+            if self._current_session_path:
+                try:
+                    from edini.image_cache import save_descriptions
+                    ok = save_descriptions(self._current_session_path, descriptions)
+                except Exception as e:
+                    pass
+            else:
+                self._pending_descriptions = descriptions
+
+        # Remove "recognizing" placeholder if still present
+        self._cleanup_recognizing()
+
+        if not descriptions:
+            return
+        has_error = any(
+            d.get("description", "").startswith("[Error:")
+            or d.get("description", "").startswith("[Image: unable")
+            for d in descriptions
+        )
+        if has_error:
+            error_msg = descriptions[0].get("description", "Vision model error")
+            bubble = VisionDescriptionBubble.create_error_bubble(error_msg)
+        else:
+            bubble = VisionDescriptionBubble.create_from_notification(
+                descriptions, all_image_data,
+            )
+
         self.agent_panel.timeline_view.add_widget(bubble)
 
     def _on_round_tick(self):
@@ -477,6 +638,24 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
     def _on_pi_session_switched(self, session_path: str):
         """Called when pi confirms a session switch (new or resumed)."""
         self._current_session_path = session_path
+
+        # Flush any pending image cache writes
+        if self._pending_cache_meta and self._pending_images:
+            from edini.image_cache import save_images
+            saved_meta = save_images(session_path, self._pending_images)
+            for sm in saved_meta:
+                idx = sm.get("index", -1)
+                if 0 <= idx < len(self._pending_cache_meta):
+                    self._pending_cache_meta[idx]["cache_path"] = sm.get("cache_path", "")
+                    self._pending_cache_meta[idx]["filename"] = sm.get("filename", self._pending_cache_meta[idx]["filename"])
+                    self._pending_cache_meta[idx].pop("_b64_pending", None)
+            # Update the chips in the user bubble with real cache paths
+            # (the existing bubble has the metadata by reference, so cache_path updates propagate)
+            self._pending_cache_meta = None
+
+        # Also flush pending descriptions
+        self._flush_pending_descriptions(session_path)
+
         self._rpc_client.send_get_stats()
         # Update list highlight to match active session
         highlight = self._browsing_session_path or session_path
@@ -489,11 +668,13 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         messages = self._filter_knowledge_extraction(messages)
         self.agent_panel.clear_timeline()
         for m in messages:
-            role = m.get("role", "")
+            _type = m.get("_type", m.get("role", ""))
             content = m.get("content", "")
-            if role == "user":
-                self.agent_panel._append_user_message(content)
-            elif role == "assistant":
+            if _type == "user":
+                self.agent_panel._append_user_message(content, m.get("images"))
+            elif _type == "vision_description":
+                self._render_vision_description(m)
+            elif _type == "assistant":
                 thinking = m.get("thinking", [])
                 for t in thinking:
                     self.agent_panel._append_thinking_text(t)
@@ -573,6 +754,10 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self._undo_pointer = -1
         self._round_counter = 0
 
+    def _refresh_current_stats(self, delay_ms: int = 300):
+        """Request stats from Pi after a delay (to let session switch settle)."""
+        QtCore.QTimer.singleShot(delay_ms, self._rpc_client.send_get_stats)
+
     def _on_new_session(self):
         # Save current session as active before creating new one (only if not already browsing)
         if not self._browsing_session_path:
@@ -585,6 +770,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self._reset_change_tree()
         self.context_panel.reset_stats()
         self._rpc_client.send_new_session()
+        self._refresh_current_stats(800)  # wait for new session to be created
         # Schedule a reload after pi creates the session
         QtCore.QTimer.singleShot(500, self.history_panel.load_sessions)
 
@@ -605,15 +791,17 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self.context_panel.reset_stats()
 
         # Load messages directly from local JSONL for instant rendering
-        messages = load_pi_messages(session_path)
+        messages = load_pi_messages_with_images(session_path)
         messages = self._merge_consecutive_assistants(messages)
         messages = self._filter_knowledge_extraction(messages)
         for m in messages:
-            role = m.get("role", "")
+            _type = m.get("_type", m.get("role", ""))
             content = m.get("content", "")
-            if role == "user":
-                self.agent_panel._append_user_message(content)
-            elif role == "assistant":
+            if _type == "user":
+                self.agent_panel._append_user_message(content, m.get("images"))
+            elif _type == "vision_description":
+                self._render_vision_description(m)
+            elif _type == "assistant":
                 thinking = m.get("thinking", [])
                 for t in thinking:
                     self.agent_panel._append_thinking_text(t)
@@ -622,6 +810,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
 
         # Tell pi to switch session (async, updates stats)
         self._rpc_client.send_switch_session(session_path)
+        self._refresh_current_stats(500)  # fallback if session_switched callback fails
 
     def _on_back_to_current(self):
         """Exit browsing mode and restore the previously active session."""
@@ -635,15 +824,17 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
             self._reset_change_tree()
             self.context_panel.reset_stats()
 
-            messages = load_pi_messages(target)
+            messages = load_pi_messages_with_images(target)
             messages = self._merge_consecutive_assistants(messages)
             messages = self._filter_knowledge_extraction(messages)
             for m in messages:
-                role = m.get("role", "")
+                _type = m.get("_type", m.get("role", ""))
                 content = m.get("content", "")
-                if role == "user":
-                    self.agent_panel._append_user_message(content)
-                elif role == "assistant":
+                if _type == "user":
+                    self.agent_panel._append_user_message(content, m.get("images"))
+                elif _type == "vision_description":
+                    self._render_vision_description(m)
+                elif _type == "assistant":
                     thinking = m.get("thinking", [])
                     for t in thinking:
                         self.agent_panel._append_thinking_text(t)
@@ -651,13 +842,22 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
                         self.agent_panel._append_assistant_message(content)
 
             self._rpc_client.send_switch_session(target)
+            self._refresh_current_stats(500)  # fallback if session_switched callback fails
             self.history_panel.highlight_session(target)
         else:
-            self._current_session_path = ""
-            self.agent_panel.clear_timeline()
+            self._on_new_session()
 
     def _on_session_deleted(self, session_path: str):
         self.history_panel.remove_session(session_path)
+
+        # Prune orphaned image cache for this session
+        from edini.image_cache import prune_orphan_caches
+        from edini.ui.pi_sessions import get_pi_session_dir
+        try:
+            cwd = _get_working_dir()
+            prune_orphan_caches(str(get_pi_session_dir(cwd)))
+        except Exception:
+            pass
 
         # If deleted session was the one being browsed, fall back to active
         if session_path == self._browsing_session_path:
@@ -710,3 +910,34 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         if global_main is self:
             import edini.ui.windows as win_mod
             win_mod._main_window = None
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Timeline placeholder widgets
+# ═══════════════════════════════════════════════════════════════════════
+
+class _RecognizingPlaceholder(QtWidgets.QFrame):
+    """Placeholder shown while vision model is processing images."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet("""
+            _RecognizingPlaceholder {
+                background: rgba(167,139,250,0.04);
+                border: 1px dashed rgba(167,139,250,0.2);
+                border-radius: 6px;
+                margin: 2px 32px;
+            }
+        """)
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(8)
+
+        spinner = QtWidgets.QLabel("🔍")
+        spinner.setStyleSheet("QLabel { color: #a78bfa; font-size: 14px; border: none; }")
+        layout.addWidget(spinner)
+
+        label = QtWidgets.QLabel("正在识别图片…")
+        label.setStyleSheet("QLabel { color: #a78bfa; font-size: 11px; border: none; }")
+        layout.addWidget(label)
+        layout.addStretch()

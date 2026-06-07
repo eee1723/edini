@@ -1,6 +1,9 @@
 """AgentPanel — Chat timeline (QScrollArea + widgets) + collapsible panels."""
 import html
+import os
 import re
+import subprocess
+import sys
 from PySide6 import QtCore, QtGui, QtWidgets
 from edini.ui.theme import accent_color, fs
 from edini.media_manager import (
@@ -158,13 +161,35 @@ class _ToolCardWidget(QtWidgets.QFrame):
 # Timeline — QScrollArea + widget-based
 # ═══════════════════════════════════════════════════════════════════════
 
-class _UserBubble(QtWidgets.QFrame):
-    """Right-aligned user message bubble — fills available width with left margin."""
-    def __init__(self, text: str, parent=None):
+class _ClickableCard(QtWidgets.QFrame):
+    """A card that opens a file/image on click. Reliable mouse handling."""
+
+    def __init__(self, open_path: str, tooltip: str = "", parent=None):
         super().__init__(parent)
-        layout = QtWidgets.QHBoxLayout(self)
-        layout.setContentsMargins(48, 0, 0, 0)  # 48px left margin (right-aligned look)
-        layout.setSpacing(0)
+        self._open_path = open_path
+        self.setCursor(QtCore.Qt.PointingHandCursor)
+        if tooltip:
+            self.setToolTip(tooltip)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            _open_image_file(self._open_path)
+        super().mouseReleaseEvent(event)
+
+
+class _UserBubble(QtWidgets.QFrame):
+    """Right-aligned user message bubble — text + optional image references."""
+    def __init__(self, text: str, images: list[dict] | None = None, parent=None):
+        super().__init__(parent)
+        outer = QtWidgets.QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(2)
+
+        # Text bubble (right-aligned with 48px left margin)
+        text_frame = QtWidgets.QFrame()
+        text_layout = QtWidgets.QHBoxLayout(text_frame)
+        text_layout.setContentsMargins(48, 0, 0, 0)
+        text_layout.setSpacing(0)
 
         self._label = QtWidgets.QLabel(html.escape(text))
         self._label.setWordWrap(True)
@@ -180,9 +205,84 @@ class _UserBubble(QtWidgets.QFrame):
             f"}}"
         )
         self._label.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
-        layout.addWidget(self._label)
+        text_layout.addWidget(self._label)
+        outer.addWidget(text_frame)
+
+        # Image references (if any) — clickable chips below text
+        if images:
+            self._add_image_refs(outer, images)
+        else:
+            pass
 
         self.setStyleSheet("QFrame { background: transparent; border: none; }")
+
+    def _add_image_refs(self, outer: QtWidgets.QVBoxLayout, images: list[dict]):
+        """Add clickable thumbnail previews below the text bubble."""
+        img_frame = QtWidgets.QFrame()
+        img_frame.setStyleSheet("QFrame { background: transparent; border: none; }")
+        img_layout = QtWidgets.QHBoxLayout(img_frame)
+        img_layout.setContentsMargins(54, 2, 8, 2)
+        img_layout.setSpacing(6)
+        img_layout.addStretch(1)
+
+        for img_meta in images:
+            filename = img_meta.get("filename", "image")
+            size_kb = img_meta.get("size_bytes", 0) / 1024
+            size_str = f"{size_kb:.0f}KB" if size_kb < 1024 else f"{size_kb/1024:.1f}MB"
+            cache_path = img_meta.get("cache_path", "")
+            b64_fallback = img_meta.get("_b64_pending", "")
+            open_path = cache_path if cache_path and os.path.isfile(cache_path) else b64_fallback
+
+            # Card container — QFrame for proper child widget rendering
+            card = _ClickableCard(open_path, f"点击查看原图 — {filename} ({size_str})")
+            card.setFixedSize(100, 90)
+            card.setStyleSheet(f"""
+                _ClickableCard {{
+                    background: #0e0e15;
+                    border: 1px solid #252540;
+                    border-radius: 4px;
+                }}
+                _ClickableCard:hover {{
+                    border-color: #4a4a6a;
+                    background: #14141e;
+                }}
+            """)
+
+            card_layout = QtWidgets.QVBoxLayout(card)
+            card_layout.setContentsMargins(2, 2, 2, 0)
+            card_layout.setSpacing(1)
+
+            # Thumbnail image — use QLabel with pixmap scaled to fill
+            thumb = QtWidgets.QLabel()
+            thumb.setFixedSize(96, 68)
+            thumb.setAlignment(QtCore.Qt.AlignCenter)
+            thumb.setScaledContents(False)
+            thumb.setStyleSheet(
+                "QLabel { background: #06060c; border-radius: 2px; border: none; }"
+            )
+            pixmap = _load_thumb_pixmap(open_path)
+            if pixmap and not pixmap.isNull():
+                scaled = pixmap.scaled(
+                    96, 68,
+                    QtCore.Qt.AspectRatioMode.IgnoreAspectRatio,
+                    QtCore.Qt.TransformationMode.SmoothTransformation,
+                )
+                thumb.setPixmap(scaled)
+            else:
+                thumb.setText("🖼️")
+            card_layout.addWidget(thumb)
+
+            # Filename label
+            name_label = QtWidgets.QLabel(_truncate_name(filename, 13))
+            name_label.setStyleSheet(
+                f"QLabel {{ color:#a1a1aa; font-size:{fs(9)}; border:none; background:transparent; }}"
+            )
+            name_label.setAlignment(QtCore.Qt.AlignCenter)
+            card_layout.addWidget(name_label)
+
+            img_layout.addWidget(card)
+
+        outer.addWidget(img_frame)
 
 
 class _AiBubble(QtWidgets.QFrame):
@@ -476,9 +576,6 @@ class AgentPanel(QtWidgets.QWidget):
         # Tool cards
         self._tool_cards: dict[str, _ToolCardWidget] = {}
 
-        # Screenshot (kept as separate quick-capture, stored as MediaItem)
-        self._screenshot_item: MediaItem | None = None
-
         self._stream_flush_timer = QtCore.QTimer(self)
         self._stream_flush_timer.setSingleShot(True)
         self._stream_flush_timer.setInterval(self.STREAM_FLUSH_INTERVAL_MS)
@@ -648,58 +745,77 @@ class AgentPanel(QtWidgets.QWidget):
 
         # ── Input row ──
         input_row = QtWidgets.QHBoxLayout()
+        input_row.setSpacing(8)
         self.input_edit = QtWidgets.QPlainTextEdit(self)
         self.input_edit.setPlaceholderText("描述你希望 Edini 完成的任务... (Enter 发送)")
-        self.input_edit.setFixedHeight(64)
+        self.input_edit.setFixedHeight(68)
         input_row.addWidget(self.input_edit, 1)
 
+        # ── Action column (right side) ──
         action_col = QtWidgets.QVBoxLayout()
-        action_col.setSpacing(4)
+        action_col.setSpacing(6)
 
-        btn_row = QtWidgets.QHBoxLayout()
-        btn_row.setSpacing(2)
+        # ── Multimodal toolbar row ──
+        a = accent_color()
+        _mm_btn_style = f"""
+            QPushButton {{
+                background: #1a1a2e;
+                color: #c0c0d0;
+                border: 1px solid #2a2a40;
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-size: {fs(12)};
+                font-weight: 500;
+            }}
+            QPushButton:hover {{
+                background: #252540;
+                border-color: {a}66;
+                color: #e5e5eb;
+            }}
+            QPushButton:pressed {{
+                background: #2a2a48;
+                border-color: {a}99;
+            }}
+        """
 
-        self._screenshot_btn = QtWidgets.QPushButton("📷")
-        self._screenshot_btn.setToolTip("Capture viewport screenshot")
-        self._screenshot_btn.setFixedSize(32, 32)
+        toolbar_row = QtWidgets.QHBoxLayout()
+        toolbar_row.setSpacing(6)
+
+        self._screenshot_btn = QtWidgets.QPushButton("📷 截图")
+        self._screenshot_btn.setToolTip("截取 Houdini Scene Viewer 视窗画面")
+        self._screenshot_btn.setMinimumHeight(34)
+        self._screenshot_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self._screenshot_btn.setStyleSheet(_mm_btn_style)
         self._screenshot_btn.clicked.connect(self._on_capture_viewport)
-        # Always show screenshot button — pi-visionizer routes images to vision model
-        self._screenshot_btn.setVisible(True)
-        btn_row.addWidget(self._screenshot_btn)
+        toolbar_row.addWidget(self._screenshot_btn)
 
-        self._file_pick_btn = QtWidgets.QPushButton("📁")
-        self._file_pick_btn.setToolTip("Select image files")
-        self._file_pick_btn.setFixedSize(32, 32)
+        self._file_pick_btn = QtWidgets.QPushButton("📁 上传")
+        self._file_pick_btn.setToolTip("从磁盘选择图片 (png, jpg, gif, webp, bmp)")
+        self._file_pick_btn.setMinimumHeight(34)
+        self._file_pick_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self._file_pick_btn.setStyleSheet(_mm_btn_style)
         self._file_pick_btn.clicked.connect(self._on_pick_files)
-        btn_row.addWidget(self._file_pick_btn)
+        toolbar_row.addWidget(self._file_pick_btn)
 
-        self._paste_btn = QtWidgets.QPushButton("📋")
-        self._paste_btn.setToolTip("Paste image from clipboard")
-        self._paste_btn.setFixedSize(32, 32)
-        self._paste_btn.clicked.connect(self._on_paste_image)
-        btn_row.addWidget(self._paste_btn)
+        action_col.addLayout(toolbar_row)
 
-        action_col.addLayout(btn_row)
+        # ── Spacer between toolbar and action controls ──
+        action_col.addSpacing(4)
 
-        self._screenshot_remove_btn = QtWidgets.QPushButton("✕")
-        self._screenshot_remove_btn.setObjectName("GhostButton")
-        self._screenshot_remove_btn.setToolTip("Remove screenshot")
-        self._screenshot_remove_btn.clicked.connect(self._on_remove_screenshot)
-        self._screenshot_remove_btn.setVisible(False)
-        self._screenshot_remove_btn.setFixedSize(32, 20)
-        action_col.addWidget(self._screenshot_remove_btn)
-
+        # ── Chat-only checkbox ──
         from edini.ui.styled_checkbox import StyledCheckBox
         self.chat_only_check = StyledCheckBox("仅对话", self)
+        action_col.addWidget(self.chat_only_check, alignment=QtCore.Qt.AlignRight)
 
+        # ── Execute / Abort button ──
         self._action_btn = QtWidgets.QPushButton("执行")
         self._action_btn.setObjectName("PrimaryButton")
-        self._action_btn.setMinimumWidth(80)
+        self._action_btn.setMinimumWidth(90)
+        self._action_btn.setMinimumHeight(34)
         self._action_btn.clicked.connect(self._on_action_btn)
-
-        action_col.addWidget(self.chat_only_check)
         action_col.addWidget(self._action_btn)
         action_col.addStretch(1)
+
         input_row.addLayout(action_col)
         root.addLayout(input_row)
 
@@ -708,15 +824,44 @@ class AgentPanel(QtWidgets.QWidget):
         self._knowledge_accept_all.clicked.connect(self._on_knowledge_accept_all)
         self._knowledge_reject_all.clicked.connect(self._on_knowledge_reject_all)
 
+        # Confirm setup
+
         # Drag-drop on input_edit
         self.input_edit.setAcceptDrops(True)
         self.input_edit.dragEnterEvent = self._on_drag_enter
         self.input_edit.dragMoveEvent = self._on_drag_move
         self.input_edit.dropEvent = self._on_drop
 
+        # Right-click context menu — must monkey-patch because
+        # Houdini's Qt may block ContextMenu events from the event filter.
+        self.input_edit.setContextMenuPolicy(QtCore.Qt.DefaultContextMenu)
+        self.input_edit.contextMenuEvent = self._on_context_menu
+
     def eventFilter(self, watched, event):
         if watched is self.input_edit and event is not None:
-            if int(event.type()) == int(QtCore.QEvent.KeyPress):
+            ev_type = int(event.type())
+
+            # ── Right-click context menu: intercept paste when image on clipboard ──
+            if ev_type == int(QtCore.QEvent.ContextMenu):
+                has_img = clipboard_has_image()
+                if has_img:
+                    menu = QtWidgets.QMenu(self.input_edit)
+                    paste_img = menu.addAction("📋 粘贴图片到附件栏")
+                    paste_img.triggered.connect(self._paste_image_from_clipboard)
+                    menu.addSeparator()
+                    paste_text = menu.addAction("粘贴文本")
+                    paste_text.triggered.connect(self._context_paste_text)
+                    menu.addSeparator()
+                    select_all = menu.addAction("全选")
+                    select_all.triggered.connect(self.input_edit.selectAll)
+                    self._context_menu = menu
+                    result = menu.exec(event.globalPos())
+                    self._context_menu = None
+                    return True
+                # No image on clipboard — let default context menu handle text paste
+                return False
+
+            if ev_type == int(QtCore.QEvent.KeyPress):
                 key = int(event.key())
                 modifiers = event.modifiers()
                 if key == int(QtCore.Qt.Key_Escape):
@@ -737,9 +882,19 @@ class AgentPanel(QtWidgets.QWidget):
                         return True
                 if key == int(QtCore.Qt.Key_V):
                     if modifiers & QtCore.Qt.ControlModifier:
-                        if clipboard_has_image():
-                            self._on_paste_image()
+                        has_img = clipboard_has_image()
+                        if has_img:
+                            if self._attachment_bar.is_full():
+                                self.add_error(f"最多 {MAX_ATTACHMENTS} 张图片")
+                            else:
+                                item = from_clipboard()
+                                if item is not None:
+                                    ok = self._attachment_bar.add(item)
+                                else:
+                                    pass
                             return True
+                        else:
+                            pass
         return super().eventFilter(watched, event)
 
     # ------------------------------------------------------------------
@@ -764,7 +919,6 @@ class AgentPanel(QtWidgets.QWidget):
         if not text or self._busy:
             return
         self.input_edit.clear()
-        self._append_user_message(text)
         self._request_count += 1
         self._stream_segments.clear()
         self._current_text = ""
@@ -787,21 +941,18 @@ class AgentPanel(QtWidgets.QWidget):
         # Collapse change tree during conversation
         self.change_tree_widget.collapse()
 
-        # Collect all images: attachment bar items + screenshot
+        # Collect all images from attachment bar
         images: list[dict] = []
-        for item in self._attachment_bar.items():
-            images.append({
+        attachment_items = self._attachment_bar.items()
+        for item in attachment_items:
+            img_info = {
                 "type": "image",
                 "data": item.base64,
                 "mimeType": item.mime_type,
-            })
-        if self._screenshot_item:
-            images.append({
-                "type": "image",
-                "data": self._screenshot_item.base64,
-                "mimeType": self._screenshot_item.mime_type,
-            })
-            self._on_remove_screenshot()
+                "filename": item.filename,
+                "source": item.source.value,
+            }
+            images.append(img_info)
 
         self._attachment_bar.clear()
 
@@ -860,21 +1011,17 @@ class AgentPanel(QtWidgets.QWidget):
     def _on_capture_viewport(self):
         item = capture_viewport()
         if item is None:
-            self._screenshot_btn.setText("❌")
-            QtCore.QTimer.singleShot(1500, lambda: self._screenshot_btn.setText("📷"))
+            self._screenshot_btn.setText("❌ 失败")
+            QtCore.QTimer.singleShot(2500, lambda: self._screenshot_btn.setText("📷 截图"))
+            self.add_error("截图失败 — 请查看 Houdini Console 获取详情")
             return
-        # If attachment bar has room, add there instead of old screenshot slot
-        if not self._attachment_bar.is_full():
-            self._attachment_bar.add(item)
-        else:
-            self._screenshot_item = item
-            self._screenshot_btn.setText("📸")
-            self._screenshot_remove_btn.setVisible(True)
-
-    def _on_remove_screenshot(self):
-        self._screenshot_item = None
-        self._screenshot_btn.setText("📷")
-        self._screenshot_remove_btn.setVisible(False)
+        if self._attachment_bar.is_full():
+            self.add_error(f"最多 {MAX_ATTACHMENTS} 张图片，请先移除一些")
+            return
+        ok = self._attachment_bar.add(item)
+        if ok:
+            self._screenshot_btn.setText("📸 ✓")
+            QtCore.QTimer.singleShot(1500, lambda: self._screenshot_btn.setText("📷 截图"))
 
     def _on_pick_files(self):
         """Open file dialog to select image files."""
@@ -896,15 +1043,28 @@ class AgentPanel(QtWidgets.QWidget):
         if added == 0 and self._attachment_bar.is_full():
             self.add_error(f"最多 {MAX_ATTACHMENTS} 张图片")
 
-    def _on_paste_image(self):
-        """Paste image from clipboard into attachment bar."""
+    def _paste_image_from_clipboard(self):
+        """Paste image from clipboard (called from right-click context menu)."""
         if self._attachment_bar.is_full():
             self.add_error(f"最多 {MAX_ATTACHMENTS} 张图片")
             return
         item = from_clipboard()
-        if item is None:
-            return
-        self._attachment_bar.add(item)
+        if item is not None:
+            ok = self._attachment_bar.add(item)
+        else:
+
+            pass
+    def _context_paste_text(self):
+        """Paste text into input_edit (called from right-click context menu).
+
+        Uses QTimer.singleShot to defer the paste until the context menu
+        is fully dismissed and focus is restored to the input_edit.
+        """
+        QtCore.QTimer.singleShot(0, self._do_context_paste_text)
+
+    def _do_context_paste_text(self):
+        self.input_edit.setFocus(QtCore.Qt.OtherFocusReason)
+        self.input_edit.paste()
 
     def _on_drag_enter(self, event):
         if mime_has_images(event.mimeData()):
@@ -928,6 +1088,26 @@ class AgentPanel(QtWidgets.QWidget):
             event.acceptProposedAction()
         else:
             event.ignore()
+
+    def _on_context_menu(self, event):
+        """Right-click context menu handler — monkey-patched onto input_edit."""
+        has_img = clipboard_has_image()
+        if has_img:
+            menu = QtWidgets.QMenu(self.input_edit)
+            paste_img = menu.addAction("📋 粘贴图片到附件栏")
+            paste_img.triggered.connect(self._paste_image_from_clipboard)
+            menu.addSeparator()
+            paste_text = menu.addAction("粘贴文本")
+            paste_text.triggered.connect(self._context_paste_text)
+            menu.addSeparator()
+            select_all = menu.addAction("全选")
+            select_all.triggered.connect(self.input_edit.selectAll)
+            self._context_menu = menu
+            result = menu.exec(event.globalPos())
+            self._context_menu = None
+        else:
+            # Let QPlainTextEdit show its default context menu
+            QtWidgets.QPlainTextEdit.contextMenuEvent(self.input_edit, event)
 
     def get_raw_stream_text(self) -> str:
         """Get the raw accumulated text of the current streaming response."""
@@ -1172,6 +1352,23 @@ class AgentPanel(QtWidgets.QWidget):
     def set_tool_result(self, tool_call_id: str, result: str):
         self._update_tool_card_result(tool_call_id, result, True)
 
+    # ── Inline capture images and descriptions ──
+
+    def add_inline_capture_image(self, filepath: str, width: int = 0, height: int = 0):
+        """Show a captured viewport/network screenshot inline in the timeline."""
+        resolved = os.path.abspath(filepath) if not os.path.isabs(filepath) else filepath
+        if not os.path.exists(resolved):
+            return
+        widget = _CaptureImageWidget(resolved, width, height)
+        self.timeline_view.add_widget(widget)
+
+    def add_inline_description(self, text: str):
+        """Show a vision model description bubble inline in the timeline."""
+        if not text.strip():
+            return
+        bubble = _DescriptionBubble(text)
+        self.timeline_view.add_widget(bubble)
+
     # ── Thinking ──
 
     def add_thinking_step(self, step_num: int, text: str):
@@ -1208,9 +1405,9 @@ class AgentPanel(QtWidgets.QWidget):
 
     # ── Messages ──
 
-    def _append_user_message(self, text: str):
+    def _append_user_message(self, text: str, images: list[dict] | None = None):
         """Append a user message bubble to the timeline."""
-        self.timeline_view.add_widget(_UserBubble(text))
+        self.timeline_view.add_widget(_UserBubble(text, images))
 
     def _append_assistant_message(self, text: str):
         """Append a non-streaming assistant message."""
@@ -1320,6 +1517,89 @@ class AgentPanel(QtWidgets.QWidget):
         self._thinking_toggle.setText("▸ Thinking (0)")
         if self._thinking_panel_expanded:
             self._thinking_view.setVisible(True)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Formatting helpers (unchanged)
+# ═══════════════════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════════════════
+# Image helpers
+# ═══════════════════════════════════════════════════════════════════════
+
+_SOURCE_ICON_MAP = {
+    "viewport": "📸",
+    "pick": "📁",
+    "drag": "📁",
+    "paste": "📋",
+    "tool": "🔧",
+}
+
+
+def _source_icon(source: str) -> str:
+    return _SOURCE_ICON_MAP.get(source, "🖼️")
+
+
+def _truncate_name(name: str, max_len: int) -> str:
+    if len(name) <= max_len:
+        return name
+    return name[:max_len - 1] + "…"
+
+
+def _load_thumb_pixmap(path_or_b64: str) -> QtGui.QPixmap | None:
+    """Load a QPixmap from a file path or base64 string.
+
+    Returns None on any failure (safe to call in Houdini's PySide6).
+    """
+    if not path_or_b64:
+        return None
+    try:
+        pixmap = QtGui.QPixmap()
+        if os.path.isfile(path_or_b64):
+            pixmap.load(path_or_b64)
+        else:
+            import base64 as _b64
+            data = _b64.b64decode(path_or_b64)
+            pixmap.loadFromData(data)
+        if pixmap.isNull():
+            return None
+        return pixmap
+    except Exception:
+        return None
+
+
+def _open_image_file(path: str):
+    """Open an image file in the OS default viewer.
+
+    If path is not a valid file path, treats it as base64 data and
+    writes to a temp file first.
+    """
+    if not path:
+        return
+
+    actual_path = path
+    if not os.path.isfile(path):
+        # Try to decode as base64 (fallback before cache is written)
+        try:
+            import base64 as _b64
+            import tempfile
+            data = _b64.b64decode(path)
+            fd, tmp = tempfile.mkstemp(suffix=".jpg", prefix="edini_view_")
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+            actual_path = tmp
+        except Exception:
+            return
+
+    try:
+        if sys.platform == "win32":
+            os.startfile(actual_path)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", actual_path])
+        else:
+            subprocess.Popen(["xdg-open", actual_path])
+    except Exception:
+        pass
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1578,3 +1858,107 @@ def _knowledge_btn_style(color: str) -> str:
         QPushButton:hover {{ background: {_lighter(color, 0.15)}; }}
         QPushButton:pressed {{ background: {_darker(color, 0.15)}; }}
     """
+
+
+# ==========================================================================
+# Inline Capture Image Widget
+# ==========================================================================
+
+class _CaptureImageWidget(QtWidgets.QFrame):
+    """Shows a captured viewport/network screenshot inline in the timeline."""
+
+    def __init__(self, filepath: str, width: int = 0, height: int = 0, parent=None):
+        super().__init__(parent)
+        self._filepath = filepath
+
+        self.setFrameShape(QtWidgets.QFrame.StyledPanel)
+        self.setMaximumWidth(500)
+        self.setStyleSheet("""
+            _CaptureImageWidget {
+                background-color: #1a1a24;
+                border-radius: 8px;
+                border: 1px solid #2a2a3c;
+                margin: 4px 0;
+            }
+        """)
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(4)
+
+        # Label
+        filename = os.path.basename(filepath)
+        label = QtWidgets.QLabel(f"📷 <b>Viewport Capture</b> <span style='color:#71717a;'>{filename}</span>")
+        label.setStyleSheet("color: #a1a1aa; font-size: 11px; border: none; background: transparent;")
+        layout.addWidget(label)
+
+        # Image
+        pixmap = QtGui.QPixmap(filepath)
+        if pixmap.isNull():
+            err_label = QtWidgets.QLabel("⚠️ Image not found")
+            err_label.setStyleSheet("color: #ef4444; font-size: 11px; border: none;")
+            layout.addWidget(err_label)
+            return
+
+        max_w = 480
+        if pixmap.width() > max_w:
+            pixmap = pixmap.scaledToWidth(max_w, QtCore.Qt.SmoothTransformation)
+
+        img_label = QtWidgets.QLabel()
+        img_label.setPixmap(pixmap)
+        img_label.setAlignment(QtCore.Qt.AlignCenter)
+        img_label.setStyleSheet("border: none; background: transparent;")
+        img_label.setCursor(QtCore.Qt.PointingHandCursor)
+        img_label.setToolTip("Click to open full-size image")
+        img_label.mousePressEvent = lambda e: self._open_full()
+        layout.addWidget(img_label)
+
+        if width and height:
+            info = QtWidgets.QLabel(f"<span style='color:#52525b;'>{width}×{height}</span>")
+            info.setStyleSheet("color: #52525b; font-size: 10px; border: none;")
+            layout.addWidget(info)
+
+    def _open_full(self):
+        """Open the image with the system default viewer."""
+        import os as _os
+        _os.startfile(self._filepath)
+
+
+# ==========================================================================
+# Description Bubble (for vision model responses)
+# ==========================================================================
+
+class _DescriptionBubble(QtWidgets.QFrame):
+    """Shows a vision model description inline in the timeline."""
+
+    def __init__(self, text: str, parent=None):
+        super().__init__(parent)
+
+        self.setFrameShape(QtWidgets.QFrame.StyledPanel)
+        self.setMaximumWidth(500)
+        self.setStyleSheet("""
+            _DescriptionBubble {
+                background-color: #1a2420;
+                border-radius: 8px;
+                border: 1px solid #2a3c30;
+                margin: 4px 0;
+            }
+        """)
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(4)
+
+        header = QtWidgets.QLabel("🔍 <b>Image Description</b>")
+        header.setStyleSheet("color: #80c080; font-size: 11px; border: none; background: transparent;")
+        layout.addWidget(header)
+
+        # Clean up the description text
+        description = text.strip()
+        # Remove common prefixes like "The image shows" redundancy
+        escaped = html.escape(description)
+        body = QtWidgets.QLabel(escaped)
+        body.setWordWrap(True)
+        body.setStyleSheet("color: #a0c0a0; font-size: 12px; border: none; background: transparent;")
+        layout.addWidget(body)
+

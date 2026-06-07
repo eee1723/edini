@@ -7,9 +7,9 @@
     "tech_stack": ["Python", "PySide6", "Houdini 21", "Node.js", "TypeScript", "Pi Agent", "DeepSeek", "Anthropic"]
   },
   "wiki": {
-    "version": "1.0",
+    "version": "2.0",
     "created": "2026-06-03",
-    "last_updated": "2026-06-05-timeline-rendering-fixes"
+    "last_updated": "2026-06-07-agent-framework-complete"
   },
   "features": {
     "search": true,

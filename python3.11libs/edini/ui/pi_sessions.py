@@ -183,6 +183,49 @@ def load_pi_messages(session_path: str) -> list[dict]:
     return messages
 
 
+def load_pi_messages_with_images(session_path: str) -> list[dict]:
+    """Load messages from a pi session file, with image metadata from cache.
+
+    Returns same format as load_pi_messages, but user messages with images
+    will have an additional 'images' key, and a synthetic 'vision_description'
+    message is inserted after the user message if descriptions were cached.
+    Messages have an added '_type' field: 'user', 'assistant', 'vision_description'.
+    """
+    from edini.image_cache import load_image_meta, load_descriptions
+
+    messages = load_pi_messages(session_path)
+    
+    image_meta = load_image_meta(session_path)
+    
+    descriptions = load_descriptions(session_path)
+
+    # Tag each message with its type for routing
+    for msg in messages:
+        msg["_type"] = msg.get("role", "")
+
+    # Annotate first user message with images
+    if image_meta:
+        for msg in messages:
+            if msg.get("role") == "user":
+                msg["images"] = image_meta
+                break
+
+    # Insert vision_description after the first user message (if descriptions cached)
+    if descriptions:
+        # Find insertion point: after the first user message
+        insert_at = 0
+        for i, msg in enumerate(messages):
+            if msg.get("role") == "user":
+                insert_at = i + 1
+                break
+        messages.insert(insert_at, {
+            "_type": "vision_description",
+            "descriptions": descriptions,
+        })
+
+    return messages
+
+
 def delete_pi_session(session_path: str) -> bool:
     """Delete a pi session file."""
     try:

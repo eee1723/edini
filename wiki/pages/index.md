@@ -1,6 +1,6 @@
 # 📊 仪表盘
 
-> **当前阶段**：多模态扩展 — pi-visionizer + Qwen-VL 视觉代理 &nbsp;|&nbsp; **状态**：16 tools 就绪，Houdini 实机运行，截图链路调试中 &nbsp;|&nbsp; **最后更新**：2026-06-05
+> **当前阶段**：多模态调试完成 — 视觉管道打通 + UI 优化 &nbsp;|&nbsp; **状态**：16 tools 就绪，Houdini 实机运行，Qwen-VL 视觉代理正常 &nbsp;|&nbsp; **最后更新**：2026-06-06
 
 ## 快速导航
 
@@ -27,9 +27,11 @@
 | 多模型 | ✅ DeepSeek V3/R1 · Anthropic · Provider 下拉 + Model 历史记忆 |
 | 设置系统 | ✅ General + Knowledge 双标签 · 主题/字体 · 知识开关/统计/管理 |
 | 知识沉淀 | ✅ 两层架构（铁律 rules.json ≤20 + 知识库 entries.json）· AI 反思 → 用户确认 · 类型可切换 · 只提取会重复犯的错 |
-| 多模态 | 🔄 pi-visionizer 视觉代理 + Qwen-VL · 截图按钮始终可见 · 截图链路调试中 |
+| 多模态 | ✅ pi-visionizer 视觉代理 + Qwen-VL · 📷 截图 + 📁 上传按钮 · 全渠道图片输入（Ctrl+V + 右键粘贴 + 拖拽 + 文件选择）· 附件预览栏（真实缩略图）· 视觉描述气泡（可折叠+查看原图）· 识别中状态提示 · Houdini 20 API 适配（saveImage/grabFrameBuffer→flipbook）· QImage.save() QBuffer/BytesIO 兼容修复 · 剪贴板多模式探测（image/mimeData/URL/raw）|
 | 变更树 | ✅ QTreeWidget 面板（diff · undo/redo · 节点跳转 · 参数折叠 · 空时不展开 · 自变参数过滤 · 切换清除） |
 | 节点创建 | ✅ namespace 自动解析 · shelf tool 预设应用 · diff 过滤内部子节点 |
+| 按钮布局 | ✅ 📷 截图 + 📁 上传（文本标签按钮，minHeight 34px，hover/pressed 动效）· 仅对话右对齐 · 执行按钮 minWidth 90px · 6px/8px 间距优化 |
+| 剪贴板 | ✅ Ctrl+V 图片粘贴 · 右键粘贴图片到附件栏 · 右键粘贴文本（defer focus+paste）· 多模式探测（QImage→mimeData→URL→raw png/jpeg）· Houdini PySide6 枚举兼容（整数 mode 值）|
 | 测试 | ⬜ 无自动化测试 |
 | 知识检索 | ⬜ search_knowledge 工具待实现 |
 
@@ -42,7 +44,7 @@
 | 通信层 | JSON-RPC (stdin/stdout) · HTTP (localhost:9876) |
 | AI 后端 | Pi Coding Agent (Node.js) · DeepSeek V3/R1 · TypeBox |
 | 扩展 | Pi Extensions (TypeScript) · edini-tools · edini-context |
-| 存储 | settings.json · rules.json · entries.json · pi JSONL sessions |
+| 存储 | settings.json · rules.json · entries.json · pi JSONL sessions · edini_images/ 图片缓存 |
 | 部署 | npm global · install.py 包注册 |
 
 ---

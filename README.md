@@ -104,7 +104,7 @@ edini/
   tool_executor.py     # HTTP server for tool execution
 
 pi-extensions/
-  edini-tools/         # Houdini tool registrations (16 tools)
+  edini-tools/         # Houdini tool registrations (18 tools)
   edini-context/       # Houdini system prompt injection
 
 scripts/

@@ -169,17 +169,48 @@ class EdiniPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _on_send(self) -> None:
-        text = self._input_field.text().strip()
-        if not text:
+        raw_text = self._input_field.text().strip()
+        if not raw_text:
             return
         self._input_field.clear()
         self._user_scrolled_up = False
-        self._add_user_message(text)
+        self._add_user_message(raw_text)
+
+        # ── Collect Houdini context and prepend to prompt ──
+        context = self._collect_context()
+        prompt = (context + "\n---\n" + raw_text) if context else raw_text
 
         self._current_assistant_bubble = self._add_assistant_message("")
         self._current_assistant_bubble.set_streaming()
 
-        self._rpc_client.send_prompt(text)
+        self._rpc_client.send_prompt(prompt)
+
+    def _collect_context(self) -> str:
+        """Collect current Houdini context to inject before user message."""
+        try:
+            import hou
+            parts = []
+
+            hip = hou.hipFile.name()
+            if hip:
+                parts.append(f"HIP: {hip}")
+
+            current = hou.pwd()
+            if current:
+                parts.append(f"Current network: {current.path()}")
+
+            selected = hou.selectedNodes()
+            if selected:
+                sel_str = ", ".join(f"{n.name()} ({n.path()})" for n in selected[:10])
+                if len(selected) > 10:
+                    sel_str += f" (+{len(selected) - 10} more)"
+                parts.append(f"Selected nodes: {sel_str}")
+
+            if parts:
+                return "[Current Houdini Context]\n" + "\n".join(parts)
+        except Exception:
+            pass
+        return ""
 
     def _on_abort(self) -> None:
         self._rpc_client.send_abort()

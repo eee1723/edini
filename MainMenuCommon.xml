@@ -4,7 +4,7 @@
     <subMenu id="edini_menu">
       <label>Edini</label>
       <scriptItem id="edini_open_chat">
-        <label>Open Chat Panel</label>
+        <label>Open Chat Panel (Alt+Shift+E)</label>
         <scriptCode><![CDATA[
 from edini.ui import open_chat_window
 open_chat_window()

@@ -25,6 +25,9 @@ export const houdiniSearchNodes = {
   description:
     "Search for available Houdini node types by keyword across all categories (Sop, Dop, Vop, etc.).",
   promptSnippet: "Search Houdini node types by keyword",
+  promptGuidelines: [
+    "When the user asks to create an effect (smoke, fire, water, destruction, etc.), use houdini_search_nodes first to find available node types before creating anything.",
+  ],
   parameters: Type.Object({
     keyword: Type.String({ description: "Search keyword" }),
   }),

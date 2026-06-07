@@ -1,6 +1,6 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-05 &nbsp;|&nbsp; 第十三阶段：多模态扩展 — 全渠道图片输入 + Qwen-VL 视觉代理 ✅
+> 最后更新：2026-06-06 &nbsp;|&nbsp; 第十六阶段：多模态 UI 按钮优化 + 剪贴板全渠道修复 ✅
 
 ## 总览看板
 
@@ -84,7 +84,7 @@
     <span class="status-tag status-done">完成</span>
   </div>
   <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:100%"></div></div>
-  <div class="phase-card-detail">✅ DeepSeek V4 Pro/V3/R1 · ✅ Anthropic Claude · ✅ Viewport 截图（三级降级修复）· ✅ pi-visionizer 视觉代理（Qwen-VL Max）· ✅ 全渠道图片输入（截图/拖拽/粘贴/文件选择）· ✅ 附件预览栏（最多5张缩略图）· ✅ 视觉描述气泡（时间线内可折叠）· ✅ AI 工具主动读图（describe_image）</div>
+  <div class="phase-card-detail">✅ DeepSeek V4 Pro/V3/R1 · ✅ Anthropic Claude · ✅ Viewport 截图（Houdini 20 flipbook 单帧 + frameRange([1.0,1.0]) 修复）· ✅ pi-visionizer 视觉代理（Qwen-VL Max）· ✅ 全渠道图片输入（截图/拖拽/粘贴/文件选择 + 右键菜单）· ✅ 附件预览栏（真实缩略图，最多5张）· ✅ 视觉描述气泡（可折叠、查看原图、错误变体）· ✅ AI 工具主动读图（describe_image）· ✅ 识别中状态提示（🔍 正在识别图片…）· ✅ 时间线缩略图卡片（96×68 点击查看原图、原始文件名保留）· ✅ 图片缓存持久化（edini_images/ 目录，切换对话可回看）· ✅ 视觉描述持久化（descriptions.json 缓存，历史气泡渲染）· ✅ Defer 缓存写入 · ✅ 📷 截图 + 📁 上传按钮优化（文本标签、hover/pressed 动效、布局重排）· ✅ Ctrl+V + 右键粘贴图片 · ✅ 剪贴板多模式探测（image/mimeData/URL/raw）· ✅ Houdini 20 API 适配（saveImage/grabFrameBuffer 移除→flipbook）· ✅ QImage.save() BytesIO/QBuffer 兼容修复 · ✅ PySide6 Qt.Clipboard 枚举兼容</div>
 </div>
 
 <div class="phase-card">
@@ -102,7 +102,49 @@
 
 <div class="timeline">
 
-<div class="timeline-item timeline-wip">
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-06</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第十六阶段：多模态 UI 按钮优化 + 剪贴板全渠道修复</span>
+      <span class="status-tag status-done">完成</span>
+    </div>
+    <div class="timeline-summary">① 📋 Paste 按钮移除：用户通过 Ctrl+V 或右键粘贴，不占面板空间 ② 按钮布局重排：📷 截图 + 📁 上传改为文本标签按钮（minHeight 34px, padding 4px 10px），不再被裁切，hover/pressed 动效 ③ 仅对话右对齐 · 执行按钮 minWidth 90px · 6px/8px 间距 ④ 移除旧截图槽位+移除按钮，截图统一走附件栏 ⑤ 剪贴板粘贴修复：QImage.save() 在 Houdini PySide6 中不接受 BytesIO/QBuffer → 改用 tempfile 中转 ⑥ 剪贴板多模式探测：image()→mimeData().imageData()→URLs→raw image/png image/jpeg，覆盖浏览器/截图工具/文件管理器等所有来源 ⑦ Houdini 20 视窗截图修复：saveImage() 和 grabFrameBuffer() 在 20.x 中已移除 → flipbook 方法 frameRange([1.0, 1.0]) 修复 ⑧ 右键上下文菜单：monkey-patch contextMenuEvent（Houdini 阻止 eventFilter 收到 ContextMenu 事件），图片剪贴板时显示 "📋 粘贴图片到附件栏" + "粘贴文本"（QTimer.singleShot defer focus+paste），无图片时走原生菜单 ⑨ PySide6 枚举兼容：Qt.Clipboard/Selection/FindBuffer 不存在 → 整数 mode 值 0/1/2</div>
+    <div class="timeline-tags">
+      <span>按钮布局</span><span>剪贴板修复</span><span>右键菜单</span><span>Houdini20适配</span><span>QImage.save</span><span>PySide6兼容</span><span>contextMenuEvent</span><span>tempfile</span>
+    </div>
+  </div>
+</div>
+
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-06</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第十五阶段：图片时间线显示 — 缩略图卡片 + 历史持久化 + 视觉描述缓存</span>
+      <span class="status-tag status-done">完成</span>
+    </div>
+    <div class="timeline-summary">① ImageCacheManager：图片缓存与 Pi 会话同目录（edini_images/<session_id>/manifest.json + 原始图片文件），支持 save/load/prune ② 时间线缩略图卡片：_UserBubble 中 96×68 缩略图 _ClickableCard（IgnoreAspectRatio 填满、QFrame mouseReleaseEvent 可靠点击），点击在 OS 查看器中打开 ③ 原始文件名保留：MediaItem.filename → _on_send → _on_agent_submit → 缓存 + 气泡，全链路传递 ④ 视觉描述持久化：_on_vision_description 收到通知时保存 descriptions.json，历史加载时重新渲染 VisionDescriptionBubble ⑤ Defer 缓存写入：_current_session_path 异步就绪时才写缓存，解决 Pi session 路径延迟问题 ⑥ _cleanup_recognizing 不再清除 _pending_images，避免缓存 flush 被跳过 ⑦ QPixmap 缩略图启用：make_thumbnail + _load_thumb_pixmap try/except 安全保护 ⑧ 附件栏缩略图恢复真实显示（不再 🖼️ 占位）⑨ 会话删除时自动清理孤立的图片缓存</div>
+    <div class="timeline-tags">
+      <span>缩略图卡片</span><span>图片缓存</span><span>历史持久化</span><span>视觉描述缓存</span><span>Defer写入</span><span>原始文件名</span><span>QPixmap</span><span>edini_images</span>
+    </div>
+  </div>
+</div>
+
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-06</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第十四阶段：多模态调试修复 — 视觉管道打通 + UI 体验优化</span>
+      <span class="status-tag status-done">完成</span>
+    </div>
+    <div class="timeline-summary">① 修复 pi-visionizer fetch 死锁：Windows 上 Pi 的 undici 全局代理导致 fetch() 永久挂起 → 改用 Node.js 原生 https.request() ② 修复通知 API：sendUiRequest 不存在 → 改用 ctx.ui.notify() ③ 修复 Aliyun API Key：auth.json 缺少 aliyun 条目 → 添加 sk-ded80b7... ④ 识别中状态提示：_RecognizingPlaceholder 虚线框 "🔍 正在识别图片…"，通知到达后自动替换 ⑤ 视觉描述气泡默认折叠：显示 "👁️ 图片识别完成 · qwen-vl-max · 3.2s ▶ 展开" ⑥ 查看原图：气泡内 📸 按钮用 OS 默认查看器打开原图 ⑦ 缩略图安全降级：QBuffer 导致 Houdini segfault → 改用 emoji 🖼️ 占位 ⑧ rpc_client 添加 stderr 读取线程 + vision_description 日志</div>
+    <div class="timeline-tags">
+      <span>https.request</span><span>undici死锁</span><span>ctx.ui.notify</span><span>识别中状态</span><span>默认折叠</span><span>查看原图</span><span>segfault修复</span>
+    </div>
+  </div>
+</div>
+
+<div class="timeline-item timeline-done">
   <div class="timeline-date">2026-06-05</div>
   <div class="timeline-card">
     <div class="timeline-card-header">
@@ -265,7 +307,7 @@
 | P1 | ~~时间线渲染~~ | ✅ Markdown 完整解析 + 气泡合并 + 文本选择 |
 | P1 | ~~多模态视觉代理~~ | ✅ pi-visionizer 安装 + Qwen-VL 模型配置完成 |
 | P1 | ~~截图链路修复~~ | ✅ 三级降级修复完成（saveImage → grabFrameBuffer → flipbook）|
-| P2 | 知识库检索工具 | 为 Agent 添加 search_knowledge 工具调用 |
+| P1 | ~~图片时间线显示~~ | ✅ 缩略图卡片 + 缓存持久化 + 视觉描述历史渲染 |
 | P2 | 知识库检索工具 | 为 Agent 添加 search_knowledge 工具调用 |
 | P2 | 单元测试 | 对 node_utils、config、tool_executor 写测试 |
 | P3 | Python 面板 | 支持嵌入 Houdini Pane Tab |
@@ -287,10 +329,16 @@
 - ✅ 工具调用实时面板（fixedHeight 折叠 20px↔200px、执行状态 ✅/❌、结果预览、自动滚底）
 - ✅ JavaScript-Free 文本选择（QLabel TextSelectableByMouse）
 - ✅ 会话管理 (pi 接管：Popen cwd 按 HIP 归档 · JSONL 本地读取 · new/switch/set_name RPC)
-- ✅ Viewport 截图（三级降级：saveImage → grabFrameBuffer → flipbook）
-- ✅ 全渠道图片输入（截图 / 拖拽 / 粘贴 / 文件选择）
-- ✅ 图片附件预览栏（缩略图 120×68，最多 5 张）
-- ✅ 视觉描述气泡（可折叠，显示 Qwen-VL 分析结果）
+- ✅ Viewport 截图（Houdini 20 flipbook 单帧 + frameRange([1.0,1.0]) 修复）
+- ✅ 全渠道图片输入（截图 / 拖拽 / Ctrl+V / 右键粘贴 / 文件选择，原始文件名保留）
+- ✅ 图片附件预览栏（真实缩略图 120×68，最多 5 张）
+- ✅ 视觉描述气泡（可折叠，显示 Qwen-VL 分析结果，📸 查看原图 (N) 多图支持）
+- ✅ 识别中状态提示（🔍 正在识别图片… 虚线框，通知到达自动替换）
+- ✅ 视觉管道修复（fetch→https.request 绕过 undici 死锁，ctx.ui.notify 通知修复）
+- ✅ 时间线缩略图卡片（96×68 缩略图 + 文件名 + 来源图标，点击在 OS 查看器中打开原图）
+- ✅ 图片缓存持久化（edini_images/ 目录，按 session 隔离，切换历史对话可回看图片）
+- ✅ 视觉描述缓存（descriptions.json，历史对话中自动渲染 VisionDescriptionBubble）
+- ✅ Defer 缓存写入（session 路径异步就绪后自动刷入，解决端到端时序问题）
 - ✅ API Key / Provider / Model 设置 (下拉选择 + 历史记忆)
 - ✅ 4 色主题实时预览 + 字体缩放
 - ✅ 执行/中止按钮一体化切换
@@ -318,7 +366,12 @@
 - ✅ pi-visionizer 默认视觉模型改为 aliyun/qwen-vl-max
 - ✅ pi-visionizer 写入 vision-description custom entry + 实时通知 Edini
 - ✅ VisionDescriptionBubble 时间线内渲染（可折叠、查看原图、错误变体）
-- ✅ 多模型视觉方案（DeepSeek V4 Pro 主模型 + Qwen-VL Max 视觉代理）
+- ✅ 剪贴板多模式探测（QImage → mimeData.imageData → URLs → raw png/jpeg）
+- ✅ 右键上下文菜单（图片剪贴板→粘贴图片到附件栏 + 粘贴文本，无图片→原生菜单）
+- ✅ 📷 截图 + 📁 上传按钮布局优化（文本标签、hover/pressed 动效、不再被裁切）
+- ✅ 视窗截图 Houdini 20 API 适配（saveImage/grabFrameBuffer 移除→flipbook 修复）
+- ✅ QImage.save() PySide6 兼容（BytesIO/QBuffer 失败→tempfile 中转）
+- ✅ PySide6 枚举兼容修复（Qt.Clipboard 等不存在→整数 mode 值 0/1/2）
 - ✅ SnapshotEngine 场景快照 Diff（snapshot / diff / 三阶段节点级 restore）
 - ✅ Undo/Redo 栈（每轮一个事务，撤销=整轮回滚重建，手动修改自动清空栈）
 - ✅ 节点视图跳转（点击变更树路径 → hou.node.setCurrent + frame viewport）

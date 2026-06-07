@@ -88,22 +88,59 @@ export function getCacheSize(): number {
   return imageCache.size;
 }
 
-// ---- Fetch with timeout ----
+// ---- HTTP helper (uses Node https directly, bypasses Pi's undici global dispatcher) ----
 
 const VISION_API_TIMEOUT_MS = 30_000;
 
-async function fetchWithTimeout(
+async function httpsRequest(
   url: string,
-  init: RequestInit,
-  timeoutMs = VISION_API_TIMEOUT_MS,
-): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
+  options: {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string;
+    timeoutMs?: number;
+  },
+): Promise<{ status: number; text: string }> {
+  const https = await import("node:https");
+  const http = await import("node:http");
+  const { URL } = await import("node:url");
+
+  const parsed = new URL(url);
+  const isHttps = parsed.protocol === "https:";
+  const mod = isHttps ? https : http;
+  const timeoutMs = options.timeoutMs ?? VISION_API_TIMEOUT_MS;
+
+  return new Promise((resolve, reject) => {
+    const req = mod.request(
+      {
+        hostname: parsed.hostname,
+        port: parsed.port || (isHttps ? 443 : 80),
+        path: parsed.pathname + parsed.search,
+        method: options.method ?? "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...options.headers,
+          "Content-Length": String(Buffer.byteLength(options.body ?? "")),
+        },
+        timeout: timeoutMs,
+      },
+      (res) => {
+        let data = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk: string) => (data += chunk));
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, text: data }));
+      },
+    );
+
+    req.on("timeout", () => {
+      req.destroy();
+      reject(new Error(`HTTPS request timed out after ${timeoutMs / 1000}s`));
+    });
+    req.on("error", reject);
+
+    if (options.body) req.write(options.body);
+    req.end();
+  });
 }
 
 // ---- OpenAI Chat Completions ----
@@ -121,43 +158,35 @@ async function callOpenAIVision(params: VisionCallParams): Promise<VisionCallRes
   }
 
   try {
-    const response = await fetchWithTimeout(`${baseUrl}/chat/completions`, {
+    const body = JSON.stringify({
+      model: model.id,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: prompt },
+            { type: "image_url", image_url: { url: `data:${mediaType};base64,${imageBase64}` } },
+          ],
+        },
+      ],
+      max_tokens: 1024,
+      temperature: 0,
+    });
+
+    const result = await httpsRequest(`${baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
       },
-      body: JSON.stringify({
-        model: model.id,
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: prompt,
-              },
-              {
-                type: "image_url",
-                image_url: {
-                  url: `data:${mediaType};base64,${imageBase64}`,
-                },
-              },
-            ],
-          },
-        ],
-        max_tokens: 1024,
-        temperature: 0,
-      }),
+      body,
     });
 
-    if (!response.ok) {
-      // Truncate error body to avoid bloating context
-      const errText = await response.text();
-      return { description: "", error: `OpenAI API error (${response.status}): ${errText.slice(0, 200)}` };
+    if (result.status < 200 || result.status >= 300) {
+      return { description: "", error: `OpenAI API error (${result.status}): ${result.text.slice(0, 200)}` };
     }
 
-    const data = (await response.json()) as {
+    const data = JSON.parse(result.text) as {
       choices?: Array<{ message?: { content?: string } }>;
     };
 
@@ -165,9 +194,6 @@ async function callOpenAIVision(params: VisionCallParams): Promise<VisionCallRes
     return { description };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    if (err instanceof Error && err.name === "AbortError") {
-      return { description: "", error: `OpenAI request timed out after ${VISION_API_TIMEOUT_MS / 1000}s` };
-    }
     return { description: "", error: `OpenAI request failed: ${message}` };
   }
 }
@@ -186,45 +212,35 @@ async function callAnthropicVision(params: VisionCallParams): Promise<VisionCall
   }
 
   try {
-    const response = await fetchWithTimeout(`${baseUrl}/messages`, {
+    const body = JSON.stringify({
+      model: model.id,
+      max_tokens: 1024,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "image", source: { type: "base64", media_type: mediaType, data: imageBase64 } },
+            { type: "text", text: prompt },
+          ],
+        },
+      ],
+    });
+
+    const result = await httpsRequest(`${baseUrl}/messages`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "x-api-key": apiKey,
         "anthropic-version": "2023-06-01",
       },
-      body: JSON.stringify({
-        model: model.id,
-        max_tokens: 1024,
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "image",
-                source: {
-                  type: "base64",
-                  media_type: mediaType,
-                  data: imageBase64,
-                },
-              },
-              {
-                type: "text",
-                text: prompt,
-              },
-            ],
-          },
-        ],
-      }),
+      body,
     });
 
-    if (!response.ok) {
-      // Truncate error body to avoid bloating context
-      const errText = await response.text();
-      return { description: "", error: `Anthropic API error (${response.status}): ${errText.slice(0, 200)}` };
+    if (result.status < 200 || result.status >= 300) {
+      return { description: "", error: `Anthropic API error (${result.status}): ${result.text.slice(0, 200)}` };
     }
 
-    const data = (await response.json()) as {
+    const data = JSON.parse(result.text) as {
       content?: Array<{ type: string; text?: string }>;
     };
 
@@ -233,9 +249,6 @@ async function callAnthropicVision(params: VisionCallParams): Promise<VisionCall
     return { description };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    if (err instanceof Error && err.name === "AbortError") {
-      return { description: "", error: `Anthropic request timed out after ${VISION_API_TIMEOUT_MS / 1000}s` };
-    }
     return { description: "", error: `Anthropic request failed: ${message}` };
   }
 }
@@ -254,43 +267,32 @@ async function callGoogleVision(params: VisionCallParams): Promise<VisionCallRes
   }
 
   try {
-    const response = await fetchWithTimeout(
-      `${baseUrl}/models/${model.id}:generateContent`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": apiKey,
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                { text: prompt },
-                {
-                  inlineData: {
-                    mimeType: mediaType,
-                    data: imageBase64,
-                  },
-                },
-              ],
-            },
+    const body = JSON.stringify({
+      contents: [
+        {
+          parts: [
+            { text: prompt },
+            { inlineData: { mimeType: mediaType, data: imageBase64 } },
           ],
-          generationConfig: {
-            maxOutputTokens: 1024,
-            temperature: 0,
-          },
-        }),
-      },
-    );
+        },
+      ],
+      generationConfig: { maxOutputTokens: 1024, temperature: 0 },
+    });
 
-    if (!response.ok) {
-      // Truncate error body to avoid bloating context
-      const errText = await response.text();
-      return { description: "", error: `Google API error (${response.status}): ${errText.slice(0, 200)}` };
+    const result = await httpsRequest(`${baseUrl}/models/${model.id}:generateContent`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey,
+      },
+      body,
+    });
+
+    if (result.status < 200 || result.status >= 300) {
+      return { description: "", error: `Google API error (${result.status}): ${result.text.slice(0, 200)}` };
     }
 
-    const data = (await response.json()) as {
+    const data = JSON.parse(result.text) as {
       candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
     };
 
@@ -299,9 +301,6 @@ async function callGoogleVision(params: VisionCallParams): Promise<VisionCallRes
     return { description };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    if (err instanceof Error && err.name === "AbortError") {
-      return { description: "", error: `Google request timed out after ${VISION_API_TIMEOUT_MS / 1000}s` };
-    }
     return { description: "", error: `Google request failed: ${message}` };
   }
 }

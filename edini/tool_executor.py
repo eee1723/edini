@@ -15,6 +15,8 @@ from edini.node_utils import (
     set_param, get_param, list_nodes, get_node_info, layout_nodes,
     search_nodes, get_help, inspect_geometry,
     run_python, run_vex, create_hda, get_hda_info,
+    capture_viewport, capture_network,
+    get_selection, check_errors, set_display_flag,
 )
 
 # Map tool names to handler functions
@@ -53,6 +55,16 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
         kw["node_path"], kw["hda_name"], kw.get("hda_label", ""),
     ),
     "houdini_get_hda_info": lambda **kw: get_hda_info(kw["hda_name"]),
+    "houdini_capture_viewport": lambda **kw: capture_viewport(kw["filepath"]),
+    "houdini_capture_network": lambda **kw: capture_network(
+        kw["filepath"],
+        parent_path=kw.get("parent_path", "/obj"),
+    ),
+    "houdini_get_selection": lambda **kw: get_selection(),
+    "houdini_check_errors": lambda **kw: check_errors(
+        node_path=kw.get("node_path"),
+    ),
+    "houdini_set_display_flag": lambda **kw: set_display_flag(kw["node_path"]),
 }
 
 

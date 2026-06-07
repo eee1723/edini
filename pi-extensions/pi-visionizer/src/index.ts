@@ -231,14 +231,13 @@ export default function (pi: ExtensionAPI) {
 
         // Notify Edini UI via extension_ui_request
         try {
-          await pi.sendUiRequest({
-            method: "notify",
-            notifyType: "info",
-            message: JSON.stringify({
+          ctx.ui.notify(
+            JSON.stringify({
               event: "vision_description",
               descriptions,
             }),
-          });
+            "info",
+          );
         } catch {
           // Notification is best-effort; don't block
         }

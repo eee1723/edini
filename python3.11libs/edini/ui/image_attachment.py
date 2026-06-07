@@ -165,7 +165,7 @@ class ImageAttachmentWidget(QtWidgets.QWidget):
     def add(self, item: MediaItem) -> bool:
         """Add a MediaItem. Returns True if added, False if rejected (full/invalid)."""
         from edini.media_manager import validate
-        ok, _ = validate(item)
+        ok, reason = validate(item)
         if not ok:
             return False
         if self.is_full():

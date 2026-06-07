@@ -35,8 +35,8 @@ class VisionDescriptionBubble(QtWidgets.QFrame):
         """
         super().__init__(parent)
         self._descriptions = descriptions
-        self._expanded = True
-        self._image_base64: str | None = None   # for "view original" feature
+        self._expanded = False  # collapsed by default
+        self._image_base64_list: list[str] = []  # for "view original" feature (multi-image)
 
         self.setStyleSheet("""
             VisionDescriptionBubble {
@@ -52,6 +52,7 @@ class VisionDescriptionBubble(QtWidgets.QFrame):
 
         self._build_header()
         self._build_content()
+        self._content_widget.setVisible(False)  # collapsed by default
 
     def _build_header(self):
         header_row = QtWidgets.QHBoxLayout()
@@ -61,7 +62,7 @@ class VisionDescriptionBubble(QtWidgets.QFrame):
         total_ms = sum(d.get("elapsedMs", 0) for d in self._descriptions)
         elapsed_str = f"{total_ms / 1000:.1f}s" if total_ms > 0 else ""
 
-        parts = ["👁️ 图片描述"]
+        parts = ["👁️ 图片识别完成"]
         if model_name:
             parts.append(f"· {model_name}")
         if elapsed_str:
@@ -73,7 +74,7 @@ class VisionDescriptionBubble(QtWidgets.QFrame):
         )
         header_row.addWidget(self._header_label, 1)
 
-        self._toggle_btn = QtWidgets.QPushButton("▲ 收起")
+        self._toggle_btn = QtWidgets.QPushButton("▶ 展开")
         self._toggle_btn.setCursor(Qt.PointingHandCursor)
         self._toggle_btn.setFixedHeight(20)
         self._toggle_btn.setStyleSheet(f"""
@@ -116,7 +117,9 @@ class VisionDescriptionBubble(QtWidgets.QFrame):
             content_layout.addWidget(label)
 
         # "View original" link
-        view_btn = QtWidgets.QPushButton("📸 查看原图")
+        count = len(self._image_base64_list) if self._image_base64_list else 0
+        btn_text = f"📸 查看原图 ({count})" if count > 1 else "📸 查看原图"
+        view_btn = QtWidgets.QPushButton(btn_text)
         view_btn.setCursor(Qt.PointingHandCursor)
         view_btn.setStyleSheet(f"""
             QPushButton {{
@@ -145,38 +148,44 @@ class VisionDescriptionBubble(QtWidgets.QFrame):
             self._toggle_btn.setText("▼ 展开")
 
     def _on_view_original(self):
-        """Open the original image in the OS default viewer via a temp file."""
-        if not self._image_base64:
+        """Open all original images in the OS default viewer via temp files."""
+        if not self._image_base64_list:
             return
-        try:
-            mime_type = self._descriptions[0].get("mimeType", "image/jpeg") if self._descriptions else "image/jpeg"
-            ext = _mime_to_ext(mime_type)
-            tmp_fd, tmp_path = tempfile.mkstemp(suffix=ext, prefix="edini_view_")
-            with os.fdopen(tmp_fd, "wb") as f:
-                f.write(base64.b64decode(self._image_base64))
-            # Open with default viewer (cross-platform)
-            if sys.platform == "win32":
-                os.startfile(tmp_path)
-            elif sys.platform == "darwin":
-                subprocess.Popen(["open", tmp_path])
-            else:
-                subprocess.Popen(["xdg-open", tmp_path])
-        except Exception:
-            pass
+        mime_type = self._descriptions[0].get("mimeType", "image/jpeg") if self._descriptions else "image/jpeg"
+        ext = _mime_to_ext(mime_type)
+        for i, b64 in enumerate(self._image_base64_list):
+            if not b64:
+                continue
+            try:
+                fd, path = tempfile.mkstemp(suffix=ext, prefix=f"edini_view_{i}_")
+                with os.fdopen(fd, "wb") as f:
+                    f.write(base64.b64decode(b64))
+                _open_with_os(path)
+            except Exception:
+                pass
+
+    def set_original_images(self, base64_list: list[str]):
+        """Provide original image data for 'view original' feature (multiple images)."""
+        self._image_base64_list = [b for b in base64_list if b]
+        # Update button text if already built
+        if hasattr(self, '_toggle_btn'):
+            count = len(self._image_base64_list)
+            if count > 1:
+                self._toggle_btn.setText(f"📸 查看原图 ({count})")
 
     def set_original_image(self, base64_data: str):
-        """Provide the original image data for 'view original' feature."""
-        self._image_base64 = base64_data
+        """Backward-compat: single image."""
+        self.set_original_images([base64_data])
 
     @staticmethod
     def create_from_notification(
         descriptions: list[dict[str, Any]],
-        image_base64: str | None = None,
+        image_base64_list: list[str] | None = None,
     ) -> "VisionDescriptionBubble":
         """Factory: create a bubble from the vision_description notification data."""
         bubble = VisionDescriptionBubble(descriptions)
-        if image_base64:
-            bubble.set_original_image(image_base64)
+        if image_base64_list:
+            bubble.set_original_images(image_base64_list)
         return bubble
 
     @staticmethod
@@ -198,6 +207,21 @@ class VisionDescriptionBubble(QtWidgets.QFrame):
             f"QLabel {{ color:#f87171; font-size:{fs(11)}; font-weight:600; border:none; }}"
         )
         return bubble
+
+
+def _open_with_os(path: str):
+    """Open a file in the OS default viewer."""
+    if not path or not os.path.isfile(path):
+        return
+    try:
+        if sys.platform == "win32":
+            os.startfile(path)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", path])
+        else:
+            subprocess.Popen(["xdg-open", path])
+    except Exception:
+        pass
 
 
 def _mime_to_ext(mime: str) -> str:

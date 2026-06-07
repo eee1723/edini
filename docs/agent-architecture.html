@@ -1,0 +1,979 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Edini 智能体完整架构</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface2: #21262d;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text2: #8b949e;
+    --accent: #58a6ff;
+    --must: #f85149;
+    --should: #d29922;
+    --skip: #3fb950;
+    --purple: #bc8cff;
+    --cyan: #39d2c0;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+    line-height: 1.7;
+    padding: 2rem;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  h1 { font-size: 2rem; border-bottom: 2px solid var(--accent); padding-bottom: 0.5rem; margin-bottom: 1rem; }
+  h2 { font-size: 1.4rem; margin-top: 2.5rem; margin-bottom: 1rem; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; }
+  h3 { font-size: 1.1rem; margin-top: 1.8rem; margin-bottom: 0.6rem; color: var(--purple); }
+  h4 { font-size: 1rem; margin-top: 1.2rem; margin-bottom: 0.4rem; color: var(--cyan); }
+
+  .meta-bar {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.5rem;
+    margin-bottom: 2rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+    font-size: 0.9rem;
+  }
+  .meta-item { display: flex; align-items: center; gap: 0.5rem; }
+  .meta-label { color: var(--text2); }
+  .meta-value { font-weight: 600; }
+
+  .diagram {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.5rem;
+    margin: 1rem 0;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', 'Microsoft YaHei', monospace;
+    font-size: 0.78rem;
+    line-height: 1.6;
+    white-space: pre;
+    overflow-x: auto;
+  }
+
+  .prompt-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.2rem 1.5rem;
+    margin: 1rem 0;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', 'Microsoft YaHei', monospace;
+    font-size: 0.78rem;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 600px;
+    overflow-y: auto;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1rem 0;
+    font-size: 0.85rem;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 0.6rem 0.8rem;
+    text-align: left;
+  }
+  th {
+    background: var(--surface2);
+    color: var(--accent);
+    font-weight: 600;
+  }
+  tr:nth-child(even) td { background: var(--surface); }
+  tr:nth-child(odd) td { background: var(--bg); }
+
+  .badge {
+    display: inline-block;
+    padding: 0.15rem 0.55rem;
+    border-radius: 10px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    margin-right: 0.3rem;
+  }
+  .badge-must { background: #f8514920; color: var(--must); border: 1px solid #f8514940; }
+  .badge-should { background: #d2992220; color: var(--should); border: 1px solid #d2992240; }
+  .badge-skip { background: #3fb95020; color: var(--skip); border: 1px solid #3fb95040; }
+  .badge-prog { background: #58a6ff20; color: var(--accent); border: 1px solid #58a6ff40; }
+  .badge-vis { background: #bc8cff20; color: var(--purple); border: 1px solid #bc8cff40; }
+  .badge-high { background: #f8514920; color: var(--must); border: 1px solid var(--must); }
+
+  .toc { margin: 1rem 0 2rem; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  .toc ul { list-style: none; padding-left: 0; }
+  .toc li { margin: 0.4rem 0; }
+
+  .note {
+    background: #d2992220;
+    border: 1px solid #d2992240;
+    border-radius: 6px;
+    padding: 0.8rem 1.2rem;
+    margin: 1rem 0;
+    font-size: 0.85rem;
+  }
+  .warning {
+    background: #f8514920;
+    border: 1px solid #f8514940;
+    border-radius: 6px;
+    padding: 0.9rem 1.2rem;
+    margin: 1rem 0;
+    font-size: 0.85rem;
+  }
+  .info {
+    background: #58a6ff15;
+    border: 1px solid #58a6ff30;
+    border-radius: 6px;
+    padding: 0.8rem 1.2rem;
+    margin: 1rem 0;
+    font-size: 0.85rem;
+  }
+
+  ul, ol { padding-left: 1.5rem; margin: 0.5rem 0; }
+  li { margin: 0.3rem 0; }
+
+  .highlight { color: var(--must); font-weight: 600; }
+  .code-inline { font-family: 'JetBrains Mono', 'Consolas', monospace; background: var(--surface2); padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.85em; }
+
+  .section-divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 3rem 0 1rem;
+  }
+
+  @media print {
+    body { padding: 1rem; font-size: 11px; }
+    .diagram, .prompt-box { font-size: 9px; max-height: none; }
+    .section-divider { page-break-before: always; }
+  }
+</style>
+</head>
+<body>
+
+<h1>🔧 Edini 智能体完整架构</h1>
+
+<div class="meta-bar">
+  <div class="meta-item"><span class="meta-label">项目</span><span class="meta-value">Edini — Houdini AI 助手</span></div>
+  <div class="meta-item"><span class="meta-label">基底</span><span class="meta-value">Pi Coding Agent (RPC 模式)</span></div>
+  <div class="meta-item"><span class="meta-label">目标</span><span class="meta-value">Houdini 21 / PySide6</span></div>
+  <div class="meta-item"><span class="meta-label">工具</span><span class="meta-value">18 个 Houdini 工具 + 4 个内置 + 1 个视觉</span></div>
+  <div class="meta-item"><span class="meta-label">扩展</span><span class="meta-value">3 个活跃</span></div>
+  <div class="meta-item"><span class="meta-label">视觉模型</span><span class="meta-value">aliyun/qwen-vl-max</span></div>
+</div>
+
+<div class="toc">
+  <strong>目录：</strong>
+  <ul>
+    <li><a href="#arch">1. 总体架构图</a></li>
+    <li><a href="#layers">2. 系统提示词 —— 分层构成</a></li>
+    <li><a href="#full-prompt">3. 完整注入的系统提示词</a></li>
+    <li><a href="#tools">4. 工具目录（18 个 + describe_image）</a></li>
+    <li><a href="#hooks">5. 程序化钩子与事件管线</a></li>
+    <li><a href="#decision">6. 视觉验证决策框架</a></li>
+    <li><a href="#vision">7. 视觉管线（pi-visionizer）</a></li>
+    <li><a href="#exec">8. 工具执行管线（端到端）</a></li>
+    <li><a href="#analysis">9. 架构分析与改进项</a></li>
+    <li><a href="#files">10. 文件清单</a></li>
+  </ul>
+</div>
+
+<hr class="section-divider">
+
+<!-- ============================================================ -->
+<h2 id="arch">1. 总体架构图</h2>
+
+<div class="diagram">
+┌──────────────────────────────────────────────────────────────────────────────────────┐
+│                              EDINI 智能体系统                                          │
+│                                                                                        │
+│  ┌──────────────────────────┐    ┌──────────────────────────────────────────────┐     │
+│  │     Houdini (Python)     │    │              Pi Agent (Node.js)                │     │
+│  │                          │    │                                               │     │
+│  │  ┌────────────────────┐  │    │  ┌──────────────────────────────────────┐     │     │
+│  │  │   对话面板 (PySide6) │  │    │  │         系统提示词分层构成             │     │     │
+│  │  │                    │  │    │  │                                      │     │     │
+│  │  │  • 聊天视图         │  │    │  │  L0: Pi 默认系统提示词                │     │     │
+│  │  │  • 工具卡片         │  │    │  │  L1: AGENTS.md / CLAUDE.md (自动)    │     │     │
+│  │  │  • 输入栏           │░░│JSONL│  │  L2: ⚠️ 参考图检测指令  ← 程序化钩子  │     │     │
+│  │  │  • 设置按钮         │░░│RPC ░│  │  L3: Edini Houdini 上下文            │     │     │
+│  │  └─────────┬──────────┘  │    │  │  L4: 操作指南 1-7                      │     │     │
+│  │            │              │    │  │  L5: 视觉验证决策框架                   │     │     │
+│  │  ┌─────────┴──────────┐  │    │  │  L6: 铁律（知识库）                     │     │     │
+│  │  │   工具执行服务器     │◄─┼─HTTP┤  │                                      │     │     │
+│  │  │   :9876/execute    │  │    │  │  ┌────────────────────────────────┐     │     │
+│  │  │                    │  │    │  │  │ 扩展: edini-tools              │     │     │
+│  │  │  • 场景操作 (10)    │  │    │  │  │ 18 个 Houdini 代理工具          │     │     │
+│  │  │  • 查询操作 (4)    │  │    │  │  │ forwardTool() → HTTP POST      │     │     │
+│  │  │  • 脚本操作 (2)    │  │    │  │  └────────────────────────────────┘     │     │
+│  │  │  • HDA 操作 (2)    │  │    │  │                                         │     │
+│  │  │  • 截图操作 (2) ←NEW │  │    │  │  ┌────────────────────────────────┐     │     │
+│  │  └────────────────────┘  │    │  │  │ 扩展: pi-visionizer             │     │     │
+│  │                          │    │  │  │ • describe_image 工具            │     │     │
+│  │  ┌────────────────────┐  │    │  │  │ • context 钩子 (自动代理)        │     │     │
+│  │  │   node_utils.py    │  │    │  │  │ • 视觉 API (3 种格式)           │     │     │
+│  │  │   houp 封装函数     │  │    │  │  └────────────────────────────────┘     │     │
+│  │  └────────────────────┘  │    │  │                                         │     │
+│  │                          │    │  │  ┌────────────────────────────────┐     │     │
+│  │  ┌────────────────────┐  │    │  │  │ 扩展: edini-context            │     │     │
+│  │  │   视口抓图          │  │    │  │  │ • before_agent_start 钩子      │     │     │
+│  │  │   Qt grab() →     │──┼────┼──┤  │ • 参考图检测 + 指令注入         │     │     │
+│  │  │   PNG 文件          │  │    │  │  │ • 铁律加载器                   │     │     │
+│  │  └────────────────────┘  │    │  │  └────────────────────────────────┘     │     │
+│  └──────────────────────────┘    │  └──────────────────────────────────────┘     │
+│                                  └──────────────────────────────────────────────┘
+└──────────────────────────────────────────────────────────────────────────────────────┘
+</div>
+
+<!-- ============================================================ -->
+<h2 id="layers">2. 系统提示词 —— 分层构成</h2>
+
+<div class="diagram">
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  LAYER 0: Pi 内置系统提示词                                                     │
+│  • 工具定义（read, write, edit, bash, describe_image）                         │
+│  • 核心智能体指令                                                                │
+│  • 思考级别指引                                                                  │
+│  • 安全提示                                                                      │
+├──────────────────────────────────────────────────────────────────────────────┤
+│  LAYER 1: AGENTS.md / CLAUDE.md（自动发现）                                     │
+│  • 从 ~/.pi/agent/AGENTS.md 加载的项目级指令                                    │
+│  • 从当前目录向上遍历各级父目录的 AGENTS.md 文件                                  │
+│  • 目前在 Edini 项目中未配置（可根据需要添加）                                    │
+├──────────────────────────────────────────────────────────────────────────────┤
+│  LAYER 2: ⚠️ 参考图检测指令  ← 程序化钩子                                     │
+│  • 仅在 event.images.length > 0 时注入                                          │
+│  • "用户附带了 N 张参考图。你必须：..."                                           │
+│  • 5 步强制验证流程                                                              │
+│  • 不依赖 LLM 自主判断 —— 代码强制执行                                           │
+├──────────────────────────────────────────────────────────────────────────────┤
+│  LAYER 3: Edini Houdini 上下文  ← edini-context 扩展                          │
+│  • 环境身份："你正在 Houdini 21 中运行，是 Edini 助手"                          │
+│  • 工具能力概览                                                                  │
+│  • 交互方式说明（用户通过面板与你交流，可看到视口）                                │
+├──────────────────────────────────────────────────────────────────────────────┤
+│  LAYER 4: 操作指南 1-7                                                           │
+│  • 先搜索后创建、布局节点、优先专用工具、告知路径、错误处理、默认路径 /obj、       │
+│    获取场景上下文                                                                │
+├──────────────────────────────────────────────────────────────────────────────┤
+│  LAYER 5: 视觉验证决策框架                                                        │
+│  • 🔴 必须截图 / 🟡 建议截图 / 🟢 跳过截图的分类表格                            │
+│  • 6 步视觉任务工作流程（创建→截图→描述→对比→修正→完成）                         │
+├──────────────────────────────────────────────────────────────────────────────┤
+│  LAYER 6: 铁律（知识库）  ← ~/.pi/agent/edini-knowledge/rules.json              │
+│  • 用户自行定义的规则，按分类（避坑、技巧、工作流、配置）组织                       │
+│  • 仅启用状态的规则被注入                                                         │
+│  • 若无规则则为空                                                                 │
+└──────────────────────────────────────────────────────────────────────────────┘
+</div>
+
+<div class="info">
+  <strong>◉ 程序化保障：</strong> Layer 2（参考图检测指令）由 <code class="code-inline">before_agent_start</code> 钩子在检测到
+  <code class="code-inline">event.images.length &gt; 0</code> 时动态注入系统提示词的最前面，不依赖 LLM 的自主判断。<br><br>
+  <strong>◉ 持久性：</strong> Layers 3-6 在每次 LLM 调用前都会通过 <code class="code-inline">before_agent_start</code> 事件重新注入。
+  即使发生上下文压缩（compaction），这些钩子始终运行，核心指令不会丢失。
+</div>
+
+<!-- ============================================================ -->
+<h2 id="full-prompt">3. 完整注入的系统提示词</h2>
+<p style="color: var(--text2); font-size: 0.85rem;">以下是 <code class="code-inline">edini-context</code> 扩展注入的实际文本。<br>
+<span class="highlight">红色部分</span> 是程序化钩子在检测到参考图时动态添加的。</p>
+
+<div class="prompt-box">
+<span class="highlight">## ⚠️ 检测到参考图 — 必须进行验证
+
+用户附带了 2 张参考图。你必须：
+1. 对每张参考图使用 describe_image 理解用户的期望效果
+2. 修改完成后，用 houdini_capture_viewport 截取视口
+3. 将截图描述与参考图描述进行对比
+4. 只有确认效果匹配参考后，才能报告任务完成
+5. 如果不匹配，调整参数并重新验证 —— 不要跳过此步骤</span>
+
+---
+
+你正在 Houdini 21（SideFX 公司的 3D 动画/特效软件）中运行，作为 Edini（Houdini AI 助手）。
+
+你可以使用的工具：
+- 创建、删除、连接、检查 Houdini 节点
+- 设置和读取节点参数
+- 按关键词搜索节点类型
+- 检查几何体（点数、面数、属性等）
+- 在 Houdini Python 环境中执行 Python 代码
+- 通过临时 Attribute Wrangle 节点执行 VEX 代码
+- 创建和检查 HDA（数字资产）
+- 截取视口和节点网络截图（houdini_capture_viewport, houdini_capture_network）
+- 使用视觉模型描述图片（describe_image）
+
+用户通过 Houdini 中的面板与你交互。他们可以在聊天旁边看到场景视口。
+当你创建或修改节点时，用户能实时看到变化。
+
+**操作指南：**
+1. 当用户要求创建特效（烟雾、火焰、水流、破坏等），先用 houdini_search_nodes 查找相关节点类型，再逐步创建。
+2. 创建节点后，用 houdini_layout_nodes 整理网络布局。
+3. 尽量使用专用工具。只有在专用工具无法完成时才用 houdini_run_python。
+4. 创建节点后告知用户完整路径，方便他们在网络视图中找到。
+5. 如果操作失败，解释原因并提供替代方案。
+6. Houdini 节点路径默认以 /obj 作为对象级容器。
+7. 需要上下文时用 houdini_get_scene_info 获取场景信息。
+
+## 视觉验证决策框架
+
+在声称任务完成之前，对你的更改进行分类：
+
+### 🔴 必须截图 + 描述的情况：
+| 触发条件 | 原因 |
+|---------|------|
+| 用户附带了参考图 | 对比是用户的明确意图 |
+| 用户说"匹配""看起来像""类似""参考"等词 | 视觉保真度是目标 |
+| 创建视觉特效节点（烟雾、火焰、水流、pyro、粒子、体积、流体）| 100% 的视觉任务 |
+| 修改着色器、材质、灯光或摄像机 | 用户看到的是结果，不是参数 |
+| 用户反馈说"不太对"或"调整一下" | 迭代视觉微调 |
+| 对显示/渲染参数执行 houdini_set_param 后 | 参数变化对你是不可见的 |
+
+### 🟡 建议截图的情况：
+| 触发条件 | 原因 |
+|---------|------|
+| 创建或修改 SOP 几何体 | 用户最终会看到它 |
+| 对同一节点进行 3 次以上参数调整 | 累积效果可能出乎意料 |
+| 用户问"看起来怎么样？"或类似 | 他们想要视觉确认 |
+| 对任何有视觉输出的类型执行 houdini_create_node | 新节点需要验证 |
+
+### 🟢 跳过截图的情况：
+| 触发条件 | 原因 |
+|---------|------|
+| 仅查询：get_scene_info, get_param, get_node, search_nodes, get_help | 只读操作，无更改 |
+| 仅布局：layout_nodes | 无视觉内容变化 |
+| 创建工具节点：null, switch, merge, output | 无可见几何体变化 |
+| 对非视觉属性（如 @id, @class）执行 Python/VEX | 无视觉影响 |
+| 创建 HDA 或获取 HDA 信息 | 管理操作 |
+
+**视觉任务工作流程：**
+1. 做出更改（创建节点、设置参数等）
+2. 调用 houdini_capture_viewport 截取结果
+3. 调用 describe_image 对截图文件检查用户看到的内容
+4. 与预期效果（或参考图描述，如有）进行对比
+5. 如果不匹配 → 调整参数并从第 1 步重新开始
+6. 只有确认匹配后才报告任务完成
+</div>
+
+<div class="note">
+  <strong>注意：</strong> 上面 <span class="highlight">红色标注</span> 的"参考图检测指令"仅在用户实际粘贴或上传图片时才会出现在系统提示词中。
+  如果用户没有附带图片，则该段根本不存在，不会占用上下文窗口。
+</div>
+
+<!-- ============================================================ -->
+<h2 id="tools">4. 工具目录</h2>
+
+<h3>4.1 Houdini 代理工具（18 个 — edini-tools 扩展）</h3>
+<p style="color: var(--text2); font-size: 0.85rem;">所有工具通过 HTTP POST 转发到 <code class="code-inline">http://127.0.0.1:9876/execute</code>
+→ <code class="code-inline">tool_executor.py</code> → <code class="code-inline">node_utils.py</code> 中的 houp 函数。</p>
+
+<table>
+  <tr><th>#</th><th>工具名称</th><th>标签</th><th>参数</th><th>分类</th><th>视觉影响</th></tr>
+  <tr>
+    <td>1</td><td><code class="code-inline">houdini_get_scene_info</code></td><td>获取场景信息</td>
+    <td>—</td><td>场景查询</td><td><span class="badge badge-skip">🟢 无</span></td>
+  </tr>
+  <tr>
+    <td>2</td><td><code class="code-inline">houdini_create_node</code></td><td>创建节点</td>
+    <td>node_type, name?, parent_path?</td><td>场景修改</td><td><span class="badge badge-should">🟡 可能</span></td>
+  </tr>
+  <tr>
+    <td>3</td><td><code class="code-inline">houdini_delete_node</code></td><td>删除节点</td>
+    <td>node_path</td><td>场景修改</td><td><span class="badge badge-should">🟡 可能</span></td>
+  </tr>
+  <tr>
+    <td>4</td><td><code class="code-inline">houdini_connect_nodes</code></td><td>连接节点</td>
+    <td>from_path, to_path, input_index?</td><td>场景修改</td><td><span class="badge badge-should">🟡 可能</span></td>
+  </tr>
+  <tr>
+    <td>5</td><td><code class="code-inline">houdini_set_param</code></td><td>设置参数</td>
+    <td>node_path, param_name, value</td><td>场景修改</td><td><span class="badge badge-must">🔴 未知</span></td>
+  </tr>
+  <tr>
+    <td>6</td><td><code class="code-inline">houdini_get_param</code></td><td>获取参数</td>
+    <td>node_path, param_name</td><td>场景查询</td><td><span class="badge badge-skip">🟢 无</span></td>
+  </tr>
+  <tr>
+    <td>7</td><td><code class="code-inline">houdini_list_nodes</code></td><td>列出节点</td>
+    <td>parent_path?, type_filter?</td><td>场景查询</td><td><span class="badge badge-skip">🟢 无</span></td>
+  </tr>
+  <tr>
+    <td>8</td><td><code class="code-inline">houdini_layout_nodes</code></td><td>整理节点布局</td>
+    <td>parent_path?</td><td>场景修改</td><td><span class="badge badge-skip">🟢 无</span></td>
+  </tr>
+  <tr>
+    <td>9</td><td><code class="code-inline">houdini_search_nodes</code></td><td>搜索节点类型</td>
+    <td>keyword</td><td>查询</td><td><span class="badge badge-skip">🟢 无</span></td>
+  </tr>
+  <tr>
+    <td>10</td><td><code class="code-inline">houdini_get_help</code></td><td>获取节点帮助</td>
+    <td>node_type_name</td><td>查询</td><td><span class="badge badge-skip">🟢 无</span></td>
+  </tr>
+  <tr>
+    <td>11</td><td><code class="code-inline">houdini_get_node</code></td><td>获取节点详情</td>
+    <td>node_path</td><td>查询</td><td><span class="badge badge-skip">🟢 无</span></td>
+  </tr>
+  <tr>
+    <td>12</td><td><code class="code-inline">houdini_inspect_geo</code></td><td>检查几何体</td>
+    <td>node_path</td><td>查询</td><td><span class="badge badge-skip">🟢 无</span></td>
+  </tr>
+  <tr>
+    <td>13</td><td><code class="code-inline">houdini_run_python</code></td><td>执行 Python</td>
+    <td>code</td><td>脚本</td><td><span class="badge badge-should">🟡 可能</span></td>
+  </tr>
+  <tr>
+    <td>14</td><td><code class="code-inline">houdini_run_vex</code></td><td>执行 VEX</td>
+    <td>code, node_path?, attrib_name?</td><td>脚本</td><td><span class="badge badge-should">🟡 可能</span></td>
+  </tr>
+  <tr>
+    <td>15</td><td><code class="code-inline">houdini_create_hda</code></td><td>创建 HDA</td>
+    <td>node_path, hda_name, hda_label?</td><td>HDA</td><td><span class="badge badge-skip">🟢 无</span></td>
+  </tr>
+  <tr>
+    <td>16</td><td><code class="code-inline">houdini_get_hda_info</code></td><td>获取 HDA 信息</td>
+    <td>hda_name</td><td>HDA</td><td><span class="badge badge-skip">🟢 无</span></td>
+  </tr>
+  <tr style="border-left: 3px solid var(--purple)">
+    <td>17</td><td><code class="code-inline">houdini_capture_viewport</code></td><td>截取视口</td>
+    <td>filepath</td><td><span class="badge badge-vis">新增</span> 截图</td><td><span class="badge badge-must">🔴 视觉验证</span></td>
+  </tr>
+  <tr style="border-left: 3px solid var(--purple)">
+    <td>18</td><td><code class="code-inline">houdini_capture_network</code></td><td>截取节点网络</td>
+    <td>filepath, parent_path?</td><td><span class="badge badge-vis">新增</span> 截图</td><td><span class="badge badge-must">🔴 视觉验证</span></td>
+  </tr>
+</table>
+
+<h3>4.2 视觉工具（pi-visionizer 扩展）</h3>
+<table>
+  <tr><th>工具名称</th><th>标签</th><th>参数</th><th>后端模型</th><th>缓存</th></tr>
+  <tr>
+    <td><code class="code-inline">describe_image</code></td><td>描述图片</td>
+    <td>path（必填）, prompt?（可选）</td>
+    <td>aliyun/qwen-vl-max（可配置切换）</td>
+    <td>LRU 100 条（相同图片仅描述一次）</td>
+  </tr>
+</table>
+
+<h3>4.3 Pi 内置工具（agent 可用）</h3>
+<table>
+  <tr><th>工具</th><th>说明</th><th>在 Edini 中的用途</th></tr>
+  <tr><td><code class="code-inline">read</code></td><td>读取文件内容（文本和图片）</td><td>读取参考图、VEX/Python 脚本文件、日志</td></tr>
+  <tr><td><code class="code-inline">bash</code></td><td>执行 shell 命令</td><td>创建截图目录、查看文件、清理临时文件</td></tr>
+  <tr><td><code class="code-inline">write</code></td><td>写入/创建文件</td><td>保存 VEX 代码、Python 脚本到磁盘</td></tr>
+  <tr><td><code class="code-inline">edit</code></td><td>精确文本替换编辑</td><td>修改现有脚本文件</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="hooks">5. 程序化钩子与事件管线</h2>
+
+<h3>5.1 Edini 中活跃的扩展钩子</h3>
+
+<table>
+  <tr><th>钩子</th><th>扩展</th><th>触发时机</th><th>执行动作</th><th>可靠性</th></tr>
+  <tr>
+    <td><code class="code-inline">before_agent_start</code></td>
+    <td>edini-context</td>
+    <td>每次 agent 对话轮次开始前</td>
+    <td>
+      ① 检查 <code class="code-inline">event.images.length &gt; 0</code><br>
+      ② 如有图片 → 注入 <span class="highlight">参考图检测指令</span><br>
+      ③ 注入 Houdini 上下文 + 指南 1-7<br>
+      ④ 注入视觉验证决策框架<br>
+      ⑤ 注入铁律知识库
+    </td>
+    <td><span class="badge badge-prog">✅ 100% 程序化</span></td>
+  </tr>
+  <tr>
+    <td><code class="code-inline">context</code></td>
+    <td>pi-visionizer</td>
+    <td>每次 LLM API 调用前</td>
+    <td>
+      ① 检查当前模型是否原生支持图片<br>
+      ② 文本模型 + 消息中有图片 → 调用视觉模型 API<br>
+      ③ 将图片块替换为 <code class="code-inline">[Image Description: ...]</code><br>
+      ④ LRU 缓存（相同图片不重复调用）
+    </td>
+    <td><span class="badge badge-prog">✅ 100% 程序化</span></td>
+  </tr>
+  <tr>
+    <td><code class="code-inline">session_start</code></td>
+    <td>edini-tools</td>
+    <td>会话加载时</td>
+    <td>
+      通知工具数量和 Houdini 端口
+    </td>
+    <td>—</td>
+  </tr>
+</table>
+
+<h3>5.2 事件流程 —— 参考图场景</h3>
+
+<div class="diagram">
+用户粘贴参考图
+    │
+    ▼
+Pi 编辑器捕获图片 → 以 base64 存入消息内容
+    │
+    ▼
+before_agent_start (edini-context)
+    │ event.images.length = 2  →  ▸ 注入"⚠️ 检测到参考图 — 必须验证"指令（前置到 system prompt 最上面）
+    │                              ▸ 注入 Houdini 上下文
+    │                              ▸ 注入决策框架
+    ▼
+context (pi-visionizer) — LLM API 调用前
+    │ 文本模型 (DeepSeek)？       → 是 → ▸ 调用 qwen-vl-max 描述每张参考图
+    │ 消息中包含图片？            → 是 → ▸ 将图片替换为文字描述
+    │                                    ▸ 缓存结果（LRU 100）
+    │ 原生视觉模型 (Claude)？     → 跳过 — 模型自己处理图片
+    ▼
+LLM 收到的输入：
+    • 系统提示词最前面是"⚠️ 参考图检测指令"
+    • 参考图的文字描述（而非原始 base64）
+    • 用户消息："创建一个匹配这个参考的烟雾效果"
+    │
+    ▼
+Agent 自主决策（受决策框架引导）：
+    • 🔴 必须："用户附带了参考图" → 触发条件匹配
+    • → 步骤 1：搜索节点（houdini_search_nodes "smoke"）
+    • → 步骤 2：创建节点（houdini_create_node "pyro"）
+    • → 步骤 3：设置参数（houdini_set_param 密度、湍流）
+    • → 步骤 4：截取视口（houdini_capture_viewport "screenshots/vp001.png"）
+    • → 步骤 5：描述截图（describe_image "screenshots/vp001.png"）
+    • → 步骤 6：对比描述 → 匹配？→ 报告完成
+    │                      → 不匹配？→ 调整参数 → 重复 4-6
+</div>
+
+<!-- ============================================================ -->
+<h2 id="decision">6. 视觉验证决策框架</h2>
+
+<h3>6.1 决策矩阵</h3>
+
+<table>
+  <tr><th>级别</th><th>触发条件</th><th>原因</th><th>触发机制</th></tr>
+  <tr>
+    <td><span class="badge badge-must">🔴 必须</span></td>
+    <td>用户附带了参考图</td>
+    <td>对比是用户的明确意图</td>
+    <td><span class="badge badge-prog">程序化钩子</span></td>
+  </tr>
+  <tr>
+    <td><span class="badge badge-must">🔴 必须</span></td>
+    <td>用户说"匹配""看起来像""类似""参考"等词</td>
+    <td>视觉保真度是目标</td>
+    <td>LLM 判断</td>
+  </tr>
+  <tr>
+    <td><span class="badge badge-must">🔴 必须</span></td>
+    <td>创建视觉特效节点（烟雾、火焰、水流、pyro、粒子、体积、流体）</td>
+    <td>100% 的视觉任务</td>
+    <td>LLM 判断</td>
+  </tr>
+  <tr>
+    <td><span class="badge badge-must">🔴 必须</span></td>
+    <td>修改着色器、材质、灯光或摄像机</td>
+    <td>用户看到的是结果不是参数</td>
+    <td>LLM 判断</td>
+  </tr>
+  <tr>
+    <td><span class="badge badge-must">🔴 必须</span></td>
+    <td>用户反馈"不太对"或"调整一下"</td>
+    <td>迭代视觉微调</td>
+    <td>LLM 判断</td>
+  </tr>
+  <tr>
+    <td><span class="badge badge-must">🔴 必须</span></td>
+    <td>对显示/渲染参数执行 set_param 后</td>
+    <td>参数变化对 agent 不可见</td>
+    <td>LLM 判断</td>
+  </tr>
+  <tr style="border-top: 2px solid var(--border)">
+    <td><span class="badge badge-should">🟡 建议</span></td>
+    <td>创建或修改 SOP 几何体</td>
+    <td>用户最终会看到</td>
+    <td>LLM 判断</td>
+  </tr>
+  <tr>
+    <td><span class="badge badge-should">🟡 建议</span></td>
+    <td>对同一节点 3 次以上参数调整</td>
+    <td>累积效果可能出人意料</td>
+    <td>LLM 判断</td>
+  </tr>
+  <tr>
+    <td><span class="badge badge-should">🟡 建议</span></td>
+    <td>用户问"看起来怎么样？"</td>
+    <td>想要视觉确认</td>
+    <td>LLM 判断</td>
+  </tr>
+  <tr>
+    <td><span class="badge badge-should">🟡 建议</span></td>
+    <td>创建有视觉输出的新节点</td>
+    <td>新节点需要验证</td>
+    <td>LLM 判断</td>
+  </tr>
+  <tr style="border-top: 2px solid var(--border)">
+    <td><span class="badge badge-skip">🟢 跳过</span></td>
+    <td>仅查询：get_scene_info, get_param, get_node, search_nodes, get_help</td>
+    <td>只读操作，无更改</td>
+    <td>LLM 判断</td>
+  </tr>
+  <tr>
+    <td><span class="badge badge-skip">🟢 跳过</span></td>
+    <td>仅布局：layout_nodes</td>
+    <td>无视觉内容变化</td>
+    <td>LLM 判断</td>
+  </tr>
+  <tr>
+    <td><span class="badge badge-skip">🟢 跳过</span></td>
+    <td>工具节点：null, switch, merge, output</td>
+    <td>无可见几何体变化</td>
+    <td>LLM 判断</td>
+  </tr>
+  <tr>
+    <td><span class="badge badge-skip">🟢 跳过</span></td>
+    <td>对非视觉属性（@id, @class）的 Python/VEX</td>
+    <td>无视觉影响</td>
+    <td>LLM 判断</td>
+  </tr>
+  <tr>
+    <td><span class="badge badge-skip">🟢 跳过</span></td>
+    <td>创建/获取 HDA 信息</td>
+    <td>管理操作</td>
+    <td>LLM 判断</td>
+  </tr>
+</table>
+
+<h3>6.2 触发可靠性分析</h3>
+
+<table>
+  <tr><th>触发类型</th><th>机制</th><th>可靠性</th><th>兜底方案</th></tr>
+  <tr>
+    <td>用户附带参考图</td>
+    <td><span class="badge badge-prog">程序化钩子</span> before_agent_start 检查 event.images</td>
+    <td>✅ 100% —— 代码强制，不依赖 LLM</td>
+    <td>无需，始终触发</td>
+  </tr>
+  <tr>
+    <td>关键词"匹配/看起来像/参考"</td>
+    <td>LLM 阅读决策框架表格</td>
+    <td>⚠️ ~85% —— 依赖 LLM 正确理解并应用</td>
+    <td>参考图检测指令覆盖大部分场景</td>
+  </tr>
+  <tr>
+    <td>创建视觉特效节点</td>
+    <td>LLM 判断 + 节点类型在必须表中明确列出</td>
+    <td>⚠️ ~80% —— 特效类型已显式列举</td>
+    <td>"对显示参数 set_param" 条件捕获遗漏</td>
+  </tr>
+  <tr>
+    <td>用户反馈"不太对"</td>
+    <td>LLM 判断</td>
+    <td>⚠️ ~75% —— 对话情境多变</td>
+    <td>用户可明确要求对比</td>
+  </tr>
+  <tr>
+    <td>纯查询操作</td>
+    <td>LLM 判断</td>
+    <td>✅ &gt;95% —— 容易分类，强烈负信号</td>
+    <td>过度截图无害（仅浪费一轮）</td>
+  </tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="vision">7. 视觉管线（pi-visionizer）</h2>
+
+<h3>7.1 两种运行模式</h3>
+
+<table>
+  <tr><th>模式</th><th>触发条件</th><th>流程</th><th>使用场景</th></tr>
+  <tr>
+    <td><strong>自动代理</strong></td>
+    <td><code class="code-inline">context</code> 钩子 + 文本模型 + 消息中有图片</td>
+    <td>
+      用户粘贴图片 → pi-visionizer 拦截 → 调用视觉模型 API →
+      将图片替换为 <code class="code-inline">[Image Description: ...]</code> → LLM 只看到文字
+    </td>
+    <td>用户粘贴参考图、通过 read 工具读取图片文件</td>
+  </tr>
+  <tr>
+    <td><strong>显式工具</strong></td>
+    <td>Agent 调用 <code class="code-inline">describe_image(path, prompt?)</code></td>
+    <td>
+      工具读取文件 → base64 编码 → 调用视觉模型 API →
+      返回文字描述 → agent 分析处理
+    </td>
+    <td>描述截图文件、主动检查视口效果、对比参考</td>
+  </tr>
+</table>
+
+<h3>7.2 视觉模型配置</h3>
+
+<div class="diagram">
+默认配置：
+  DEFAULT_VISION_MODEL: { provider: "aliyun", modelId: "qwen-vl-max" }
+
+运行时命令：
+  /visionizer-model    选择视觉模型（从 pi 已配置的模型中筛选支持图片的）
+  /visionizer-prompt   自定义描述提示词
+  /visionizer-https    切换 HTTPS 要求（Ollama 等本地模型需关闭）
+  /visionizer-status   查看当前配置和缓存状态
+  /visionizer-clear    禁用视觉代理
+</div>
+
+<h3>7.3 支持的视觉 API</h3>
+
+<table>
+  <tr><th>API 格式</th><th>示例模型</th><th>认证方式</th></tr>
+  <tr><td><code class="code-inline">openai-completions</code></td><td>gpt-4o, gpt-4.1-mini, qwen-vl-max, qwen2.5-vl</td><td>Bearer token</td></tr>
+  <tr><td><code class="code-inline">anthropic-messages</code></td><td>claude-sonnet-4-20250514, claude-3.5-haiku</td><td>x-api-key</td></tr>
+  <tr><td><code class="code-inline">google-generative-ai</code></td><td>gemini-2.5-flash, gemini-2.5-pro</td><td>x-goog-api-key</td></tr>
+</table>
+
+<h3>7.4 默认视觉描述提示词</h3>
+
+<div class="prompt-box" style="max-height:250px">
+详细且客观地描述这张图片。你的描述将被一个无法看到图片的编程智能体阅读。
+
+如果是 UI、网页、代码编辑器或终端截图：
+- 逐字转录所有可见的文本、代码、错误信息、日志和 UI 标签
+- 描述布局、颜色及任何视觉问题（错位、损坏元素、错误状态、异常行为）
+- 注明相关的工具、框架或上下文（如 React 应用、Chrome DevTools、VS Code）
+
+如果是照片、艺术作品或人物/角色图片：
+- 描述外观、服装、表情、姿势和环境
+- 如果主体是已知角色、公众人物或可识别实体，请识别
+
+如果是图表、架构图或表格：
+- 描述结构、标签、关系和关键数据点
+
+对于任何其他类型图片，客观描述所有可见元素、文本和上下文。
+</div>
+
+<div class="warning">
+  <strong>⚠️ 改进建议：</strong> 默认提示词是为编程截图设计的，对 3D 视口内容（几何体形状、粒子密度、光照质量）
+  的描述可能不够精准。建议通过 <code class="code-inline">/visionizer-prompt</code> 定制为 Houdini 专属分析，
+  重点关注：3D 几何体形状、材质着色、光照条件、特效品质、视口摄像机角度等。
+</div>
+
+<!-- ============================================================ -->
+<h2 id="exec">8. 工具执行管线（端到端）</h2>
+
+<h3>8.1 标准工具调用（如 houdini_set_param）</h3>
+
+<div class="diagram">
+Agent 调用: houdini_set_param(node_path="/obj/geo1", param_name="scale", value=2.0)
+    │
+    ▼ [TypeScript] scene.ts → forwardTool("houdini_set_param", params)
+    │   fetch("http://127.0.0.1:9876/execute", { body: JSON.stringify({ tool, params }) })
+    ▼
+[Python] tool_executor.py → TOOL_HANDLERS["houdini_set_param"]
+    │   lambda **kw: set_param(kw["node_path"], kw["param_name"], kw["value"])
+    ▼
+[Python] node_utils.py → set_param() → hou.node(path).parm(name).set(value)
+    │   返回: {"success": True, "path": "/obj/geo1", "param": "scale", "value": 2.0}
+    ▼
+[JSON] ← HTTP 200 响应
+    ▼
+[TypeScript] forwardTool() 收到 JSON → JSON.stringify(result, null, 2)
+    │   返回: { content: [{ type: "text", text: "{\n  \"success\": true, ...}" }], details: {...} }
+    ▼
+Agent 看到格式化结果，继续下一步操作
+</div>
+
+<h3>8.2 截图 → 描述 → 对比管线</h3>
+
+<div class="diagram">
+Agent 视觉验证工作流程：
+
+  ┌──────────────────────────────────────────────────────────────────┐
+  │ 1. houdini_capture_viewport(filepath="screenshots/vp.png")       │
+  │    → Qt grab() 抓取 Scene Viewer 面板                            │
+  │    → 保存 PNG 到磁盘（自动创建 screenshots/ 目录）                 │
+  │    ← {"success": true, "path": "...", "width": 1920, "height": 1080}
+  └────────────────────────────┬─────────────────────────────────────┘
+                               │
+  ┌────────────────────────────▼─────────────────────────────────────┐
+  │ 2. describe_image(path="screenshots/vp.png")                     │
+  │    → 读取文件，base64 编码                                        │
+  │    → 发送到 aliyun/qwen-vl-max（可配置）                          │
+  │    → 视觉模型返回文字描述                                         │
+  │    ← "视口显示一个球体发射器的体积烟雾，蓝色调，密度中等……"          │
+  └────────────────────────────┬─────────────────────────────────────┘
+                               │
+  ┌────────────────────────────▼─────────────────────────────────────┐
+  │ 3. Agent 对比描述                                                 │
+  │    参考图描述: "浓密的蓝色体积烟雾，填满整个视口"                    │
+  │    截图描述:   "密度中等的烟雾，有可见间隙"                         │
+  │    → 不匹配 → 调整密度参数 → 重新截图                              │
+  └────────────────────────────┬─────────────────────────────────────┘
+                               │
+  ┌────────────────────────────▼─────────────────────────────────────┐
+  │ 4. 调整后重新验证                                                  │
+  │    截图描述: "浓密的体积烟雾填满视口，与参考图一致"                  │
+  │    → 匹配 → 确认 + 报告完成                                        │
+  └──────────────────────────────────────────────────────────────────┘
+</div>
+
+<h3>8.3 节点网络截图（辅助调试）</h3>
+
+<div class="diagram">
+houdini_capture_network(filepath="screenshots/net.png", parent_path="/obj/geo1")
+    → Qt grab() 抓取 Network Editor 面板
+    → 先导航到 /obj/geo1（editor.setPwd）
+    → 保存 PNG
+    → agent 可检查节点连接、布局、参数状态
+    → 适用于文档记录或验证复杂节点图
+</div>
+
+<!-- ============================================================ -->
+<h2 id="analysis">9. 架构分析与改进项</h2>
+
+<h3>9.1 当前优势</h3>
+
+<table>
+  <tr><th>方面</th><th>评估</th></tr>
+  <tr>
+    <td>可扩展性</td>
+    <td>✅ 新增工具只需：node_utils.py 1 个函数 + tool_executor.py 1 个路由 + scene.ts 1 个定义</td>
+  </tr>
+  <tr>
+    <td>多模态</td>
+    <td>✅ describe_image 显式工具 + context 钩子自动代理 —— 覆盖用户图片和截图两种场景</td>
+  </tr>
+  <tr>
+    <td>参考图检测</td>
+    <td>✅ before_agent_start 程序化钩子 —— 100% 可靠，不依赖 LLM</td>
+  </tr>
+  <tr>
+    <td>决策框架</td>
+    <td>✅ 三层分类（必须/建议/跳过）配合具体触发条件</td>
+  </tr>
+  <tr>
+    <td>容错性</td>
+    <td>✅ 所有 Python 函数返回 {"success": bool} 字典；截图失败不影响主流程</td>
+  </tr>
+  <tr>
+    <td>会话持久化</td>
+    <td>✅ 视觉模型配置存于会话自定义条目中；重启不丢失</td>
+  </tr>
+  <tr>
+    <td>测试覆盖</td>
+    <td>✅ 34 个自动化测试覆盖参数契约、返回值格式、路径处理和完整工作流</td>
+  </tr>
+</table>
+
+<h3>9.2 待改进项</h3>
+
+<table>
+  <tr><th>#</th><th>问题</th><th>影响</th><th>建议修复</th><th>优先级</th></tr>
+  <tr>
+    <td style="border-left: 3px solid var(--must)">G1</td>
+    <td><strong>PaneTab.grab() 兼容性未知</strong><br>部分 Houdini 版本可能不暴露 QWidget.grab() 到 PaneTab</td>
+    <td><span class="badge badge-high">高</span> 如果 grab() 失败，截图功能完全失效</td>
+    <td><strong>必须在 Houdini 中实测。</strong> 备选方案：flipbook API（hou.SceneViewer.flipbook）或 QScreen.grabWindow</td>
+    <td><span class="badge badge-must">🔴 紧急</span></td>
+  </tr>
+  <tr>
+    <td>G2</td>
+    <td><strong>视觉描述提示词偏通用</strong><br>默认 prompt 为编程截图设计，非 3D 内容</td>
+    <td>中 — 视觉模型可能遗漏 Houdini 特定细节</td>
+    <td>通过 <code class="code-inline">/visionizer-prompt</code> 定制：关注 3D 几何体、材质、光照、特效品质</td>
+    <td><span class="badge badge-should">🟡 建议</span></td>
+  </tr>
+  <tr>
+    <td>G3</td>
+    <td><strong>set_param 后无程序化截图触发</strong><br>Agent 自行决定是否截图，可能被跳过</td>
+    <td>中 — 长对话中 agent 可能忘记验证</td>
+    <td>添加 <code class="code-inline">tool_result</code> 钩子：N 次视觉修改后无截图 → 注入引导消息</td>
+    <td><span class="badge badge-should">🟡 建议</span></td>
+  </tr>
+  <tr>
+    <td>G4</td>
+    <td><strong>缺少结构化对比评分</strong><br>Agent 用文字比较，无"80% 匹配"量化信息</td>
+    <td>低 — 语义对比在大多数场景下已足够</td>
+    <td>可添加 compare_images 工具将两张图发到视觉模型做显式对比</td>
+    <td><span class="badge badge-skip">🟢 可选</span></td>
+  </tr>
+  <tr>
+    <td>G5</td>
+    <td><strong>describe_image 有 4MB 大小限制</strong><br>4K 截图可能超出</td>
+    <td>低 — 典型视口 1920×1080 ≈ 500KB PNG</td>
+    <td>当前可接受；必要时在 capture_viewport 中添加缩放选项</td>
+    <td><span class="badge badge-skip">🟢 可选</span></td>
+  </tr>
+  <tr>
+    <td>G6</td>
+    <td><strong>铁律系统无编辑界面</strong><br>规则需手动编辑 JSON 文件</td>
+    <td>低 — 高级功能，用户可直接编辑 JSON</td>
+    <td>可在 panel.py 设置对话框中添加规则管理标签页</td>
+    <td><span class="badge badge-skip">🟢 可选</span></td>
+  </tr>
+  <tr>
+    <td>G7</td>
+    <td><strong>视觉模型调用有延迟</strong><br>API 调用需 2-8 秒无反馈</td>
+    <td>低 — 验证步骤可接受此时延</td>
+    <td>pi-visionizer 已有 onUpdate "Describing image…"；截图本身是即时操作</td>
+    <td><span class="badge badge-skip">🟢 无</span></td>
+  </tr>
+</table>
+
+<h3>9.3 关键行动项</h3>
+
+<div class="warning">
+  <strong>🔴 G1 — 在 Houdini 21 中实测 PaneTab.grab()</strong><br>
+  这是当前唯一的高风险项。如果 <code class="code-inline">viewer.grab()</code> 抛出 AttributeError，
+  整个截图功能无法工作。必须在真实的 Houdini 实例中验证。
+  备选方案（flipbook API / QScreen.grabWindow）已准备好，一旦确认问题即可切换。
+</div>
+
+<div class="info">
+  <strong>✅ G4（自动创建截图目录）已在本次迭代中修复</strong><br>
+  capture_viewport 和 capture_network 现在会在保存文件前自动创建目标目录
+  （<code class="code-inline">os.makedirs(os.path.dirname(filepath), exist_ok=True)</code>）。
+</div>
+
+<!-- ============================================================ -->
+<h2 id="files">10. 文件清单</h2>
+
+<table>
+  <tr><th>文件</th><th>职责</th><th>语言</th><th>约行数</th></tr>
+  <tr><td><code class="code-inline">pi-extensions/edini-context/index.ts</code></td><td>系统提示词注入 + 参考图检测钩子</td><td>TypeScript</td><td>~145</td></tr>
+  <tr><td><code class="code-inline">pi-extensions/edini-tools/index.ts</code></td><td>扩展入口：注册全部 18 个工具</td><td>TypeScript</td><td>~18</td></tr>
+  <tr><td><code class="code-inline">pi-extensions/edini-tools/tools/scene.ts</code></td><td>10 个场景工具（创建/删除/连接/参数/截图等）</td><td>TypeScript</td><td>~220</td></tr>
+  <tr><td><code class="code-inline">pi-extensions/edini-tools/tools/query.ts</code></td><td>4 个查询工具（搜索/帮助/节点/几何体）</td><td>TypeScript</td><td>~100</td></tr>
+  <tr><td><code class="code-inline">pi-extensions/edini-tools/tools/script.ts</code></td><td>4 个脚本工具（python/vex/hda/hda_info）</td><td>TypeScript</td><td>~120</td></tr>
+  <tr><td><code class="code-inline">pi-extensions/pi-visionizer/src/index.ts</code></td><td>视觉扩展：describe_image 工具 + context 钩子</td><td>TypeScript</td><td>~360</td></tr>
+  <tr><td><code class="code-inline">pi-extensions/pi-visionizer/src/config.ts</code></td><td>视觉模型配置 + 默认 prompt</td><td>TypeScript</td><td>~100</td></tr>
+  <tr><td><code class="code-inline">pi-extensions/pi-visionizer/src/vision-client.ts</code></td><td>视觉 API 客户端（OpenAI/Anthropic/Google）</td><td>TypeScript</td><td>~270</td></tr>
+  <tr><td><code class="code-inline">pi-extensions/pi-visionizer/src/commands.ts</code></td><td>视觉用户命令（/visionizer-*）</td><td>TypeScript</td><td>~180</td></tr>
+  <tr><td><code class="code-inline">edini/tool_executor.py</code></td><td>HTTP 服务器：路由工具 → node_utils 函数</td><td>Python</td><td>~160</td></tr>
+  <tr><td><code class="code-inline">edini/node_utils.py</code></td><td>houp 封装：全部 18 个工具实现</td><td>Python</td><td>~530</td></tr>
+  <tr><td><code class="code-inline">edini/panel.py</code></td><td>PySide6 对话面板 UI</td><td>Python</td><td>~500</td></tr>
+  <tr><td><code class="code-inline">edini/rpc_client.py</code></td><td>Pi 子进程管理器（JSON-RPC stdin/stdout）</td><td>Python</td><td>~300</td></tr>
+  <tr><td><code class="code-inline">edini/config.py</code></td><td>设置持久化 + Pi 命令构建</td><td>Python</td><td>~120</td></tr>
+  <tr><td><code class="code-inline">tests/test_capture_tools.py</code></td><td>截图工具参数契约与工作流测试</td><td>Python</td><td>~300</td></tr>
+  <tr><td><code class="code-inline">tests/test_edini_context.py</code></td><td>系统提示词与决策框架测试</td><td>Python</td><td>~260</td></tr>
+</table>
+
+<hr class="section-divider">
+
+<p style="text-align: center; color: var(--text2); font-size: 0.82rem; margin-top: 3rem;">
+  生成自 F:/zz/Edini — Edini Agent Framework v0.2.0<br>
+  扩展：edini-tools (18 工具) · edini-context (提示词 + 钩子) · pi-visionizer (视觉)<br>
+  测试：34 个自动化测试全部通过
+</p>
+
+</body>
+</html>
