@@ -55,6 +55,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self._browsing_session_path = ""
         self._extracting_knowledge = False
         self._last_capture_path = ""  # track capture→describe pairing
+        self._cwd = _get_working_dir()
 
         # Undo/redo stack for change tree
         self._pre_snapshot: dict = {}
@@ -650,8 +651,12 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self._last_pi_status = status
         self.context_panel.set_pi_status(status)
         self._update_statusbar()
-        # On first connect, set session name and request stats
+        # On first connect, set session name, sync model, request stats
         if status == "connected":
+            settings = get_settings()
+            provider = settings.get("provider", "deepseek")
+            model_id = settings.get("model_id", "deepseek-chat")
+            self._rpc_client.send_set_model(provider, model_id)
             if hou:
                 try:
                     hip = hou.hipFile.name()
@@ -917,6 +922,9 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         if hasattr(self, '_eval_dialog') and self._eval_dialog is not None:
             self._eval_dialog.raise_()
             self._eval_dialog.activateWindow()
+            # Refresh data when dialog is brought to front
+            for child in self._eval_dialog.findChildren(EvalTab):
+                child.refresh()
             return
 
         from PySide6 import QtWidgets

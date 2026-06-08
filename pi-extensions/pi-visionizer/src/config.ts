@@ -19,8 +19,25 @@ export interface VisionizerConfig {
   requireHttps?: boolean;
 }
 
-/** Hardcoded default vision model — fallback when no persisted config found.
- *  Change provider/modelId to your preferred vision model. */
+/**
+ * Read vision config from environment variables (set by Edini settings).
+ * These take lowest priority — session config wins over env vars.
+ */
+export function getEnvConfig(): VisionizerConfig | undefined {
+  const provider = process.env["VISIONIZER_PROVIDER"];
+  const modelId = process.env["VISIONIZER_MODEL_ID"];
+  const apiKey = process.env["VISIONIZER_API_KEY"];
+  if (provider && modelId) {
+    const cfg: VisionizerConfig = { provider, modelId };
+    if (apiKey) {
+      (cfg as any).apiKey = apiKey;
+    }
+    return cfg;
+  }
+  return undefined;
+}
+
+/** Hardcoded default vision model — lowest priority fallback. */
 export const DEFAULT_VISION_MODEL: VisionizerConfig = {
   provider: "aliyun",
   modelId: "qwen-vl-max",
@@ -74,12 +91,12 @@ export function getConfig(ctx: ExtensionContext): VisionizerConfig | undefined {
 }
 
 /**
- * Resolve visionizer config: session config takes priority, falls back to
- * hardcoded DEFAULT_VISION_MODEL when no session config is found.
+ * Resolve visionizer config (priority: session > env var > hardcoded default).
  *
- * This ensures visionizer always has a model to use — the "config lost"
- * problem is solved by the hardcoded default.
+ * Session config: set via /visionizer-model command (persists in session entries)
+ * Env var config: set by Edini UI via VISIONIZER_PROVIDER / VISIONIZER_MODEL_ID
+ * Hardcoded default: last resort (aliyun/qwen-vl-max)
  */
 export function resolveConfig(ctx: ExtensionContext): VisionizerConfig {
-  return getConfig(ctx) ?? DEFAULT_VISION_MODEL;
+  return getConfig(ctx) ?? getEnvConfig() ?? DEFAULT_VISION_MODEL;
 }

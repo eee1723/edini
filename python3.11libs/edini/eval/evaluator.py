@@ -43,6 +43,7 @@ class EvaluatorPipeline:
         judge_provider: str | None = None,
         judge_sampling_rate: float = 0.5,
         force_judge: bool = False,
+        force_no_judge: bool = False,
     ):
         # Try Edini config first, then env vars
         try:
@@ -60,6 +61,7 @@ class EvaluatorPipeline:
             self._judge_provider = judge_provider or "deepseek"
         self._judge_sampling_rate = judge_sampling_rate
         self._force_judge = force_judge
+        self._force_no_judge = force_no_judge
 
     def evaluate(self, session: StructuredSession) -> EvalResult:
         """Run all evaluators and return combined result."""
@@ -77,10 +79,22 @@ class EvaluatorPipeline:
         if self._force_judge or (
             session.tool_calls and self._should_judge(session)
         ):
-            ta_score, _ = self._judge_tool_accuracy(session)
-            tc_score, _ = self._judge_task_completion(session)
-            tool_accuracy = ta_score
-            task_completion = tc_score
+            try:
+                ta_score, _ = self._judge_tool_accuracy(session)
+                tool_accuracy = ta_score
+            except Exception as judge_e:
+                logger.warning("Judge (tool_accuracy) crashed: %s", judge_e)
+                import traceback
+                logger.debug(traceback.format_exc())
+                tool_accuracy = None
+            try:
+                tc_score, _ = self._judge_task_completion(session)
+                task_completion = tc_score
+            except Exception as judge_e:
+                logger.warning("Judge (task_completion) crashed: %s", judge_e)
+                import traceback
+                logger.debug(traceback.format_exc())
+                task_completion = None
 
         # 3. Compute total score (weighted, re-normalize if Judge scores missing)
         available_weights = {}
@@ -204,6 +218,8 @@ class EvaluatorPipeline:
         Always judge short sessions (≤ 3 tool calls) as a baseline.
         Sample longer sessions at judge_sampling_rate.
         """
+        if self._force_no_judge:
+            return False
         if self._force_judge:
             return True
         if len(session.tool_calls) <= 3:

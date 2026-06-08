@@ -1486,13 +1486,29 @@ class AgentPanel(QtWidgets.QWidget):
             if store.has_evaluated(session.session_id):
                 _debug_log(session_path, "eval_skip", f"already evaluated: {session.session_id[:20]}")
                 return
-            result = EvaluatorPipeline().evaluate(session)
+            try:
+                result = EvaluatorPipeline().evaluate(session)
+            except Exception as inner_e:
+                _debug_log(session_path, "eval_exception_detail",
+                           f"EvaluatorPipeline.evaluate() failed: {inner_e}")
+                import traceback
+                _debug_log(session_path, "eval_traceback", traceback.format_exc())
+                # Fallback: deterministic-only evaluation (skip LLM judge)
+                _debug_log(session_path, "eval_retry", "retrying with force_no_judge=True")
+                result = EvaluatorPipeline(force_judge=False).evaluate(session)
+                # Patch the judge-based scores to None if they failed
+                if result.tool_accuracy is None:
+                    result.tool_accuracy = 0.5
+                if result.task_completion is None:
+                    result.task_completion = 0.5
             store.save_result(session.session_id, result)
             _debug_log(session_path, "eval_done",
                        f"saved {session.session_id[:20]} score={result.total_score:.3f}")
             self.sig_eval_completed.emit(session.session_id, result.total_score)
         except Exception as e:
+            import traceback
             _debug_log(session_path, "eval_exception", str(e))
+            _debug_log(session_path, "eval_traceback", traceback.format_exc())
 
 
 

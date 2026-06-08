@@ -283,16 +283,68 @@ def list_nodes(parent_path: str = "/", type_filter: str | None = None) -> dict[s
         return {"success": False, "error": str(e)}
 
 
+def _safe_parm_value(p) -> Any:
+    """Safely evaluate a parameter, returning a JSON-safe value.
+
+    Handles Ramp and other non-serializable parameter types.
+    """
+    try:
+        raw = p.rawValue()
+        # Ramp parameters are not JSON serializable
+        if isinstance(raw, hou.Ramp):
+            return {
+                "_type": "ramp",
+                "basis": str(raw.basis()),
+                "keys": [
+                    {"pos": k.position(), "value": k.value()}
+                    for k in raw.keys()
+                ],
+            }
+        # Data (file contents) can be huge — return metadata instead
+        if isinstance(raw, hou.Data):
+            return {"_type": "data", "size": len(str(raw)) if raw else 0}
+        # Try eval, fallback to raw
+        try:
+            v = p.eval()
+            # Check serializability
+            json.dumps(v)
+            return v
+        except (TypeError, ValueError, json.JSONDecodeError):
+            pass
+        # Stringify anything else
+        return {"_type": type(raw).__name__, "_repr": str(raw)[:200]}
+    except Exception:
+        return {"_type": "error", "_repr": f"<{p.name()}: eval failed>"}
+
+
 def get_node_info(node_path: str) -> dict[str, Any]:
     """Get detailed info about a specific node."""
     try:
+        import json
         node = hou.node(node_path)
         if node is None:
             return {"success": False, "error": f"Node not found: {node_path}"}
 
+        # For HDA nodes, need to unlock to see children
+        children = []
+        try:
+            node.allowEditingOfContents(True)
+            for child in node.children():
+                children.append({
+                    "name": child.name(),
+                    "path": child.path(),
+                    "type": child.type().name(),
+                })
+        except Exception:
+            pass
+
         parms = []
         for p in node.parms():
-            parms.append({"name": p.name(), "label": p.description(), "value": p.eval()})
+            parms.append({
+                "name": p.name(),
+                "label": p.description(),
+                "value": _safe_parm_value(p),
+            })
 
         return {
             "success": True,
@@ -303,7 +355,9 @@ def get_node_info(node_path: str) -> dict[str, Any]:
             "inputs": [inp.path() if inp else None for inp in node.inputs()],
             "outputs": [out.path() for out in node.outputs()],
             "parameters": parms,
+            "children": children,
             "is_time_dependent": node.isTimeDependent(),
+            "is_hda": node.type().definition() is not None,
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -501,13 +555,108 @@ def get_hda_info(hda_name: str) -> dict[str, Any]:
         if definition is None:
             return {"success": False, "error": f"HDA '{hda_name}' not found in loaded definitions"}
 
+        # HDADefinition doesn't have .name() / .description() / .label() directly
+        # Use the node type for those properties
+        node_type_name = definition.nodeTypeName()  # works — returns 'mynamespace::myname::2.0'
+        category = None
+        for cat in hou.nodeTypeCategories().values():
+            nt = cat.nodeType(node_type_name)
+            if nt is not None:
+                category = cat.name()
+                break
+
         return {
             "success": True,
-            "name": definition.nodeTypeName(),
-            "description": definition.description(),
+            "name": node_type_name,
+            "type_label": definition.description() if hasattr(definition, 'description') else "",
+            "category": category or "",
             "path": definition.libraryFilePath(),
             "version": definition.version(),
             "is_editable": definition.isEditable(),
+            "node_count": len(definition.sections()) if hasattr(definition, 'sections') else 0,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# Selection / Errors / Display Flag — missing handlers from tool_executor
+# ---------------------------------------------------------------------------
+
+def get_selection() -> dict[str, Any]:
+    """Get the list of currently selected nodes."""
+    try:
+        selected = hou.selectedNodes()
+        nodes = []
+        for n in selected:
+            nodes.append({
+                "name": n.name(),
+                "path": n.path(),
+                "type": n.type().name(),
+                "type_label": n.type().description(),
+            })
+        return {
+            "success": True,
+            "selection_count": len(nodes),
+            "nodes": nodes,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def check_errors(node_path: str | None = None) -> dict[str, Any]:
+    """Check for errors on a specific node or across the entire scene."""
+    try:
+        if node_path:
+            node = hou.node(node_path)
+            if node is None:
+                return {"success": False, "error": f"Node not found: {node_path}"}
+            targets = [node]
+        else:
+            root = hou.node("/")
+            if root is None:
+                return {"success": False, "error": "Cannot access scene root"}
+            targets = [root] + root.allSubChildren()
+
+        errors = []
+        warnings = []
+        for n in targets:
+            try:
+                errs = n.errors()
+                for e in errs:
+                    errors.append({"path": n.path(), "type": n.type().name(), "error": str(e)})
+            except Exception:
+                pass
+            try:
+                warns = n.warnings()
+                for w in warns:
+                    warnings.append({"path": n.path(), "type": n.type().name(), "warning": str(w)})
+            except Exception:
+                pass
+
+        return {
+            "success": True,
+            "node_count": len(targets),
+            "error_count": len(errors),
+            "warning_count": len(warnings),
+            "errors": errors,
+            "warnings": warnings,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def set_display_flag(node_path: str) -> dict[str, Any]:
+    """Set a node as the display node in its network."""
+    try:
+        node = hou.node(node_path)
+        if node is None:
+            return {"success": False, "error": f"Node not found: {node_path}"}
+        node.setDisplayFlag(True)
+        return {
+            "success": True,
+            "path": node_path,
+            "name": node.name(),
         }
     except Exception as e:
         return {"success": False, "error": str(e)}

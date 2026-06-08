@@ -287,9 +287,9 @@ class EvalStore:
                 (session_id,),
             ).fetchall()
 
-        columns = [d[0] for d in conn.execute("PRAGMA table_info(sessions)")]
-        tc_cols = [d[0] for d in conn.execute("PRAGMA table_info(tool_calls)")]
-        jl_cols = [d[0] for d in conn.execute("PRAGMA table_info(judge_logs)")]
+        columns = [d[1] for d in conn.execute("PRAGMA table_info(sessions)")]
+        tc_cols = [d[1] for d in conn.execute("PRAGMA table_info(tool_calls)")]
+        jl_cols = [d[1] for d in conn.execute("PRAGMA table_info(judge_logs)")]
 
         return {
             "session": dict(zip(columns, s)),

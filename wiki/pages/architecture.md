@@ -34,8 +34,8 @@ function switchLang(lang) {
 </div>
 <div class="card">
   <div class="card-title">Pi 扩展</div>
-  <div class="card-value">3</div>
-  <small>edini-tools · edini-context · pi-visionizer</small>
+  <div class="card-value">4</div>
+  <small>edini-tools · edini-context · pi-visionizer · edini-zhipu</small>
 </div>
 <div class="card">
   <div class="card-title">提示词层</div>
@@ -49,8 +49,8 @@ function switchLang(lang) {
 </div>
 <div class="card">
   <div class="card-title">视觉模型</div>
-  <div class="card-value">1</div>
-  <small>aliyun/qwen-vl-max</small>
+  <div class="card-value">2</div>
+  <small>aliyun/qwen-vl-max · zhipu/glm-4.6v</small>
 </div>
 <div class="card">
   <div class="card-title">测试</div>

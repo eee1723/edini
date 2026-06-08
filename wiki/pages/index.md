@@ -25,8 +25,8 @@
 | Pi 扩展 | ✅ 16 tools (TypeBox) · edini-context 铁律注入 + Houdini 上下文 |
 | 安装部署 | ✅ install.py · setup_pi.bat · settings.json 持久化 |
 | Session 管理 | ✅ pi 接管会话（cwd=HIP）· pi_sessions.py 读 JSONL · 浏览模式 · new/switch/set_name/get_state RPC |
-| 多模型 | ✅ DeepSeek V3/R1 · Anthropic · Provider 下拉 + Model 历史记忆 |
-| 设置系统 | ✅ General + Knowledge 双标签 · 主题/字体 · 知识开关/统计/管理 |
+| 多模型 | ✅ DeepSeek · Anthropic · OpenAI · Google · 智谱(ZhipuAI Coding Plan) · 视觉模型配置 · Provider下拉+Model历史 |
+| 设置系统 | ✅ General + Vision + Knowledge 三标签 · 主题/字体 · 知识开关 · 模型测试按钮 |
 | 知识沉淀 | ✅ 两层架构（铁律 rules.json ≤20 + 知识库 entries.json）· AI 反思 → 用户确认 · 类型可切换 · 只提取会重复犯的错 |
 | 多模态 | ✅ pi-visionizer 视觉代理 + Qwen-VL · 📷 截图 + 📁 上传按钮 · 全渠道图片输入（Ctrl+V + 右键粘贴 + 拖拽 + 文件选择）· 附件预览栏（真实缩略图）· 视觉描述气泡（可折叠+查看原图）· 识别中状态提示 · Houdini 20 API 适配（saveImage/grabFrameBuffer→flipbook）· QImage.save() QBuffer/BytesIO 兼容修复 · 剪贴板多模式探测（image/mimeData/URL/raw）|
 | 变更树 | ✅ QTreeWidget 面板（diff · undo/redo · 节点跳转 · 参数折叠 · 空时不展开 · 自变参数过滤 · 切换清除） |

@@ -1,6 +1,6 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-08 &nbsp;|&nbsp; 第十七阶段：智能体评估系统 + 日志记录系统 ✅
+> 最后更新：2026-06-08 &nbsp;|&nbsp; 第十八阶段：评估修复 + 工具补齐 + 智谱Provider + 设置增强 ✅
 
 ## 总览看板
 
@@ -104,7 +104,7 @@
     <span class="status-tag status-done">完成</span>
   </div>
   <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:100%"></div></div>
-  <div class="phase-card-detail">✅ 5 维度评估管道（3 确定性 + 2 LLM-as-Judge）· ✅ SQLite 评估仓库（sessions/tool_calls/judge_logs/daily_aggregates）· ✅ LogParser 从 Pi JSONL 解析会话 · ✅ 增量评估（只评未评分的会话）· ✅ EvalDashboard UI（概览卡片 + 趋势图 + 会话列表）· ✅ AgentEval 工具（edini_get_eval_stats 自省）· ✅ 后台自动评估 · ✅ 8 个真实 Houdini 会话实测通过 · ✅ Wiki 设计理念文档 · ⚠️ V4 Pro reasoning_tokens 隐藏输出（Judge 改用 deepseek-chat）</div>
+  <div class="phase-card-detail">✅ 5 维度评估管道（3 确定性 + 2 LLM-as-Judge）· ✅ SQLite 评估仓库（sessions/tool_calls/judge_logs/daily_aggregates）· ✅ LogParser 从 Pi JSONL 解析会话 · ✅ 增量评估（只评未评分的会话）· ✅ EvalDashboard UI（概览卡片 + 趋势图 + 会话列表）· ✅ AgentEval 工具（edini_get_eval_stats 自省）· ✅ 后台自动评估 · ✅ 8 个真实 Houdini 会话实测通过 · ✅ Wiki 设计理念文档 · ✅ 纯确定性评估(force_no_judge)跑通16会话 / LLM Judge可选 / ⚡ Re-evaluate按钮</div>
 </div>
 
 </div>
@@ -117,12 +117,26 @@
   <div class="timeline-date">2026-06-08</div>
   <div class="timeline-card">
     <div class="timeline-card-header">
-      <span class="timeline-title">第十七阶段：智能体评估系统 + 日志记录系统</span>
+      <span class="timeline-title">第十八阶段：评估修复 + 工具补齐 + 智谱Provider + 设置增强</span>
       <span class="status-tag status-done">完成</span>
     </div>
     <div class="timeline-summary">① 三层评估架构：数据模型（StructuredSession/ToolCallRecord/EvalResult）→ SQLite EvalStore（4 表 CRUD + 聚合）→ EvaluatorPipeline（5维度：reliability/efficiency/cost 确定性 + tool_accuracy/task_completion LLM-as-Judge）② LogParser 适配 Pi RPC JSONL 格式（message.toolName 提取工具名，content 解析 success/error）③ EvalDashboard UI（_ScoreCard 概览卡片、_TrendChart 趋势折线图、QTableWidget 会话列表、双击导航）④ edini_get_eval_stats Pi Extension 工具（自省：平均分/趋势/最弱维度/常见错误）⑤ MainWindow 集成（状态栏 📊 Eval 按钮 + 弹窗）⑥ 后台自动触发评估（finish_streaming/show_aborted → 线程评估 → 保存）⑦ LLM-as-Judge 真实 API 调用（DeepSeek deepseek-chat，2 轮/会话，～4.4s 平均）· 实测 8 个 Houdini 对话，评分合理有区分度 · 发现 V4 Pro reasoning_tokens 问题 · Wiki 记录设计理念 + 实测结果 + 经验教训</div>
     <div class="timeline-tags">
       <span>5维度评估</span><span>SQLite</span><span>LLM-as-Judge</span><span>LogParser</span><span>EvalDashboard</span><span>edini_get_eval_stats</span><span>后台评估</span><span>DeepSeek</span><span>V4 Pro推理问题</span><span>设计理念</span>
+    </div>
+  </div>
+</div>
+
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-08</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第十八阶段：评估修复 + 工具补齐 + 智谱Provider + 设置面板增强</span>
+      <span class="status-tag status-done">完成</span>
+    </div>
+    <div class="timeline-summary">① Eval修复：force_no_judge LLM Judge失败自动回退 / traceback完整日志 / PRAGMA d[0]→d[1]修复 / ⚡ Re-evaluate按钮 / 纯确定性评估先跑通16个历史会话 ② 缺失工具补齐：houdini_get_selection (hou.selectedNodes) / houdini_check_errors (allSubChildren errors+warnings) / houdini_set_display_flag (setDisplayFlag) — scene.ts已注册但Python handler缺失 ③ Ramp参数安全：_safe_parm_value() 检测hou.Ramp返回结构化keys / allowEditingOfContents解锁HDA子节点 / HDADefinition属性安全read ④ 智谱Coding Plan接入：新建edini-zhipu扩展(5模型: glm-5.1/5/4.7/4.6v/4.5v) / Coding专属端点 / ZHIPU_USE_CODING=1切换 ⑤ API Key修复：get_pi_env()改用_set_provider_api_key按provider分发 / send_set_model在connect+save时调用 ⑥ 设置面板增强：新增Vision标签(视觉Provider/Model/Key) / Test Model按钮(通过tool_executor:9876/test_model中转，ssl._create_unverified_context) / QTimer.singleShot替代QMetaObject.invokeMethod / 按钮状态瞬时反馈+异常捕获 ⑦ 知识库清理：合并3条重复Ramp规则→1条/更新已修复工具规则/20→18</div>
+    <div class="timeline-tags">
+      <span>Eval修复</span><span>3个缺失工具</span><span>Ramp安全</span><span>智谱Provider</span><span>CodingPlan</span><span>Vision设置</span><span>Test按钮</span><span>APIKey修复</span><span>知识库清理</span>
     </div>
   </div>
 </div>
@@ -389,7 +403,7 @@
 - ✅ 多行输入 (Ctrl+Enter 换行，Enter 发送)
 - ✅ 会话浏览模式（历史回看 + 回到当前）
 - ✅ 对话轮次计时器（Pi Status 卡片实时显示 Round 时间）
-- ✅ Pi Status 工具信息（Tools: 16 loaded, port 9876）
+- ✅ Pi Status 工具信息（Tools: 19 loaded, port 9876）
 - ✅ 知识沉淀两层架构：铁律 (≤20, 上下文注入) + 知识库 (细节, 可检索)
 - ✅ AI 反思 → 用户确认面板（✓✕ + 全部接受/放弃 + 类型切换）
 - ✅ Settings Knowledge 标签页（开关 + 统计 + 管理按钮）

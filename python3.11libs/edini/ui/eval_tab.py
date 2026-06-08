@@ -353,6 +353,20 @@ class EvalTab(QtWidgets.QWidget):
         refresh_btn.clicked.connect(self._load_data)
         list_header.addWidget(refresh_btn)
 
+        re_eval_btn = QtWidgets.QPushButton("⚡ Re-evaluate")
+        re_eval_btn.setStyleSheet(
+            f"QPushButton {{"
+            f"  color:{COLOR_YELLOW};background:{COLOR_CARD};"
+            f"  border:1px solid {COLOR_BORDER};"
+            f"  border-radius:4px;padding:3px 8px;font-size:{fs(9)};"
+            f"}}"
+            f"QPushButton:hover {{"
+            f"  color:{COLOR_TEXT};border-color:{accent_color()};"
+            f"}}"
+        )
+        re_eval_btn.clicked.connect(self._re_evaluate_all)
+        list_header.addWidget(re_eval_btn)
+
         list_section.addLayout(list_header)
 
         self._session_table = QtWidgets.QTableWidget()
@@ -413,6 +427,67 @@ class EvalTab(QtWidgets.QWidget):
         self._load_summary()
         self._load_trend(14)
         self._load_session_list()
+
+    def _re_evaluate_all(self):
+        """Re-evaluate all un-evaluated sessions in the background."""
+        import threading, os, glob
+        sessions_dir = os.path.expanduser("~/.pi/agent/sessions")
+        self._re_eval_status = QtWidgets.QLabel("Re-evaluating...")
+        self._re_eval_status.setStyleSheet(
+            f"color:{COLOR_YELLOW};font-size:{fs(10)};border:none;"
+        )
+        self.layout().addWidget(self._re_eval_status)
+
+        def _do_re_eval():
+            from edini.eval.log_parser import LogParser
+            from edini.eval.evaluator import EvaluatorPipeline
+            from edini.eval.store import EvalStore
+            store = EvalStore()
+            pipeline = EvaluatorPipeline(force_no_judge=True)
+            count = 0
+            for root, dirs, files in os.walk(sessions_dir):
+                for f in sorted(files):
+                    if not f.endswith(".jsonl"):
+                        continue
+                    path = os.path.join(root, f)
+                    session = LogParser.parse(path)
+                    if not session:
+                        continue
+                    if store.has_evaluated(session.session_id):
+                        continue
+                    try:
+                        result = pipeline.evaluate(session)
+                        store.save_result(session.session_id, result)
+                        count += 1
+                    except Exception:
+                        pass
+            return count
+
+        import threading
+        def _done(count):
+            self._load_data()
+            if self._re_eval_status:
+                self._re_eval_status.setText(f"Re-evaluated {count} sessions")
+                self._re_eval_status.setStyleSheet(
+                    f"color:{COLOR_GREEN};font-size:{fs(10)};border:none;"
+                )
+            import QtCore
+            QtCore.QTimer.singleShot(3000, self._remove_re_eval_status)
+
+        def _run():
+            count = _do_re_eval()
+            from PySide6 import QtCore
+            QtCore.QMetaObject.invokeMethod(
+                self, lambda: _done(count), QtCore.Qt.QueuedConnection
+            )
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+
+    def _remove_re_eval_status(self):
+        if self._re_eval_status:
+            self._re_eval_status.deleteLater()
+            self._re_eval_status = None
 
     def _load_summary(self):
         """Update score cards with recent averages."""

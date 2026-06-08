@@ -1,12 +1,12 @@
 # 🔧 工具清单
 
-> Edini 16 个 Houdini 工具的完整目录。最后更新：2026-06-03。
+> Edini 19 个 Houdini 工具的完整目录。最后更新：2026-06-08。
 
 ## 工具总览
 
 | 分类 | 数量 | 工具 |
 |------|------|------|
-| 场景/节点 | 8 | Scene Info · Create · Delete · Connect · Set Param · Get Param · List · Layout |
+| 场景/节点 | 11 | Scene Info · Create · Delete · Connect · Set Param · Get Param · List · Layout |
 | 查询/检查 | 4 | Search · Help · Node Info · Inspect Geo |
 | 脚本/HDA | 4 | Run Python · Run VEX · Create HDA · Get HDA Info |
 
@@ -46,6 +46,23 @@
 - **参数**：`parent_path` (默认 /) · `type_filter` (可选)
 - **返回**：节点列表 (路径、类型)
 - **示例**："List all geo nodes under /obj"
+
+
+### houdini_get_selection ✨ 新增
+- **参数**：无
+- **返回**：选中节点列表 (名称/路径/类型)
+- **示例**："What is selected right now?"
+- 💡 用户说"这个节点"时自动获取选中
+
+### houdini_check_errors ✨ 新增
+- **参数**： (可选，省略扫描全场景)
+- **返回**：错误列表 + 警告列表
+- **示例**："Check for errors in my scene"
+
+### houdini_set_display_flag ✨ 新增
+- **参数**： (必填)
+- **返回**：设置确认
+- **示例**："Show this node in the viewport"
 
 ### houdini_layout_nodes
 - **参数**：`parent_path` (默认 /obj)

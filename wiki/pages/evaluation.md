@@ -1,6 +1,6 @@
 # 📐 智能体评估系统 — 设计理念
 
-> **最后更新**：2026-06-08 &nbsp;|&nbsp; **状态**：设计阶段 · 待实现 &nbsp;|&nbsp; **版本**：v1 初版
+> **最后更新**：2026-06-08 &nbsp;|&nbsp; **状态**：已完成 · 持续迭代 &nbsp;|&nbsp; **版本**：v2 修复版
 
 ## 为什么需要评估系统
 
@@ -250,10 +250,23 @@ else:
     self.agent_panel.finish_streaming()  # 立即评估
 ```
 
+
+## v2 修复记录（2026-06-08）
+
+| 修复 | 说明 |
+|------|------|
+|  | EvaluatorPipeline 新增参数，Judge 失败自动回退纯确定性评估 |
+| PRAGMA d[0]->d[1] |  列名索引修复 |
+| 完整 traceback |  记录完整调用栈而非  |
+| Re-evaluate 按钮 | EvalDashboard 增加批量重新评估所有未评会话 |
+| f-string Python 3.11 |  替代  在 f-string 表达式中 |
+| 纯确定性评估 | 即使无 LLM Judge，也能完成 reliability/efficiency/cost 3 维评分 |
+| 首次评估 | 16 个历史 Houdini 会话一次性评估完毕，数据存入 SQLite |
+
 ## 变更日志
 
 | 日期 | 变更 |
 |------|------|
-| 2026-06-08 | 端到端调试完成：6 个 bug 修复后评估系统可正常运行 |
+| 2026-06-08 | v2 修复：force_no_judge / PRAGMA fix / traceback / Re-evaluate / 16会话批量评估 |：6 个 bug 修复后评估系统可正常运行 |
 | 2026-06-08 | 实测阶段：修复 LogParser 兼容 Pi RPC 格式，对接真实 Judge API，优化 JSON 解析逻辑 |
 | 2026-06-08 | 初版设计：5 维度评估 + SQLite + UI Dashboard + AgentEval 工具 |

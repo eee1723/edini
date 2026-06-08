@@ -56,6 +56,10 @@ _DEFAULTS: dict[str, Any] = {
     "theme_color": "cyan",
     "font_scale": 1.0,
     "knowledge_enabled": True,
+    # Vision model settings
+    "vision_provider": "",
+    "vision_model_id": "",
+    "vision_api_key": "",
 }
 
 # ---- Env var overrides (highest priority) ----
@@ -100,28 +104,74 @@ def save_settings(updates: dict[str, Any]) -> None:
 
 
 def get_pi_env() -> dict[str, str]:
-    """Build environment dict for Pi subprocess with current API key."""
+    """Build environment dict for Pi subprocess with all API keys."""
     settings = get_settings()
     env = {
         **os.environ,
         "EDINI_TOOL_PORT": str(TOOL_EXECUTOR_PORT),
     }
-    # Pass API key as env var so Pi can use it
+    # Pass main API key and model config as env vars so Pi can use them
     api_key = settings.get("api_key", "")
+    provider = settings.get("provider", "")
+    model_id = settings.get("model_id", "")
     if api_key:
+        # Set provider-specific key based on current provider
+        # (e.g. ZHIPU_API_KEY for zhipu, DEEPSEEK_API_KEY for deepseek)
+        _set_provider_api_key(env, provider, api_key)
+        # Also set a generic fallback
         env["DEEPSEEK_API_KEY"] = api_key
+    if provider:
+        env["EDINI_MODEL_PROVIDER"] = provider
+    if model_id:
+        env["EDINI_MODEL_ID"] = model_id
+
+    # Pass vision model config as env vars for pi-visionizer
+    vision_provider = settings.get("vision_provider", "")
+    vision_model = settings.get("vision_model_id", "")
+    vision_key = settings.get("vision_api_key", "")
+    if vision_provider and vision_model:
+        env["VISIONIZER_PROVIDER"] = vision_provider
+        env["VISIONIZER_MODEL_ID"] = vision_model
+        if vision_key:
+            env["VISIONIZER_API_KEY"] = vision_key
+            # Also pass as provider-specific env var so pi can find the model
+            _set_provider_api_key(env, vision_provider, vision_key)
     return env
+
+
+def _set_provider_api_key(env: dict[str, str], provider: str, api_key: str) -> None:
+    """Set the correct env var for a given provider."""
+    mapping = {
+        "deepseek": "DEEPSEEK_API_KEY",
+        "anthropic": "ANTHROPIC_API_KEY",
+        "openai": "OPENAI_API_KEY",
+        "google": "GEMINI_API_KEY",
+        "gemini": "GEMINI_API_KEY",
+        "aliyun": "DASHSCOPE_API_KEY",
+        "qwen": "DASHSCOPE_API_KEY",
+        "openrouter": "OPENROUTER_API_KEY",
+        "zhipu": "ZHIPU_API_KEY",
+        "zhipuai": "ZHIPU_API_KEY",
+    }
+    key = mapping.get(provider.lower())
+    if key:
+        env[key] = api_key
 
 
 def get_pi_command() -> list[str]:
     """Build the Pi subprocess command."""
-    return [
+    cmds = [
         PI_EXECUTABLE,
         "--mode", "rpc",
         "-e", str(PI_EXTENSIONS_DIR / "edini-tools" / "index.ts"),
         "-e", str(PI_EXTENSIONS_DIR / "edini-context" / "index.ts"),
         "-e", str(PI_EXTENSIONS_DIR / "pi-visionizer" / "src" / "index.ts"),
     ]
+    # Add 智谱 extension if it exists
+    zhipu_ext = PI_EXTENSIONS_DIR / "edini-zhipu" / "index.ts"
+    if zhipu_ext.exists():
+        cmds.extend(["-e", str(zhipu_ext)])
+    return cmds
 
 
 # ---- Model History (user input memory) ----
