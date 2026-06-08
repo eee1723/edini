@@ -1465,24 +1465,45 @@ class AgentPanel(QtWidgets.QWidget):
 
     def _run_evaluation(self, session_path: str):
         """Evaluate a single session in background thread."""
+        import os
+        _debug_log(session_path, "eval_start", f"path={session_path}")
         try:
             from edini.eval.log_parser import LogParser
             from edini.eval.evaluator import EvaluatorPipeline
             from edini.eval.store import EvalStore
-            import os
+
+            if not os.path.exists(session_path):
+                _debug_log(session_path, "eval_fail", "session file not found")
+                return
 
             session = LogParser.parse(session_path)
             if not session:
+                _debug_log(session_path, "eval_fail", "LogParser returned None")
                 return
             store = EvalStore()
             if store.has_evaluated(session.session_id):
+                _debug_log(session_path, "eval_skip", f"already evaluated: {session.session_id[:20]}")
                 return
             result = EvaluatorPipeline().evaluate(session)
             store.save_result(session.session_id, result)
+            _debug_log(session_path, "eval_done",
+                       f"saved {session.session_id[:20]} score={result.total_score:.3f}")
             self.sig_eval_completed.emit(session.session_id, result.total_score)
         except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning("Background eval failed: %s", e)
+            _debug_log(session_path, "eval_exception", str(e))
+
+
+def _debug_log(session_path: str, tag: str, msg: str):
+    """Write debug log to temp file for diagnostics."""
+    import os, datetime
+    log_file = os.path.join(
+        os.environ.get("TEMP", "/tmp"), "edini_eval_debug.log"
+    )
+    try:
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(f"[{datetime.datetime.now().isoformat()}] [{tag}] {msg}\n")
+    except Exception:
+        pass
 
     def clear_timeline(self):
         """Clear all messages from the timeline."""
