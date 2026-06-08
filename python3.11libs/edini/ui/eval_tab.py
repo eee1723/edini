@@ -305,7 +305,7 @@ class EvalTab(QtWidgets.QWidget):
                 f"}}"
             )
             btn.clicked.connect(
-                lambda checked, d=days, b=btn: self._load_trend(d)
+                lambda _checked=False, d=days: self._load_trend(d)
             )
             chart_header.addWidget(btn)
 
