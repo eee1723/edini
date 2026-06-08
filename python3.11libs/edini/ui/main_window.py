@@ -904,7 +904,8 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         from PySide6 import QtWidgets
         dialog = QtWidgets.QDialog(self)
         dialog.setWindowTitle("Agent Evaluation Dashboard")
-        dialog.resize(900, 600)
+        dialog.resize(960, 640)
+        dialog.setMinimumSize(800, 500)
         dialog.setStyleSheet(
             "QDialog { background:#0d0d1a; }"
         )

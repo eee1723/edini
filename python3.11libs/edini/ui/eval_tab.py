@@ -51,7 +51,7 @@ class _ScoreCard(QtWidgets.QFrame):
         self._build_ui()
 
     def _build_ui(self):
-        self.setFixedSize(150, 80)
+        self.setFixedSize(125, 72)
         self.setFrameShape(QtWidgets.QFrame.StyledPanel)
         self.setStyleSheet(
             f"_ScoreCard {{"
@@ -276,7 +276,18 @@ class EvalTab(QtWidgets.QWidget):
             self._cards_layout.addWidget(card)
 
         self._cards_layout.addStretch()
-        main_layout.addLayout(self._cards_layout)
+
+        cards_scroll = QtWidgets.QScrollArea()
+        cards_scroll.setWidgetResizable(True)
+        cards_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        cards_scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        cards_scroll.setStyleSheet(
+            "QScrollArea { border: none; background: transparent; }"
+        )
+        cards_container = QtWidgets.QWidget()
+        cards_container.setLayout(self._cards_layout)
+        cards_scroll.setWidget(cards_container)
+        main_layout.addWidget(cards_scroll)
 
         # ── ② Trend Chart ──
         chart_section = QtWidgets.QVBoxLayout()
@@ -293,7 +304,7 @@ class EvalTab(QtWidgets.QWidget):
 
         for days, lbl in [(7, "7d"), (14, "14d"), (30, "30d")]:
             btn = QtWidgets.QPushButton(lbl)
-            btn.setFixedSize(36, 22)
+            btn.setFixedWidth(42)
             btn.setStyleSheet(
                 f"QPushButton {{"
                 f"  color:{COLOR_MUTED};background:{COLOR_CARD};"
