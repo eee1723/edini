@@ -393,6 +393,19 @@ class EvalTab(QtWidgets.QWidget):
         )
         list_section.addWidget(self._session_table)
 
+        # Empty state placeholder (hidden when sessions exist)
+        self._empty_label = QtWidgets.QLabel(
+            "No evaluated sessions yet.\n"
+            "Complete a conversation in Edini to see evaluation results here,\n"
+            "or click Refresh to check for new data."
+        )
+        self._empty_label.setAlignment(QtCore.Qt.AlignCenter)
+        self._empty_label.setStyleSheet(
+            f"color:{COLOR_MUTED};font-size:{fs(11)};border:none;"
+        )
+        self._empty_label.hide()
+        list_section.addWidget(self._empty_label)
+
         main_layout.addLayout(list_section, 1)
 
     def _load_data(self):
@@ -462,6 +475,13 @@ class EvalTab(QtWidgets.QWidget):
             )
         else:
             sessions = self._store.get_recent_sessions(limit=50)
+
+        has_data = len(sessions) > 0
+        self._session_table.setVisible(has_data)
+        self._empty_label.setVisible(not has_data)
+
+        if not has_data:
+            return
 
         self._session_table.setRowCount(len(sessions))
 

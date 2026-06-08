@@ -344,6 +344,8 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
             self._handle_extraction_response()
             return
 
+        # Sync session path for background evaluation
+        self.agent_panel._current_session_path = self._current_session_path
         self.agent_panel.finish_streaming()
         self.agent_panel.set_busy(False)
 
@@ -400,6 +402,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
     def _on_abort_request(self):
         self._cleanup_recognizing()
         self._rpc_client.send_abort()
+        self.agent_panel._current_session_path = self._current_session_path
         self.agent_panel.show_aborted()
         self._round_timer.stop()
 
