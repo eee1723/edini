@@ -40,11 +40,24 @@ class EvaluatorPipeline:
         self,
         judge_model: str | None = None,
         judge_api_key: str | None = None,
+        judge_provider: str | None = None,
         judge_sampling_rate: float = 0.5,
         force_judge: bool = False,
     ):
-        self._judge_model = judge_model or os.environ.get("EDINI_JUDGE_MODEL", "")
-        self._judge_api_key = judge_api_key or os.environ.get("EDINI_JUDGE_API_KEY", "")
+        # Try Edini config first, then env vars
+        try:
+            from edini.config import get_settings
+            settings = get_settings()
+            # Use a non-reasoning model for judge to ensure visible text output
+            # deepseek-chat maps to v4-flash which returns content normally
+            # Use deepseek-chat for judge (V4 Pro reasoning mode hides visible output)
+            self._judge_model = judge_model or "deepseek-chat"
+            self._judge_api_key = judge_api_key or settings.get("api_key", "")
+            self._judge_provider = judge_provider or settings.get("provider", "deepseek")
+        except ImportError:
+            self._judge_model = judge_model or os.environ.get("EDINI_JUDGE_MODEL", "deepseek-chat")
+            self._judge_api_key = judge_api_key or os.environ.get("EDINI_JUDGE_API_KEY", "")
+            self._judge_provider = judge_provider or "deepseek"
         self._judge_sampling_rate = judge_sampling_rate
         self._force_judge = force_judge
 
@@ -208,12 +221,18 @@ class EvaluatorPipeline:
         if not self._judge_model:
             return None, None
 
+        # Limit tool calls in prompt to avoid timeout and cost
+        max_calls = min(len(session.tool_calls), 20)
         tool_summary = []
-        for tc in session.tool_calls:
+        for tc in session.tool_calls[:max_calls]:
             tool_summary.append(
                 f"[{tc.index}] {tc.tool_name}("
                 f"params={json.dumps(tc.params)}, "
                 f"success={tc.result_success})"
+            )
+        if len(session.tool_calls) > max_calls:
+            tool_summary.append(
+                f"... and {len(session.tool_calls) - max_calls} more calls"
             )
 
         first_query = session.user_queries[0] if session.user_queries else "(unknown)"
@@ -255,12 +274,18 @@ class EvaluatorPipeline:
         if not self._judge_model:
             return None, None
 
+        # Limit tool calls in prompt
+        max_calls = min(len(session.tool_calls), 20)
         tool_summary = []
-        for tc in session.tool_calls:
+        for tc in session.tool_calls[:max_calls]:
             tool_summary.append(
                 f"[{tc.index}] {tc.tool_name}("
                 f"params={json.dumps(tc.params)}, "
                 f"success={tc.result_success})"
+            )
+        if len(session.tool_calls) > max_calls:
+            tool_summary.append(
+                f"... and {len(session.tool_calls) - max_calls} more calls"
             )
 
         first_query = session.user_queries[0] if session.user_queries else "(unknown)"
@@ -298,20 +323,169 @@ class EvaluatorPipeline:
             return None, None
 
     def _call_judge(self, prompt: str) -> tuple[float, str]:
-        """Call the judge LLM and parse the JSON response.
+        """Call the configured LLM as a judge and parse JSON response.
 
-        In production, this should be wired to the configured model provider
-        (DeepSeek/Anthropic/Qwen). The current implementation logs the call
-        and returns a default score so the system works without a judge model.
+        Supports OpenAI-compatible providers (DeepSeek, Qwen) and Anthropic.
+        Falls back to placeholder if API call fails.
         """
-        logger.info(
-            "Judge would call model=%s with %d chars",
-            self._judge_model,
-            len(prompt),
+        if not self._judge_api_key:
+            logger.warning(
+                "No API key configured for judge. Set api_key in Edini settings."
+            )
+            return 0.8, '{"score": 0.8, "reason": "No API key"}'
+
+        provider = self._judge_provider.lower()
+        model = self._judge_model
+
+        try:
+            if provider in ("deepseek", "openai", "qwen"):
+                return self._call_openai_like(prompt, model)
+            elif provider == "anthropic":
+                return self._call_anthropic(prompt, model)
+            else:
+                logger.warning("Unknown provider '%s', trying OpenAI-compatible", provider)
+                return self._call_openai_like(prompt, model)
+        except Exception as e:
+            logger.warning("Judge API call failed: %s", e)
+            return 0.8, '{"score": 0.8, "reason": "Judge API call failed: %s"}' % str(e)
+
+    def _call_openai_like(self, prompt: str, model: str) -> tuple[float, str]:
+        """Call OpenAI-compatible API (DeepSeek, Qwen, etc.)."""
+        import urllib.request
+        import urllib.error
+
+        # Determine API endpoint and key based on provider
+        provider = self._judge_provider.lower()
+        if provider == "deepseek":
+            url = "https://api.deepseek.com/chat/completions"
+            api_key = self._judge_api_key
+        elif provider == "qwen":
+            url = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+            api_key = self._judge_api_key
+        else:
+            url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1") + "/chat/completions"
+            api_key = self._judge_api_key
+
+        body = json.dumps({
+            "model": model,
+            "messages": [
+                {"role": "system", "content": (
+                    "You are a precise evaluator. "
+                    "Output ONLY valid JSON. No thinking, no reasoning, "
+                    "no markdown formatting, no extra text. "
+                    "Just the JSON object."
+                )},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0.01,
+            "max_tokens": 512,
+        }).encode("utf-8")
+
+        req = urllib.request.Request(
+            url,
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="POST",
         )
-        # Placeholder: returns default score.
-        # Override by subclassing or monkey-patching _call_judge.
-        return 0.8, '{"score": 0.8, "reason": "Placeholder judge"}'
+
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            response_data = json.loads(resp.read().decode("utf-8"))
+
+        msg = response_data["choices"][0]["message"]
+        raw = msg.get("content", "") or ""
+
+        # Some models (DeepSeek V4 Pro) return content in reasoning_content
+        if not raw.strip():
+            raw = msg.get("reasoning_content", "") or ""
+
+        # If still no content, try a different approach: use deepseek-chat
+        if not raw.strip() or not any(c in raw for c in ('{"score"', "'score'", '"reason"')):
+            # The model may have hidden the JSON in reasoning tokens
+            # Search entire response for a score pattern
+            full_response = json.dumps(response_data)
+            import re
+            score_match = re.search(r'"score"\s*[:=]\s*([01]\.?\d*)', full_response)
+            if score_match:
+                try:
+                    score = float(score_match.group(1))
+                    return max(0.0, min(1.0, score)), full_response[:300]
+                except ValueError:
+                    pass
+
+        return self._parse_judge_response(raw)
+
+    def _call_anthropic(self, prompt: str, model: str) -> tuple[float, str]:
+        """Call Anthropic Claude API."""
+        import urllib.request
+
+        body = json.dumps({
+            "model": model or "claude-sonnet-4-20250514",
+            "max_tokens": 512,
+            "messages": [{"role": "user", "content": prompt}],
+        }).encode("utf-8")
+
+        req = urllib.request.Request(
+            "https://api.anthropic.com/v1/messages",
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": self._judge_api_key,
+                "anthropic-version": "2023-06-01",
+            },
+            method="POST",
+        )
+
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            response_data = json.loads(resp.read().decode("utf-8"))
+
+        raw = response_data["content"][0]["text"]
+        return self._parse_judge_response(raw)
+
+    def _parse_judge_response(self, raw: str) -> tuple[float, str]:
+        """Parse JSON response from judge LLM.
+
+        Handles nested braces in reason strings by finding the outermost
+        balanced JSON object that contains a "score" key.
+        """
+        import re
+
+        # 1. Try extracting JSON from code block
+        code_match = re.search(
+            r'```(?:json)?\s*([\s\S]*?)\s*```', raw
+        )
+        json_str = code_match.group(1) if code_match else raw
+
+        # 2. Find balanced JSON object with "score" key
+        start = json_str.find('{')
+        depth = 0
+        obj_start = -1
+        for i, ch in enumerate(json_str):
+            if ch == '{':
+                if depth == 0:
+                    obj_start = i
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth == 0 and obj_start >= 0:
+                    candidate = json_str[obj_start:i + 1]
+                    if '"score"' in candidate:
+                        try:
+                            parsed = json.loads(candidate)
+                            score = float(parsed.get("score", 0.8))
+                            score = max(0.0, min(1.0, score))
+                            return score, raw[:300]
+                        except (json.JSONDecodeError, ValueError, TypeError):
+                            pass
+                    obj_start = -1
+
+        # 3. Fallback: return default
+        logger.warning(
+            "Failed to parse judge response: %s", raw[:200]
+        )
+        return 0.8, raw[:300]
 
 
 def evaluate_session(

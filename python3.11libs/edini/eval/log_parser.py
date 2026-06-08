@@ -59,70 +59,75 @@ class LogParser:
                 continue
 
             etype = entry.get("type")
-            if etype not in ("message", "tool_call", "tool_result",
-                             "vision_description"):
+            if etype != "message":
                 continue
 
             msg = entry.get("message", {})
+            role = msg.get("role", "")
+            content = msg.get("content", "")
 
-            if etype == "message":
-                role = msg.get("role", "")
+            if role == "user":
+                if isinstance(content, list):
+                    texts = [
+                        b.get("text", "") for b in content
+                        if isinstance(b, dict) and b.get("type") == "text"
+                    ]
+                    content = "".join(texts)
+                if content:
+                    user_queries.append(content)
+
+            elif role == "assistant":
+                if isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict):
+                            if block.get("type") == "text":
+                                assistant_responses.append(
+                                    block.get("text", "")
+                                )
+                            elif block.get("type") == "thinking":
+                                thinking_steps.append(
+                                    block.get("thinking", "")
+                                )
+
+            elif role == "toolResult":
+                # Pi RPC format: tool results have toolName in message
+                tool_name = msg.get("toolName", "")
                 content = msg.get("content", "")
 
-                if role == "user":
-                    if isinstance(content, list):
-                        texts = [
-                            b.get("text", "") for b in content
-                            if isinstance(b, dict) and b.get("type") == "text"
-                        ]
-                        content = "".join(texts)
-                    if content:
-                        user_queries.append(content)
+                # Extract result text from content blocks
+                result_text = ""
+                if isinstance(content, list):
+                    texts = [
+                        b.get("text", "") for b in content
+                        if isinstance(b, dict) and b.get("type") == "text"
+                    ]
+                    result_text = "".join(texts)
+                elif isinstance(content, str):
+                    result_text = content
 
-                elif role == "assistant":
-                    if isinstance(content, list):
-                        for block in content:
-                            if isinstance(block, dict):
-                                if block.get("type") == "text":
-                                    assistant_responses.append(
-                                        block.get("text", "")
-                                    )
-                                elif block.get("type") == "thinking":
-                                    thinking_steps.append(
-                                        block.get("thinking", "")
-                                    )
+                # Parse result as JSON to check success
+                result_success = True
+                error_msg = None
+                if result_text:
+                    result_text_stripped = result_text.strip()
+                    if result_text_stripped.startswith("{"):
+                        try:
+                            parsed = json.loads(result_text_stripped)
+                            if isinstance(parsed, dict):
+                                result_success = parsed.get("success", True)
+                                if not result_success:
+                                    error_msg = parsed.get("error", "Tool call failed")
+                        except json.JSONDecodeError:
+                            pass
 
-            elif etype == "tool_call":
-                pending_tool = {
-                    "tool": msg.get("name", entry.get("name", "")),
-                    "params": msg.get("params", entry.get("params", {})),
-                    "call_index": len(tool_calls),
-                    "timestamp": entry.get("timestamp", 0),
-                }
-
-            elif etype == "tool_result":
-                tool_name = msg.get("name", entry.get("name", ""))
-                if pending_tool and pending_tool["tool"] == tool_name:
-                    result = msg.get("content", entry.get("result", ""))
-                    result_success = True
-                    error_msg = None
-                    if isinstance(result, str) and "error" in result.lower():
-                        result_success = False
-                        error_msg = result
-                    elif isinstance(result, dict):
-                        result_success = result.get("success", True)
-                        if not result_success:
-                            error_msg = result.get("error", str(result))
-
-                    tool_calls.append(ToolCallRecord(
-                        index=pending_tool["call_index"],
-                        tool_name=tool_name,
-                        params=pending_tool.get("params", {}),
-                        result_success=result_success,
-                        error_message=error_msg,
-                        latency_ms=0,
-                    ))
-                    pending_tool = None
+                tool_calls.append(ToolCallRecord(
+                    index=len(tool_calls),
+                    tool_name=tool_name or "unknown",
+                    params={},
+                    result_success=bool(result_success),
+                    error_message=error_msg,
+                    latency_ms=0,
+                ))
 
         return StructuredSession(
             session_id=session_id,
