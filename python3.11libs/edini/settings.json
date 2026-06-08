@@ -1,8 +1,11 @@
 {
-  "api_key": "sk-ba5acd12e0014246a3ffa210d24e1b58",
-  "provider": "deepseek",
-  "model_id": "deepseek-v4-pro",
+  "api_key": "0cd59cc43776478bab7af498264a008a.LoguYYEOqiVgTUnl",
+  "provider": "zhipu",
+  "model_id": "GLM-5.1",
   "theme_color": "purple",
   "font_scale": 0.8,
-  "knowledge_enabled": true
+  "knowledge_enabled": true,
+  "vision_provider": "google",
+  "vision_model_id": "gemini-2.5-flash",
+  "vision_api_key": ""
 }

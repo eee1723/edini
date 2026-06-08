@@ -19,7 +19,7 @@ from edini.ui.vision_overlay import VisionDescriptionBubble
 from edini.eval.store import EvalStore
 from edini.ui.eval_tab import EvalTab
 from edini.ui.pi_sessions import load_pi_messages, load_pi_messages_with_images
-from edini.config import get_settings, read_pi_settings
+from edini.config import get_settings, read_pi_settings, migrate_legacy_settings
 from edini.ui.snapshot_engine import snapshot as snap_scene, diff as diff_snapshots, restore as restore_snapshot
 
 try:
@@ -74,6 +74,11 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self._pending_descriptions: list[dict] | None = None  # descriptions pending cache write
         self._recognizing_placeholder: QtWidgets.QWidget | None = None
         self._available_models: list = []
+
+        # Migrate legacy edini settings → pi config files
+        migration_msg = migrate_legacy_settings()
+        if migration_msg:
+            print(f"[Edini] {migration_msg}", flush=True)
 
         self._build_ui()
         self._bind_events()
