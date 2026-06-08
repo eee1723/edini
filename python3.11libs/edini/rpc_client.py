@@ -35,6 +35,9 @@ class RpcClient(QObject):
     session_switched = Signal(str)           # session path after switch
     extension_info = Signal(str)            # info/warning from pi extensions (tools loaded, etc.)
     vision_description = Signal(object)     # vision model descriptions from pi-visionizer
+    models_received = Signal(object)        # list of model dicts from get_available_models
+    model_changed = Signal(object)          # model dict from set_model / cycle_model
+    thinking_changed = Signal(str)          # thinking level string
 
     def __init__(self, parent: QObject | None = None):
         super().__init__(parent)
@@ -75,6 +78,9 @@ class RpcClient(QObject):
         self._worker.session_switched.connect(self.session_switched)
         self._worker.extension_info.connect(self.extension_info)
         self._worker.vision_description.connect(self.vision_description)
+        self._worker.models_received.connect(self.models_received)
+        self._worker.model_changed.connect(self.model_changed)
+        self._worker.thinking_changed.connect(self.thinking_changed)
 
         self._thread.started.connect(self._worker.run)
         self._thread.start()
@@ -157,6 +163,21 @@ class RpcClient(QObject):
         if self._worker:
             self._worker.send_command({"type": "get_messages"})
 
+    def send_get_available_models(self) -> None:
+        """Request list of all configured models from Pi."""
+        if self._worker:
+            self._worker.send_command({"type": "get_available_models"})
+
+    def send_cycle_model(self) -> None:
+        """Cycle to the next available model."""
+        if self._worker:
+            self._worker.send_command({"type": "cycle_model"})
+
+    def send_set_thinking_level(self, level: str) -> None:
+        """Set thinking level: off, minimal, low, medium, high, xhigh."""
+        if self._worker:
+            self._worker.send_command({"type": "set_thinking_level", "level": level})
+
     def restart(self) -> None:
         """Restart the Pi subprocess (needed after API key change)."""
         was_running = self._is_running
@@ -181,6 +202,9 @@ class _RpcWorker(QObject):
     session_switched = Signal(str)
     extension_info = Signal(str)            # info/warning from pi extensions (tools loaded, etc.)
     vision_description = Signal(object)      # vision model descriptions from pi-visionizer
+    models_received = Signal(object)        # list of model dicts from get_available_models
+    model_changed = Signal(object)          # model dict from set_model / cycle_model
+    thinking_changed = Signal(str)          # thinking level string
 
     def __init__(self, pi_cmd: list[str], tool_port: int, cwd: str | None = None):
         super().__init__()
@@ -331,6 +355,18 @@ class _RpcWorker(QObject):
                 session_file = data.get("sessionFile", "")
                 if session_file:
                     self.session_switched.emit(session_file)
+            elif event.get("command") == "get_available_models":
+                data = event.get("data", {})
+                self.models_received.emit(data.get("models", []))
+            elif event.get("command") == "set_model":
+                data = event.get("data", {})
+                if data:
+                    self.model_changed.emit(data)
+            elif event.get("command") == "cycle_model":
+                data = event.get("data", {})
+                if data and data.get("model"):
+                    self.model_changed.emit(data.get("model"))
+                    self.thinking_changed.emit(data.get("thinkingLevel", ""))
 
         elif event_type == "extension_error":
             self.error_occurred.emit(f"Extension: {event.get('error', '')}")
