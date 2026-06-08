@@ -1,6 +1,11 @@
-"""Edini configuration with local settings persistence.
+"""Edini configuration with pi-native config file integration.
 
-Priority: env vars > settings.json > built-in defaults.
+Model/provider/API-key configuration is managed via pi's standard files:
+  ~/.pi/agent/auth.json    — API keys
+  ~/.pi/agent/models.json  — custom provider/model definitions
+  ~/.pi/agent/settings.json — default provider/model/thinking
+
+Edini's own settings.json stores only UI preferences (knowledge).
 """
 import json
 import os
@@ -10,8 +15,14 @@ from typing import Any
 # Project root (parent of edini/)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-# Local settings file (gitignored, user-specific)
-SETTINGS_FILE = PROJECT_ROOT / "edini" / "settings.json"
+# ── Pi agent config files (shared with pi CLI) ──────────────────────
+PI_AGENT_DIR = Path.home() / ".pi" / "agent"
+PI_AUTH_FILE = PI_AGENT_DIR / "auth.json"
+PI_MODELS_FILE = PI_AGENT_DIR / "models.json"
+PI_SETTINGS_FILE = PI_AGENT_DIR / "settings.json"
+
+# Edini's own local settings (knowledge — NOT provider/model/key)
+EDINI_SETTINGS_FILE = Path(__file__).resolve().parent / "settings.json"
 
 # Pi executable (from npm global install)
 # Houdini may not have npm's bin dir in PATH, so we search for it.
@@ -47,67 +58,153 @@ TOOL_EXECUTOR_PORT = 9876
 PANEL_DEFAULT_WIDTH = 500
 PANEL_DEFAULT_HEIGHT = 600
 
-# ---- Defaults (lowest priority) ----
-_DEFAULTS: dict[str, Any] = {
-    "api_key": "",
-    "provider": "deepseek",
-    "model_id": "deepseek-chat",
+
+# ═══════════════════════════════════════════════════════════════════════
+# Pi Config File Helpers
+# ═══════════════════════════════════════════════════════════════════════
+
+def _atomic_write_json(path: Path, data: dict) -> None:
+    """Write JSON to file atomically."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    tmp.replace(path)
+
+
+def read_pi_auth() -> dict:
+    """Read ~/.pi/agent/auth.json. Returns {} if missing or invalid."""
+    if PI_AUTH_FILE.exists():
+        try:
+            with open(PI_AUTH_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+def read_pi_models() -> dict:
+    """Read ~/.pi/agent/models.json. Returns {} if missing or invalid."""
+    if PI_MODELS_FILE.exists():
+        try:
+            with open(PI_MODELS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+def read_pi_settings() -> dict:
+    """Read ~/.pi/agent/settings.json. Returns {} if missing or invalid."""
+    if PI_SETTINGS_FILE.exists():
+        try:
+            with open(PI_SETTINGS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+def write_pi_auth(data: dict) -> None:
+    """Overwrite ~/.pi/agent/auth.json."""
+    _atomic_write_json(PI_AUTH_FILE, data)
+
+
+def write_pi_models(data: dict) -> None:
+    """Overwrite ~/.pi/agent/models.json."""
+    _atomic_write_json(PI_MODELS_FILE, data)
+
+
+def write_pi_settings(data: dict) -> None:
+    """Overwrite ~/.pi/agent/settings.json."""
+    _atomic_write_json(PI_SETTINGS_FILE, data)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Edini UI Settings (knowledge only)
+# ═══════════════════════════════════════════════════════════════════════
+
+_EDINI_DEFAULTS: dict[str, Any] = {
     "knowledge_enabled": True,
 }
 
-# ---- Env var overrides (highest priority) ----
-_ENV_MAP = {
-    "api_key": "EDINI_API_KEY",
-    "provider": "EDINI_MODEL_PROVIDER",
-    "model_id": "EDINI_MODEL_ID",
-}
 
-
-def _load_settings() -> dict[str, Any]:
-    """Load settings from local JSON file, falling back to defaults."""
-    if SETTINGS_FILE.exists():
+def _load_edini_settings() -> dict[str, Any]:
+    """Load Edini's own UI settings (not provider/model)."""
+    if EDINI_SETTINGS_FILE.exists():
         try:
-            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            with open(EDINI_SETTINGS_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            return {**_DEFAULTS, **data}
+            return {**_EDINI_DEFAULTS, **data}
         except (json.JSONDecodeError, OSError):
             pass
-    return dict(_DEFAULTS)
+    return dict(_EDINI_DEFAULTS)
 
 
 def get_settings() -> dict[str, Any]:
-    """Get current settings (env overrides file)."""
-    settings = _load_settings()
-    for key, env_name in _ENV_MAP.items():
-        env_val = os.environ.get(env_name)
-        if env_val:
-            settings[key] = env_val
-    return settings
+    """Get Edini UI settings."""
+    return _load_edini_settings()
 
 
 def save_settings(updates: dict[str, Any]) -> None:
-    """Merge updates into settings file (atomic write)."""
-    current = _load_settings()
+    """Merge updates into Edini settings file."""
+    current = _load_edini_settings()
     current.update(updates)
-    SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = SETTINGS_FILE.with_suffix(".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(current, f, indent=2, ensure_ascii=False)
-    tmp.replace(SETTINGS_FILE)
+    _atomic_write_json(EDINI_SETTINGS_FILE, current)
 
+
+# ═══════════════════════════════════════════════════════════════════════
+# Legacy Migration
+# ═══════════════════════════════════════════════════════════════════════
+
+def migrate_legacy_settings() -> str | None:
+    """Migrate old api_key/provider/model_id to pi config files.
+    Returns migration message or None if nothing to migrate.
+    """
+    old = _load_edini_settings()
+    old_key = old.get("api_key", "")
+    old_provider = old.get("provider", "")
+    old_model = old.get("model_id", "")
+
+    if not old_key or not old_provider:
+        return None
+
+    # Write API key to auth.json
+    auth = read_pi_auth()
+    if old_provider not in auth:
+        auth[old_provider] = {"type": "api_key", "key": old_key}
+        write_pi_auth(auth)
+
+    # Write default model to pi settings.json
+    pi_settings = read_pi_settings()
+    if "defaultProvider" not in pi_settings:
+        pi_settings["defaultProvider"] = old_provider
+        pi_settings["defaultModel"] = old_model
+        write_pi_settings(pi_settings)
+
+    # Remove legacy keys from edini settings
+    old.pop("api_key", None)
+    old.pop("provider", None)
+    old.pop("model_id", None)
+    _atomic_write_json(EDINI_SETTINGS_FILE, old)
+
+    return f"✅ Migrated: {old_provider}/{old_model} → ~/.pi/agent/"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Pi Subprocess
+# ═══════════════════════════════════════════════════════════════════════
 
 def get_pi_env() -> dict[str, str]:
-    """Build environment dict for Pi subprocess with current API key."""
-    settings = get_settings()
-    env = {
+    """Build environment dict for Pi subprocess.
+
+    Pi reads ~/.pi/agent/auth.json itself on startup, so no API key
+    injection via env vars is needed.
+    """
+    return {
         **os.environ,
         "EDINI_TOOL_PORT": str(TOOL_EXECUTOR_PORT),
     }
-    # Pass API key as env var so Pi can use it
-    api_key = settings.get("api_key", "")
-    if api_key:
-        env["DEEPSEEK_API_KEY"] = api_key
-    return env
 
 
 def get_pi_command() -> list[str]:
