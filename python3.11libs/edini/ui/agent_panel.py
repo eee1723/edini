@@ -1453,7 +1453,9 @@ class AgentPanel(QtWidgets.QWidget):
     def _trigger_background_eval(self):
         """Run evaluator in background thread after session ends."""
         session_path = getattr(self, '_current_session_path', None)
+        _debug_log(str(session_path or ""), "trigger_eval", f"session_path={session_path!r}")
         if not session_path:
+            _debug_log("", "trigger_eval", "no session path, returning")
             return
         import threading
         t = threading.Thread(
