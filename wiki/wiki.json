@@ -31,6 +31,7 @@
     {"id": "tools", "title": "工具清单", "icon": "🔧", "order": 4},
     {"id": "pitfalls", "title": "踩坑记录", "icon": "⚠️", "order": 5, "filterable": true},
     {"id": "references", "title": "参考资料", "icon": "📚", "order": 6},
-    {"id": "handoff", "title": "Agent交接", "icon": "🤖", "order": 7}
+    {"id": "handoff", "title": "Agent交接", "icon": "🤖", "order": 7},
+    {"id": "evaluation", "title": "评估系统", "icon": "📐", "order": 8}
   ]
 }

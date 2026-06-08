@@ -12,6 +12,7 @@
 | [踩坑记录](pitfalls.html) | 开发中的踩坑记录，支持分类/优先级/状态筛选 |
 | [参考资料](references.html) | 外部文档 · 设计决策 · API 参考 |
 | [Agent交接](handoff.html) | 给新 Agent 和开发者的快速上下文 |
+| [评估系统](evaluation.html) | 智能体评估系统的设计理念与迭代记录 |
 
 ## 当前阶段
 
