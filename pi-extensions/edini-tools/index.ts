@@ -5,9 +5,10 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { sceneTools } from "./tools/scene";
 import { queryTools } from "./tools/query";
 import { scriptTools } from "./tools/script";
+import { ediniGetEvalStats } from "./tools/eval";
 
 export default function (pi: ExtensionAPI) {
-  const allTools = [...sceneTools, ...queryTools, ...scriptTools];
+  const allTools = [...sceneTools, ...queryTools, ...scriptTools, ediniGetEvalStats];
 
   for (const tool of allTools) {
     pi.registerTool(tool);
