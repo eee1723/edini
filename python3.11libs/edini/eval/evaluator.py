@@ -237,6 +237,7 @@ class EvaluatorPipeline:
 
         first_query = session.user_queries[0] if session.user_queries else "(unknown)"
 
+        _json_example = '{"score": 0.0-1.0, "reason": "..."}'
         prompt = (
             f"You are an evaluator for a Houdini AI assistant.\n"
             f"Evaluate the tool call accuracy for the following session.\n\n"
@@ -248,7 +249,7 @@ class EvaluatorPipeline:
             f"2. Were the parameters correctly extracted?\n"
             f"3. Was the tool call order logical?\n\n"
             f"Output JSON only: "
-            f"{'{\"score\": 0.0-1.0, \"reason\": \"...\"}'}"
+            f"{_json_example}"
         )
 
         try:
@@ -291,6 +292,7 @@ class EvaluatorPipeline:
         first_query = session.user_queries[0] if session.user_queries else "(unknown)"
         last_response = session.assistant_responses[-1] if session.assistant_responses else "(none)"
 
+        _json_example = '{"score": 0.0-1.0, "reason": "..."}'
         prompt = (
             f"You are an evaluator for a Houdini AI assistant.\n"
             f"Evaluate whether the user's task was fully accomplished.\n\n"
@@ -303,7 +305,7 @@ class EvaluatorPipeline:
             f"- Is the output usable in Houdini?\n"
             f"- Were there critical errors?\n\n"
             f"Output JSON only: "
-            f"{'{\"score\": 0.0-1.0, \"reason\": \"...\"}'}"
+            f"{_json_example}"
         )
 
         try:
