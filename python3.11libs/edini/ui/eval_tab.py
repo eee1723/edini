@@ -36,6 +36,7 @@ def _score_emoji(score: float) -> str:
 
 _TREND_SYMBOLS = {"improving": "\u2191", "declining": "\u2193", "stable": "\u2192"}
 _TREND_COLORS = {"improving": COLOR_GREEN, "declining": COLOR_RED, "stable": COLOR_MUTED}
+_EM_DASH = "\u2014"  # — em dash (cannot use \u in f-strings pre-3.12)
 
 
 class _ScoreCard(QtWidgets.QFrame):
@@ -499,12 +500,12 @@ class EvalTab(QtWidgets.QWidget):
             return
         s = detail["session"]
         parts = [
-            f"Total: {s.get('total_score', '\u2014')}",
-            f"Tool: {s.get('tool_accuracy', '\u2014')}",
-            f"Task: {s.get('task_completion', '\u2014')}",
-            f"Eff: {s.get('efficiency', '\u2014')}",
-            f"Rel: {s.get('reliability', '\u2014')}",
-            f"Cost: {s.get('cost', '\u2014')}",
+            f"Total: {s.get('total_score', _EM_DASH)}",
+            f"Tool: {s.get('tool_accuracy', _EM_DASH)}",
+            f"Task: {s.get('task_completion', _EM_DASH)}",
+            f"Eff: {s.get('efficiency', _EM_DASH)}",
+            f"Rel: {s.get('reliability', _EM_DASH)}",
+            f"Cost: {s.get('cost', _EM_DASH)}",
         ]
         if detail.get("judge_logs"):
             for jl in detail["judge_logs"][:2]:
