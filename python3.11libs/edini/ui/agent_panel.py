@@ -1493,17 +1493,6 @@ class AgentPanel(QtWidgets.QWidget):
             _debug_log(session_path, "eval_exception", str(e))
 
 
-def _debug_log(session_path: str, tag: str, msg: str):
-    """Write debug log to temp file for diagnostics."""
-    import os, datetime
-    log_file = os.path.join(
-        os.environ.get("TEMP", "/tmp"), "edini_eval_debug.log"
-    )
-    try:
-        with open(log_file, "a", encoding="utf-8") as f:
-            f.write(f"[{datetime.datetime.now().isoformat()}] [{tag}] {msg}\n")
-    except Exception:
-        pass
 
     def clear_timeline(self):
         """Clear all messages from the timeline."""
@@ -1922,6 +1911,18 @@ def _knowledge_btn_style(color: str) -> str:
 # ==========================================================================
 # Inline Capture Image Widget
 # ==========================================================================
+
+def _debug_log(session_path: str, tag: str, msg: str):
+    """Write debug log to temp file for diagnostics."""
+    import os, datetime
+    log_file = os.path.join(
+        os.environ.get("TEMP", "/tmp"), "edini_eval_debug.log"
+    )
+    try:
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(f"[{datetime.datetime.now().isoformat()}] [{tag}] {msg}\n")
+    except Exception:
+        pass
 
 class _CaptureImageWidget(QtWidgets.QFrame):
     """Shows a captured viewport/network screenshot inline in the timeline."""
