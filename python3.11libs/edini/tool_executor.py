@@ -10,12 +10,23 @@ import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Any, Callable
 
+from edini.eval.store import EvalStore
 from edini.node_utils import (
     get_scene_info,  create_node, delete_node, connect_nodes,
     set_param, get_param, list_nodes, get_node_info, layout_nodes,
     search_nodes, get_help, inspect_geometry,
     run_python, run_vex, create_hda, get_hda_info,
 )
+
+def get_eval_stats(period: int = 10) -> dict:
+    """Read from SQLite and return evaluation stats for agent self-reflection."""
+    try:
+        store = EvalStore()
+        stats = store.get_stats_summary(period=period)
+        return {"success": True, **stats}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
 
 # Map tool names to handler functions
 TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
@@ -53,6 +64,11 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
         kw["node_path"], kw["hda_name"], kw.get("hda_label", ""),
     ),
     "houdini_get_hda_info": lambda **kw: get_hda_info(kw["hda_name"]),
+
+    # Evaluation tools
+    "edini_get_eval_stats": lambda **kw: get_eval_stats(
+        period=kw.get("period", 10),
+    ),
 }
 
 
