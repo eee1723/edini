@@ -19,7 +19,7 @@ from edini.ui.vision_overlay import VisionDescriptionBubble
 from edini.eval.store import EvalStore
 from edini.ui.eval_tab import EvalTab
 from edini.ui.pi_sessions import load_pi_messages, load_pi_messages_with_images
-from edini.config import get_settings
+from edini.config import get_settings, read_pi_settings
 from edini.ui.snapshot_engine import snapshot as snap_scene, diff as diff_snapshots, restore as restore_snapshot
 
 try:
@@ -73,6 +73,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self._pending_cache_meta: list[dict] | None = None  # metadata pending cache write
         self._pending_descriptions: list[dict] | None = None  # descriptions pending cache write
         self._recognizing_placeholder: QtWidgets.QWidget | None = None
+        self._available_models: list = []
 
         self._build_ui()
         self._bind_events()
@@ -170,6 +171,9 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self._rpc_client.status_changed.connect(self._on_status_changed)
         self._rpc_client.extension_info.connect(self.context_panel.set_tools_info)
         self._rpc_client.vision_description.connect(self._on_vision_description)
+        # Pi model discovery
+        self._rpc_client.models_received.connect(self._on_models_received)
+        self._rpc_client.model_changed.connect(self._on_model_changed)
         # Pi session management responses
         self._rpc_client.session_switched.connect(self._on_pi_session_switched)
         self._rpc_client.messages_received.connect(self._on_pi_messages_received)
@@ -196,10 +200,10 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self.history_panel.load_sessions()
         self.context_panel.refresh_scene_info()
         self.context_panel.refresh_knowledge()
-        settings = get_settings()
+        pi_sett = read_pi_settings()
         self.context_panel.set_provider_model(
-            settings.get("provider", "deepseek"),
-            settings.get("model_id", "deepseek-chat"),
+            pi_sett.get("defaultProvider", "?"),
+            pi_sett.get("defaultModel", "?"),
         )
         self.context_panel.set_tools_info("16 loaded, port 9876")
         from edini.ui.hotkey import install_event_filter
@@ -651,12 +655,15 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self._last_pi_status = status
         self.context_panel.set_pi_status(status)
         self._update_statusbar()
-        # On first connect, set session name, sync model, request stats
+        # On first connect: discover models, sync model from pi config, request stats
         if status == "connected":
-            settings = get_settings()
-            provider = settings.get("provider", "deepseek")
-            model_id = settings.get("model_id", "deepseek-chat")
-            self._rpc_client.send_set_model(provider, model_id)
+            self._rpc_client.send_get_available_models()
+            # Set model from pi's own settings (auth.json + models.json + settings.json)
+            pi_sett = read_pi_settings()
+            provider = pi_sett.get("defaultProvider", "")
+            model_id = pi_sett.get("defaultModel", "")
+            if provider and model_id:
+                self._rpc_client.send_set_model(provider, model_id)
             if hou:
                 try:
                     hip = hou.hipFile.name()
@@ -666,6 +673,18 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
                 except Exception:
                     pass
             self._rpc_client.send_get_stats()
+
+    def _on_models_received(self, models: list):
+        """Handle available models from Pi RPC. Stores them and refreshes display."""
+        self._available_models = models
+        self._update_statusbar()
+
+    def _on_model_changed(self, model: dict):
+        """Handle model change confirmation from Pi RPC."""
+        name = model.get("name", model.get("id", "?"))
+        provider = model.get("provider", "?")
+        self.context_panel.set_provider_model(provider, name)
+        self._update_statusbar()
 
     def _on_pi_session_switched(self, session_path: str):
         """Called when pi confirms a session switch (new or resumed)."""
@@ -969,8 +988,11 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         status = getattr(self, '_last_pi_status', 'connecting')
         icons = {"connected": "●", "connecting": "◌", "disconnected": "○"}
         parts.append(f"{icons.get(status, '●')} {status}")
-        settings = get_settings()
-        parts.append(f"{settings.get('provider','?')}/{settings.get('model_id','?')}")
+        # Show model info from pi config (not old edini settings)
+        pi_sett = read_pi_settings()
+        provider = pi_sett.get("defaultProvider", "?")
+        model = pi_sett.get("defaultModel", "?")
+        parts.append(f"{provider}/{model}")
         if hou:
             try:
                 root = hou.node("/")
