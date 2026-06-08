@@ -128,6 +128,20 @@
 </div>
 
 <div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-08</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第十七阶段补丁：端到端调试与 Python 3.11 兼容修复</span>
+      <span class="status-tag status-done">完成</span>
+    </div>
+    <div class="timeline-summary">① 修复 f-string 反斜杠兼容问题（eval_tab.py — 改用 _EM_DASH 常量；evaluator.py — 改用变量 _json_example）② 修复 ScoreCard 按钮裁切（125px+dialog 960px+QScrollArea）③ 修复 session 路径时序竞争（agent_end 先于 session_switched — 延迟触发评估）④ 修复 _debug_log 函数缩进错误吞掉后续 AgentPanel 方法（_toggle_thinking_panel 找不到）⑤ 添加诊断日志系统（_debug_log 写入 %%TEMP%%/edini_eval_debug.log）⑥ 空数据状态显示提示文字</div>
+    <div class="timeline-tags">
+      <span>f-string兼容</span><span>Python3.11</span><span>时序竞争</span><span>缩进bug</span><span>诊断日志</span><span>UI适配</span>
+    </div>
+  </div>
+</div>
+
+<div class="timeline-item timeline-done">
   <div class="timeline-date">2026-06-06</div>
   <div class="timeline-card">
     <div class="timeline-card-header">

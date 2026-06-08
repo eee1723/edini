@@ -1,6 +1,6 @@
 # 📊 仪表盘
 
-> **当前阶段**：多模态调试完成 — 视觉管道打通 + UI 优化 &nbsp;|&nbsp; **状态**：16 tools 就绪，Houdini 实机运行，Qwen-VL 视觉代理正常 &nbsp;|&nbsp; **最后更新**：2026-06-06
+> **当前阶段**：评估系统完成 — 5 维度评分 + LLM-as-Judge + EvalDashboard &nbsp;|&nbsp; **状态**：17 tools 就绪，Houdini 实机运行，评估系统已上线 &nbsp;|&nbsp; **最后更新**：2026-06-08
 
 ## 快速导航
 
@@ -35,6 +35,7 @@
 | 剪贴板 | ✅ Ctrl+V 图片粘贴 · 右键粘贴图片到附件栏 · 右键粘贴文本（defer focus+paste）· 多模式探测（QImage→mimeData→URL→raw png/jpeg）· Houdini PySide6 枚举兼容（整数 mode 值）|
 | 测试 | ⬜ 无自动化测试 |
 | 知识检索 | ⬜ search_knowledge 工具待实现 |
+| 评估系统 | ✅ 5 维度评分 · LogParser · SQLite · EvalDashboard · edini_get_eval_stats · LLM-as-Judge (deepseek-chat) |
 
 ## 技术栈
 
