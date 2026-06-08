@@ -547,6 +547,7 @@ class AgentPanel(QtWidgets.QWidget):
     abort_requested = QtCore.Signal()
     knowledge_accepted = QtCore.Signal(list)        # list of accepted items
     knowledge_rejected = QtCore.Signal()            # all rejected
+    sig_eval_completed = QtCore.Signal(str, float)  # session_id, total_score
 
     STREAM_FLUSH_CHARS = 80
     STREAM_FLUSH_INTERVAL_MS = 80
@@ -1343,6 +1344,8 @@ class AgentPanel(QtWidgets.QWidget):
         # Auto-collapse panels after completion
         self._collapse_tool_panel()
         self._collapse_thinking_panel()
+        # Trigger background evaluation
+        self._trigger_background_eval()
 
     # ── Tool cards ──
 
@@ -1444,7 +1447,42 @@ class AgentPanel(QtWidgets.QWidget):
         self.timeline_view.add_widget(_Separator("── 已中止 ──"))
         self._collapse_tool_panel()
         self._collapse_thinking_panel()
+        self._trigger_background_eval()
         self.set_busy(False)
+
+    def _trigger_background_eval(self):
+        """Run evaluator in background thread after session ends."""
+        session_path = getattr(self, '_current_session_path', None)
+        if not session_path:
+            return
+        import threading
+        t = threading.Thread(
+            target=self._run_evaluation,
+            args=(session_path,),
+            daemon=True,
+        )
+        t.start()
+
+    def _run_evaluation(self, session_path: str):
+        """Evaluate a single session in background thread."""
+        try:
+            from edini.eval.log_parser import LogParser
+            from edini.eval.evaluator import EvaluatorPipeline
+            from edini.eval.store import EvalStore
+            import os
+
+            session = LogParser.parse(session_path)
+            if not session:
+                return
+            store = EvalStore()
+            if store.has_evaluated(session.session_id):
+                return
+            result = EvaluatorPipeline().evaluate(session)
+            store.save_result(session.session_id, result)
+            self.sig_eval_completed.emit(session.session_id, result.total_score)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning("Background eval failed: %s", e)
 
     def clear_timeline(self):
         """Clear all messages from the timeline."""

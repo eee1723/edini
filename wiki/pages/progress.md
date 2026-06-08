@@ -1,6 +1,6 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-06 &nbsp;|&nbsp; 第十六阶段：多模态 UI 按钮优化 + 剪贴板全渠道修复 ✅
+> 最后更新：2026-06-08 &nbsp;|&nbsp; 第十七阶段：智能体评估系统 + 日志记录系统 ✅
 
 ## 总览看板
 
@@ -98,9 +98,34 @@
 
 </div>
 
+<div class="phase-card">
+  <div class="phase-card-header">
+    <span class="phase-card-title">📐 评估系统</span>
+    <span class="status-tag status-done">完成</span>
+  </div>
+  <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:100%"></div></div>
+  <div class="phase-card-detail">✅ 5 维度评估管道（3 确定性 + 2 LLM-as-Judge）· ✅ SQLite 评估仓库（sessions/tool_calls/judge_logs/daily_aggregates）· ✅ LogParser 从 Pi JSONL 解析会话 · ✅ 增量评估（只评未评分的会话）· ✅ EvalDashboard UI（概览卡片 + 趋势图 + 会话列表）· ✅ AgentEval 工具（edini_get_eval_stats 自省）· ✅ 后台自动评估 · ✅ 8 个真实 Houdini 会话实测通过 · ✅ Wiki 设计理念文档 · ⚠️ V4 Pro reasoning_tokens 隐藏输出（Judge 改用 deepseek-chat）</div>
+</div>
+
+</div>
+
 ## 近期关键节点
 
 <div class="timeline">
+
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-08</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第十七阶段：智能体评估系统 + 日志记录系统</span>
+      <span class="status-tag status-done">完成</span>
+    </div>
+    <div class="timeline-summary">① 三层评估架构：数据模型（StructuredSession/ToolCallRecord/EvalResult）→ SQLite EvalStore（4 表 CRUD + 聚合）→ EvaluatorPipeline（5维度：reliability/efficiency/cost 确定性 + tool_accuracy/task_completion LLM-as-Judge）② LogParser 适配 Pi RPC JSONL 格式（message.toolName 提取工具名，content 解析 success/error）③ EvalDashboard UI（_ScoreCard 概览卡片、_TrendChart 趋势折线图、QTableWidget 会话列表、双击导航）④ edini_get_eval_stats Pi Extension 工具（自省：平均分/趋势/最弱维度/常见错误）⑤ MainWindow 集成（状态栏 📊 Eval 按钮 + 弹窗）⑥ 后台自动触发评估（finish_streaming/show_aborted → 线程评估 → 保存）⑦ LLM-as-Judge 真实 API 调用（DeepSeek deepseek-chat，2 轮/会话，～4.4s 平均）· 实测 8 个 Houdini 对话，评分合理有区分度 · 发现 V4 Pro reasoning_tokens 问题 · Wiki 记录设计理念 + 实测结果 + 经验教训</div>
+    <div class="timeline-tags">
+      <span>5维度评估</span><span>SQLite</span><span>LLM-as-Judge</span><span>LogParser</span><span>EvalDashboard</span><span>edini_get_eval_stats</span><span>后台评估</span><span>DeepSeek</span><span>V4 Pro推理问题</span><span>设计理念</span>
+    </div>
+  </div>
+</div>
 
 <div class="timeline-item timeline-done">
   <div class="timeline-date">2026-06-06</div>
@@ -309,7 +334,10 @@
 | P1 | ~~截图链路修复~~ | ✅ 三级降级修复完成（saveImage → grabFrameBuffer → flipbook）|
 | P1 | ~~图片时间线显示~~ | ✅ 缩略图卡片 + 缓存持久化 + 视觉描述历史渲染 |
 | P2 | 知识库检索工具 | 为 Agent 添加 search_knowledge 工具调用 |
-| P2 | 单元测试 | 对 node_utils、config、tool_executor 写测试 |
+| P2 | 单元测试 | 对 node_utils、config、tool_executor、eval 写测试 |
+| P2 | Judge模型优化 | 接入 Anthropic Claude 做 Judge（结构化输出更强）、V4 Pro reasoning_tokens 兼容 |
+| P3 | 效率基线优化 | 基于任务类型百分位计算效率评分，而非固定启发式 |
+| P3 | 评估结果→知识系统 | 低分会话自动提取铁律/知识条目 |
 | P3 | Python 面板 | 支持嵌入 Houdini Pane Tab |
 | P3 | 多模型优化 | Qwen 等更多 provider 快速切换 |
 

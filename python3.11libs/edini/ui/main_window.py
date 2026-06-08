@@ -16,6 +16,8 @@ from edini.ui.agent_panel import AgentPanel
 from edini.ui.history_panel import HistoryPanel
 from edini.ui.context_panel import ContextPanel
 from edini.ui.vision_overlay import VisionDescriptionBubble
+from edini.eval.store import EvalStore
+from edini.ui.eval_tab import EvalTab
 from edini.ui.pi_sessions import load_pi_messages, load_pi_messages_with_images
 from edini.config import get_settings
 from edini.ui.snapshot_engine import snapshot as snap_scene, diff as diff_snapshots, restore as restore_snapshot
@@ -117,6 +119,19 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self.status = QtWidgets.QStatusBar(self)
         self.setStatusBar(self.status)
         self.status.showMessage("Ready")
+
+        # Eval dashboard button in status bar
+        self._eval_btn = QtWidgets.QPushButton("\U0001f4ca Eval")
+        self._eval_btn.setFixedWidth(60)
+        self._eval_btn.setStyleSheet(
+            f"QPushButton {{"
+            f"  color:#a1a1aa;background:#18182a;border:1px solid #252540;"
+            f"  border-radius:4px;font-size:9pt;padding:2px 6px;"
+            f"}}"
+            f"QPushButton:hover {{ color:#e5e5eb;border-color:#0bc; }}"
+        )
+        self._eval_btn.clicked.connect(self._show_eval_dashboard)
+        self.status.addPermanentWidget(self._eval_btn)
 
     def _bind_events(self):
         # Chat runtime signals
@@ -878,6 +893,43 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         if session_path == self._current_session_path:
             self._current_session_path = ""
             self.agent_panel.clear_timeline()
+
+    def _show_eval_dashboard(self):
+        """Open evaluation dashboard as a modeless dialog."""
+        if hasattr(self, '_eval_dialog') and self._eval_dialog is not None:
+            self._eval_dialog.raise_()
+            self._eval_dialog.activateWindow()
+            return
+
+        from PySide6 import QtWidgets
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Agent Evaluation Dashboard")
+        dialog.resize(900, 600)
+        dialog.setStyleSheet(
+            "QDialog { background:#0d0d1a; }"
+        )
+        layout = QtWidgets.QVBoxLayout(dialog)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        eval_store = EvalStore()
+        eval_tab = EvalTab(eval_store, parent=dialog)
+        eval_tab.navigate_to_session.connect(self._on_eval_navigate)
+        layout.addWidget(eval_tab)
+        eval_tab.refresh()
+
+        self._eval_dialog = dialog
+        dialog.finished.connect(lambda: setattr(self, '_eval_dialog', None))
+        dialog.show()
+
+    def _on_eval_navigate(self, session_id: str):
+        """Navigate to a session from evaluation dashboard."""
+        from edini.ui.pi_sessions import list_pi_sessions
+        sessions = list_pi_sessions(self._cwd)
+        for s in sessions:
+            if s["session_id"] == session_id:
+                target_path = s["path"]
+                self._on_session_selected(target_path)
+                break
 
     def refresh_theme(self):
         """Called externally after settings change to reapply theme."""
