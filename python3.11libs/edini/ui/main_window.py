@@ -346,7 +346,16 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
 
         # Sync session path for background evaluation
         self.agent_panel._current_session_path = self._current_session_path
-        self.agent_panel.finish_streaming()
+
+        # If session path not yet available (race: agent_end before session_switched),
+        # defer evaluation until session path arrives
+        if not self._current_session_path:
+            self._rpc_client.session_switched.connect(
+                self._on_deferred_eval, QtCore.Qt.QueuedConnection
+            )
+        else:
+            self.agent_panel.finish_streaming()
+
         self.agent_panel.set_busy(False)
 
         self.context_panel.refresh_scene_info()
@@ -896,6 +905,12 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         if session_path == self._current_session_path:
             self._current_session_path = ""
             self.agent_panel.clear_timeline()
+
+    def _on_deferred_eval(self, session_path: str):
+        """Called when session_switched fires after agent_done (deferred eval)."""
+        self._rpc_client.session_switched.disconnect(self._on_deferred_eval)
+        self.agent_panel._current_session_path = session_path
+        self.agent_panel.finish_streaming()
 
     def _show_eval_dashboard(self):
         """Open evaluation dashboard as a modeless dialog."""
