@@ -11,6 +11,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Any, Callable
 
 from edini.eval.store import EvalStore
+from edini.ui.knowledge_store import search_entries
 from edini.node_utils import (
     get_scene_info,  create_node, delete_node, connect_nodes,
     set_param, get_param, list_nodes, get_node_info, layout_nodes,
@@ -25,6 +26,28 @@ def get_eval_stats(period: int = 10) -> dict:
         store = EvalStore()
         stats = store.get_stats_summary(period=period)
         return {"success": True, **stats}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def _search_knowledge(query: str, category: str = "", limit: int = 10) -> dict[str, Any]:
+    """Search the knowledge base entries."""
+    try:
+        entries = search_entries(query=query, category=category, limit=limit)
+        return {
+            "success": True,
+            "query": query,
+            "match_count": len(entries),
+            "entries": [
+                {
+                    "title": e.get("title", ""),
+                    "content": e.get("content", ""),
+                    "category": e.get("category", ""),
+                    "tags": e.get("tags", []),
+                }
+                for e in entries
+            ],
+        }
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -78,6 +101,13 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     # Evaluation tools
     "edini_get_eval_stats": lambda **kw: get_eval_stats(
         period=kw.get("period", 10),
+    ),
+
+    # Knowledge tools
+    "edini_search_knowledge": lambda **kw: _search_knowledge(
+        query=kw["query"],
+        category=kw.get("category", ""),
+        limit=kw.get("limit", 10),
     ),
 }
 

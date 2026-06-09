@@ -6,9 +6,10 @@ import { sceneTools } from "./tools/scene";
 import { queryTools } from "./tools/query";
 import { scriptTools } from "./tools/script";
 import { ediniGetEvalStats } from "./tools/eval";
+import { ediniSearchKnowledge } from "./tools/knowledge";
 
 export default function (pi: ExtensionAPI) {
-  const allTools = [...sceneTools, ...queryTools, ...scriptTools, ediniGetEvalStats];
+  const allTools = [...sceneTools, ...queryTools, ...scriptTools, ediniGetEvalStats, ediniSearchKnowledge];
 
   for (const tool of allTools) {
     pi.registerTool(tool);
