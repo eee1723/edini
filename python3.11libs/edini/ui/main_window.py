@@ -637,6 +637,43 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
                         source_session=self._current_session_path)
         self.context_panel.knowledge_zone.refresh()
 
+    def _on_change_undo(self, round_num: int):
+        """Undo a specific round: restore post → pre state."""
+        for entry in self._undo_stack:
+            if entry.get("round_num") == round_num:
+                restore_snapshot(entry["post"], entry["pre"])
+                self._undo_pointer -= 1
+                self.agent_panel.change_tree_widget.mark_undone(round_num)
+                self.agent_panel.change_tree_widget.set_undo_pointer(
+                    self._undo_pointer)
+                self.status.showMessage(f"已撤销 Round {round_num}", 2000)
+                return
+
+    def _on_change_redo(self):
+        """Redo the next undone round: restore pre → post state."""
+        if self._undo_pointer + 1 < len(self._undo_stack):
+            self._undo_pointer += 1
+            entry = self._undo_stack[self._undo_pointer]
+            restore_snapshot(entry["pre"], entry["post"])
+            round_num = entry.get("round_num", 0)
+            self.agent_panel.change_tree_widget.mark_redone(round_num)
+            self.agent_panel.change_tree_widget.set_undo_pointer(
+                self._undo_pointer)
+            self.status.showMessage(f"已重做 Round {round_num}", 2000)
+
+    def _on_change_node_requested(self, node_path: str):
+        """Navigate Houdini viewport to the requested node path."""
+        try:
+            import hou
+            node = hou.node(node_path)
+            if node:
+                node.setCurrent(True, clear_all_selected=True)
+                self.status.showMessage(f"已跳转到节点: {node_path}", 1800)
+            else:
+                self.status.showMessage(f"未找到节点: {node_path}", 2200)
+        except Exception:
+            pass
+
     def _on_busy_changed(self, busy: bool):
 
         pass
