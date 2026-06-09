@@ -70,10 +70,12 @@ class SettingsDialog(QtWidgets.QDialog):
                 border-top-color: #71717a;
             }}
             QComboBox QAbstractItemView {{
-                background-color: #101018;
-                border: 1px solid #1e1e2c;
-                selection-background-color: #1a1a2a;
+                background-color: #181824;
+                border: 1px solid #2a2a3c;
+                selection-background-color: rgba(6, 182, 212, 0.2);
+                selection-color: #e5e5eb;
                 color:#c8ccd4;
+                outline: none;
             }}
             QTabWidget::pane {{
                 background: #0c0c14;
@@ -87,6 +89,26 @@ class SettingsDialog(QtWidgets.QDialog):
                 font-size: {fs(12)};
                 border: 1px solid #1e1e2c;
                 border-bottom: none;
+            }}
+            QTableWidget {{
+                background-color: #0e0e16;
+                color: #c8ccd4;
+                border: 1px solid #1e1e2c;
+                border-radius: 4px;
+                gridline-color: #1a1a2a;
+                font-size:{fs(11)};
+            }}
+            QTableWidget::item {{
+                padding: 4px 8px;
+                background: transparent;
+            }}
+            QHeaderView::section {{
+                background-color: #0c0c14;
+                color: #71717a;
+                padding: 4px 8px;
+                border: none;
+                border-bottom: 1px solid #1e1e2c;
+                font-size:{fs(10)};
             }}
             QTabBar::tab:selected {{
                 background: #0c0c14;
@@ -217,7 +239,9 @@ class SettingsDialog(QtWidgets.QDialog):
         vision_row.addWidget(self._vision_provider, 1)
         vision_row.addWidget(QtWidgets.QLabel("Model:"))
         self._vision_model = QtWidgets.QComboBox()
-        self._vision_model.setEditable(False)
+        self._vision_model.setEditable(True)
+        self._vision_model.setInsertPolicy(QtWidgets.QComboBox.NoInsert)
+        self._vision_model.lineEdit().setPlaceholderText("vision model id...")
         vision_row.addWidget(self._vision_model, 1)
         layout.addLayout(vision_row)
 
@@ -297,27 +321,16 @@ class SettingsDialog(QtWidgets.QDialog):
         # ── Vision model — only show configured providers ──
         self._vision_provider.clear()
         vision_all = get_pi_ai_vision_models()
-        vision_provider_ids = {m["provider"] for m in vision_all}
+        vision_by_provider = {}
+        for m in vision_all:
+            vision_by_provider.setdefault(m["provider"], []).append(m)
         provider_names = {p["id"]: p["name"]
                           for p in get_pi_ai_providers()}
 
         for p in configured:
             pid = p["id"]
-            # Include if: has vision models in pi-ai, OR has vision models
-            # in models.json, OR is a custom provider (user may know)
-            has_vision = pid in vision_provider_ids
-            if not has_vision:
-                custom = read_pi_models().get("providers", {}).get(pid, {})
-                for m in custom.get("models", []):
-                    if "image" in m.get("input", ["text"]):
-                        has_vision = True
-                        break
-            # Still include custom providers even without image flag
-            # (they may have models that support it but aren't tagged)
-            custom_conf = read_pi_models().get("providers", {}).get(pid, {})
-            if has_vision or custom_conf:
-                name = provider_names.get(pid, p["name"])
-                self._vision_provider.addItem(name, pid)
+            name = provider_names.get(pid, p["name"])
+            self._vision_provider.addItem(name, pid)
 
         vision_provider = settings.get("vision_provider", "")
         vidx = self._vision_provider.findData(vision_provider)

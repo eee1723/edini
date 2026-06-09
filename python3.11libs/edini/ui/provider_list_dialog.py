@@ -4,7 +4,7 @@ Used for:
   - Login: pick a provider to configure (shows all pi-ai providers)
   - Logout: pick a provider to deconfigure (shows only configured providers)
 """
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtGui, QtWidgets
 from PySide6.QtCore import Qt
 
 from edini.ui.theme import fs, accent_color
@@ -44,7 +44,7 @@ class ProviderListDialog(QtWidgets.QDialog):
             }}
             QLineEdit:focus {{ border-color: {accent_color()}; }}
             QListWidget {{
-                background-color: #0a0a12;
+                background-color: #0e0e16;
                 color: #c8ccd4;
                 border: 1px solid #1e1e2c;
                 border-radius: 6px;
@@ -56,6 +56,7 @@ class ProviderListDialog(QtWidgets.QDialog):
                 padding: 10px 14px;
                 border-radius: 4px;
                 margin: 1px 0;
+                background-color: transparent;
             }}
             QListWidget::item:selected {{
                 background-color: #1a1a2e;
@@ -63,7 +64,7 @@ class ProviderListDialog(QtWidgets.QDialog):
                 border-left: 2px solid {accent_color()};
             }}
             QListWidget::item:hover:!selected {{
-                background-color: #111120;
+                background-color: #141422;
             }}
         """)
 
@@ -138,10 +139,10 @@ class ProviderListDialog(QtWidgets.QDialog):
             # Dim unconfigured providers slightly
             if not configured:
                 item.setForeground(
-                    QtCore.QColor("#a1a1aa"))
+                    QtGui.QColor("#a1a1aa"))
             else:
                 item.setForeground(
-                    QtCore.QColor("#c8ccd4"))
+                    QtGui.QColor("#c8ccd4"))
 
             self._list.addItem(item)
 
