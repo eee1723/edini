@@ -582,6 +582,51 @@ class SettingsDialog(QtWidgets.QDialog):
             f"QCheckBox {{ color:#e5e5eb; font-size:{fs(12)}; spacing:8px; }}")
         layout.addWidget(self._knowledge_check)
 
+        # Reflection model
+        model_row = QtWidgets.QHBoxLayout()
+        model_row.setSpacing(6)
+        model_label = QtWidgets.QLabel("反思模型:")
+        model_label.setStyleSheet(f"color:#e5e5eb;font-size:{fs(11)};")
+        model_label.setFixedWidth(60)
+        model_row.addWidget(model_label)
+
+        self._reflect_provider_combo = QtWidgets.QComboBox()
+        self._reflect_provider_combo.addItem("默认（对话模型）", "")
+        self._reflect_provider_combo.setStyleSheet(f"""
+            QComboBox {{
+                background: #1a1a24; color: #e5e5eb;
+                border: 1px solid #2a2a3c; border-radius: 4px;
+                padding: 3px 6px; font-size: {fs(11)};
+                min-width: 120px;
+            }}
+            QComboBox::drop-down {{ border: none; }}
+        """)
+        # Populate from pi auth
+        from edini.config import read_pi_auth
+        for pid in read_pi_auth().keys():
+            self._reflect_provider_combo.addItem(pid, pid)
+        # Restore saved value
+        saved_prov = settings.get("reflection_provider", "")
+        idx = self._reflect_provider_combo.findData(saved_prov)
+        if idx >= 0:
+            self._reflect_provider_combo.setCurrentIndex(idx)
+        model_row.addWidget(self._reflect_provider_combo, 1)
+
+        self._reflect_model_edit = QtWidgets.QLineEdit()
+        self._reflect_model_edit.setPlaceholderText("默认（对话模型）")
+        self._reflect_model_edit.setText(settings.get("reflection_model", ""))
+        self._reflect_model_edit.setStyleSheet(f"""
+            QLineEdit {{
+                background: #1a1a24; color: #e5e5eb;
+                border: 1px solid #2a2a3c; border-radius: 4px;
+                padding: 3px 6px; font-size: {fs(11)};
+            }}
+        """)
+        self._reflect_model_edit.setFixedWidth(140)
+        model_row.addWidget(self._reflect_model_edit)
+
+        layout.addLayout(model_row)
+
         # Stats
         stats_card = QtWidgets.QFrame()
         stats_card.setStyleSheet("""
@@ -680,6 +725,8 @@ class SettingsDialog(QtWidgets.QDialog):
             "knowledge_enabled": self._knowledge_check.isChecked(),
             "vision_provider": vision_prov_id,
             "vision_model_id": vision_model_id,
+            "reflection_provider": self._reflect_provider_combo.currentData(),
+            "reflection_model": self._reflect_model_edit.text().strip(),
         })
 
         # Theme + font

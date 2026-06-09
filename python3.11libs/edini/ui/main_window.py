@@ -15,6 +15,7 @@ from edini.ui.theme import apply_theme, accent_color
 from edini.ui.agent_panel import AgentPanel
 from edini.ui.history_panel import HistoryPanel
 from edini.ui.context_panel import ContextPanel
+from edini.ui.reflect_worker import ReflectWorker
 from edini.ui.vision_overlay import VisionDescriptionBubble
 from edini.eval.store import EvalStore
 from edini.ui.eval_tab import EvalTab
@@ -53,7 +54,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self._current_session_path = ""
         self._active_session_path = ""
         self._browsing_session_path = ""
-        self._extracting_knowledge = False
+        self._reflect_worker: ReflectWorker | None = None
         self._last_capture_path = ""  # track capture→describe pairing
         self._cwd = _get_working_dir()
 
@@ -155,8 +156,6 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         # Agent panel signals
         self.agent_panel.submit_requested.connect(self._on_agent_submit)
         self.agent_panel.abort_requested.connect(self._on_abort_request)
-        self.agent_panel.knowledge_accepted.connect(self._on_knowledge_accepted)
-        self.agent_panel.knowledge_rejected.connect(self._on_knowledge_rejected)
 
         # Change tree signals
         self.agent_panel.change_tree_widget.undo_round_requested.connect(
@@ -349,11 +348,6 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         if self._undo_stack:
             self.agent_panel.change_tree_widget.expand()
 
-        # If this was an extraction response, handle separately
-        if self._extracting_knowledge:
-            self._handle_extraction_response()
-            return
-
         # Sync session path for background evaluation
         self.agent_panel._current_session_path = self._current_session_path
 
@@ -375,8 +369,8 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         # Refresh session list (message count updated)
         self.history_panel.load_sessions()
 
-        # Auto knowledge extraction
-        self._maybe_extract_knowledge()
+        # Trigger knowledge reflection in background
+        self._trigger_reflection()
 
     def _on_tool_call(self, tool_name: str, tool_call_id: str, args: dict):
         self.agent_panel.add_tool_card(tool_name, args, tool_call_id)
@@ -534,127 +528,117 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
             elapsed = self._round_elapsed.elapsed() / 1000.0
             self.context_panel.set_round_time(elapsed)
 
-    # ── Knowledge Extraction ──
+    # ── Knowledge Reflection (background) ──
 
-    # ── Change Tree undo/redo / navigation ──
-
-    def _on_change_undo(self, round_num: int):
-        """Undo a specific round: restore post → pre state."""
-        for entry in self._undo_stack:
-            if entry.get("round_num") == round_num:
-                restore_snapshot(entry["post"], entry["pre"])
-                self._undo_pointer -= 1
-                self.agent_panel.change_tree_widget.mark_undone(round_num)
-                self.agent_panel.change_tree_widget.set_undo_pointer(
-                    self._undo_pointer)
-                self.status.showMessage(f"已撤销 Round {round_num}", 2000)
-                return
-
-    def _on_change_redo(self):
-        """Redo the next undone round: restore pre → post state."""
-        if self._undo_pointer + 1 < len(self._undo_stack):
-            self._undo_pointer += 1
-            entry = self._undo_stack[self._undo_pointer]
-            restore_snapshot(entry["pre"], entry["post"])
-            round_num = entry.get("round_num", 0)
-            self.agent_panel.change_tree_widget.mark_redone(round_num)
-            self.agent_panel.change_tree_widget.set_undo_pointer(
-                self._undo_pointer)
-            self.status.showMessage(f"已重做 Round {round_num}", 2000)
-
-    def _on_change_node_requested(self, node_path: str):
-        """Navigate Houdini viewport to the requested node path."""
-        try:
-            import hou
-            node = hou.node(node_path)
-            if node:
-                node.setCurrent(True, clear_all_selected=True)
-                self.status.showMessage(f"已跳转到节点: {node_path}", 1800)
-            else:
-                self.status.showMessage(f"未找到节点: {node_path}", 2200)
-        except Exception:
-            pass
-
-    # ── Knowledge Extraction ──
-
-    def _maybe_extract_knowledge(self):
-        """After conversation finishes, optionally trigger knowledge extraction."""
+    def _trigger_reflection(self):
+        """Start background knowledge reflection after conversation ends."""
         settings = get_settings()
         if not settings.get("knowledge_enabled", True):
             return
-        if self._extracting_knowledge:
+        if not self._current_session_path:
             return
-        self._extracting_knowledge = True
-        self.status.showMessage("Extracting knowledge...")
 
-        prompt = (
-            "Review the conversation above and identify mistakes, pitfalls, or tricky situations "
-            "that are LIKELY TO BE REPEATED in future Houdini work.\n\n"
-            "🔴 ONLY extract if ALL of these are true:\n"
-            "1. A concrete mistake was made, or something unexpectedly failed\n"
-            "2. The solution was non-obvious — an experienced Houdini user might also forget this\n"
-            "3. Without this reminder, the same mistake would likely happen again\n\n"
-            "✋ DO NOT extract:\n"
-            "- Generic Houdini knowledge that any LLM already knows (node types, basic workflows)\n"
-            "- Things that worked correctly the first time\n"
-            "- Standard API documentation facts\n"
-            "- Obvious tips like 'check your parameters before rendering'\n\n"
-            "Return a JSON array. If nothing qualifies, return [].\n\n"
-            "Each object:\n"
-            '- type: "rule" OR "entry". Use this test: "If I start a brand new Houdini project tomorrow, '
-            'will this still apply?" YES → "rule", NO (only applies to this specific case/tool) → "entry"\n'
-            '- category: prefer "避坑", use "配置" for config issues, "工作流" for workflow gotchas\n'
-            '- title: short summary in Chinese (max 30 chars)\n'
-            '- content: WHAT went wrong + WHY + HOW to avoid next time (1-3 sentences)\n'
-            '- tags: optional search keywords\n\n'
-            'Rule examples: "Node creation order matters for DOP networks" (applies to all DOPs)\n'
-            'Entry examples: "第3个Resample节点需要关闭MaxSegments否则崩" (applies to this one setup)\n\n'
-            'Examples: [{"type":"rule","category":"避坑","title":"DOP解算中节点顺序影响结果","content":"在DOP网络中，解算器顺序改变会完全改变模拟结果。GasTurbulence必须关闭否则大尺度烟雾数值爆炸。所有DOP项目适用。","tags":["dop","sim"]}]'
-        )
-        self.agent_panel.begin_assistant_message()
-        QtCore.QTimer.singleShot(300, lambda: self._rpc_client.send_prompt(prompt))
+        try:
+            from edini.config import read_pi_auth, read_pi_settings, read_pi_models
+            pi_settings = read_pi_settings()
+            pi_auth = read_pi_auth()
 
-    def _handle_extraction_response(self):
-        """Capture extraction response directly (not from timeline HTML)."""
-        from edini.ui.knowledge_store import parse_extraction_response
+            provider = (settings.get("reflection_provider")
+                       or pi_settings.get("defaultProvider", "deepseek"))
+            model = (settings.get("reflection_model")
+                    or pi_settings.get("defaultModel", "deepseek-chat"))
 
-        raw_text = self.agent_panel.get_raw_stream_text()
-        self.agent_panel.cancel_current_stream()
-        self.agent_panel.set_busy(False)
-
-        items, error_text = parse_extraction_response(raw_text)
-
-        if items:
-            self.agent_panel.show_extraction_results(items)
-            self.status.showMessage(
-                f"Knowledge: {len(items)} items found — review below")
-        else:
-            self._extracting_knowledge = False
-            if error_text:
-                self.status.showMessage(
-                    "Knowledge extraction failed — check Houdini Console")
+            provider_auth = pi_auth.get(provider, {})
+            if isinstance(provider_auth, dict):
+                api_key = provider_auth.get("key", "")
+            elif isinstance(provider_auth, str):
+                api_key = provider_auth
             else:
-                self.status.showMessage("No new knowledge to extract")
+                api_key = ""
 
-    def _on_knowledge_accepted(self, items: list):
-        """User accepted extracted knowledge items — save them."""
-        self._extracting_knowledge = False
-        from edini.ui.knowledge_store import accept_extracted
-        r, e = accept_extracted(items, self._current_session_path)
-        parts = []
-        if r:
-            parts.append(f"{r} 条铁律")
-        if e:
-            parts.append(f"{e} 条知识")
-        self.status.showMessage(f"Knowledge saved: {' + '.join(parts)}" if parts else "Ready")
-        self.context_panel.refresh_knowledge()
+            base_url = None
+            models_conf = read_pi_models()
+            prov_conf = models_conf.get("providers", {}).get(provider, {})
+            if isinstance(prov_conf, dict) and "baseUrl" in prov_conf:
+                base_url = prov_conf["baseUrl"]
 
-    def _on_knowledge_rejected(self):
-        """User rejected all extracted knowledge."""
-        self._extracting_knowledge = False
+            if not api_key:
+                return
+
+        except Exception:
+            return
+
+        self.context_panel.knowledge_zone.show_reflection_status(
+            "🔄 Reflecting...")
+
+        self._reflect_worker = ReflectWorker(
+            session_path=self._current_session_path,
+            provider=provider,
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+        )
+        self._reflect_worker.reflection_done.connect(
+            self._on_reflection_done)
+        self._reflect_worker.reflection_failed.connect(
+            self._on_reflection_failed)
+        self._reflect_worker.reflection_status.connect(
+            self.context_panel.knowledge_zone.show_reflection_status)
+        self._reflect_worker.start()
+
+    def _on_reflection_done(self, items: list):
+        """Handle reflection results."""
+        if items:
+            self.context_panel.knowledge_zone.show_reflection_results(items)
+            self.context_panel.knowledge_zone.items_accepted.connect(
+                self._on_knowledge_items_accepted, QtCore.Qt.UniqueConnection)
+        else:
+            self.context_panel.knowledge_zone._reflect_area.setVisible(False)
         self.status.showMessage("Ready")
 
+    def _on_reflection_failed(self, error: str):
+        """Handle reflection failure silently."""
+        self.context_panel.knowledge_zone.show_reflection_status(
+            f"⚠️ Reflection failed: {error[:50]}")
+        QtCore.QTimer.singleShot(
+            3000,
+            lambda: self.context_panel.knowledge_zone._reflect_area.setVisible(False))
+        self.status.showMessage("Ready")
+
+    def _on_knowledge_items_accepted(self, items: list):
+        """Save accepted knowledge items."""
+        from edini.ui.knowledge_store import (
+            add_rule, add_entry, merge_entry,
+        )
+        for item in items:
+            action = item.get("_action", "new")
+            if action == "merge":
+                target = item.get("_merge_target", {})
+                target_id = target.get("id", "")
+                if target_id:
+                    merge_entry(
+                        target_id,
+                        item.get("title", ""),
+                        item.get("content", ""),
+                        item.get("tags"),
+                    )
+            else:
+                if item.get("type") == "rule":
+                    add_rule(
+                        item.get("category", "避坑"),
+                        item.get("title", ""),
+                        item.get("content", ""))
+                else:
+                    add_entry(
+                        item.get("category", "技巧"),
+                        item.get("title", ""),
+                        item.get("content", ""),
+                        tags=item.get("tags", []),
+                        source_session=self._current_session_path)
+        self.context_panel.knowledge_zone.refresh()
+
     def _on_busy_changed(self, busy: bool):
+
         pass
 
     def _on_status_changed(self, status: str):
@@ -722,7 +706,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         """Render messages from pi in the agent panel."""
         # This is a fallback; normally we load from local file synchronously
         messages = self._merge_consecutive_assistants(messages)
-        messages = self._filter_knowledge_extraction(messages)
+        messages = messages
         self.agent_panel.clear_timeline()
         for m in messages:
             _type = m.get("_type", m.get("role", ""))
@@ -737,25 +721,6 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
                     self.agent_panel._append_thinking_text(t)
                 if content:
                     self.agent_panel._append_assistant_message(content)
-
-    _KNOWLEDGE_PROMPT_PREFIX = "Review the conversation above and identify mistakes"
-
-    def _filter_knowledge_extraction(self, messages: list) -> list:
-        """Remove knowledge extraction prompt/response pairs from display."""
-        result = []
-        skip_next = False
-        for m in messages:
-            role = m.get("role", "")
-            content = m.get("content", "")
-            if role == "user" and isinstance(content, str):
-                if content.startswith(self._KNOWLEDGE_PROMPT_PREFIX):
-                    skip_next = True
-                    continue
-            if skip_next and role == "assistant":
-                skip_next = False
-                continue
-            result.append(m)
-        return result
 
     def _merge_consecutive_assistants(self, messages: list) -> list:
         """Merge consecutive assistant messages into single entries.
@@ -850,7 +815,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         # Load messages directly from local JSONL for instant rendering
         messages = load_pi_messages_with_images(session_path)
         messages = self._merge_consecutive_assistants(messages)
-        messages = self._filter_knowledge_extraction(messages)
+        messages = messages
         for m in messages:
             _type = m.get("_type", m.get("role", ""))
             content = m.get("content", "")
@@ -883,7 +848,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
 
             messages = load_pi_messages_with_images(target)
             messages = self._merge_consecutive_assistants(messages)
-            messages = self._filter_knowledge_extraction(messages)
+            messages = messages
             for m in messages:
                 _type = m.get("_type", m.get("role", ""))
                 content = m.get("content", "")
