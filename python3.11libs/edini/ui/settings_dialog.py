@@ -342,9 +342,6 @@ class SettingsDialog(QtWidgets.QDialog):
         vidx = self._vision_provider.findData(vision_provider)
         if vidx >= 0:
             self._vision_provider.setCurrentIndex(vidx)
-
-        self._vision_model.clear()
-        if vision_provider:
             self._on_vision_provider_changed(vision_provider)
             vision_model = settings.get("vision_model_id", "")
             vmidx = self._vision_model.findData(vision_model)
