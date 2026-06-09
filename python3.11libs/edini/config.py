@@ -12,8 +12,13 @@ import os
 from pathlib import Path
 from typing import Any
 
-# Project root (parent of edini/)
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# Project root (parent of the top-level edini/ directory).
+# Handles both paths: edini/config.py and python3.11libs/edini/config.py
+_config_dir = Path(__file__).resolve().parent
+if _config_dir.name == "edini" and _config_dir.parent.name == "python3.11libs":
+    PROJECT_ROOT = _config_dir.parent.parent  # python3.11libs/edini → up 2 levels
+else:
+    PROJECT_ROOT = _config_dir.parent         # edini/ → up 1 level (top-level package)
 
 # ── Pi agent config files (shared with pi CLI) ──────────────────────
 PI_AGENT_DIR = Path.home() / ".pi" / "agent"
