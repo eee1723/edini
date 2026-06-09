@@ -5,18 +5,15 @@ Model/provider/API-key configuration is managed via pi's standard files:
   ~/.pi/agent/models.json  — custom provider/model definitions
   ~/.pi/agent/settings.json — default provider/model/thinking
 
-Edini's own settings.json stores only UI preferences (theme, font, knowledge).
+Edini's own settings.json stores only UI preferences (knowledge).
 """
 import json
 import os
-import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
-# config.py is at python3.11libs/edini/config.py
-# Project root is 3 levels up: edini/ -> python3.11libs/ -> project root/
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+# Project root (parent of edini/)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # ── Pi agent config files (shared with pi CLI) ──────────────────────
 PI_AGENT_DIR = Path.home() / ".pi" / "agent"
@@ -24,7 +21,7 @@ PI_AUTH_FILE = PI_AGENT_DIR / "auth.json"
 PI_MODELS_FILE = PI_AGENT_DIR / "models.json"
 PI_SETTINGS_FILE = PI_AGENT_DIR / "settings.json"
 
-# Edini's own local settings (theme, font, knowledge — NOT provider/model/key)
+# Edini's own local settings (knowledge — NOT provider/model/key)
 EDINI_SETTINGS_FILE = Path(__file__).resolve().parent / "settings.json"
 
 # Pi executable (from npm global install)
@@ -124,15 +121,11 @@ def write_pi_settings(data: dict) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Edini UI Settings (theme, font, knowledge only)
+# Edini UI Settings (knowledge only)
 # ═══════════════════════════════════════════════════════════════════════
 
 _EDINI_DEFAULTS: dict[str, Any] = {
-    "theme_color": "cyan",
-    "font_scale": 1.0,
     "knowledge_enabled": True,
-    "vision_provider": "",
-    "vision_model_id": "",
 }
 
 
@@ -193,7 +186,6 @@ def migrate_legacy_settings() -> str | None:
     old.pop("api_key", None)
     old.pop("provider", None)
     old.pop("model_id", None)
-    old.pop("vision_api_key", None)
     _atomic_write_json(EDINI_SETTINGS_FILE, old)
 
     return f"✅ Migrated: {old_provider}/{old_model} → ~/.pi/agent/"
@@ -209,191 +201,18 @@ def get_pi_env() -> dict[str, str]:
     Pi reads ~/.pi/agent/auth.json itself on startup, so no API key
     injection via env vars is needed.
     """
-    env = {
+    return {
         **os.environ,
         "EDINI_TOOL_PORT": str(TOOL_EXECUTOR_PORT),
     }
-    # Pass vision config for pi-visionizer backward compat during transition.
-    settings = get_settings()
-    vision_provider = settings.get("vision_provider", "")
-    vision_model = settings.get("vision_model_id", "")
-    if vision_provider and vision_model:
-        env["VISIONIZER_PROVIDER"] = vision_provider
-        env["VISIONIZER_MODEL_ID"] = vision_model
-    return env
 
 
 def get_pi_command() -> list[str]:
     """Build the Pi subprocess command."""
-    cmds = [
+    return [
         PI_EXECUTABLE,
         "--mode", "rpc",
         "-e", str(PI_EXTENSIONS_DIR / "edini-tools" / "index.ts"),
         "-e", str(PI_EXTENSIONS_DIR / "edini-context" / "index.ts"),
         "-e", str(PI_EXTENSIONS_DIR / "pi-visionizer" / "src" / "index.ts"),
     ]
-    # Add 智谱 extension if it exists
-    zhipu_ext = PI_EXTENSIONS_DIR / "edini-zhipu" / "index.ts"
-    if zhipu_ext.exists():
-        cmds.extend(["-e", str(zhipu_ext)])
-    return cmds
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# Model History (user input memory)
-# ═══════════════════════════════════════════════════════════════════════
-
-_MODEL_HISTORY_FILE = Path(__file__).resolve().parent / "model_history.json"
-_MAX_MODEL_HISTORY = 10
-
-
-def get_model_history() -> list[str]:
-    """Return list of previously used model names, newest first."""
-    if _MODEL_HISTORY_FILE.exists():
-        try:
-            with open(_MODEL_HISTORY_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError):
-            pass
-    return []
-
-
-def add_model_history(model_name: str) -> None:
-    """Add a model name to history, keeping last 10 unique entries."""
-    history = get_model_history()
-    if model_name in history:
-        history.remove(model_name)
-    history.insert(0, model_name)
-    history = history[:_MAX_MODEL_HISTORY]
-    with open(_MODEL_HISTORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(history, f, indent=2, ensure_ascii=False)
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# Pi-AI Data Bridge (auto-synced provider/model data)
-# ═══════════════════════════════════════════════════════════════════════
-
-_BRIDGE_SCRIPT = Path(__file__).resolve().parent / "pi_data_bridge.js"
-_providers_cache: list[dict] | None = None
-_models_cache: dict[str, list[dict]] = {}
-_vision_models_cache: list[dict] | None = None
-
-
-def _run_bridge(*args: str) -> Any:
-    """Run pi_data_bridge.js and return parsed JSON output."""
-    cmd = ["node", str(_BRIDGE_SCRIPT)] + list(args)
-    try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=10,
-            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return json.loads(result.stdout.strip())
-    except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError):
-        pass
-    return None
-
-
-def get_pi_ai_providers() -> list[dict]:
-    """Get all providers from pi-ai. Cached for process lifetime.
-    Returns list of {id, name, modelCount, imageModelCount}."""
-    global _providers_cache
-    if _providers_cache is None:
-        _providers_cache = _run_bridge("providers") or []
-    return _providers_cache
-
-
-def get_pi_ai_models(provider: str) -> list[dict]:
-    """Get models for a provider from pi-ai. Cached per provider.
-    Returns list of {id, name, reasoning, input}."""
-    if provider not in _models_cache:
-        data = _run_bridge("models", provider) or []
-        _models_cache[provider] = data
-    return _models_cache[provider]
-
-
-def get_pi_ai_vision_models() -> list[dict]:
-    """Get all vision-capable models from pi-ai. Cached.
-    Returns list of {provider, id, name, reasoning}."""
-    global _vision_models_cache
-    if _vision_models_cache is None:
-        _vision_models_cache = _run_bridge("vision-models") or []
-    return _vision_models_cache
-
-
-def get_provider_auth_status(provider: str) -> dict:
-    """Check auth status for a provider.
-    Returns {configured: bool, source: str|None, hint: str|None}.
-    Priority: auth.json > models.json > env var."""
-    # Check auth.json
-    auth = read_pi_auth()
-    if provider in auth:
-        entry = auth[provider]
-        if isinstance(entry, dict) and entry.get("type") == "api_key":
-            key = entry.get("key", "")
-            hint = key[:8] + "..." + key[-4:] if len(key) > 12 else key
-            return {"configured": True, "source": "auth.json", "hint": hint}
-
-    # Check models.json
-    models = read_pi_models()
-    prov_config = models.get("providers", {}).get(provider, {})
-    if prov_config.get("apiKey"):
-        return {"configured": True, "source": "models.json",
-                "hint": prov_config["apiKey"][:20] + "..."}
-
-    # Check env vars
-    env_map = {
-        "anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY",
-        "deepseek": "DEEPSEEK_API_KEY", "google": "GEMINI_API_KEY",
-        "mistral": "MISTRAL_API_KEY", "groq": "GROQ_API_KEY",
-        "cerebras": "CEREBRAS_API_KEY", "xai": "XAI_API_KEY",
-        "openrouter": "OPENROUTER_API_KEY", "nvidia": "NVIDIA_API_KEY",
-        "fireworks": "FIREWORKS_API_KEY", "together": "TOGETHER_API_KEY",
-        "huggingface": "HF_TOKEN", "zai": "ZAI_API_KEY",
-        "zai-coding-cn": "ZAI_CODING_CN_API_KEY",
-        "opencode": "OPENCODE_API_KEY",
-        "kimi-coding": "KIMI_API_KEY",
-        "minimax": "MINIMAX_API_KEY", "minimax-cn": "MINIMAX_CN_API_KEY",
-        "xiaomi": "XIAOMI_API_KEY",
-    }
-    env_var = env_map.get(provider, "")
-    if env_var and os.environ.get(env_var):
-        return {"configured": True, "source": "env", "hint": env_var}
-
-    return {"configured": False, "source": None, "hint": None}
-
-
-def get_configured_providers() -> list[dict]:
-    """Get list of providers that have auth configured.
-    Returns list of {id, name, source, hint}."""
-    all_providers = get_pi_ai_providers()
-    # Also include providers from auth.json/models.json not in pi-ai
-    extra_ids = set()
-    for p in read_pi_auth().keys():
-        extra_ids.add(p)
-    for p in read_pi_models().get("providers", {}).keys():
-        extra_ids.add(p)
-
-    result = []
-    for p in all_providers:
-        status = get_provider_auth_status(p["id"])
-        if status["configured"]:
-            result.append({
-                "id": p["id"], "name": p["name"],
-                "source": status["source"], "hint": status["hint"],
-            })
-
-    # Add custom providers from models.json not in pi-ai list
-    pi_ai_ids = {p["id"] for p in all_providers}
-    for pid in sorted(extra_ids - pi_ai_ids):
-        status = get_provider_auth_status(pid)
-        if status["configured"]:
-            display = read_pi_models().get("providers", {}).get(pid, {})
-            result.append({
-                "id": pid,
-                "name": display.get("name", pid),
-                "source": status["source"],
-                "hint": status["hint"],
-            })
-
-    return result

@@ -6,8 +6,6 @@ Runs on a QThread to avoid blocking the Houdini UI.
 from __future__ import annotations
 
 import json
-import os
-import sys
 import subprocess
 from typing import Any
 
@@ -23,21 +21,15 @@ class RpcClient(QObject):
     """
 
     text_delta = Signal(str)                # Streaming text chunk
-    thinking_delta = Signal(str)            # Thinking/reasoning text chunk
     tool_call = Signal(str, str, object)    # tool_name, tool_call_id, args dict
-    tool_result = Signal(str, str, str)     # tool_name, tool_call_id, result
     agent_started = Signal()
     agent_finished = Signal()
     error_occurred = Signal(str)
     status_changed = Signal(str)
     stats_updated = Signal(object)          # dict: tokens, cost, contextUsage
+
     messages_received = Signal(object)       # list: messages from get_messages
     session_switched = Signal(str)           # session path after switch
-    extension_info = Signal(str)            # info/warning from pi extensions (tools loaded, etc.)
-    vision_description = Signal(object)     # vision model descriptions from pi-visionizer
-    models_received = Signal(object)        # list of model dicts from get_available_models
-    model_changed = Signal(object)          # model dict from set_model / cycle_model
-    thinking_changed = Signal(str)          # thinking level string
 
     def __init__(self, parent: QObject | None = None):
         super().__init__(parent)
@@ -66,9 +58,7 @@ class RpcClient(QObject):
         self._worker.moveToThread(self._thread)
 
         self._worker.text_delta.connect(self.text_delta)
-        self._worker.thinking_delta.connect(self.thinking_delta)
         self._worker.tool_call.connect(self.tool_call)
-        self._worker.tool_result.connect(self.tool_result)
         self._worker.agent_started.connect(self.agent_started)
         self._worker.agent_finished.connect(self.agent_finished)
         self._worker.error_occurred.connect(self.error_occurred)
@@ -76,11 +66,6 @@ class RpcClient(QObject):
         self._worker.stats_received.connect(self.stats_updated)
         self._worker.messages_received.connect(self.messages_received)
         self._worker.session_switched.connect(self.session_switched)
-        self._worker.extension_info.connect(self.extension_info)
-        self._worker.vision_description.connect(self.vision_description)
-        self._worker.models_received.connect(self.models_received)
-        self._worker.model_changed.connect(self.model_changed)
-        self._worker.thinking_changed.connect(self.thinking_changed)
 
         self._thread.started.connect(self._worker.run)
         self._thread.start()
@@ -106,7 +91,6 @@ class RpcClient(QObject):
             cmd: dict[str, Any] = {"type": "prompt", "message": text}
             if images:
                 cmd["images"] = images
-                pass  # images attached
             self._worker.send_command(cmd)
 
     def send_abort(self) -> None:
@@ -164,21 +148,6 @@ class RpcClient(QObject):
         if self._worker:
             self._worker.send_command({"type": "get_messages"})
 
-    def send_get_available_models(self) -> None:
-        """Request list of all configured models from Pi."""
-        if self._worker:
-            self._worker.send_command({"type": "get_available_models"})
-
-    def send_cycle_model(self) -> None:
-        """Cycle to the next available model."""
-        if self._worker:
-            self._worker.send_command({"type": "cycle_model"})
-
-    def send_set_thinking_level(self, level: str) -> None:
-        """Set thinking level: off, minimal, low, medium, high, xhigh."""
-        if self._worker:
-            self._worker.send_command({"type": "set_thinking_level", "level": level})
-
     def restart(self) -> None:
         """Restart the Pi subprocess (needed after API key change)."""
         was_running = self._is_running
@@ -191,9 +160,7 @@ class _RpcWorker(QObject):
     """Worker object running on a QThread. Manages subprocess I/O."""
 
     text_delta = Signal(str)
-    thinking_delta = Signal(str)
     tool_call = Signal(str, str, object)
-    tool_result = Signal(str, str, str)
     agent_started = Signal()
     agent_finished = Signal()
     error_occurred = Signal(str)
@@ -201,11 +168,6 @@ class _RpcWorker(QObject):
     stats_received = Signal(object)
     messages_received = Signal(object)
     session_switched = Signal(str)
-    extension_info = Signal(str)            # info/warning from pi extensions (tools loaded, etc.)
-    vision_description = Signal(object)      # vision model descriptions from pi-visionizer
-    models_received = Signal(object)        # list of model dicts from get_available_models
-    model_changed = Signal(object)          # model dict from set_model / cycle_model
-    thinking_changed = Signal(str)          # thinking level string
 
     def __init__(self, pi_cmd: list[str], tool_port: int, cwd: str | None = None):
         super().__init__()
@@ -218,40 +180,17 @@ class _RpcWorker(QObject):
     def run(self) -> None:
         """Start Pi subprocess and read stdout JSONL events."""
         try:
-            popen_kwargs: dict[str, Any] = {
-                "stdin": subprocess.PIPE,
-                "stdout": subprocess.PIPE,
-                "stderr": subprocess.PIPE,
-                "text": True,
-                "bufsize": 1,
-                "env": get_pi_env(),
-                "cwd": self._cwd,
-            }
-            # On Windows, suppress console window when spawning pi.cmd
-            if sys.platform == "win32":
-                popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                startupinfo.wShowWindow = subprocess.SW_HIDE
-                popen_kwargs["startupinfo"] = startupinfo
-
-            self._process = subprocess.Popen(self._pi_cmd, **popen_kwargs)
+            self._process = subprocess.Popen(
+                self._pi_cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+                cwd=self._cwd,
+                env=get_pi_env(),
+            )
             self.status_changed.emit("connected")
-
-            # ── Read stderr in a daemon thread for debug logging ──
-            import threading
-            def _read_stderr():
-                try:
-                    for line in self._process.stderr:
-                        if self._should_stop:
-                            break
-                        line = line.strip()
-                        if line:
-                            # Print to Houdini console for debugging
-                            print(f"[pi:stderr] {line}", flush=True)
-                except Exception:
-                    pass
-            threading.Thread(target=_read_stderr, daemon=True).start()
 
             for line in self._process.stdout:
                 if self._should_stop:
@@ -283,16 +222,9 @@ class _RpcWorker(QObject):
         if self._process:
             try:
                 self._process.terminate()
-                try:
-                    self._process.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    self._process.kill()
-                    self._process.wait(timeout=2)
+                self._process.wait(timeout=3)
             except Exception:
-                try:
-                    self._process.kill()
-                except Exception:
-                    pass
+                self._process.kill()
 
     def send_command(self, cmd: dict[str, Any]) -> None:
         """Send a JSON command to Pi's stdin."""
@@ -309,24 +241,14 @@ class _RpcWorker(QObject):
 
         if event_type == "message_update":
             delta = event.get("assistantMessageEvent", {})
-            delta_type = delta.get("type", "")
-            if delta_type == "text_delta":
+            if delta.get("type") == "text_delta":
                 self.text_delta.emit(delta.get("delta", ""))
-            elif delta_type == "thinking_delta":
-                self.thinking_delta.emit(delta.get("delta", ""))
 
         elif event_type == "tool_execution_start":
             self.tool_call.emit(
                 event.get("toolName", ""),
                 event.get("toolCallId", ""),
                 event.get("args", {}),
-            )
-
-        elif event_type == "tool_execution_end":
-            self.tool_result.emit(
-                event.get("toolName", ""),
-                event.get("toolCallId", ""),
-                json.dumps(event.get("result", {}), ensure_ascii=True),
             )
 
         elif event_type == "agent_start":
@@ -346,6 +268,7 @@ class _RpcWorker(QObject):
             elif event.get("command") == "new_session":
                 data = event.get("data", {})
                 if not data.get("cancelled", False):
+                    # Request state to get the new session path
                     self.send_command({"type": "get_state"})
             elif event.get("command") == "switch_session":
                 data = event.get("data", {})
@@ -356,35 +279,12 @@ class _RpcWorker(QObject):
                 session_file = data.get("sessionFile", "")
                 if session_file:
                     self.session_switched.emit(session_file)
-            elif event.get("command") == "get_available_models":
-                data = event.get("data", {})
-                self.models_received.emit(data.get("models", []))
-            elif event.get("command") == "set_model":
-                data = event.get("data", {})
-                if data:
-                    self.model_changed.emit(data)
-            elif event.get("command") == "cycle_model":
-                data = event.get("data", {})
-                if data and data.get("model"):
-                    self.model_changed.emit(data.get("model"))
-                    self.thinking_changed.emit(data.get("thinkingLevel", ""))
 
         elif event_type == "extension_error":
             self.error_occurred.emit(f"Extension: {event.get('error', '')}")
 
         elif event_type == "extension_ui_request":
             if event.get("method") == "notify":
-                notify_type = event.get("notifyType", "info")
-                message = event.get("message", "")
-                # Check for vision_description payload from pi-visionizer
-                try:
-                    payload = json.loads(message)
-                    if isinstance(payload, dict) and payload.get("event") == "vision_description":
-                        self.vision_description.emit(payload.get("descriptions", []))
-                        return
-                except (json.JSONDecodeError, TypeError):
-                    pass
-                if notify_type == "error":
-                    self.error_occurred.emit(f"[{notify_type}] {message}")
-                else:
-                    self.extension_info.emit(message)
+                self.error_occurred.emit(
+                    f"[{event.get('notifyType', 'info')}] {event.get('message', '')}"
+                )

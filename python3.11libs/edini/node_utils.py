@@ -283,68 +283,16 @@ def list_nodes(parent_path: str = "/", type_filter: str | None = None) -> dict[s
         return {"success": False, "error": str(e)}
 
 
-def _safe_parm_value(p) -> Any:
-    """Safely evaluate a parameter, returning a JSON-safe value.
-
-    Handles Ramp and other non-serializable parameter types.
-    """
-    try:
-        raw = p.rawValue()
-        # Ramp parameters are not JSON serializable
-        if isinstance(raw, hou.Ramp):
-            return {
-                "_type": "ramp",
-                "basis": str(raw.basis()),
-                "keys": [
-                    {"pos": k.position(), "value": k.value()}
-                    for k in raw.keys()
-                ],
-            }
-        # Data (file contents) can be huge — return metadata instead
-        if isinstance(raw, hou.Data):
-            return {"_type": "data", "size": len(str(raw)) if raw else 0}
-        # Try eval, fallback to raw
-        try:
-            v = p.eval()
-            # Check serializability
-            json.dumps(v)
-            return v
-        except (TypeError, ValueError, json.JSONDecodeError):
-            pass
-        # Stringify anything else
-        return {"_type": type(raw).__name__, "_repr": str(raw)[:200]}
-    except Exception:
-        return {"_type": "error", "_repr": f"<{p.name()}: eval failed>"}
-
-
 def get_node_info(node_path: str) -> dict[str, Any]:
     """Get detailed info about a specific node."""
     try:
-        import json
         node = hou.node(node_path)
         if node is None:
             return {"success": False, "error": f"Node not found: {node_path}"}
 
-        # For HDA nodes, need to unlock to see children
-        children = []
-        try:
-            node.allowEditingOfContents(True)
-            for child in node.children():
-                children.append({
-                    "name": child.name(),
-                    "path": child.path(),
-                    "type": child.type().name(),
-                })
-        except Exception:
-            pass
-
         parms = []
         for p in node.parms():
-            parms.append({
-                "name": p.name(),
-                "label": p.description(),
-                "value": _safe_parm_value(p),
-            })
+            parms.append({"name": p.name(), "label": p.description(), "value": p.eval()})
 
         return {
             "success": True,
@@ -355,9 +303,7 @@ def get_node_info(node_path: str) -> dict[str, Any]:
             "inputs": [inp.path() if inp else None for inp in node.inputs()],
             "outputs": [out.path() for out in node.outputs()],
             "parameters": parms,
-            "children": children,
             "is_time_dependent": node.isTimeDependent(),
-            "is_hda": node.type().definition() is not None,
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -548,6 +494,101 @@ def create_hda(node_path: str, hda_name: str, hda_label: str = "") -> dict[str, 
         return {"success": False, "error": str(e)}
 
 
+# ---------------------------------------------------------------------------
+# Capture / Screenshot Operations
+# ---------------------------------------------------------------------------
+
+def capture_viewport(filepath: str) -> dict[str, Any]:
+    """Capture the active scene viewport as an image file.
+
+    Uses Qt's grab() on the Scene Viewer pane tab widget, then saves as PNG.
+    This captures exactly what the user sees (including gizmos, handles, etc.).
+    """
+    try:
+        from PySide6.QtWidgets import QApplication
+        import os
+
+        desktop = hou.ui.curDesktop()
+        viewer = desktop.paneTabOfType(hou.paneTabType.SceneViewer)
+        if viewer is None:
+            return {"success": False, "error": "No Scene Viewer pane found"}
+
+        # Process pending events so viewport is up-to-date
+        QApplication.processEvents()
+
+        # Ensure output directory exists
+        os.makedirs(os.path.dirname(os.path.abspath(filepath)) or ".", exist_ok=True)
+
+        # hou.PaneTab inherits from QWidget in Houdini 21/PySide6
+        pixmap = viewer.grab()
+        pixmap.save(filepath, "PNG")
+
+        if os.path.exists(filepath):
+            size_kb = round(os.path.getsize(filepath) / 1024, 1)
+            width = pixmap.width()
+            height = pixmap.height()
+            return {
+                "success": True,
+                "path": filepath,
+                "size_kb": size_kb,
+                "width": width,
+                "height": height,
+            }
+        return {"success": False, "error": f"File not created: {filepath}"}
+    except AttributeError as e:
+        return {"success": False, "error": f"Viewport grab failed (API mismatch): {e}"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def capture_network(
+    filepath: str,
+    parent_path: str = "/obj",
+) -> dict[str, Any]:
+    """Capture the node network editor as an image.
+
+    Navigates to the requested parent path, then grabs the Network Editor
+    pane tab widget. Returns the image dimensions and filesize.
+    """
+    try:
+        from PySide6.QtWidgets import QApplication
+        import os
+
+        desktop = hou.ui.curDesktop()
+        editor = desktop.paneTabOfType(hou.paneTabType.NetworkEditor)
+        if editor is None:
+            return {"success": False, "error": "No Network Editor pane found"}
+
+        # Navigate to the requested parent path
+        target = hou.node(parent_path)
+        if target is not None:
+            editor.setPwd(target)
+
+        QApplication.processEvents()
+
+        # Ensure output directory exists
+        os.makedirs(os.path.dirname(os.path.abspath(filepath)) or ".", exist_ok=True)
+
+        pixmap = editor.grab()
+        pixmap.save(filepath, "PNG")
+
+        if os.path.exists(filepath):
+            size_kb = round(os.path.getsize(filepath) / 1024, 1)
+            return {
+                "success": True,
+                "path": filepath,
+                "size_kb": size_kb,
+                "width": pixmap.width(),
+                "height": pixmap.height(),
+                "parent_path": parent_path,
+            }
+        return {"success": False, "error": f"File not created: {filepath}"}
+    except AttributeError as e:
+        return {"success": False, "error": f"Network grab failed (API mismatch): {e}"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 def get_hda_info(hda_name: str) -> dict[str, Any]:
     """Get information about an HDA definition."""
     try:
@@ -555,36 +596,24 @@ def get_hda_info(hda_name: str) -> dict[str, Any]:
         if definition is None:
             return {"success": False, "error": f"HDA '{hda_name}' not found in loaded definitions"}
 
-        # HDADefinition doesn't have .name() / .description() / .label() directly
-        # Use the node type for those properties
-        node_type_name = definition.nodeTypeName()  # works — returns 'mynamespace::myname::2.0'
-        category = None
-        for cat in hou.nodeTypeCategories().values():
-            nt = cat.nodeType(node_type_name)
-            if nt is not None:
-                category = cat.name()
-                break
-
         return {
             "success": True,
-            "name": node_type_name,
-            "type_label": definition.description() if hasattr(definition, 'description') else "",
-            "category": category or "",
+            "name": definition.nodeTypeName(),
+            "description": definition.description(),
             "path": definition.libraryFilePath(),
             "version": definition.version(),
             "is_editable": definition.isEditable(),
-            "node_count": len(definition.sections()) if hasattr(definition, 'sections') else 0,
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 
 # ---------------------------------------------------------------------------
-# Selection / Errors / Display Flag — missing handlers from tool_executor
+# Context / Inspection Operations
 # ---------------------------------------------------------------------------
 
 def get_selection() -> dict[str, Any]:
-    """Get the list of currently selected nodes."""
+    """Get the user's currently selected nodes."""
     try:
         selected = hou.selectedNodes()
         nodes = []
@@ -593,70 +622,64 @@ def get_selection() -> dict[str, Any]:
                 "name": n.name(),
                 "path": n.path(),
                 "type": n.type().name(),
-                "type_label": n.type().description(),
             })
-        return {
-            "success": True,
-            "selection_count": len(nodes),
-            "nodes": nodes,
-        }
+        return {"success": True, "count": len(nodes), "nodes": nodes}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 
 def check_errors(node_path: str | None = None) -> dict[str, Any]:
-    """Check for errors on a specific node or across the entire scene."""
+    """Check for Houdini node errors. If node_path given, check that node
+    only. Otherwise scan the entire scene."""
     try:
         if node_path:
             node = hou.node(node_path)
             if node is None:
                 return {"success": False, "error": f"Node not found: {node_path}"}
-            targets = [node]
-        else:
-            root = hou.node("/")
-            if root is None:
-                return {"success": False, "error": "Cannot access scene root"}
-            targets = [root] + root.allSubChildren()
+            errors = node.errors() or []
+            warnings = node.warnings() or []
+            return {
+                "success": True,
+                "path": node_path,
+                "error_count": len(errors),
+                "warning_count": len(warnings),
+                "errors": errors,
+                "warnings": warnings,
+            }
 
-        errors = []
-        warnings = []
-        for n in targets:
+        # Full scene scan
+        error_nodes = []
+        warning_nodes = []
+        for n in hou.node("/").allSubChildren():
             try:
                 errs = n.errors()
-                for e in errs:
-                    errors.append({"path": n.path(), "type": n.type().name(), "error": str(e)})
-            except Exception:
-                pass
-            try:
                 warns = n.warnings()
-                for w in warns:
-                    warnings.append({"path": n.path(), "type": n.type().name(), "warning": str(w)})
+                if errs:
+                    error_nodes.append({"path": n.path(), "errors": errs})
+                if warns:
+                    warning_nodes.append({"path": n.path(), "warnings": warns})
             except Exception:
-                pass
+                continue
 
         return {
             "success": True,
-            "node_count": len(targets),
-            "error_count": len(errors),
-            "warning_count": len(warnings),
-            "errors": errors,
-            "warnings": warnings,
+            "total_nodes": len(hou.node("/").allSubChildren()),
+            "error_nodes": len(error_nodes),
+            "warning_nodes": len(warning_nodes),
+            "details": error_nodes[:10] + warning_nodes[:10],
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 
 def set_display_flag(node_path: str) -> dict[str, Any]:
-    """Set a node as the display node in its network."""
+    """Set a node as the display/render flag — the node shown in the viewport."""
     try:
         node = hou.node(node_path)
         if node is None:
             return {"success": False, "error": f"Node not found: {node_path}"}
         node.setDisplayFlag(True)
-        return {
-            "success": True,
-            "path": node_path,
-            "name": node.name(),
-        }
+        node.setRenderFlag(True)
+        return {"success": True, "path": node_path}
     except Exception as e:
         return {"success": False, "error": str(e)}

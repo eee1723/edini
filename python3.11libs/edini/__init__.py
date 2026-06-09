@@ -1,11 +1,12 @@
 """Edini - Houdini AI Assistant powered by Pi."""
+
 __version__ = "0.2.0"
 
 
-def create_panel():
+def createPanel():
+    """Create and return the Edini main window for Houdini.
+
+    Forwards to edini.ui.main_window.EdinMainWindow.
+    """
     from edini.ui.main_window import EdiniMainWindow
     return EdiniMainWindow()
-
-
-# Alias for backward compatibility with camelCase callers
-createPanel = create_panel

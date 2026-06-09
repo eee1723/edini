@@ -45,17 +45,34 @@ class EvaluatorPipeline:
         force_judge: bool = False,
         force_no_judge: bool = False,
     ):
-        # Try Edini config first, then env vars
+        # Resolve judge config: use conversation model's provider & API key by default.
+        # After Phase 19 refactor, api_key is in pi's auth.json, not edini settings.
         try:
-            from edini.config import get_settings
-            settings = get_settings()
-            # Use a non-reasoning model for judge to ensure visible text output
-            # deepseek-chat maps to v4-flash which returns content normally
-            # Use deepseek-chat for judge (V4 Pro reasoning mode hides visible output)
-            self._judge_model = judge_model or "deepseek-chat"
-            self._judge_api_key = judge_api_key or settings.get("api_key", "")
-            self._judge_provider = judge_provider or settings.get("provider", "deepseek")
-        except ImportError:
+            from edini.config import read_pi_auth, read_pi_settings
+            pi_settings = read_pi_settings()
+            pi_auth = read_pi_auth()
+
+            # Default: use the conversation model's provider
+            default_provider = pi_settings.get("defaultProvider", "deepseek")
+            self._judge_provider = judge_provider or default_provider
+
+            # Default: use the conversation model itself (or a non-reasoning variant)
+            default_model = pi_settings.get("defaultModel", "deepseek-chat")
+            # Reasoning models (R1, V4 Pro) hide visible text output — fall back
+            # to the base chat model for judge reliability
+            if "reason" in default_model.lower() or "r1" in default_model.lower():
+                default_model = "deepseek-chat"
+            self._judge_model = judge_model or default_model
+
+            # API key from pi auth.json for the chosen provider
+            provider_auth = pi_auth.get(self._judge_provider, {})
+            resolved_key = ""
+            if isinstance(provider_auth, dict):
+                resolved_key = provider_auth.get("key", "")
+            elif isinstance(provider_auth, str):
+                resolved_key = provider_auth
+            self._judge_api_key = judge_api_key or resolved_key
+        except Exception:
             self._judge_model = judge_model or os.environ.get("EDINI_JUDGE_MODEL", "deepseek-chat")
             self._judge_api_key = judge_api_key or os.environ.get("EDINI_JUDGE_API_KEY", "")
             self._judge_provider = judge_provider or "deepseek"
