@@ -383,20 +383,24 @@ class SettingsDialog(QtWidgets.QDialog):
         self._vision_model.clear()
         if not provider_id:
             return
-        # Get all vision models and filter by provider
+        # Get vision models from pi-ai for this provider
         all_vision = get_pi_ai_vision_models()
         provider_models = [m for m in all_vision
                            if m["provider"] == provider_id]
-        # Also check custom models from models.json
+        # Check if this is a custom provider (not in pi-ai)
+        pi_ai_ids = {p["id"] for p in get_pi_ai_providers()}
+        is_custom = provider_id not in pi_ai_ids
+        # Add custom models from models.json
         custom = read_pi_models().get("providers", {}).get(provider_id, {})
         for m in custom.get("models", []):
             mid = m.get("id", "")
             mname = m.get("name", mid)
-            inputs = m.get("input", ["text"])
-            if "image" in inputs and not any(
-                    vm["id"] == mid for vm in provider_models):
-                provider_models.append(
-                    {"id": mid, "name": mname, "provider": provider_id})
+            inputs = m.get("input", None)
+            # Include if: custom provider (show all), or explicitly has image
+            if is_custom or (inputs and "image" in inputs):
+                if not any(vm["id"] == mid for vm in provider_models):
+                    provider_models.append(
+                        {"id": mid, "name": mname, "provider": provider_id})
 
         for m in provider_models:
             name = m.get("name", m["id"])
