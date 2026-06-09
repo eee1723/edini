@@ -177,21 +177,32 @@ export default function (pi: ExtensionAPI) {
     try {
       // Skip if current model supports images natively
       const model = ctx.model;
-      if (!model || model.input.includes("image")) return;
+      if (!model) return;
+      const input = model.input ?? [];
+      if (input.includes("image")) return;
 
       // Resolve config (session entry or hardcoded default)
       const cfg = resolveConfig(ctx);
+      console.error(`[pi-visionizer] config: provider=${cfg.provider}, modelId=${cfg.modelId}`);
 
       // Find the vision model in pi's registry
       const visionModel = ctx.modelRegistry.find(cfg.provider, cfg.modelId);
-      if (!visionModel) return;
+      if (!visionModel) {
+        console.error(`[pi-visionizer] model not found: ${cfg.provider}/${cfg.modelId}`);
+        return;
+      }
+      console.error(`[pi-visionizer] found model: ${visionModel.provider}/${visionModel.id}, api=${visionModel.api}`);
 
       // Check for image content in messages
       if (!hasImages(event.messages)) return;
 
       // Resolve vision model auth
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(visionModel);
-      if (!auth.ok || !auth.apiKey) return;
+      if (!auth.ok || !auth.apiKey) {
+        console.error(`[pi-visionizer] auth failed: ok=${auth.ok}, error=${auth.error ?? 'none'}`);
+        return;
+      }
+      console.error(`[pi-visionizer] auth OK, key length=${auth.apiKey.length}`);
 
       const prompt = cfg.prompt || DEFAULT_PROMPT;
       const requireHttps = cfg.requireHttps !== false; // default true
@@ -244,8 +255,9 @@ export default function (pi: ExtensionAPI) {
       }
 
       return { messages: processed };
-    } catch {
-      // Silently pass through — never block the conversation
+    } catch (err) {
+      // Log but never block the conversation
+      console.error(`[pi-visionizer] context hook error: ${err instanceof Error ? err.message : String(err)}`);
       return;
     }
   });
