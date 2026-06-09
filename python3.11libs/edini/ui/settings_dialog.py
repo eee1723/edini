@@ -170,6 +170,8 @@ class SettingsDialog(QtWidgets.QDialog):
             QtWidgets.QAbstractItemView.NoEditTriggers)
         self._auth_table.setSelectionBehavior(
             QtWidgets.QAbstractItemView.SelectRows)
+        self._auth_table.setSelectionMode(
+            QtWidgets.QAbstractItemView.NoSelection)
         self._auth_table.setMaximumHeight(180)
         self._populate_configured_providers()
         layout.addWidget(self._auth_table)
@@ -294,6 +296,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
         # ── Chat model ──
         configured = get_configured_providers()
+        self._chat_provider.blockSignals(True)
         self._chat_provider.clear()
         for p in configured:
             self._chat_provider.addItem(p["name"], p["id"])
@@ -304,6 +307,7 @@ class SettingsDialog(QtWidgets.QDialog):
             self._chat_provider.setCurrentIndex(idx)
 
         # Populate models for current provider
+        self._chat_model.clear()
         if current_provider:
             self._on_chat_provider_changed(current_provider)
             current_model = pi_sett.get("defaultModel", "")
@@ -312,6 +316,7 @@ class SettingsDialog(QtWidgets.QDialog):
                 self._chat_model.setCurrentIndex(midx)
             elif current_model:
                 self._chat_model.setCurrentText(current_model)
+        self._chat_provider.blockSignals(False)
 
         current_thinking = pi_sett.get("defaultThinkingLevel", "medium")
         tidx = self._thinking_combo.findText(current_thinking)
@@ -319,6 +324,7 @@ class SettingsDialog(QtWidgets.QDialog):
             self._thinking_combo.setCurrentIndex(tidx)
 
         # ── Vision model — only show configured providers ──
+        self._vision_provider.blockSignals(True)
         self._vision_provider.clear()
         vision_all = get_pi_ai_vision_models()
         vision_by_provider = {}
@@ -337,12 +343,14 @@ class SettingsDialog(QtWidgets.QDialog):
         if vidx >= 0:
             self._vision_provider.setCurrentIndex(vidx)
 
+        self._vision_model.clear()
         if vision_provider:
             self._on_vision_provider_changed(vision_provider)
             vision_model = settings.get("vision_model_id", "")
             vmidx = self._vision_model.findData(vision_model)
             if vmidx >= 0:
                 self._vision_model.setCurrentIndex(vmidx)
+        self._vision_provider.blockSignals(False)
 
     def _on_chat_provider_changed(self, provider_id: str) -> None:
         """Update chat model dropdown when provider changes."""
