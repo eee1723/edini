@@ -1,6 +1,6 @@
 # 📊 仪表盘
 
-> **当前阶段**：供应商与模型配置重构 — pi-ai 自动同步 + Login/Logout + 视觉模型 &nbsp;|&nbsp; **状态**：17 tools 就绪，Houdini 实机运行，视觉识别已修复 &nbsp;|&nbsp; **最后更新**：2026-06-09
+> **当前阶段**：知识 → Skills 演化 — Traces → Knowledge → Skills 闭环 &nbsp;|&nbsp; **状态**：21 阶段完成，规划 Hivemind 式持续学习 &nbsp;|&nbsp; **最后更新**：2026-06-09
 
 ## 快速导航
 
@@ -13,6 +13,7 @@
 | [参考资料](references.html) | 外部文档 · 设计决策 · API 参考 |
 | [Agent交接](handoff.html) | 给新 Agent 和开发者的快速上下文 |
 | [评估系统](evaluation.html) | 智能体评估系统的设计理念与迭代记录 |
+| [知识→Skills演化](skills-evolution.html) | Hivemind 式持续学习：Traces → Knowledge → Pi Skills 闭环设计 |
 
 ## 当前阶段
 
@@ -34,7 +35,8 @@
 | 按钮布局 | ✅ 📷 截图 + 📁 上传（文本标签按钮，minHeight 34px，hover/pressed 动效）· 仅对话右对齐 · 执行按钮 minWidth 90px · 6px/8px 间距优化 |
 | 剪贴板 | ✅ Ctrl+V 图片粘贴 · 右键粘贴图片到附件栏 · 右键粘贴文本（defer focus+paste）· 多模式探测（QImage→mimeData→URL→raw png/jpeg）· Houdini PySide6 枚举兼容（整数 mode 值）|
 | 测试 | ⬜ 无自动化测试 |
-| 知识检索 | ⬜ search_knowledge 工具待实现 |
+| 知识检索 | ✅ edini_search_knowledge 工具已实现 |
+| 知识→Skills | ⬜ Traces → Skills 自动提取（规划中） |
 | 评估系统 | ✅ 5 维度评分 · LogParser · SQLite · EvalDashboard · edini_get_eval_stats · LLM-as-Judge (deepseek-chat) |
 
 ## 技术栈

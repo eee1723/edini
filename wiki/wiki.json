@@ -9,7 +9,7 @@
   "wiki": {
     "version": "2.0",
     "created": "2026-06-03",
-    "last_updated": "2026-06-08-eval-fix-and-zhipu"
+    "last_updated": "2026-06-09-skills-evolution"
   },
   "features": {
     "search": true,
@@ -32,6 +32,7 @@
     {"id": "pitfalls", "title": "踩坑记录", "icon": "⚠️", "order": 5, "filterable": true},
     {"id": "references", "title": "参考资料", "icon": "📚", "order": 6},
     {"id": "handoff", "title": "Agent交接", "icon": "🤖", "order": 7},
-    {"id": "evaluation", "title": "评估系统", "icon": "📐", "order": 8}
+    {"id": "evaluation", "title": "评估系统", "icon": "📐", "order": 8},
+    {"id": "skills-evolution", "title": "知识→Skills演化", "icon": "🧠", "order": 9}
   ]
 }

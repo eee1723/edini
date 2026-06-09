@@ -1,6 +1,6 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-09 &nbsp;|&nbsp; 第二十一阶段：知识反思面板 + 去重 ✅
+> 最后更新：2026-06-09 &nbsp;|&nbsp; 第二十一阶段：知识反思面板 + 去重 ✅ &nbsp;|&nbsp; 规划：知识 → Skills 演化
 
 ## 总览看板
 
@@ -399,17 +399,13 @@
 
 | 优先级 | 任务 | 说明 |
 |------|------|------|
-| P1 | ~~时间线渲染~~ | ✅ Markdown 完整解析 + 气泡合并 + 文本选择 |
-| P1 | ~~多模态视觉代理~~ | ✅ pi-visionizer 安装 + Qwen-VL 模型配置完成 |
-| P1 | ~~截图链路修复~~ | ✅ 三级降级修复完成（saveImage → grabFrameBuffer → flipbook）|
-| P1 | ~~图片时间线显示~~ | ✅ 缩略图卡片 + 缓存持久化 + 视觉描述历史渲染 |
-| P2 | ~~知识库检索工具~~ | ✅ edini_search_knowledge 已实现 |
-| P2 | ~~单元测试~~ | ✅ 105+ 测试通过（node_utils 48 + config 24 + knowledge_store 33） |
+| **P0** | **优化 ReflectWorker 提取质量** | 现有系统已在工作，先让 knowledge 质量上去 |
+| **P1** | **增加 Skill 提取维度** | 在 reflection prompt 中加 skill 模板，自动写入 `skills/` 目录 |
+| **P2** | **跨 Agent 共享（Hivemind）** | 把 knowledge/skills 推到共享存储（Git repo / S3） |
+| **P3** | **反馈循环：Skill 使用效果追踪** | 跟踪哪些 skill 真正被用到了，淘汰无效 skill |
 | P2 | Judge模型优化 | 接入 Anthropic Claude 做 Judge（结构化输出更强）、V4 Pro reasoning_tokens 兼容 |
 | P3 | 效率基线优化 | 基于任务类型百分位计算效率评分，而非固定启发式 |
-| P3 | ~~评估结果→知识系统~~ | ✅ 评估低分会话自动提取知识条目 |
 | P3 | Python 面板 | 支持嵌入 Houdini Pane Tab |
-| P2 | 多模型优化 | ~~Qwen 等更多 provider 快速切换~~ ✅ 已通过 35 内置供应商自动同步实现 |
 
 ## 已实现功能清单
 
