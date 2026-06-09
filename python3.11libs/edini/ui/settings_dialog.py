@@ -485,14 +485,14 @@ class SettingsDialog(QtWidgets.QDialog):
             providers[data["name"]] = {
                 "baseUrl": data["baseUrl"],
                 "api": data["api"],
-                "apiKey": (
-                    "$" + data["name"].upper().replace("-", "_") + "_API_KEY"
-                ),
                 "models": [
                     {"id": m.strip()}
                     for m in data["models"].split(",") if m.strip()
                 ],
             }
+            api_key = data.get("apiKey", "")
+            if api_key:
+                providers[data["name"]]["apiKey"] = api_key
             write_pi_models(models)
             self._needs_restart = True
             self._populate_configured_providers()
@@ -773,6 +773,11 @@ class _AddProviderDialog(QtWidgets.QDialog):
             "e.g. llama3.1:8b, qwen2.5-coder:7b")
         form.addRow("Models (comma-separated):", self._models)
 
+        self._api_key = QtWidgets.QLineEdit()
+        self._api_key.setEchoMode(QtWidgets.QLineEdit.Password)
+        self._api_key.setPlaceholderText("Optional — leave empty for local models")
+        form.addRow("API Key:", self._api_key)
+
         layout.addLayout(form)
 
         buttons = QtWidgets.QDialogButtonBox(
@@ -793,6 +798,7 @@ class _AddProviderDialog(QtWidgets.QDialog):
             "baseUrl": self._base_url.text().strip(),
             "api": self._api_type.currentText(),
             "models": self._models.text().strip(),
+            "apiKey": self._api_key.text().strip(),
         }
 
 
