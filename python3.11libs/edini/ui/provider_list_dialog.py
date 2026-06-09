@@ -7,7 +7,7 @@ Used for:
 from PySide6 import QtCore, QtWidgets
 from PySide6.QtCore import Qt
 
-from edini.ui.theme import fs
+from edini.ui.theme import fs, accent_color
 
 
 class ProviderListDialog(QtWidgets.QDialog):
@@ -29,6 +29,7 @@ class ProviderListDialog(QtWidgets.QDialog):
         self._providers = providers
         self._filtered = list(providers)
         self._selected: dict | None = None
+        self._show_badges = show_badges
 
         self.setStyleSheet(f"""
             QDialog {{ background-color: #0c0c14; }}
@@ -36,40 +37,43 @@ class ProviderListDialog(QtWidgets.QDialog):
             QLineEdit {{
                 background-color: #10101a;
                 color: #c8ccd4;
-                border: 1px solid #1e1e2c;
-                border-radius: 4px;
+                border: 1px solid #2a2a3c;
+                border-radius: 6px;
                 padding: 8px 12px;
                 font-size:{fs(13)};
             }}
-            QLineEdit:focus {{ border-color: #06b6d4; }}
+            QLineEdit:focus {{ border-color: {accent_color()}; }}
             QListWidget {{
-                background-color: #10101a;
+                background-color: #0a0a12;
                 color: #c8ccd4;
                 border: 1px solid #1e1e2c;
-                border-radius: 4px;
+                border-radius: 6px;
                 font-size:{fs(12)};
                 outline: none;
-                padding: 4px;
+                padding: 6px;
             }}
             QListWidget::item {{
-                padding: 8px 12px;
-                border-radius: 3px;
+                padding: 10px 14px;
+                border-radius: 4px;
+                margin: 1px 0;
             }}
             QListWidget::item:selected {{
-                background-color: rgba(6, 182, 212, 0.15);
+                background-color: #1a1a2e;
                 color: #e5e5eb;
+                border-left: 2px solid {accent_color()};
             }}
-            QListWidget::item:hover {{
-                background-color: rgba(255,255,255,0.04);
+            QListWidget::item:hover:!selected {{
+                background-color: #111120;
             }}
         """)
 
         layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(8)
 
         # Search hint
-        hint = QtWidgets.QLabel("Type to filter, ↑↓ to navigate, Enter to select, Esc to cancel")
+        hint = QtWidgets.QLabel(
+            "Search · ↑↓ Navigate · Enter Select · Esc Cancel")
         hint.setStyleSheet(f"color:#52525b;font-size:{fs(9)};")
         layout.addWidget(hint)
 
@@ -82,7 +86,8 @@ class ProviderListDialog(QtWidgets.QDialog):
         # Provider list
         self._list = QtWidgets.QListWidget()
         self._list.itemDoubleClicked.connect(self._on_select)
-        self._show_badges = show_badges
+        self._list.setVerticalScrollMode(
+            QtWidgets.QAbstractItemView.ScrollPerPixel)
         self._populate()
         layout.addWidget(self._list, 1)
 
@@ -90,11 +95,12 @@ class ProviderListDialog(QtWidgets.QDialog):
         cancel = QtWidgets.QPushButton("Cancel")
         cancel.setStyleSheet(f"""
             QPushButton {{
-                background: #1e1e2c; color: #a1a1aa;
-                border: none; border-radius: 4px;
-                padding: 6px 20px; font-size:{fs(11)};
+                background: #1a1a2a; color: #a1a1aa;
+                border: 1px solid #2a2a3c;
+                border-radius: 6px;
+                padding: 8px 24px; font-size:{fs(11)};
             }}
-            QPushButton:hover {{ background: #2a2a3c; }}
+            QPushButton:hover {{ background: #22223a; color: #c8ccd4; }}
         """)
         cancel.clicked.connect(self.reject)
         btn_row = QtWidgets.QHBoxLayout()
@@ -105,21 +111,38 @@ class ProviderListDialog(QtWidgets.QDialog):
     def _populate(self) -> None:
         self._list.clear()
         for p in self._filtered:
-            text = p.get("name", p.get("id", ""))
+            item = QtWidgets.QListWidgetItem()
+            item.setData(Qt.UserRole, p)
+
+            name = p.get("name", p.get("id", ""))
+            configured = p.get("_configured", False)
+
             if self._show_badges:
                 mc = p.get("modelCount")
                 vc = p.get("imageModelCount")
+                parts = [name]
                 if mc is not None:
-                    badges = f"  {mc} models"
+                    parts.append(f"{mc} models")
                     if vc:
-                        badges += f" · {vc} vision"
-                    text += f"  <span style='color:#52525b;font-size:{fs(9)}'>{badges}</span>"
+                        parts.append(f"{vc} vision")
+                info = "  ·  ".join(parts[1:]) if len(parts) > 1 else ""
+                if configured:
+                    name = f"● {name}"
+                elif info:
+                    name = f"  {name}    {info}"
             elif p.get("hint"):
-                text += f"  <span style='color:#52525b;font-size:{fs(9)}'>{p['hint']}</span>"
+                name = f"{name}    {p['hint']}"
 
-            item = QtWidgets.QListWidgetItem()
-            item.setData(Qt.UserRole, p)
-            item.setText(p.get("name", p.get("id", "")))
+            item.setText(name)
+
+            # Dim unconfigured providers slightly
+            if not configured:
+                item.setForeground(
+                    QtCore.QColor("#a1a1aa"))
+            else:
+                item.setForeground(
+                    QtCore.QColor("#c8ccd4"))
+
             self._list.addItem(item)
 
         if self._list.count() > 0:

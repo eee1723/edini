@@ -55,7 +55,20 @@ class SettingsDialog(QtWidgets.QDialog):
                 font-size:{fs(12)};
             }}
             QComboBox:focus {{ border-color: #06b6d4; }}
-            QComboBox::drop-down {{ border:none; width:20px; }}
+            QComboBox::drop-down {{
+                border: none;
+                width: 24px;
+            }}
+            QComboBox::down-arrow {{
+                width: 10px;
+                height: 10px;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 5px solid #52525b;
+            }}
+            QComboBox:hover::down-arrow {{
+                border-top-color: #71717a;
+            }}
             QComboBox QAbstractItemView {{
                 background-color: #101018;
                 border: 1px solid #1e1e2c;
@@ -281,21 +294,30 @@ class SettingsDialog(QtWidgets.QDialog):
         if tidx >= 0:
             self._thinking_combo.setCurrentIndex(tidx)
 
-        # ── Vision model ──
+        # ── Vision model — only show configured providers ──
         self._vision_provider.clear()
-        # Only show providers that have vision-capable models
         vision_all = get_pi_ai_vision_models()
-        vision_provider_ids = sorted({m["provider"] for m in vision_all})
-        # Also include configured custom providers
-        for p in configured:
-            if p["id"] not in vision_provider_ids:
-                vision_provider_ids.append(p["id"])
-
+        vision_provider_ids = {m["provider"] for m in vision_all}
         provider_names = {p["id"]: p["name"]
                           for p in get_pi_ai_providers()}
-        for pid in vision_provider_ids:
-            name = provider_names.get(pid, pid)
-            self._vision_provider.addItem(name, pid)
+
+        for p in configured:
+            pid = p["id"]
+            # Include if: has vision models in pi-ai, OR has vision models
+            # in models.json, OR is a custom provider (user may know)
+            has_vision = pid in vision_provider_ids
+            if not has_vision:
+                custom = read_pi_models().get("providers", {}).get(pid, {})
+                for m in custom.get("models", []):
+                    if "image" in m.get("input", ["text"]):
+                        has_vision = True
+                        break
+            # Still include custom providers even without image flag
+            # (they may have models that support it but aren't tagged)
+            custom_conf = read_pi_models().get("providers", {}).get(pid, {})
+            if has_vision or custom_conf:
+                name = provider_names.get(pid, p["name"])
+                self._vision_provider.addItem(name, pid)
 
         vision_provider = settings.get("vision_provider", "")
         vidx = self._vision_provider.findData(vision_provider)
@@ -329,7 +351,7 @@ class SettingsDialog(QtWidgets.QDialog):
         for m in models:
             name = m.get("name", m["id"])
             if m.get("reasoning"):
-                name += " ✦"
+                name += "  [R]"
             self._chat_model.addItem(name, m["id"])
 
         if current:
@@ -371,6 +393,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
     def _on_login_provider(self) -> None:
         """Open provider selector for login."""
+        # Start with all pi-ai built-in providers
         all_providers = get_pi_ai_providers()
         configured_ids = {p["id"] for p in get_configured_providers()}
         providers = []
@@ -378,6 +401,21 @@ class SettingsDialog(QtWidgets.QDialog):
             p_copy = dict(p)
             p_copy["_configured"] = p["id"] in configured_ids
             providers.append(p_copy)
+
+        # Also include custom providers from models.json
+        pi_ai_ids = {p["id"] for p in all_providers}
+        for pid, pconf in read_pi_models().get("providers", {}).items():
+            if pid not in pi_ai_ids:
+                providers.append({
+                    "id": pid,
+                    "name": pconf.get("name", pid),
+                    "modelCount": len(pconf.get("models", [])),
+                    "imageModelCount": sum(
+                        1 for m in pconf.get("models", [])
+                        if "image" in m.get("input", ["text"])
+                    ),
+                    "_configured": pid in configured_ids,
+                })
 
         dlg = ProviderListDialog(
             self, providers,
