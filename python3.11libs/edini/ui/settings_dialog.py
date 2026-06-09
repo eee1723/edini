@@ -1,4 +1,8 @@
-"""Settings dialog — tabbed: API Keys + Models + Knowledge.
+"""Settings dialog — tabbed: Providers & Models + Appearance + Knowledge.
+
+Provider/model configuration uses pi-ai data bridge for auto-synced
+provider lists. Login/logout flow inspired by pi CLI's /login, /logout,
+/model commands.
 
 Stores configuration in pi's native config files:
   ~/.pi/agent/auth.json    — API keys
@@ -6,32 +10,30 @@ Stores configuration in pi's native config files:
   ~/.pi/agent/settings.json — default provider/model/thinking
 """
 from PySide6 import QtCore, QtWidgets
+
 from edini.config import (
     get_settings, save_settings,
     read_pi_auth, write_pi_auth,
     read_pi_models, write_pi_models,
     read_pi_settings, write_pi_settings,
     PI_MODELS_FILE,
+    get_pi_ai_providers, get_pi_ai_models, get_pi_ai_vision_models,
+    get_provider_auth_status, get_configured_providers,
 )
 from edini.ui.theme import THEMES, get_theme, set_theme, set_font_scale, fs
 from edini.ui.knowledge_store import rules_count, entries_count, load_rules
-
-KNOWN_PROVIDERS = [
-    "anthropic", "openai", "deepseek", "google", "mistral", "groq",
-    "cerebras", "xai", "openrouter", "nvidia", "fireworks", "together",
-    "huggingface", "kimi-coding", "minimax", "minimax-cn", "zai",
-    "zai-coding-cn", "xiaomi", "opencode", "aliyun", "zhipu",
-]
+from edini.ui.provider_list_dialog import ProviderListDialog
+from edini.ui.api_key_dialog import ApiKeyDialog
 
 
 class SettingsDialog(QtWidgets.QDialog):
-    """Settings dialog with three tabs: API Keys, Models, Knowledge."""
+    """Settings dialog with three tabs: Providers & Models, Appearance, Knowledge."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._needs_restart = False
         self.setWindowTitle("Edini Settings")
-        self.setMinimumSize(560, 600)
+        self.setMinimumSize(560, 640)
         self.setStyleSheet(f"""
             QDialog {{ background-color: #0c0c14; }}
             QLabel {{ color: #c8ccd4; font-size:{fs(12)}; background:transparent; }}
@@ -78,25 +80,6 @@ class SettingsDialog(QtWidgets.QDialog):
                 color: #e5e5eb;
                 font-weight: 600;
             }}
-            QTableWidget {{
-                background-color: #10101a;
-                color: #c8ccd4;
-                border: 1px solid #1e1e2c;
-                border-radius: 4px;
-                gridline-color: #1e1e2c;
-                font-size:{fs(11)};
-            }}
-            QTableWidget::item {{
-                padding: 4px 8px;
-            }}
-            QHeaderView::section {{
-                background-color: #0c0c14;
-                color: #a1a1aa;
-                padding: 4px 8px;
-                border: none;
-                border-bottom: 1px solid #1e1e2c;
-                font-size:{fs(10)};
-            }}
         """)
 
         layout = QtWidgets.QVBoxLayout(self)
@@ -105,9 +88,12 @@ class SettingsDialog(QtWidgets.QDialog):
 
         # Tabs
         self._tabs = QtWidgets.QTabWidget()
-        self._tabs.addTab(self._build_api_keys_tab(), "\U0001f511 API Keys")
-        self._tabs.addTab(self._build_models_tab(), "\U0001f916 Models")
-        self._tabs.addTab(self._build_knowledge_tab(get_settings()), "\U0001f4da Knowledge")
+        self._tabs.addTab(
+            self._build_providers_models_tab(), "\U0001f50c Providers & Models")
+        self._tabs.addTab(
+            self._build_appearance_tab(), "\U0001f3a8 Appearance")
+        self._tabs.addTab(
+            self._build_knowledge_tab(get_settings()), "\U0001f4da Knowledge")
         layout.addWidget(self._tabs, 1)
 
         # Buttons
@@ -123,28 +109,20 @@ class SettingsDialog(QtWidgets.QDialog):
         layout.addLayout(btn_row)
 
     # ═══════════════════════════════════════════════════════════════════
-    # Tab 1: API Keys
+    # Tab 1: Providers & Models
     # ═══════════════════════════════════════════════════════════════════
 
-    def _build_api_keys_tab(self) -> QtWidgets.QWidget:
+    def _build_providers_models_tab(self) -> QtWidgets.QWidget:
         w = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(w)
-        layout.setSpacing(10)
+        layout.setSpacing(8)
         layout.setContentsMargins(12, 12, 12, 12)
 
-        # Header
-        header = QtWidgets.QLabel(
-            "API keys are stored in <code>~/.pi/agent/auth.json</code><br>"
-            "Shared with <b>pi</b> CLI \u2014 configure once, use everywhere."
-        )
-        header.setWordWrap(True)
-        header.setStyleSheet(f"color:#71717a;font-size:{fs(10)};padding:4px 0;")
-        layout.addWidget(header)
-
-        # Configured providers list
+        # ── Section 1: Configured Providers ──
         layout.addWidget(_section_label("Configured Providers"))
         self._auth_table = QtWidgets.QTableWidget(0, 3)
-        self._auth_table.setHorizontalHeaderLabels(["Provider", "API Key", ""])
+        self._auth_table.setHorizontalHeaderLabels(
+            ["Provider", "Auth Source", ""])
         self._auth_table.horizontalHeader().setSectionResizeMode(
             0, QtWidgets.QHeaderView.Stretch)
         self._auth_table.horizontalHeader().setSectionResizeMode(
@@ -153,161 +131,27 @@ class SettingsDialog(QtWidgets.QDialog):
             2, QtWidgets.QHeaderView.Fixed)
         self._auth_table.horizontalHeader().resizeSection(2, 80)
         self._auth_table.verticalHeader().setVisible(False)
-        self._auth_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
-        self._auth_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
-        self._auth_table.setMaximumHeight(200)
-        self._populate_auth_table(read_pi_auth())
+        self._auth_table.setEditTriggers(
+            QtWidgets.QAbstractItemView.NoEditTriggers)
+        self._auth_table.setSelectionBehavior(
+            QtWidgets.QAbstractItemView.SelectRows)
+        self._auth_table.setMaximumHeight(180)
+        self._populate_configured_providers()
         layout.addWidget(self._auth_table)
 
-        # Add new provider row
-        layout.addWidget(_section_label("Add Provider"))
-        add_row = QtWidgets.QHBoxLayout()
-        self._new_provider_combo = QtWidgets.QComboBox()
-        self._new_provider_combo.setEditable(True)
-        self._new_provider_combo.addItems(KNOWN_PROVIDERS)
-        self._new_provider_combo.setCurrentText("")
-        add_row.addWidget(self._new_provider_combo, 1)
+        # Login + Custom provider buttons
+        btn_row = QtWidgets.QHBoxLayout()
+        login_btn = QtWidgets.QPushButton("+ Login Provider")
+        login_btn.setStyleSheet(_btn_style("#0E7490"))
+        login_btn.clicked.connect(self._on_login_provider)
+        btn_row.addWidget(login_btn)
 
-        self._new_key_input = QtWidgets.QLineEdit()
-        self._new_key_input.setEchoMode(QtWidgets.QLineEdit.Password)
-        self._new_key_input.setPlaceholderText("API Key...")
-        add_row.addWidget(self._new_key_input, 2)
-
-        add_btn = QtWidgets.QPushButton("Add")
-        add_btn.setFixedWidth(60)
-        add_btn.clicked.connect(self._on_add_provider_key)
-        add_row.addWidget(add_btn)
-        layout.addLayout(add_row)
-
-        # Terminal hint
-        hint = QtWidgets.QLabel(
-            "\U0001f4a1 Advanced: run <code>pi /login</code> in terminal "
-            "for OAuth providers (Claude Pro, ChatGPT Plus, GitHub Copilot)")
-        hint.setWordWrap(True)
-        hint.setStyleSheet(f"color:#52525b;font-size:{fs(9)};padding:4px 0;")
-        layout.addWidget(hint)
-
-        layout.addStretch()
-        return w
-
-    def _populate_auth_table(self, auth: dict) -> None:
-        self._auth_table.setRowCount(0)
-        for provider, entry in auth.items():
-            if not isinstance(entry, dict) or entry.get("type") != "api_key":
-                continue
-            row = self._auth_table.rowCount()
-            self._auth_table.insertRow(row)
-            self._auth_table.setItem(row, 0, QtWidgets.QTableWidgetItem(provider))
-            key = entry.get("key", "")
-            masked = key[:8] + "..." + key[-4:] if len(key) > 12 else key
-            self._auth_table.setItem(row, 1, QtWidgets.QTableWidgetItem(masked))
-            btn = QtWidgets.QPushButton("Remove")
-            btn.setStyleSheet("color:#ef4444;border:none;font-size:10px;")
-            btn.clicked.connect(
-                lambda checked, p=provider: self._on_remove_provider(p))
-            self._auth_table.setCellWidget(row, 2, btn)
-
-    def _on_add_provider_key(self) -> None:
-        provider = self._new_provider_combo.currentText().strip()
-        key = self._new_key_input.text().strip()
-        if not provider or not key:
-            return
-        auth = read_pi_auth()
-        auth[provider] = {"type": "api_key", "key": key}
-        write_pi_auth(auth)
-        self._populate_auth_table(auth)
-        self._new_key_input.clear()
-        self._new_provider_combo.setCurrentText("")
-        self._needs_restart = True
-
-    def _on_remove_provider(self, provider: str) -> None:
-        auth = read_pi_auth()
-        auth.pop(provider, None)
-        write_pi_auth(auth)
-        self._populate_auth_table(auth)
-        self._needs_restart = True
-
-    # ═══════════════════════════════════════════════════════════════════
-    # Tab 2: Models
-    # ═══════════════════════════════════════════════════════════════════
-
-    def _build_models_tab(self) -> QtWidgets.QWidget:
-        w = QtWidgets.QWidget()
-        layout = QtWidgets.QVBoxLayout(w)
-        layout.setSpacing(10)
-        layout.setContentsMargins(12, 12, 12, 12)
-
-        pi_sett = read_pi_settings()
-
-        # ── Default Model ──
-        layout.addWidget(_section_label("Default Model"))
-        model_row = QtWidgets.QHBoxLayout()
-        model_row.addWidget(QtWidgets.QLabel("Provider:"))
-        self._default_provider = QtWidgets.QComboBox()
-        self._default_provider.setEditable(False)
-        providers = self._get_all_provider_names()
-        self._default_provider.addItems(providers)
-        current_provider = pi_sett.get("defaultProvider", "")
-        if current_provider:
-            idx = self._default_provider.findText(current_provider)
-            if idx >= 0:
-                self._default_provider.setCurrentIndex(idx)
-        model_row.addWidget(self._default_provider, 1)
-
-        model_row.addWidget(QtWidgets.QLabel("Model:"))
-        self._default_model = QtWidgets.QComboBox()
-        self._default_model.setEditable(True)
-        self._default_model.setInsertPolicy(QtWidgets.QComboBox.NoInsert)
-        self._default_model.lineEdit().setPlaceholderText("model name...")
-        self._populate_models_for_provider(
-            self._default_provider.currentText(), self._default_model)
-        current_model = pi_sett.get("defaultModel", "")
-        if current_model:
-            idx = self._default_model.findText(current_model)
-            if idx >= 0:
-                self._default_model.setCurrentIndex(idx)
-            else:
-                self._default_model.setCurrentText(current_model)
-        model_row.addWidget(self._default_model, 1)
-        layout.addLayout(model_row)
-
-        # ── Thinking Level ──
-        thinking_row = QtWidgets.QHBoxLayout()
-        thinking_row.addWidget(QtWidgets.QLabel("Thinking:"))
-        self._thinking_combo = QtWidgets.QComboBox()
-        self._thinking_combo.addItems(
-            ["off", "minimal", "low", "medium", "high", "xhigh"])
-        current_thinking = pi_sett.get("defaultThinkingLevel", "medium")
-        idx = self._thinking_combo.findText(current_thinking)
-        if idx >= 0:
-            self._thinking_combo.setCurrentIndex(idx)
-        thinking_row.addWidget(self._thinking_combo)
-        thinking_row.addStretch()
-        layout.addLayout(thinking_row)
-
-        self._default_provider.currentTextChanged.connect(
-            lambda p: self._populate_models_for_provider(p, self._default_model))
-
-        # ── Appearance ──
-        layout.addWidget(_section_label("Appearance"))
-        appear_row = QtWidgets.QHBoxLayout()
-        appear_row.addWidget(QtWidgets.QLabel("Theme:"))
-        self._theme_combo = QtWidgets.QComboBox()
-        settings = get_settings()
-        current_theme = settings.get("theme_color", "cyan")
-        for key, info in THEMES.items():
-            self._theme_combo.addItem(info["name"], key)
-            if key == current_theme:
-                self._theme_combo.setCurrentIndex(self._theme_combo.count() - 1)
-        appear_row.addWidget(self._theme_combo)
-        appear_row.addWidget(QtWidgets.QLabel("Font:"))
-        self._font_scale = QtWidgets.QComboBox()
-        current_scale = str(settings.get("font_scale", 1.0))
-        for val in ["0.8", "0.9", "1.0", "1.1", "1.2", "1.3", "1.4"]:
-            self._font_scale.addItem(val)
-        self._font_scale.setCurrentText(current_scale)
-        appear_row.addWidget(self._font_scale)
-        layout.addLayout(appear_row)
+        custom_btn = QtWidgets.QPushButton("+ Custom Provider")
+        custom_btn.setStyleSheet(_btn_style("#1e1e2c", "#a1a1aa"))
+        custom_btn.clicked.connect(self._on_add_custom_provider)
+        btn_row.addWidget(custom_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
 
         # ── Separator ──
         sep = QtWidgets.QFrame()
@@ -315,33 +159,66 @@ class SettingsDialog(QtWidgets.QDialog):
         sep.setStyleSheet("color:#1e1e2c;")
         layout.addWidget(sep)
 
-        # ── Custom Providers ──
-        layout.addWidget(_section_label("Custom Providers"))
-        layout.addWidget(QtWidgets.QLabel(
-            f"From <code>{PI_MODELS_FILE}</code>"))
-        self._providers_table = QtWidgets.QTableWidget(0, 3)
-        self._providers_table.setHorizontalHeaderLabels(
-            ["Provider", "API Type", "Models"])
-        self._providers_table.horizontalHeader().setSectionResizeMode(
-            0, QtWidgets.QHeaderView.ResizeToContents)
-        self._providers_table.horizontalHeader().setSectionResizeMode(
-            1, QtWidgets.QHeaderView.ResizeToContents)
-        self._providers_table.horizontalHeader().setStretchLastSection(True)
-        self._providers_table.verticalHeader().setVisible(False)
-        self._providers_table.setEditTriggers(
-            QtWidgets.QAbstractItemView.NoEditTriggers)
-        self._providers_table.setMaximumHeight(200)
-        self._populate_providers_table()
-        layout.addWidget(self._providers_table)
+        # ── Section 2: Chat Model ──
+        layout.addWidget(_section_label("Chat Model"))
 
-        add_cp_btn = QtWidgets.QPushButton("+ Add Custom Provider")
-        add_cp_btn.setStyleSheet(_btn_style("#0E7490"))
-        add_cp_btn.clicked.connect(self._on_add_custom_provider)
-        layout.addWidget(add_cp_btn)
+        chat_row = QtWidgets.QHBoxLayout()
+        chat_row.addWidget(QtWidgets.QLabel("Provider:"))
+        self._chat_provider = QtWidgets.QComboBox()
+        self._chat_provider.setEditable(False)
+        chat_row.addWidget(self._chat_provider, 1)
+        chat_row.addWidget(QtWidgets.QLabel("Model:"))
+        self._chat_model = QtWidgets.QComboBox()
+        self._chat_model.setEditable(True)
+        self._chat_model.setInsertPolicy(QtWidgets.QComboBox.NoInsert)
+        self._chat_model.lineEdit().setPlaceholderText("model name...")
+        chat_row.addWidget(self._chat_model, 1)
+        layout.addLayout(chat_row)
+
+        thinking_row = QtWidgets.QHBoxLayout()
+        thinking_row.addWidget(QtWidgets.QLabel("Thinking:"))
+        self._thinking_combo = QtWidgets.QComboBox()
+        self._thinking_combo.addItems(
+            ["off", "minimal", "low", "medium", "high", "xhigh"])
+        thinking_row.addWidget(self._thinking_combo)
+        thinking_row.addStretch()
+        layout.addLayout(thinking_row)
+
+        self._chat_provider.currentIndexChanged.connect(
+            lambda: self._on_chat_provider_changed(
+                self._chat_provider.currentData() or ""))
+
+        # ── Separator ──
+        sep2 = QtWidgets.QFrame()
+        sep2.setFrameShape(QtWidgets.QFrame.HLine)
+        sep2.setStyleSheet("color:#1e1e2c;")
+        layout.addWidget(sep2)
+
+        # ── Section 3: Vision Model ──
+        layout.addWidget(_section_label("Vision Model"))
+
+        vision_row = QtWidgets.QHBoxLayout()
+        vision_row.addWidget(QtWidgets.QLabel("Provider:"))
+        self._vision_provider = QtWidgets.QComboBox()
+        self._vision_provider.setEditable(False)
+        vision_row.addWidget(self._vision_provider, 1)
+        vision_row.addWidget(QtWidgets.QLabel("Model:"))
+        self._vision_model = QtWidgets.QComboBox()
+        self._vision_model.setEditable(False)
+        vision_row.addWidget(self._vision_model, 1)
+        layout.addLayout(vision_row)
+
+        self._vision_provider.currentIndexChanged.connect(
+            lambda: self._on_vision_provider_changed(
+                self._vision_provider.currentData() or ""))
+
+        # ── Initialize values ──
+        self._populate_chat_and_vision()
 
         hint = QtWidgets.QLabel(
-            "\U0001f4a1 Advanced: edit "
-            "<code>~/.pi/agent/models.json</code> directly for full control")
+            "\U0001f4a1 Provider data auto-synced from installed pi-ai package. "
+            "Run <code>pi /login</code> in terminal for OAuth providers "
+            "(Claude Pro, ChatGPT Plus, GitHub Copilot).")
         hint.setWordWrap(True)
         hint.setStyleSheet(f"color:#52525b;font-size:{fs(9)};padding:4px 0;")
         layout.addWidget(hint)
@@ -349,49 +226,201 @@ class SettingsDialog(QtWidgets.QDialog):
         layout.addStretch()
         return w
 
-    def _get_all_provider_names(self) -> list[str]:
-        names = set()
-        names.update(read_pi_auth().keys())
-        models = read_pi_models()
-        names.update(models.get("providers", {}).keys())
-        for p in KNOWN_PROVIDERS:
-            names.add(p)
-        return sorted(names)
+    def _populate_configured_providers(self) -> None:
+        """Fill the configured providers table."""
+        self._auth_table.setRowCount(0)
+        providers = get_configured_providers()
+        for p in providers:
+            row = self._auth_table.rowCount()
+            self._auth_table.insertRow(row)
+            self._auth_table.setItem(
+                row, 0, QtWidgets.QTableWidgetItem(p["name"]))
+            source_text = p.get("source", "")
+            hint = p.get("hint", "")
+            display = source_text
+            if hint and source_text == "auth.json":
+                display = f"{source_text}: {hint}"
+            elif hint and source_text == "env":
+                display = f"env: {hint}"
+            self._auth_table.setItem(
+                row, 1, QtWidgets.QTableWidgetItem(display))
+            btn = QtWidgets.QPushButton("Logout")
+            btn.setStyleSheet("color:#ef4444;border:none;font-size:10px;")
+            btn.clicked.connect(
+                lambda checked, pid=p["id"]: self._on_logout_provider(pid))
+            self._auth_table.setCellWidget(row, 2, btn)
 
-    def _populate_models_for_provider(
-            self, provider: str, combo: QtWidgets.QComboBox) -> None:
-        current = combo.currentText()
-        combo.clear()
-        models_config = read_pi_models()
-        provider_config = models_config.get("providers", {}).get(provider, {})
-        for m in provider_config.get("models", []):
-            name = m.get("name", m.get("id", ""))
-            combo.addItem(name, m.get("id", ""))
+    def _populate_chat_and_vision(self) -> None:
+        """Initialize chat model and vision model dropdowns."""
+        pi_sett = read_pi_settings()
+        settings = get_settings()
+
+        # ── Chat model ──
+        configured = get_configured_providers()
+        self._chat_provider.clear()
+        for p in configured:
+            self._chat_provider.addItem(p["name"], p["id"])
+
+        current_provider = pi_sett.get("defaultProvider", "")
+        idx = self._chat_provider.findData(current_provider)
+        if idx >= 0:
+            self._chat_provider.setCurrentIndex(idx)
+
+        # Populate models for current provider
+        if current_provider:
+            self._on_chat_provider_changed(current_provider)
+            current_model = pi_sett.get("defaultModel", "")
+            midx = self._chat_model.findData(current_model)
+            if midx >= 0:
+                self._chat_model.setCurrentIndex(midx)
+            elif current_model:
+                self._chat_model.setCurrentText(current_model)
+
+        current_thinking = pi_sett.get("defaultThinkingLevel", "medium")
+        tidx = self._thinking_combo.findText(current_thinking)
+        if tidx >= 0:
+            self._thinking_combo.setCurrentIndex(tidx)
+
+        # ── Vision model ──
+        self._vision_provider.clear()
+        # Only show providers that have vision-capable models
+        vision_all = get_pi_ai_vision_models()
+        vision_provider_ids = sorted({m["provider"] for m in vision_all})
+        # Also include configured custom providers
+        for p in configured:
+            if p["id"] not in vision_provider_ids:
+                vision_provider_ids.append(p["id"])
+
+        provider_names = {p["id"]: p["name"]
+                          for p in get_pi_ai_providers()}
+        for pid in vision_provider_ids:
+            name = provider_names.get(pid, pid)
+            self._vision_provider.addItem(name, pid)
+
+        vision_provider = settings.get("vision_provider", "")
+        vidx = self._vision_provider.findData(vision_provider)
+        if vidx >= 0:
+            self._vision_provider.setCurrentIndex(vidx)
+
+        if vision_provider:
+            self._on_vision_provider_changed(vision_provider)
+            vision_model = settings.get("vision_model_id", "")
+            vmidx = self._vision_model.findData(vision_model)
+            if vmidx >= 0:
+                self._vision_model.setCurrentIndex(vmidx)
+
+    def _on_chat_provider_changed(self, provider_id: str) -> None:
+        """Update chat model dropdown when provider changes."""
+        current = self._chat_model.currentData()
+        self._chat_model.clear()
+        if not provider_id:
+            return
+        models = get_pi_ai_models(provider_id)
+        # Also include custom models from models.json
+        custom = read_pi_models().get("providers", {}).get(provider_id, {})
+        for m in custom.get("models", []):
+            mid = m.get("id", "")
+            mname = m.get("name", mid)
+            # Don't duplicate if already in bridge data
+            if not any(bm["id"] == mid for bm in models):
+                models.append({"id": mid, "name": mname,
+                               "reasoning": False, "input": ["text"]})
+
+        for m in models:
+            name = m.get("name", m["id"])
+            if m.get("reasoning"):
+                name += " ✦"
+            self._chat_model.addItem(name, m["id"])
+
         if current:
-            idx = combo.findText(current)
+            idx = self._chat_model.findData(current)
             if idx >= 0:
-                combo.setCurrentIndex(idx)
-            elif combo.count() > 0:
-                # Keep current text if editable
-                combo.setCurrentText(current)
+                self._chat_model.setCurrentIndex(idx)
 
-    def _populate_providers_table(self) -> None:
-        self._providers_table.setRowCount(0)
-        models = read_pi_models()
-        for name, config in models.get("providers", {}).items():
-            row = self._providers_table.rowCount()
-            self._providers_table.insertRow(row)
-            self._providers_table.setItem(
-                row, 0, QtWidgets.QTableWidgetItem(name))
-            self._providers_table.setItem(
-                row, 1, QtWidgets.QTableWidgetItem(
-                    config.get("api", "")))
-            model_names = ", ".join(
-                m.get("id", "") for m in config.get("models", []))
-            self._providers_table.setItem(
-                row, 2, QtWidgets.QTableWidgetItem(model_names))
+    def _on_vision_provider_changed(self, provider_id: str) -> None:
+        """Update vision model dropdown when provider changes."""
+        current = self._vision_model.currentData()
+        self._vision_model.clear()
+        if not provider_id:
+            return
+        # Get all vision models and filter by provider
+        all_vision = get_pi_ai_vision_models()
+        provider_models = [m for m in all_vision
+                           if m["provider"] == provider_id]
+        # Also check custom models from models.json
+        custom = read_pi_models().get("providers", {}).get(provider_id, {})
+        for m in custom.get("models", []):
+            mid = m.get("id", "")
+            mname = m.get("name", mid)
+            inputs = m.get("input", ["text"])
+            if "image" in inputs and not any(
+                    vm["id"] == mid for vm in provider_models):
+                provider_models.append(
+                    {"id": mid, "name": mname, "provider": provider_id})
+
+        for m in provider_models:
+            name = m.get("name", m["id"])
+            self._vision_model.addItem(name, m["id"])
+
+        if current:
+            idx = self._vision_model.findData(current)
+            if idx >= 0:
+                self._vision_model.setCurrentIndex(idx)
+
+    # ── Login / Logout / Custom Provider ──
+
+    def _on_login_provider(self) -> None:
+        """Open provider selector for login."""
+        all_providers = get_pi_ai_providers()
+        configured_ids = {p["id"] for p in get_configured_providers()}
+        providers = []
+        for p in all_providers:
+            p_copy = dict(p)
+            p_copy["_configured"] = p["id"] in configured_ids
+            providers.append(p_copy)
+
+        dlg = ProviderListDialog(
+            self, providers,
+            "Select Provider to Login", show_badges=True)
+        if dlg.exec() == QtWidgets.QDialog.Accepted and dlg.selected:
+            provider = dlg.selected
+            provider_id = provider["id"]
+            provider_name = provider.get("name", provider_id)
+
+            # Check if already configured
+            status = get_provider_auth_status(provider_id)
+            if status["configured"]:
+                QtWidgets.QMessageBox.information(
+                    self, "Already Configured",
+                    f"{provider_name} is already configured "
+                    f"(source: {status['source']}).\n\n"
+                    f"Logout first to reconfigure.")
+                return
+
+            # Show API key input
+            key_dlg = ApiKeyDialog(self, provider_name)
+            if key_dlg.exec() == QtWidgets.QDialog.Accepted:
+                auth = read_pi_auth()
+                auth[provider_id] = {
+                    "type": "api_key", "key": key_dlg.api_key}
+                write_pi_auth(auth)
+                self._needs_restart = True
+                # Refresh UI
+                self._populate_configured_providers()
+                self._populate_chat_and_vision()
+
+    def _on_logout_provider(self, provider_id: str) -> None:
+        """Remove provider credentials."""
+        auth = read_pi_auth()
+        if provider_id in auth:
+            del auth[provider_id]
+            write_pi_auth(auth)
+            self._needs_restart = True
+            self._populate_configured_providers()
+            self._populate_chat_and_vision()
 
     def _on_add_custom_provider(self) -> None:
+        """Add a custom provider (Ollama, LM Studio, etc.)."""
         dlg = _AddProviderDialog(self)
         if dlg.exec() == QtWidgets.QDialog.Accepted:
             data = dlg.get_provider_data()
@@ -409,10 +438,52 @@ class SettingsDialog(QtWidgets.QDialog):
                 ],
             }
             write_pi_models(models)
-            self._populate_providers_table()
-            self._default_provider.clear()
-            self._default_provider.addItems(self._get_all_provider_names())
             self._needs_restart = True
+            self._populate_configured_providers()
+            self._populate_chat_and_vision()
+
+    # ═══════════════════════════════════════════════════════════════════
+    # Tab 2: Appearance
+    # ═══════════════════════════════════════════════════════════════════
+
+    def _build_appearance_tab(self) -> QtWidgets.QWidget:
+        w = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(w)
+        layout.setSpacing(12)
+        layout.setContentsMargins(12, 12, 12, 12)
+
+        settings = get_settings()
+
+        # Theme
+        layout.addWidget(_section_label("Theme"))
+        theme_row = QtWidgets.QHBoxLayout()
+        theme_row.addWidget(QtWidgets.QLabel("Color:"))
+        self._theme_combo = QtWidgets.QComboBox()
+        current_theme = settings.get("theme_color", "cyan")
+        for key, info in THEMES.items():
+            self._theme_combo.addItem(info["name"], key)
+            if key == current_theme:
+                self._theme_combo.setCurrentIndex(
+                    self._theme_combo.count() - 1)
+        theme_row.addWidget(self._theme_combo)
+        theme_row.addStretch()
+        layout.addLayout(theme_row)
+
+        # Font
+        layout.addWidget(_section_label("Font Size"))
+        font_row = QtWidgets.QHBoxLayout()
+        font_row.addWidget(QtWidgets.QLabel("Scale:"))
+        self._font_scale = QtWidgets.QComboBox()
+        current_scale = str(settings.get("font_scale", 1.0))
+        for val in ["0.8", "0.9", "1.0", "1.1", "1.2", "1.3", "1.4"]:
+            self._font_scale.addItem(val)
+        self._font_scale.setCurrentText(current_scale)
+        font_row.addWidget(self._font_scale)
+        font_row.addStretch()
+        layout.addLayout(font_row)
+
+        layout.addStretch()
+        return w
 
     # ═══════════════════════════════════════════════════════════════════
     # Tab 3: Knowledge (preserved unchanged)
@@ -427,7 +498,8 @@ class SettingsDialog(QtWidgets.QDialog):
         # Enable
         self._knowledge_check = QtWidgets.QCheckBox(
             "对话结束后自动提取知识（AI 反思 → 用户确认 → 存入铁律/知识库）")
-        self._knowledge_check.setChecked(settings.get("knowledge_enabled", True))
+        self._knowledge_check.setChecked(
+            settings.get("knowledge_enabled", True))
         self._knowledge_check.setStyleSheet(
             f"QCheckBox {{ color:#e5e5eb; font-size:{fs(12)}; spacing:8px; }}")
         layout.addWidget(self._knowledge_check)
@@ -485,10 +557,6 @@ class SettingsDialog(QtWidgets.QDialog):
         layout.addStretch()
         return w
 
-    # ═══════════════════════════════════════════════════════════════════
-    # Shared helpers
-    # ═══════════════════════════════════════════════════════════════════
-
     def _refresh_knowledge_stats(self):
         r = rules_count()
         e = entries_count()
@@ -513,23 +581,30 @@ class SettingsDialog(QtWidgets.QDialog):
     # ═══════════════════════════════════════════════════════════════════
 
     def _on_save(self):
-        provider = self._default_provider.currentText()
-        model_text = self._default_model.currentText().strip()
-        model_id = self._default_model.currentData() or model_text
+        # Chat model
+        chat_prov_id = self._chat_provider.currentData() or ""
+        chat_model_id = (
+            self._chat_model.currentData()
+            or self._chat_model.currentText().strip())
         thinking = self._thinking_combo.currentText()
 
-        # Write default model to pi settings.json
         pi_sett = read_pi_settings()
-        pi_sett["defaultProvider"] = provider
-        pi_sett["defaultModel"] = model_id
+        pi_sett["defaultProvider"] = chat_prov_id
+        pi_sett["defaultModel"] = chat_model_id
         pi_sett["defaultThinkingLevel"] = thinking
         write_pi_settings(pi_sett)
 
-        # Write Edini UI settings (theme, font, knowledge)
+        # Vision model
+        vision_prov_id = self._vision_provider.currentData() or ""
+        vision_model_id = self._vision_model.currentData() or ""
+
         save_settings({
             "knowledge_enabled": self._knowledge_check.isChecked(),
+            "vision_provider": vision_prov_id,
+            "vision_model_id": vision_model_id,
         })
 
+        # Theme + font
         theme_key = self._theme_combo.currentData()
         if theme_key:
             set_theme(theme_key)
@@ -537,17 +612,15 @@ class SettingsDialog(QtWidgets.QDialog):
         font_val = float(self._font_scale.currentText())
         set_font_scale(font_val)
 
+        # Apply to running pi
         from edini.ui.windows import _main_window
         if _main_window:
             _main_window.refresh_theme()
             rpc = _main_window._rpc_client
-
-            # Try to set model without restart
-            rpc.send_set_model(provider, model_id)
+            rpc.send_set_model(chat_prov_id, chat_model_id)
 
             if self._needs_restart:
                 self._needs_restart = False
-                # Connect a one-shot handler for post-restart model re-set
                 try:
                     rpc.status_changed.disconnect(self._on_restart_done)
                 except TypeError:
@@ -558,7 +631,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.accept()
 
     def _on_restart_done(self, status: str):
-        """After Pi restarts, re-send the model config from pi settings."""
+        """After Pi restarts, re-send the model config."""
         if status == "connected":
             from edini.ui.windows import _main_window
             if _main_window:
@@ -578,7 +651,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Add Provider Dialog
+# Add Provider Dialog (custom providers like Ollama)
 # ═══════════════════════════════════════════════════════════════════════
 
 class _AddProviderDialog(QtWidgets.QDialog):
@@ -647,7 +720,8 @@ class _AddProviderDialog(QtWidgets.QDialog):
         layout.addLayout(form)
 
         buttons = QtWidgets.QDialogButtonBox(
-            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+            QtWidgets.QDialogButtonBox.Ok
+            | QtWidgets.QDialogButtonBox.Cancel)
         buttons.accepted.connect(self._validate_and_accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -676,18 +750,18 @@ def _section_label(text: str) -> QtWidgets.QLabel:
     return lbl
 
 
-def _btn_style(color: str) -> str:
+def _btn_style(bg: str, fg: str = "#e5e5eb") -> str:
     return f"""
         QPushButton {{
-            background: {color};
-            color: #e5e5eb;
+            background: {bg};
+            color: {fg};
             border: none;
             border-radius: 4px;
             padding: 6px 16px;
             font-size: {fs(11)};
         }}
-        QPushButton:hover {{ background: {_lighter(color, 0.15)}; }}
-        QPushButton:pressed {{ background: {_darker(color, 0.15)}; }}
+        QPushButton:hover {{ background: {_lighter(bg, 0.15)}; }}
+        QPushButton:pressed {{ background: {_darker(bg, 0.15)}; }}
     """
 
 

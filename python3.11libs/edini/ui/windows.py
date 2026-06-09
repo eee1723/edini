@@ -43,9 +43,10 @@ def open_chat_window(toggle=False):
 
 def open_settings():
     global _settings_dialog
-    if _settings_dialog is None:
-        from edini.ui.settings_dialog import SettingsDialog
-        _settings_dialog = SettingsDialog(_main_parent() if _main_window else None)
+    # Always create fresh to pick up latest auth/model data
+    from edini.ui.settings_dialog import SettingsDialog
+    _settings_dialog = SettingsDialog(
+        _main_parent() if _main_window else None)
     _settings_dialog.show()
     _settings_dialog.raise_()
     _settings_dialog.activateWindow()
