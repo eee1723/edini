@@ -1,6 +1,6 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-09 &nbsp;|&nbsp; 第十九阶段：供应商与模型配置重构 — pi CLI 风格 + pi-ai 自动同步 ✅
+> 最后更新：2026-06-09 &nbsp;|&nbsp; 第二十阶段：测试基建 + 知识检索闭环 + 评估联动 ✅
 
 ## 总览看板
 
@@ -30,7 +30,7 @@
     <span class="status-tag status-done">完成</span>
   </div>
   <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:100%"></div></div>
-  <div class="phase-card-detail">HTTP Server (127.0.0.1:9876) · 16 tool handlers · /health 端点 · JSON 序列化 · 异常处理</div>
+  <div class="phase-card-detail">HTTP Server (127.0.0.1:9876) · 22 tool handlers · /health 端点 · JSON 序列化 · 异常处理</div>
 </div>
 
 <div class="phase-card">
@@ -48,7 +48,7 @@
     <span class="status-tag status-done">完成</span>
   </div>
   <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:100%"></div></div>
-  <div class="phase-card-detail">16 tools (TypeBox schema) · edini-context 注入铁律（rules.json）+ Houdini 上下文 · forwardTool HTTP 转发</div>
+  <div class="phase-card-detail">22 tools (TypeBox schema) · edini-context 注入铁律（rules.json）+ Houdini 上下文 · forwardTool HTTP 转发 · edini_search_knowledge 知识检索</div>
 </div>
 
 <div class="phase-card">
@@ -72,10 +72,10 @@
 <div class="phase-card">
   <div class="phase-card-header">
     <span class="phase-card-title">🧪 测试</span>
-    <span class="status-tag status-pending">计划中</span>
+    <span class="status-tag status-done">完成</span>
   </div>
-  <div class="progress-bar-bg"><div class="progress-bar-fill progress-pending" style="width:0%"></div></div>
-  <div class="phase-card-detail">⬜ 单元测试 · ⬜ 集成测试 · ⬜ 端到端测试</div>
+  <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:100%"></div></div>
+  <div class="phase-card-detail">✅ Mock Hou 模块（MockNode/MockParm/MockNodeType/MockCategory）· ✅ 105+ 单元测试（node_utils 48 + config 24 + knowledge_store 33）· ✅ 全部 22 handler 脱机测试 · ⬜ 集成测试 · ⬜ 端到端测试</div>
 </div>
 
 <div class="phase-card">
@@ -112,6 +112,20 @@
 ## 近期关键节点
 
 <div class="timeline">
+
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-09</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第二十阶段：测试基建 + 知识检索闭环 + 评估联动</span>
+      <span class="status-tag status-done">完成</span>
+    </div>
+    <div class="timeline-summary">① Mock Hou 模块（MockNode/MockParm/MockNodeType/MockCategory）支持全部 22 个 handler 脱机测试 ② node_utils 单元测试 48 用例覆盖全部 handler ③ config.py 测试 24 用例覆盖读写 JSON、路径查找、legacy 迁移 ④ knowledge_store 测试 33 用例覆盖 CRUD/search/parse extraction ⑤ edini_search_knowledge Pi 工具注册，Agent 可查询知识库 ⑥ 评估低分会话自动提取知识条目 ⑦ 全部测试 105+ 通过</div>
+    <div class="timeline-tags">
+      <span>单元测试</span><span>Mock Hou</span><span>知识检索</span><span>评估联动</span>
+    </div>
+  </div>
+</div>
 
 <div class="timeline-item timeline-done">
   <div class="timeline-date">2026-06-09</div>
@@ -375,11 +389,11 @@
 | P1 | ~~多模态视觉代理~~ | ✅ pi-visionizer 安装 + Qwen-VL 模型配置完成 |
 | P1 | ~~截图链路修复~~ | ✅ 三级降级修复完成（saveImage → grabFrameBuffer → flipbook）|
 | P1 | ~~图片时间线显示~~ | ✅ 缩略图卡片 + 缓存持久化 + 视觉描述历史渲染 |
-| P2 | 知识库检索工具 | 为 Agent 添加 search_knowledge 工具调用 |
-| P2 | 单元测试 | 对 node_utils、config、tool_executor、eval 写测试 |
+| P2 | ~~知识库检索工具~~ | ✅ edini_search_knowledge 已实现 |
+| P2 | ~~单元测试~~ | ✅ 105+ 测试通过（node_utils 48 + config 24 + knowledge_store 33） |
 | P2 | Judge模型优化 | 接入 Anthropic Claude 做 Judge（结构化输出更强）、V4 Pro reasoning_tokens 兼容 |
 | P3 | 效率基线优化 | 基于任务类型百分位计算效率评分，而非固定启发式 |
-| P3 | 评估结果→知识系统 | 低分会话自动提取铁律/知识条目 |
+| P3 | ~~评估结果→知识系统~~ | ✅ 评估低分会话自动提取知识条目 |
 | P3 | Python 面板 | 支持嵌入 Houdini Pane Tab |
 | P2 | 多模型优化 | ~~Qwen 等更多 provider 快速切换~~ ✅ 已通过 35 内置供应商自动同步实现 |
 
@@ -417,7 +431,7 @@
 - ✅ 多行输入 (Ctrl+Enter 换行，Enter 发送)
 - ✅ 会话浏览模式（历史回看 + 回到当前）
 - ✅ 对话轮次计时器（Pi Status 卡片实时显示 Round 时间）
-- ✅ Pi Status 工具信息（Tools: 19 loaded, port 9876）
+- ✅ Pi Status 工具信息（Tools: 22 loaded, port 9876）
 - ✅ 知识沉淀两层架构：铁律 (≤20, 上下文注入) + 知识库 (细节, 可检索)
 - ✅ AI 反思 → 用户确认面板（✓✕ + 全部接受/放弃 + 类型切换）
 - ✅ Settings Knowledge 标签页（开关 + 统计 + 管理按钮）
