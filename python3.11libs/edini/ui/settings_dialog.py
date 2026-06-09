@@ -16,7 +16,6 @@ from edini.config import (
     read_pi_auth, write_pi_auth,
     read_pi_models, write_pi_models,
     read_pi_settings, write_pi_settings,
-    PI_MODELS_FILE,
     get_pi_ai_providers, get_pi_ai_models, get_pi_ai_vision_models,
     get_provider_auth_status, get_configured_providers,
 )
@@ -286,7 +285,7 @@ class SettingsDialog(QtWidgets.QDialog):
             btn = QtWidgets.QPushButton("Logout")
             btn.setStyleSheet("color:#ef4444;border:none;font-size:10px;")
             btn.clicked.connect(
-                lambda checked, pid=p["id"]: self._on_logout_provider(pid))
+                lambda *a, pid=p["id"]: self._on_logout_provider(pid))
             self._auth_table.setCellWidget(row, 2, btn)
 
     def _populate_chat_and_vision(self) -> None:
@@ -460,21 +459,40 @@ class SettingsDialog(QtWidgets.QDialog):
             # Show API key input
             key_dlg = ApiKeyDialog(self, provider_name)
             if key_dlg.exec() == QtWidgets.QDialog.Accepted:
-                auth = read_pi_auth()
-                auth[provider_id] = {
-                    "type": "api_key", "key": key_dlg.api_key}
-                write_pi_auth(auth)
+                # If provider has models.json config, write key there
+                models = read_pi_models()
+                prov_config = models.get("providers", {}).get(provider_id)
+                if prov_config is not None:
+                    prov_config["apiKey"] = key_dlg.api_key
+                    write_pi_models(models)
+                else:
+                    # Built-in provider: write to auth.json
+                    auth = read_pi_auth()
+                    auth[provider_id] = {
+                        "type": "api_key", "key": key_dlg.api_key}
+                    write_pi_auth(auth)
                 self._needs_restart = True
                 # Refresh UI
                 self._populate_configured_providers()
                 self._populate_chat_and_vision()
 
     def _on_logout_provider(self, provider_id: str) -> None:
-        """Remove provider credentials."""
+        """Remove provider credentials from auth.json and/or models.json."""
+        changed = False
+        # Remove from auth.json
         auth = read_pi_auth()
         if provider_id in auth:
             del auth[provider_id]
             write_pi_auth(auth)
+            changed = True
+        # Remove apiKey from models.json
+        models = read_pi_models()
+        prov = models.get("providers", {}).get(provider_id, {})
+        if prov.get("apiKey"):
+            del prov["apiKey"]
+            write_pi_models(models)
+            changed = True
+        if changed:
             self._needs_restart = True
             self._populate_configured_providers()
             self._populate_chat_and_vision()
