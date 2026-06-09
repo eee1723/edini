@@ -450,7 +450,7 @@ class TestGetSelection(unittest.TestCase):
         _mock_hou.set_selected([])
         r = get_selection()
         self.assertTrue(r["success"])
-        self.assertEqual(r["selection_count"], 0)
+        self.assertEqual(r["count"], 0)
         self.assertEqual(r["nodes"], [])
 
     def test_with_selection(self):
@@ -460,7 +460,7 @@ class TestGetSelection(unittest.TestCase):
         _mock_hou.set_selected([node])
         r = get_selection()
         self.assertTrue(r["success"])
-        self.assertEqual(r["selection_count"], 1)
+        self.assertEqual(r["count"], 1)
         self.assertEqual(r["nodes"][0]["name"], "sel_node")
 
 
@@ -474,8 +474,8 @@ class TestCheckErrors(unittest.TestCase):
     def test_scene_scan(self):
         r = check_errors()
         self.assertTrue(r["success"])
-        self.assertIn("error_count", r)
-        self.assertIn("warning_count", r)
+        self.assertIn("error_nodes", r)
+        self.assertIn("warning_nodes", r)
 
     def test_single_node(self):
         cr = create_node("box", name="err_node")
@@ -483,6 +483,9 @@ class TestCheckErrors(unittest.TestCase):
         r = check_errors(cr["path"])
         self.assertTrue(r["success"])
         self.assertIn("error_count", r)
+        self.assertIn("warning_count", r)
+        self.assertIn("errors", r)
+        self.assertIn("warnings", r)
 
     def test_missing_node(self):
         r = check_errors("/obj/ghost")

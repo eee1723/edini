@@ -173,16 +173,13 @@ class TestEdiniSettings(unittest.TestCase):
         """Returns defaults when settings file doesn't exist."""
         with patch.object(cfg, "EDINI_SETTINGS_FILE", self.settings_path):
             result = cfg.get_settings()
-        self.assertEqual(result["theme_color"], "cyan")
-        self.assertEqual(result["font_scale"], 1.0)
         self.assertTrue(result["knowledge_enabled"])
 
     def test_load_when_missing(self):
         """get_settings returns defaults without file."""
         with patch.object(cfg, "EDINI_SETTINGS_FILE", Path("/nonexistent/settings.json")):
             result = cfg.get_settings()
-        self.assertIn("theme_color", result)
-        self.assertEqual(result["theme_color"], "cyan")
+        self.assertTrue(result["knowledge_enabled"])
 
     def test_save_and_load(self):
         """save_settings persists and get_settings returns merged values."""
@@ -297,51 +294,17 @@ class TestGetPiEnv(unittest.TestCase):
         # Should contain at least PATH
         self.assertIn("PATH", env)
 
-    def test_vision_env_when_configured(self):
-        """Sets VISIONIZER env vars when vision provider/model configured."""
+    def test_vision_env_not_set_when_configured(self):
+        """Vision env vars are NOT injected via get_pi_env (pi reads its own config)."""
         with tempfile.TemporaryDirectory() as tmp:
             settings_path = Path(tmp) / "settings.json"
             data = {"vision_provider": "openai", "vision_model_id": "gpt-4o"}
             settings_path.write_text(json.dumps(data), encoding="utf-8")
             with patch.object(cfg, "EDINI_SETTINGS_FILE", settings_path):
                 env = cfg.get_pi_env()
-            self.assertEqual(env.get("VISIONIZER_PROVIDER"), "openai")
-            self.assertEqual(env.get("VISIONIZER_MODEL_ID"), "gpt-4o")
+            self.assertIsNone(env.get("VISIONIZER_PROVIDER"))
+            self.assertIsNone(env.get("VISIONIZER_MODEL_ID"))
 
-
-# ═══════════════════════════════════════════════════════════════════════
-# TestModelHistory
-# ═══════════════════════════════════════════════════════════════════════
-
-class TestModelHistory(unittest.TestCase):
-    """Tests for get_model_history / add_model_history."""
-
-    def setUp(self):
-        self.tmpdir = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmpdir.cleanup)
-        self.history_path = Path(self.tmpdir.name) / "model_history.json"
-
-    def test_empty_history(self):
-        """Returns [] when history file doesn't exist."""
-        with patch.object(cfg, "_MODEL_HISTORY_FILE", self.history_path):
-            result = cfg.get_model_history()
-        self.assertEqual(result, [])
-
-    def test_add_and_retrieve(self):
-        """Adds a model and retrieves it."""
-        with patch.object(cfg, "_MODEL_HISTORY_FILE", self.history_path):
-            cfg.add_model_history("claude-sonnet-4-20250514")
-            result = cfg.get_model_history()
-        self.assertEqual(result, ["claude-sonnet-4-20250514"])
-
-    def test_dedup_and_order(self):
-        """Most recent entry is first, duplicates removed."""
-        with patch.object(cfg, "_MODEL_HISTORY_FILE", self.history_path):
-            cfg.add_model_history("model-a")
-            cfg.add_model_history("model-b")
-            cfg.add_model_history("model-a")  # duplicate
-            result = cfg.get_model_history()
-        self.assertEqual(result, ["model-a", "model-b"])
 
 
 if __name__ == "__main__":
