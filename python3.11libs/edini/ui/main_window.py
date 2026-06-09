@@ -488,9 +488,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
 
     def _on_vision_description(self, descriptions: list):
         """Handle vision_description notification from pi-visionizer."""
-        print(f"[edini] Vision description received: {len(descriptions)} items")
-        for d in descriptions:
-            print(f"  model={d.get('model','?')}, len={len(d.get('description',''))}, err={d.get('error','')}")
+        # Vision descriptions received from pi-visionizer
         # Save all image data before cleanup
         all_image_data: list[str] = []
         if self._pending_images:

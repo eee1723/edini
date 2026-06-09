@@ -183,26 +183,16 @@ export default function (pi: ExtensionAPI) {
 
       // Resolve config (session entry or hardcoded default)
       const cfg = resolveConfig(ctx);
-      console.error(`[pi-visionizer] config: provider=${cfg.provider}, modelId=${cfg.modelId}`);
-
       // Find the vision model in pi's registry
       const visionModel = ctx.modelRegistry.find(cfg.provider, cfg.modelId);
-      if (!visionModel) {
-        console.error(`[pi-visionizer] model not found: ${cfg.provider}/${cfg.modelId}`);
-        return;
-      }
-      console.error(`[pi-visionizer] found model: ${visionModel.provider}/${visionModel.id}, api=${visionModel.api}`);
+      if (!visionModel) return;
 
       // Check for image content in messages
       if (!hasImages(event.messages)) return;
 
       // Resolve vision model auth
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(visionModel);
-      if (!auth.ok || !auth.apiKey) {
-        console.error(`[pi-visionizer] auth failed: ok=${auth.ok}, error=${auth.error ?? 'none'}`);
-        return;
-      }
-      console.error(`[pi-visionizer] auth OK, key length=${auth.apiKey.length}`);
+      if (!auth.ok || !auth.apiKey) return;
 
       const prompt = cfg.prompt || DEFAULT_PROMPT;
       const requireHttps = cfg.requireHttps !== false; // default true
