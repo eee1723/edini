@@ -2,10 +2,19 @@
 
 > **用途**：让新 Agent 或开发者在 Edini 仓库里快速上手。
 
-**最后更新**：2026-06-09（第二十一阶段：知识反思面板 + 去重）
-**当前阶段**：156 单元测试 · ReflectWorker 后台反思 · Jaccard 去重
+**最后更新**：2026-06-09（第二十一阶段：知识反思面板 + 去重 + 稳定性修复）
+**当前阶段**：156 单元测试 · ReflectWorker 后台反思 · Jaccard 去重 · 全链路验证通过
 **下一阶段**：Houdini Pane Tab 嵌入 · 场景感知
 **工作分支**：`master`
+
+## 第二十一阶段修复记录（Houdini 实测后修复 4 个 bug）
+
+1. `RpcClient` 缺 `thinking_delta`/`tool_result`/`extension_info` 等 6 个信号 — Phase 20 sync 覆盖了完整版
+2. `_on_change_undo`/`_redo`/`_node_requested` 3 个方法误删 — 字节替换时范围过大
+3. `PROJECT_ROOT` 差一级，Pi 找不到扩展 — `config.py` 在 `python3.11libs/edini/` 时 parent.parent 是 `python3.11libs/` 而非 `edini/`
+4. `config.py` 缺 `get_pi_ai_providers` 等 6 个桥接函数 — Phase 19 代码在 sync 中丢失
+
+**经验教训**：`edini/` 和 `python3.11libs/edini/` 是两个独立的安装路径，同步时不能简单覆盖，需要双向对比确保功能完整。最好用 `diff` 对比后再合并。
 
 ## 一句话总结
 
