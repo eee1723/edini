@@ -136,21 +136,10 @@ class ContextPanel(QtWidgets.QWidget):
 
         layout.addWidget(scene_card)
 
-        # ── Card 3: Knowledge ──
-        kn_card, kn_layout = _make_card("Knowledge", self)
-
-        self.rules_count_label = _card_label("Rules: -")
-        kn_layout.addWidget(self.rules_count_label)
-
-        self.entries_count_label = _card_label("Entries: -")
-        kn_layout.addWidget(self.entries_count_label)
-
-        manage_btn = QtWidgets.QPushButton("管理")
-        manage_btn.setObjectName("GhostButton")
-        manage_btn.clicked.connect(self._open_knowledge_manager)
-        kn_layout.addWidget(manage_btn)
-
-        layout.addWidget(kn_card)
+        # ── Card 3: Knowledge Zone ──
+        from edini.ui.knowledge_zone import KnowledgeZone
+        self.knowledge_zone = KnowledgeZone(self)
+        layout.addWidget(self.knowledge_zone)
         layout.addStretch(1)
 
     def set_pi_status(self, status: str):
@@ -196,12 +185,8 @@ class ContextPanel(QtWidgets.QWidget):
         self.round_time_label.setText("Round: —")
 
     def refresh_knowledge(self):
-        """Update knowledge counts in the card."""
-        from edini.ui.knowledge_store import rules_count, entries_count
-        r = rules_count()
-        e = entries_count()
-        self.rules_count_label.setText(f"Rules: {r}" if r else "Rules: -")
-        self.entries_count_label.setText(f"Entries: {e}" if e else "Entries: -")
+        """Refresh knowledge zone."""
+        self.knowledge_zone.refresh()
 
     def _open_knowledge_manager(self):
         from edini.ui.knowledge_dialog import KnowledgeDialog
