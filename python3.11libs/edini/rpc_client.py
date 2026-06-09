@@ -106,6 +106,7 @@ class RpcClient(QObject):
             cmd: dict[str, Any] = {"type": "prompt", "message": text}
             if images:
                 cmd["images"] = images
+                print(f"[edini] Sending prompt with {len(images)} image(s)")
             self._worker.send_command(cmd)
 
     def send_abort(self) -> None:
