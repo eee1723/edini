@@ -545,8 +545,6 @@ class AgentPanel(QtWidgets.QWidget):
     submit_requested = QtCore.Signal(str, object)   # text, images
     stop_requested = QtCore.Signal()
     abort_requested = QtCore.Signal()
-    knowledge_accepted = QtCore.Signal(list)        # list of accepted items
-    knowledge_rejected = QtCore.Signal()            # all rejected
     sig_eval_completed = QtCore.Signal(str, float)  # session_id, total_score
 
     STREAM_FLUSH_CHARS = 80
@@ -691,50 +689,6 @@ class AgentPanel(QtWidgets.QWidget):
         self._tool_panel.setFixedHeight(self._TOOL_PANEL_COLLAPSED_H)
         root.addWidget(self._tool_panel)
 
-        # ── Knowledge Extraction Area ──
-        self._knowledge_area = QtWidgets.QFrame()
-        self._knowledge_area.setStyleSheet(f"""
-            QFrame {{
-                background: #0a0a12;
-                border: 1px solid #1e2e2e;
-                border-radius: 4px;
-            }}
-        """)
-        ka_layout = QtWidgets.QVBoxLayout(self._knowledge_area)
-        ka_layout.setContentsMargins(10, 4, 10, 6)
-        ka_layout.setSpacing(4)
-
-        ka_header = QtWidgets.QHBoxLayout()
-        ka_header.setContentsMargins(0, 0, 0, 0)
-        self._knowledge_title = QtWidgets.QLabel("🧠 知识提取")
-        self._knowledge_title.setStyleSheet(f"color:#80cbc4;font-size:{fs(11)};font-weight:600;border:none;")
-        ka_header.addWidget(self._knowledge_title)
-        ka_header.addStretch()
-        self._knowledge_accept_all = QtWidgets.QPushButton("全部接受")
-        self._knowledge_accept_all.setStyleSheet(_knowledge_btn_style("#16a34a"))
-        ka_header.addWidget(self._knowledge_accept_all)
-        self._knowledge_reject_all = QtWidgets.QPushButton("全部放弃")
-        self._knowledge_reject_all.setStyleSheet(_knowledge_btn_style("#555"))
-        ka_header.addWidget(self._knowledge_reject_all)
-        ka_layout.addLayout(ka_header)
-
-        self._knowledge_scroll = QtWidgets.QScrollArea()
-        self._knowledge_scroll.setWidgetResizable(True)
-        self._knowledge_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
-        self._knowledge_scroll.setMaximumHeight(240)
-        self._knowledge_scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
-        self._knowledge_items_widget = QtWidgets.QWidget()
-        self._knowledge_items_widget.setStyleSheet("background: transparent;")
-        self._knowledge_items_layout = QtWidgets.QVBoxLayout(self._knowledge_items_widget)
-        self._knowledge_items_layout.setContentsMargins(0, 0, 0, 0)
-        self._knowledge_items_layout.setSpacing(3)
-        self._knowledge_items_layout.addStretch()
-        self._knowledge_scroll.setWidget(self._knowledge_items_widget)
-        ka_layout.addWidget(self._knowledge_scroll)
-
-        self._knowledge_area.setVisible(False)
-        root.addWidget(self._knowledge_area)
-
         # ── Change Tree Panel (collapsible) ──
         from edini.ui.change_tree_widget import ChangeTreeWidget
         self.change_tree_widget = ChangeTreeWidget()
@@ -822,9 +776,6 @@ class AgentPanel(QtWidgets.QWidget):
 
     def _bind_events(self):
         self.input_edit.installEventFilter(self)
-        self._knowledge_accept_all.clicked.connect(self._on_knowledge_accept_all)
-        self._knowledge_reject_all.clicked.connect(self._on_knowledge_reject_all)
-
         # Confirm setup
 
         # Drag-drop on input_edit
@@ -1135,109 +1086,6 @@ class AgentPanel(QtWidgets.QWidget):
         self._thinking_buf = ""
         self._clear_tool_cards()
         self._clear_thinking()
-
-    # ------------------------------------------------------------------
-    # Knowledge Extraction Area (unchanged)
-    # ------------------------------------------------------------------
-
-    def show_extraction_results(self, items: list[dict]):
-        self._clear_knowledge_items()
-        self._pending_knowledge_items = items
-        for i, item in enumerate(items):
-            card = self._make_knowledge_card(item, i)
-            self._knowledge_items_layout.insertWidget(
-                self._knowledge_items_layout.count() - 1, card)
-        rule_count = sum(1 for it in items if it.get("type") == "rule")
-        entry_count = len(items) - rule_count
-        parts = []
-        if rule_count:
-            parts.append(f"{rule_count} 条铁律")
-        if entry_count:
-            parts.append(f"{entry_count} 条知识")
-        self._knowledge_title.setText(f"🧠 知识提取 — {' + '.join(parts)}")
-        self._knowledge_area.setVisible(True)
-
-    def _clear_knowledge_items(self):
-        for i in reversed(range(self._knowledge_items_layout.count())):
-            item = self._knowledge_items_layout.itemAt(i)
-            if item and item.widget():
-                item.widget().deleteLater()
-        self._pending_knowledge_items = []
-
-    def hide_extraction_results(self):
-        self._clear_knowledge_items()
-        self._knowledge_area.setVisible(False)
-
-    def _make_knowledge_card(self, item: dict, index: int) -> QtWidgets.QWidget:
-        card = QtWidgets.QWidget()
-        layout = QtWidgets.QHBoxLayout(card)
-        layout.setContentsMargins(6, 3, 6, 3)
-        layout.setSpacing(6)
-        is_rule = item.get("type") == "rule"
-        badge = _TypeToggleBadge(is_rule, index, self._on_toggle_item_type)
-        layout.addWidget(badge)
-        cat_label = QtWidgets.QLabel(item.get("category", ""))
-        cat_label.setStyleSheet(f"color:#71717a;font-size:{fs(10)};border:none;")
-        cat_label.setFixedWidth(40)
-        layout.addWidget(cat_label)
-        content_text = QtWidgets.QWidget()
-        cl = QtWidgets.QVBoxLayout(content_text)
-        cl.setContentsMargins(0, 0, 0, 0)
-        cl.setSpacing(1)
-        title = QtWidgets.QLabel(item.get("title", ""))
-        title.setStyleSheet(f"color:#e5e5eb;font-size:{fs(11)};font-weight:600;border:none;")
-        title.setWordWrap(True)
-        cl.addWidget(title)
-        detail = QtWidgets.QLabel(item.get("content", "")[:120])
-        detail.setStyleSheet(f"color:#94a3b8;font-size:{fs(10)};border:none;")
-        detail.setWordWrap(True)
-        cl.addWidget(detail)
-        layout.addWidget(content_text, 1)
-        accept_btn = QtWidgets.QPushButton("✓")
-        accept_btn.setFixedSize(26, 26)
-        accept_btn.setStyleSheet(_knowledge_btn_style("#16a34a"))
-        accept_btn.clicked.connect(lambda checked=False, idx=index: self._on_knowledge_accept_one(idx))
-        layout.addWidget(accept_btn)
-        reject_btn = QtWidgets.QPushButton("✕")
-        reject_btn.setFixedSize(26, 26)
-        reject_btn.setStyleSheet(_knowledge_btn_style("#555"))
-        reject_btn.clicked.connect(lambda checked=False, idx=index: self._on_knowledge_reject_one(idx))
-        layout.addWidget(reject_btn)
-        return card
-
-    def _on_knowledge_accept_one(self, index: int):
-        if 0 <= index < len(self._pending_knowledge_items):
-            item = self._pending_knowledge_items.pop(index)
-            self.knowledge_accepted.emit([item])
-            self._refresh_knowledge_cards()
-
-    def _on_knowledge_reject_one(self, index: int):
-        if 0 <= index < len(self._pending_knowledge_items):
-            self._pending_knowledge_items.pop(index)
-            self._refresh_knowledge_cards()
-
-    def _on_toggle_item_type(self, index: int, is_rule: bool):
-        if 0 <= index < len(self._pending_knowledge_items):
-            self._pending_knowledge_items[index]["type"] = "rule" if is_rule else "entry"
-
-    def _on_knowledge_accept_all(self):
-        items = list(self._pending_knowledge_items)
-        self.knowledge_accepted.emit(items)
-        self.hide_extraction_results()
-
-    def _on_knowledge_reject_all(self):
-        self.knowledge_rejected.emit()
-        self.hide_extraction_results()
-
-    def _refresh_knowledge_cards(self):
-        if not self._pending_knowledge_items:
-            self.hide_extraction_results()
-            return
-        self._clear_knowledge_items()
-        for i, item in enumerate(self._pending_knowledge_items):
-            card = self._make_knowledge_card(item, i)
-            self._knowledge_items_layout.insertWidget(
-                self._knowledge_items_layout.count() - 1, card)
 
     # ------------------------------------------------------------------
     # Public API
@@ -1909,21 +1757,6 @@ def _darker(h: str, a: float) -> str:
     h = _expand_hex(h)
     r, g, b = int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16)
     return f"#{max(0,int(r*(1-a))):02x}{max(0,int(g*(1-a))):02x}{max(0,int(b*(1-a))):02x}"
-
-
-def _knowledge_btn_style(color: str) -> str:
-    return f"""
-        QPushButton {{
-            background: {color};
-            color: #e5e5eb;
-            border: none;
-            border-radius: 3px;
-            font-size: {fs(11)};
-            font-weight: 600;
-        }}
-        QPushButton:hover {{ background: {_lighter(color, 0.15)}; }}
-        QPushButton:pressed {{ background: {_darker(color, 0.15)}; }}
-    """
 
 
 # ==========================================================================
