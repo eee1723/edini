@@ -126,6 +126,8 @@ def write_pi_settings(data: dict) -> None:
 
 _EDINI_DEFAULTS: dict[str, Any] = {
     "knowledge_enabled": True,
+    "reflection_provider": "",
+    "reflection_model": "",
 }
 
 

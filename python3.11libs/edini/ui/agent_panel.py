@@ -503,40 +503,6 @@ class _TimelineView(QtWidgets.QScrollArea):
 # Type Toggle Badge (unchanged)
 # ═══════════════════════════════════════════════════════════════════════
 
-class _TypeToggleBadge(QtWidgets.QLabel):
-    """Clickable badge showing '铁律' or '知识', toggles on click."""
-
-    def __init__(self, is_rule: bool, index: int, callback, parent=None):
-        super().__init__(parent)
-        self._is_rule = is_rule
-        self._index = index
-        self._callback = callback
-        self.setCursor(QtCore.Qt.PointingHandCursor)
-        self.setToolTip("点击切换铁律 / 知识")
-        self.setFixedWidth(40)
-        self.setAlignment(QtCore.Qt.AlignCenter)
-        self._update_style()
-
-    def _update_style(self):
-        text = "铁律" if self._is_rule else "知识"
-        color = "#a78bfa" if self._is_rule else "#80cbc4"
-        bg = "rgba(167,139,250,0.15)" if self._is_rule else "rgba(128,203,196,0.12)"
-        self.setText(text)
-        self.setStyleSheet(
-            f"color:{color};font-size:{fs(10)};font-weight:600;"
-            f"background:{bg};padding:1px 4px;border-radius:3px;border:1px solid {color}44;"
-        )
-
-    def mousePressEvent(self, event):
-        self._is_rule = not self._is_rule
-        self._update_style()
-        self._callback(self._index, self._is_rule)
-
-    @property
-    def is_rule(self) -> bool:
-        return self._is_rule
-
-
 # ═══════════════════════════════════════════════════════════════════════
 # AgentPanel
 # ═══════════════════════════════════════════════════════════════════════
