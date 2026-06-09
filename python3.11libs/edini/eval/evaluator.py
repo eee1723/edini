@@ -512,3 +512,60 @@ def evaluate_session(
 ) -> EvalResult:
     """Convenience function for one-shot evaluation."""
     return EvaluatorPipeline(force_judge=force_judge).evaluate(session)
+
+
+def extract_knowledge_from_eval(
+    session: StructuredSession,
+    result: EvalResult,
+    score_threshold: float = 0.5,
+) -> list[dict]:
+    """Auto-extract knowledge entries from low-scoring sessions.
+
+    Only extracts if total_score < score_threshold.
+    Generates entries based on error patterns and failure modes.
+    Returns list of candidate items for entries.json (not auto-saved).
+    """
+    if result.total_score >= score_threshold:
+        return []
+
+    items = []
+
+    # Extract from failed tool calls
+    for tc in session.tool_calls:
+        if not tc.result_success and tc.error_message:
+            items.append({
+                "type": "entry",
+                "category": "避坑",
+                "title": f"{tc.tool_name}: {tc.error_message[:50]}",
+                "content": f"Tool {tc.tool_name} failed with: {tc.error_message}. "
+                           f"Check parameters and node paths before calling.",
+                "tags": [tc.tool_name, "auto-extracted"],
+            })
+
+    # Extract from low reliability (empty responses or errors)
+    if result.reliability < 0.4:
+        items.append({
+            "type": "entry",
+            "category": "避坑",
+            "title": "低可靠性会话模式",
+            "content": f"Session had reliability score {result.reliability:.2f}. "
+                       f"Review error patterns and tool parameter validation.",
+            "tags": ["reliability", "auto-extracted"],
+        })
+
+    # Extract from low tool accuracy
+    if result.tool_accuracy is not None and result.tool_accuracy < 0.4:
+        failed_tools = [
+            tc.tool_name for tc in session.tool_calls if not tc.result_success
+        ]
+        if failed_tools:
+            items.append({
+                "type": "entry",
+                "category": "技巧",
+                "title": f"工具精度低: {', '.join(set(failed_tools[:3]))}",
+                "content": f"Tools {set(failed_tools)} had accuracy issues. "
+                           f"Double-check parameters and verify node existence before calling.",
+                "tags": list(set(failed_tools)) + ["accuracy", "auto-extracted"],
+            })
+
+    return items[:5]  # Cap at 5 items per session
