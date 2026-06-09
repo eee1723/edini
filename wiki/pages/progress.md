@@ -1,6 +1,6 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-08 &nbsp;|&nbsp; 第十八阶段：评估修复 + 工具补齐 + 智谱Provider + 设置增强 ✅
+> 最后更新：2026-06-09 &nbsp;|&nbsp; 第十九阶段：供应商与模型配置重构 — pi CLI 风格 + pi-ai 自动同步 ✅
 
 ## 总览看板
 
@@ -112,6 +112,20 @@
 ## 近期关键节点
 
 <div class="timeline">
+
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-09</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第十九阶段：供应商与模型配置重构 — pi CLI 风格 + pi-ai 自动同步</span>
+      <span class="status-tag status-done">完成</span>
+    </div>
+    <div class="timeline-summary">① 设置面板重构为 3 Tab：Providers & Models / Appearance / Knowledge ② Login/Logout pi CLI 风格交互：可搜索供应商列表（35 内置供应商 + 自定义供应商）→ API Key 输入 ③ pi_data_bridge.js Node.js 桥接：读取已安装 pi-ai 包数据，pi 更新后自动同步 ④ Chat Model Provider→Model 级联下拉 + Vision Model 独立选择（仅 image-capable 模型） ⑤ 自定义供应商支持 API Key ⑥ 修复：models.json 无效 provider 导致 pi 拒绝加载所有自定义供应商（根本原因）→ 视觉识别从此正常工作</div>
+    <div class="timeline-tags">
+      <span>pi-ai同步</span><span>Login/Logout</span><span>Vision Model</span><span>35供应商</span><span>视觉识别修复</span>
+    </div>
+  </div>
+</div>
 
 <div class="timeline-item timeline-done">
   <div class="timeline-date">2026-06-08</div>
@@ -367,7 +381,7 @@
 | P3 | 效率基线优化 | 基于任务类型百分位计算效率评分，而非固定启发式 |
 | P3 | 评估结果→知识系统 | 低分会话自动提取铁律/知识条目 |
 | P3 | Python 面板 | 支持嵌入 Houdini Pane Tab |
-| P3 | 多模型优化 | Qwen 等更多 provider 快速切换 |
+| P2 | 多模型优化 | ~~Qwen 等更多 provider 快速切换~~ ✅ 已通过 35 内置供应商自动同步实现 |
 
 ## 已实现功能清单
 
@@ -395,7 +409,7 @@
 - ✅ 图片缓存持久化（edini_images/ 目录，按 session 隔离，切换历史对话可回看图片）
 - ✅ 视觉描述缓存（descriptions.json，历史对话中自动渲染 VisionDescriptionBubble）
 - ✅ Defer 缓存写入（session 路径异步就绪后自动刷入，解决端到端时序问题）
-- ✅ API Key / Provider / Model 设置 (下拉选择 + 历史记忆)
+- ✅ API Key / Provider / Model 设置 (pi CLI 风格 Login/Logout + 35 供应商自动同步 + Vision Model 独立配置)
 - ✅ 4 色主题实时预览 + 字体缩放
 - ✅ 执行/中止按钮一体化切换
 - ✅ 智能滚动（rangeChanged + valueChanged + _pinned_to_bottom 标志位，零抖动）
