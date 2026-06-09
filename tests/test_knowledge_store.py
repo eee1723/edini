@@ -31,12 +31,38 @@ from edini.ui.knowledge_store import (  # noqa: E402
 )
 
 
+class _IsolatedKnowledgeDir:
+    """Context manager that redirects knowledge file paths to a tempdir.
+
+    Patches the globals dict of the imported load_rules function directly,
+    which is the only reliable way to override _rules_path regardless of
+    how many module instances pytest creates.
+    """
+
+    def __init__(self, td: str):
+        # Use the globals from the actual imported load_rules function
+        # This is the authoritative module namespace that load_rules sees
+        self._g = load_rules.__globals__
+        self._kdir = Path(td) / "knowledge"
+        self._saved = {}
+        for name in ('_rules_path', '_entries_path', '_ensure_dir'):
+            self._saved[name] = self._g[name]
+
+    def __enter__(self):
+        kdir = self._kdir
+        self._g['_rules_path'] = lambda: kdir / "rules.json"
+        self._g['_entries_path'] = lambda: kdir / "entries.json"
+        self._g['_ensure_dir'] = lambda: kdir.mkdir(parents=True, exist_ok=True)
+        return self
+
+    def __exit__(self, *args):
+        for name, func in self._saved.items():
+            self._g[name] = func
+
+
 def _patch_dir(td: str):
-    """Return a mock.patch that redirects _knowledge_dir to a tempdir."""
-    return mock.patch(
-        "edini.ui.knowledge_store._knowledge_dir",
-        return_value=Path(td) / "knowledge",
-    )
+    """Return a context manager that redirects knowledge file paths to a tempdir."""
+    return _IsolatedKnowledgeDir(td)
 
 
 # ── TestRulesCRUD ──────────────────────────────────────────────────────────
@@ -52,6 +78,12 @@ class TestRulesCRUD:
                 rules = load_rules()
                 assert isinstance(rules, list)
                 assert len(rules) == 4
+                for r in rules:
+                    assert "id" in r
+                    assert "category" in r
+                    assert "title" in r
+                    assert "content" in r
+                    assert "enabled" in r
                 # Every default rule should have required keys
                 for r in rules:
                     assert "id" in r
