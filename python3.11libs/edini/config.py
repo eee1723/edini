@@ -9,6 +9,8 @@ Edini's own settings.json stores only UI preferences (knowledge).
 """
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -223,3 +225,110 @@ def get_pi_command() -> list[str]:
         "-e", str(PI_EXTENSIONS_DIR / "edini-context" / "index.ts"),
         "-e", str(PI_EXTENSIONS_DIR / "pi-visionizer" / "src" / "index.ts"),
     ]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Pi-AI Data Bridge (auto-synced provider/model data)
+# ═══════════════════════════════════════════════════════════════════════
+
+_BRIDGE_SCRIPT = Path(__file__).resolve().parent / "pi_data_bridge.js"
+_providers_cache: list[dict] | None = None
+_models_cache: dict[str, list[dict]] = {}
+_vision_models_cache: list[dict] | None = None
+
+
+def _run_bridge(*args: str) -> Any:
+    cmd = ["node", str(_BRIDGE_SCRIPT)] + list(args)
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=10,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return json.loads(result.stdout.strip())
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError):
+        pass
+    return None
+
+
+def get_pi_ai_providers() -> list[dict]:
+    global _providers_cache
+    if _providers_cache is None:
+        _providers_cache = _run_bridge("providers") or []
+    return _providers_cache
+
+
+def get_pi_ai_models(provider: str) -> list[dict]:
+    if provider not in _models_cache:
+        data = _run_bridge("models", provider) or []
+        _models_cache[provider] = data
+    return _models_cache[provider]
+
+
+def get_pi_ai_vision_models() -> list[dict]:
+    global _vision_models_cache
+    if _vision_models_cache is None:
+        _vision_models_cache = _run_bridge("vision-models") or []
+    return _vision_models_cache
+
+
+def get_provider_auth_status(provider: str) -> dict:
+    auth = read_pi_auth()
+    if provider in auth:
+        entry = auth[provider]
+        if isinstance(entry, dict) and entry.get("type") == "api_key":
+            key = entry.get("key", "")
+            hint = key[:8] + "..." + key[-4:] if len(key) > 12 else key
+            return {"configured": True, "source": "auth.json", "hint": hint}
+    models = read_pi_models()
+    prov_config = models.get("providers", {}).get(provider, {})
+    if prov_config.get("apiKey"):
+        return {"configured": True, "source": "models.json",
+                "hint": prov_config["apiKey"][:20] + "..."}
+    env_map = {
+        "anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY",
+        "deepseek": "DEEPSEEK_API_KEY", "google": "GEMINI_API_KEY",
+        "mistral": "MISTRAL_API_KEY", "groq": "GROQ_API_KEY",
+        "cerebras": "CEREBRAS_API_KEY", "xai": "XAI_API_KEY",
+        "openrouter": "OPENROUTER_API_KEY", "nvidia": "NVIDIA_API_KEY",
+        "fireworks": "FIREWORKS_API_KEY", "together": "TOGETHER_API_KEY",
+        "huggingface": "HF_TOKEN", "zai": "ZAI_API_KEY",
+        "zai-coding-cn": "ZAI_CODING_CN_API_KEY",
+        "opencode": "OPENCODE_API_KEY",
+        "kimi-coding": "KIMI_API_KEY",
+        "minimax": "MINIMAX_API_KEY", "minimax-cn": "MINIMAX_CN_API_KEY",
+        "xiaomi": "XIAOMI_API_KEY",
+    }
+    env_var = env_map.get(provider, "")
+    if env_var and os.environ.get(env_var):
+        return {"configured": True, "source": "env", "hint": env_var}
+    return {"configured": False, "source": None, "hint": None}
+
+
+def get_configured_providers() -> list[dict]:
+    all_providers = get_pi_ai_providers()
+    extra_ids = set()
+    for p in read_pi_auth().keys():
+        extra_ids.add(p)
+    for p in read_pi_models().get("providers", {}).keys():
+        extra_ids.add(p)
+    result = []
+    for p in all_providers:
+        status = get_provider_auth_status(p["id"])
+        if status["configured"]:
+            result.append({
+                "id": p["id"], "name": p["name"],
+                "source": status["source"], "hint": status["hint"],
+            })
+    pi_ai_ids = {p["id"] for p in all_providers}
+    for pid in sorted(extra_ids - pi_ai_ids):
+        status = get_provider_auth_status(pid)
+        if status["configured"]:
+            display = read_pi_models().get("providers", {}).get(pid, {})
+            result.append({
+                "id": pid,
+                "name": display.get("name", pid),
+                "source": status["source"],
+                "hint": status["hint"],
+            })
+    return result

@@ -534,8 +534,10 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         """Start background knowledge reflection after conversation ends."""
         settings = get_settings()
         if not settings.get("knowledge_enabled", True):
+            print("[Edini] Reflection skipped: knowledge_enabled=False", flush=True)
             return
         if not self._current_session_path:
+            print("[Edini] Reflection skipped: no session path", flush=True)
             return
 
         try:
@@ -563,9 +565,13 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
                 base_url = prov_conf["baseUrl"]
 
             if not api_key:
+                print(f"[Edini] Reflection skipped: no API key for provider '{provider}'", flush=True)
                 return
 
-        except Exception:
+            print(f"[Edini] Starting reflection with {provider}/{model} on {self._current_session_path}", flush=True)
+
+        except Exception as e:
+            print(f"[Edini] Reflection skipped: config error - {e}", flush=True)
             return
 
         self.context_panel.knowledge_zone.show_reflection_status(
