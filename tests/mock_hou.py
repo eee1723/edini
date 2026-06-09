@@ -66,6 +66,9 @@ class MockNodeType:
     def namespaceOrder(self) -> list[str]:
         return [self._name]
 
+    def definition(self):
+        return None
+
 
 class MockCategory:
     """Mock node type category."""
@@ -86,6 +89,9 @@ class MockCategory:
 
 class MockNode:
     """Mock Houdini node with children, parameters, connections."""
+
+    # Class-level reference to the MockHou instance, set during create_mock_hou()
+    _hou_ref: "MockHou | None" = None
 
     def __init__(self, path: str, name: str | None = None,
                  type_name: str = "", parent: MockNode | None = None):
@@ -149,6 +155,10 @@ class MockNode:
         actual_name = node_name or node_type_name
         child_path = f"{self._path}/{actual_name}"
         child = MockNode(child_path, actual_name, node_type_name, parent=self)
+        # Auto-create known parms for specific node types
+        if node_type_name == "attribwrangle":
+            child._parms["snippet"] = MockParm("snippet", "")
+            child._parms["snippet_attribname"] = MockParm("snippet_attribname", "result")
         self._children.append(child)
         return child
 
@@ -156,6 +166,9 @@ class MockNode:
         self._destroyed = True
         if self._parent and self in self._parent._children:
             self._parent._children.remove(self)
+        # Remove from the global node registry if available
+        if MockNode._hou_ref is not None:
+            MockNode._hou_ref._nodes.pop(self._path, None)
 
     def setDisplayFlag(self, value: bool) -> None:
         self._display_flag = value
@@ -303,6 +316,7 @@ class MockHou:
     def pwd(self) -> MockNode | None:
         return self._nodes.get(self._pwd_path)
 
+    @property
     def hipFile(self) -> MockHipFile:
         return self._hip_file
 
@@ -361,4 +375,6 @@ class MockHou:
 
 def create_mock_hou() -> MockHou:
     """Create a fresh mock hou instance."""
-    return MockHou()
+    hou = MockHou()
+    MockNode._hou_ref = hou
+    return hou
