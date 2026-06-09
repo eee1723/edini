@@ -253,6 +253,41 @@ def entries_count() -> int:
 
 
 # ==========================================================================
+# Similarity & merging
+# ==========================================================================
+
+def find_similar(title: str, threshold: float = 0.5) -> dict[str, Any] | None:
+    """Find the most similar existing rule or entry to a given title."""
+    from edini.ui.dedup import find_similar as _find_similar
+    all_items = load_rules() + load_entries()
+    return _find_similar(title, all_items, threshold)
+
+
+def merge_entry(entry_id: str, new_title: str, new_content: str,
+                new_tags: list[str] | None = None) -> dict | None:
+    """Update an existing entry with merged content. Returns updated entry."""
+    # Try entries first, then rules
+    entries = load_entries()
+    for e in entries:
+        if e["id"] == entry_id:
+            e["title"] = new_title
+            e["content"] = new_content
+            if new_tags is not None:
+                existing_tags = set(e.get("tags", []))
+                e["tags"] = list(existing_tags | set(new_tags))
+            save_entries(entries)
+            return e
+    rules = load_rules()
+    for r in rules:
+        if r["id"] == entry_id:
+            r["title"] = new_title
+            r["content"] = new_content
+            save_rules(rules)
+            return r
+    return None
+
+
+# ==========================================================================
 # Extraction: parse AI reflection response
 # ==========================================================================
 
