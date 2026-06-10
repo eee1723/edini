@@ -193,11 +193,15 @@ def load_pi_messages_with_images(session_path: str) -> list[dict]:
     """
     from edini.image_cache import load_image_meta, load_descriptions
 
+    print(f"[Edini:img] load_pi_messages_with_images: session_path={session_path!r}", flush=True)
     messages = load_pi_messages(session_path)
+    print(f"[Edini:img] load_pi_messages_with_images: loaded {len(messages)} messages", flush=True)
     
     image_meta = load_image_meta(session_path)
+    print(f"[Edini:img] load_pi_messages_with_images: image_meta={'found' if image_meta else 'NOT FOUND'}", flush=True)
     
     descriptions = load_descriptions(session_path)
+    print(f"[Edini:img] load_pi_messages_with_images: descriptions={'found' if descriptions else 'NOT FOUND'}", flush=True)
 
     # Tag each message with its type for routing
     for msg in messages:

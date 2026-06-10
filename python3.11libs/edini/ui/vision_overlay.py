@@ -45,6 +45,8 @@ class VisionDescriptionBubble(QtWidgets.QFrame):
                 border-radius: 6px;
             }
         """)
+        # Make the entire header area clickable to view original images
+        self.setCursor(Qt.PointingHandCursor)
 
         self._layout = QtWidgets.QVBoxLayout(self)
         self._layout.setContentsMargins(10, 6, 10, 6)
@@ -72,7 +74,33 @@ class VisionDescriptionBubble(QtWidgets.QFrame):
         self._header_label.setStyleSheet(
             f"QLabel {{ color:#a78bfa; font-size:{fs(11)}; font-weight:600; border:none; }}"
         )
+        self._header_label.setCursor(Qt.PointingHandCursor)
+        self._header_label.setToolTip("点击查看原图")
+        self._header_label.mousePressEvent = self._on_header_click
         header_row.addWidget(self._header_label, 1)
+
+        # "View original" button — hidden until image data is set via set_original_images()
+        self._header_view_btn = QtWidgets.QPushButton("📸 原图")
+        self._header_view_btn.setCursor(Qt.PointingHandCursor)
+        self._header_view_btn.setFixedHeight(20)
+        self._header_view_btn.setVisible(False)  # hidden until images arrive
+        self._header_view_btn.setToolTip("点击查看原始图片")
+        self._header_view_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: rgba(167,139,250,0.15);
+                color: #c4b5fd;
+                border: none;
+                border-radius: 3px;
+                padding: 0px 6px;
+                font-size: {fs(10)};
+            }}
+            QPushButton:hover {{
+                background: rgba(167,139,250,0.30);
+                color: #e5e5eb;
+            }}
+        """)
+        self._header_view_btn.clicked.connect(self._on_view_original)
+        header_row.addWidget(self._header_view_btn)
 
         self._toggle_btn = QtWidgets.QPushButton("▶ 展开")
         self._toggle_btn.setCursor(Qt.PointingHandCursor)
@@ -116,12 +144,12 @@ class VisionDescriptionBubble(QtWidgets.QFrame):
             )
             content_layout.addWidget(label)
 
-        # "View original" link
+        # "View original" link (in expanded content area)
         count = len(self._image_base64_list) if self._image_base64_list else 0
         btn_text = f"📸 查看原图 ({count})" if count > 1 else "📸 查看原图"
-        view_btn = QtWidgets.QPushButton(btn_text)
-        view_btn.setCursor(Qt.PointingHandCursor)
-        view_btn.setStyleSheet(f"""
+        self._content_view_btn = QtWidgets.QPushButton(btn_text)
+        self._content_view_btn.setCursor(Qt.PointingHandCursor)
+        self._content_view_btn.setStyleSheet(f"""
             QPushButton {{
                 background: transparent;
                 color: #71717a;
@@ -134,10 +162,21 @@ class VisionDescriptionBubble(QtWidgets.QFrame):
                 color: #a78bfa;
             }}
         """)
-        view_btn.clicked.connect(self._on_view_original)
-        content_layout.addWidget(view_btn)
+        self._content_view_btn.clicked.connect(self._on_view_original)
+        self._content_view_btn.setVisible(count > 0)
+        content_layout.addWidget(self._content_view_btn)
 
         self._layout.addWidget(self._content_widget)
+
+    def _on_header_click(self, event=None):
+        """Click on the header label toggles expansion; also tries view original."""
+        if self._expanded:
+            self._toggle()
+        else:
+            # If collapsed and images available, try to view original first
+            if self._image_base64_list:
+                self._on_view_original()
+            self._toggle()
 
     def _toggle(self):
         self._expanded = not self._expanded
@@ -167,11 +206,25 @@ class VisionDescriptionBubble(QtWidgets.QFrame):
     def set_original_images(self, base64_list: list[str]):
         """Provide original image data for 'view original' feature (multiple images)."""
         self._image_base64_list = [b for b in base64_list if b]
-        # Update button text if already built
-        if hasattr(self, '_toggle_btn'):
-            count = len(self._image_base64_list)
-            if count > 1:
-                self._toggle_btn.setText(f"📸 查看原图 ({count})")
+        count = len(self._image_base64_list)
+
+        # Update header button
+        if hasattr(self, '_header_view_btn'):
+            btn_text = f"📸 原图 ({count})" if count > 1 else "📸 原图"
+            self._header_view_btn.setText(btn_text)
+            self._header_view_btn.setVisible(count > 0)
+            self._header_view_btn.setToolTip(
+                f"点击查看 {count} 张原始图片" if count > 1 else "点击查看原始图片"
+            )
+            self._header_label.setToolTip(
+                f"点击查看 {count} 张原始图片 · 点击展开详情" if count > 1 else "点击查看原始图片 · 点击展开详情"
+            )
+
+        # Update content view button
+        if hasattr(self, '_content_view_btn'):
+            cbtn_text = f"📸 查看原图 ({count})" if count > 1 else "📸 查看原图"
+            self._content_view_btn.setText(cbtn_text)
+            self._content_view_btn.setVisible(count > 0)
 
     def set_original_image(self, base64_data: str):
         """Backward-compat: single image."""

@@ -45,9 +45,11 @@ def save_images(session_path: str, images: list[dict]) -> list[dict]:
     If session_path is empty, returns empty list (no-op).
     """
     if not session_path or not images:
+        print(f"[Edini:img] save_images SKIP: session_path={session_path!r}, images_count={len(images or [])}", flush=True)
         return []
 
     cache_dir = get_image_cache_dir(session_path)
+    print(f"[Edini:img] save_images START: session_path={session_path}, cache_dir={cache_dir}, image_count={len(images)}", flush=True)
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     meta_list: list[dict] = []
@@ -59,11 +61,15 @@ def save_images(session_path: str, images: list[dict]) -> list[dict]:
 
     for i, img in enumerate(images):
         b64_data = img.get("data", "")
+        b64_len = len(b64_data) if b64_data else 0
+        print(f"[Edini:img] save_images img[{i}]: b64_len={b64_len}, mime={img.get('mimeType', '?')}, filename={img.get('filename', '?')}", flush=True)
         if not b64_data:
+            print(f"[Edini:img] save_images img[{i}] SKIP: empty data", flush=True)
             continue
         try:
             raw = base64.b64decode(b64_data)
-        except Exception:
+        except Exception as e:
+            print(f"[Edini:img] save_images img[{i}] FAIL: base64 decode error: {e}", flush=True)
             continue
 
         mime = img.get("mimeType", "image/png")
@@ -74,7 +80,9 @@ def save_images(session_path: str, images: list[dict]) -> list[dict]:
 
         try:
             filepath.write_bytes(raw)
-        except OSError:
+            print(f"[Edini:img] save_images img[{i}] WRITTEN: {filepath} ({len(raw)} bytes)", flush=True)
+        except OSError as e:
+            print(f"[Edini:img] save_images img[{i}] FAIL: write error: {e}", flush=True)
             continue
 
         meta = {
@@ -94,32 +102,41 @@ def save_images(session_path: str, images: list[dict]) -> list[dict]:
             json.dumps(meta_list, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        print(f"[Edini:img] save_images MANIFEST WRITTEN: {manifest_path}, entries={len(meta_list)}", flush=True)
     except OSError as e:
-        pass
+        print(f"[Edini:img] save_images MANIFEST FAIL: {e}", flush=True)
 
+    print(f"[Edini:img] save_images DONE: saved {len(meta_list)}/{len(images)} images", flush=True)
     return meta_list
 
 
 def load_image_meta(session_path: str) -> Optional[list[dict]]:
     """Load cached image metadata for a session. Returns None if no cache."""
     if not session_path:
+        print(f"[Edini:img] load_image_meta SKIP: empty session_path", flush=True)
         return None
     cache_dir = get_image_cache_dir(session_path)
     manifest_path = cache_dir / "manifest.json"
+    print(f"[Edini:img] load_image_meta: session_path={session_path}, manifest_path={manifest_path}, exists={manifest_path.exists()}", flush=True)
     if not manifest_path.exists():
+        print(f"[Edini:img] load_image_meta MISS: manifest not found at {manifest_path}", flush=True)
         return None
     try:
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        print(f"[Edini:img] load_image_meta: manifest loaded, entries={len(data) if isinstance(data, list) else 'not-a-list'}", flush=True)
         if isinstance(data, list) and data:
             # Filter out entries whose files no longer exist
             valid = []
             for meta in data:
                 cp = meta.get("cache_path", "")
-                if cp and os.path.isfile(cp):
+                file_ok = cp and os.path.isfile(cp)
+                print(f"[Edini:img] load_image_meta entry: cache_path={cp}, exists={file_ok}, filename={meta.get('filename', '?')}", flush=True)
+                if file_ok:
                     valid.append(meta)
+            print(f"[Edini:img] load_image_meta: valid entries={len(valid)}/{len(data)}", flush=True)
             return valid if valid else None
-    except (json.JSONDecodeError, OSError):
-        pass
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"[Edini:img] load_image_meta FAIL: {e}", flush=True)
     return None
 
 
@@ -139,6 +156,7 @@ def save_descriptions(session_path: str, descriptions: list[dict]) -> bool:
     Returns True if saved successfully.
     """
     if not session_path or not descriptions:
+        print(f"[Edini:img] save_descriptions SKIP: session_path={session_path!r}, desc_count={len(descriptions or [])}", flush=True)
         return False
     cache_dir = get_image_cache_dir(session_path)
     try:
@@ -148,8 +166,10 @@ def save_descriptions(session_path: str, descriptions: list[dict]) -> bool:
             json.dumps(descriptions, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        print(f"[Edini:img] save_descriptions OK: {desc_path}, entries={len(descriptions)}", flush=True)
         return True
-    except OSError:
+    except OSError as e:
+        print(f"[Edini:img] save_descriptions FAIL: {e}", flush=True)
         return False
 
 

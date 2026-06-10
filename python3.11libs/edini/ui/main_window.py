@@ -222,6 +222,8 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
 
         # Save images for vision_description bubble
         self._pending_images = images
+        print(f"[Edini:img] _on_agent_submit: has_images={images is not None and len(images or []) > 0}, "
+              f"image_count={len(images) if images else 0}, session_path={self._current_session_path!r}", flush=True)
 
         # Build image metadata and show in user bubble
         if images:
@@ -249,20 +251,9 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
                     "_b64_pending": b64_data,  # fallback for "view original" before cache write
                 })
 
-            # Try to save to cache now; defer if session path not yet known
-            if self._current_session_path:
-                from edini.image_cache import save_images
-                saved_meta = save_images(self._current_session_path, images)
-                # Merge cache_path back into image_meta
-                for sm in saved_meta:
-                    idx = sm.get("index", -1)
-                    if 0 <= idx < len(image_meta):
-                        image_meta[idx]["cache_path"] = sm.get("cache_path", "")
-                        image_meta[idx]["filename"] = sm.get("filename", image_meta[idx]["filename"])
-                        image_meta[idx].pop("_b64_pending", None)  # no longer needed
-                self._pending_cache_meta = None
-            else:
-                self._pending_cache_meta = image_meta  # will write in _on_pi_session_switched
+            # Always defer cache write to ensure session path is available.
+            # Written in _on_pi_session_switched (normal) or _on_agent_done (fallback).
+            self._pending_cache_meta = image_meta
 
             self.agent_panel._append_user_message(text, image_meta)
         else:
@@ -294,9 +285,18 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
 
     def _on_agent_done(self, _):
         self._cleanup_recognizing()
-        self._pending_images = None  # safe to clear now — agent round complete
-        self._pending_cache_meta = None
-        self._pending_descriptions = None
+        # Flush pending image cache and descriptions before clearing.
+        # Handles the race where agent_end arrives before session_switched.
+        print(f"[Edini:img] _on_agent_done: flushing cache before clear, session_path={self._current_session_path!r}", flush=True)
+        self._flush_pending_image_cache()
+        self._flush_pending_descriptions(self._current_session_path)
+        # Only clear pending data if session path is confirmed.
+        # If session_path is still empty, _on_pi_session_switched will
+        # flush the cache later — keep _pending_* alive until then.
+        if self._current_session_path:
+            self._pending_images = None
+            self._pending_cache_meta = None
+            self._pending_descriptions = None
         self._stats_poll_timer.stop()
         self._round_timer.stop()
         self._on_round_tick()  # final update
@@ -414,6 +414,13 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
 
     def _on_abort_request(self):
         self._cleanup_recognizing()
+        # Flush pending image cache before clearing (image data is still valid)
+        self._flush_pending_image_cache()
+        self._flush_pending_descriptions(self._current_session_path)
+        if self._current_session_path:
+            self._pending_images = None
+            self._pending_cache_meta = None
+            self._pending_descriptions = None
         self._rpc_client.send_abort()
         self.agent_panel._current_session_path = self._current_session_path
         self.agent_panel.show_aborted()
@@ -447,11 +454,54 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
 
     def _on_error(self, msg: str):
         self._cleanup_recognizing()
+        # Flush pending image cache before clearing (image data is still valid)
+        self._flush_pending_image_cache()
+        self._flush_pending_descriptions(self._current_session_path)
+        if self._current_session_path:
+            self._pending_images = None
+            self._pending_cache_meta = None
+            self._pending_descriptions = None
         self._stats_poll_timer.stop()
         self._round_timer.stop()
         self.agent_panel.add_error(msg)
         self.agent_panel.set_busy(False)
         self.status.showMessage(f"Error: {msg}")
+
+    def _flush_pending_image_cache(self):
+        """Write pending images to cache if session path is now known.
+
+        Called from both _on_pi_session_switched (normal path) and
+        _on_agent_done (fallback for when agent_end races ahead of session_switched).
+        """
+        if not self._pending_cache_meta or not self._pending_images:
+            print(f"[Edini:img] _flush_pending_image_cache SKIP: "
+                  f"has_meta={self._pending_cache_meta is not None}, "
+                  f"has_images={self._pending_images is not None}", flush=True)
+            return
+        session_path = self._current_session_path
+        if not session_path:
+            print(f"[Edini:img] _flush_pending_image_cache SKIP: no session_path yet", flush=True)
+            return
+        print(f"[Edini:img] _flush_pending_image_cache: writing cache for session_path={session_path!r}, "
+              f"images={len(self._pending_images)}", flush=True)
+        try:
+            from edini.image_cache import save_images
+            saved_meta = save_images(session_path, self._pending_images)
+            if saved_meta:
+                for sm in saved_meta:
+                    idx = sm.get("index", -1)
+                    if 0 <= idx < len(self._pending_cache_meta):
+                        self._pending_cache_meta[idx]["cache_path"] = sm.get("cache_path", "")
+                        self._pending_cache_meta[idx]["filename"] = sm.get(
+                            "filename", self._pending_cache_meta[idx]["filename"]
+                        )
+                        self._pending_cache_meta[idx].pop("_b64_pending", None)
+                print(f"[Edini:img] _flush_pending_image_cache OK: {len(saved_meta)} images saved", flush=True)
+            else:
+                print(f"[Edini:img] _flush_pending_image_cache: save_images returned empty!", flush=True)
+        except Exception as e:
+            print(f"[Edini:img] _flush_pending_image_cache FAIL: {e}", flush=True)
+            import traceback; traceback.print_exc()
 
     def _flush_pending_descriptions(self, session_path: str):
         """Save any pending vision descriptions to cache."""
@@ -468,6 +518,30 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         descriptions = m.get("descriptions", [])
         if not descriptions:
             return
+
+        print(f"[Edini:img] _render_vision_description: desc_count={len(descriptions)}, "
+              f"session_path={self._current_session_path!r}, browsing_path={self._browsing_session_path!r}", flush=True)
+
+        # Load cached image data for "view original" feature
+        image_base64_list: list[str] = []
+        try:
+            import base64 as _b64
+            from edini.image_cache import load_image_meta
+            session_path = self._current_session_path or self._browsing_session_path
+            if session_path:
+                meta_list = load_image_meta(session_path)
+                if meta_list:
+                    for meta in meta_list:
+                        cache_path = meta.get("cache_path", "")
+                        if cache_path and os.path.isfile(cache_path):
+                            with open(cache_path, "rb") as f:
+                                data = f.read()
+                            image_base64_list.append(_b64.b64encode(data).decode("ascii"))
+            print(f"[Edini:img] _render_vision_description: loaded {len(image_base64_list)} cached images", flush=True)
+        except Exception as e:
+            print(f"[Edini:img] _render_vision_description: load cache error: {e}", flush=True)
+            import traceback; traceback.print_exc()
+
         has_error = any(
             d.get("description", "").startswith("[Error:")
             or d.get("description", "").startswith("[Image: unable")
@@ -477,12 +551,16 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
             error_msg = descriptions[0].get("description", "Vision model error")
             bubble = VisionDescriptionBubble.create_error_bubble(error_msg)
         else:
-            bubble = VisionDescriptionBubble.create_from_notification(descriptions)
+            bubble = VisionDescriptionBubble.create_from_notification(
+                descriptions, image_base64_list,
+            )
         self.agent_panel.timeline_view.add_widget(bubble)
 
     def _on_vision_description(self, descriptions: list):
         """Handle vision_description notification from pi-visionizer."""
         # Vision descriptions received from pi-visionizer
+        print(f"[Edini:img] _on_vision_description: got {len(descriptions)} descriptions, "
+              f"pending_images={self._pending_images is not None and len(self._pending_images or []) > 0}", flush=True)
         # Save all image data before cleanup
         all_image_data: list[str] = []
         if self._pending_images:
@@ -722,23 +800,20 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
     def _on_pi_session_switched(self, session_path: str):
         """Called when pi confirms a session switch (new or resumed)."""
         self._current_session_path = session_path
+        print(f"[Edini:img] _on_pi_session_switched: session_path={session_path!r}, "
+              f"has_pending_meta={self._pending_cache_meta is not None}, "
+              f"has_pending_images={self._pending_images is not None}", flush=True)
 
         # Flush any pending image cache writes
-        if self._pending_cache_meta and self._pending_images:
-            from edini.image_cache import save_images
-            saved_meta = save_images(session_path, self._pending_images)
-            for sm in saved_meta:
-                idx = sm.get("index", -1)
-                if 0 <= idx < len(self._pending_cache_meta):
-                    self._pending_cache_meta[idx]["cache_path"] = sm.get("cache_path", "")
-                    self._pending_cache_meta[idx]["filename"] = sm.get("filename", self._pending_cache_meta[idx]["filename"])
-                    self._pending_cache_meta[idx].pop("_b64_pending", None)
-            # Update the chips in the user bubble with real cache paths
-            # (the existing bubble has the metadata by reference, so cache_path updates propagate)
-            self._pending_cache_meta = None
+        self._flush_pending_image_cache()
 
         # Also flush pending descriptions
         self._flush_pending_descriptions(session_path)
+
+        # Clear pending data after cache has been written
+        self._pending_images = None
+        self._pending_cache_meta = None
+        self._pending_descriptions = None
 
         self._rpc_client.send_get_stats()
         # Update list highlight to match active session
@@ -856,7 +931,9 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self.context_panel.reset_stats()
 
         # Load messages directly from local JSONL for instant rendering
+        print(f"[Edini:img] _on_session_selected: loading from {session_path!r}", flush=True)
         messages = load_pi_messages_with_images(session_path)
+        print(f"[Edini:img] _on_session_selected: got {len(messages)} messages, types={[m.get('_type', m.get('role', '?')) for m in messages]}", flush=True)
         messages = self._merge_consecutive_assistants(messages)
         messages = messages
         for m in messages:

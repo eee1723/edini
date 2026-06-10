@@ -1,6 +1,6 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-09 &nbsp;|&nbsp; 第二十一阶段：知识反思面板 + 去重 ✅ &nbsp;|&nbsp; 规划：知识 → Skills 演化
+> 最后更新：2026-06-10 &nbsp;|&nbsp; 第二十三阶段：图片缓存竞态修复 ✅ &nbsp;|&nbsp; 规划：知识 → Skills 演化
 
 ## 总览看板
 
@@ -12,7 +12,7 @@
     <span class="status-tag status-done">完成</span>
   </div>
   <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:100%"></div></div>
-  <div class="phase-card-detail">三栏布局 · Thinking 面板（可折叠、QTextEdit 纯文本流、实时展开/收拢）· Tool Call 面板（fixedHeight 折叠 24px↔200px、暗色协调、自动滚底）· 时间线 QScrollArea + Widget（_UserBubble / _AiBubble / _Separator / _ErrorBanner）· 智能滚动（rangeChanged valueChanged + _pinned_to_bottom 标志位）· Markdown 完整渲染（双格式化器 _format_full / _format_lite，标题/列表/表格/代码块/分隔线）· 文本选择（TextSelectableByMouse）· 知识提取确认区（铁律/知识卡片 + ✓✕ + 全部接受/放弃 + 类型切换）· 气泡 Expanding 填满窗口 · 完成后自动折叠面板 · 4 层统一字号 · 历史气泡合并 · 知识提取过滤</div>
+  <div class="phase-card-detail">三栏布局 · Thinking 面板（可折叠、QTextEdit 纯文本流、实时展开/收拢）· Tool Call 面板（fixedHeight 折叠 24px↔200px、暗色协调、自动滚底）· 时间线 QScrollArea + Widget（_UserBubble / _AiBubble / _Separator / _ErrorBanner）· 智能滚动（rangeChanged valueChanged + _pinned_to_bottom 标志位）· Markdown 完整渲染（mistune 3.2.1 + _DarkRenderer, GFM: 标题/列表/表格/代码块/链接/图片/删除线/任务列表/引用块, 流式/最终 pixel 一致, 零依赖纯 Python）· 文本选择（TextSelectableByMouse）· 知识提取确认区（铁律/知识卡片 + ✓✕ + 全部接受/放弃 + 类型切换）· 气泡 Expanding 填满窗口 · 完成后自动折叠面板 · 4 层统一字号 · 历史气泡合并 · 知识提取过滤</div>
 </div>
 
 <div class="phase-card">
@@ -112,6 +112,34 @@
 ## 近期关键节点
 
 <div class="timeline">
+
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-10</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第二十三阶段：图片缓存竞态修复 + 查看原图交互优化</span>
+      <span class="status-tag status-done">完成</span>
+    </div>
+    <div class="timeline-summary">① 修复图片缓存写入竞态条件：_on_agent_done 先于 _on_pi_session_switched 到达时，session_path 为空导致缓存跳过写入 → pending 数据在 _on_agent_done 中被清零，session_switched 后已无数据可写 ② 修复方案：_on_agent_done/_on_abort_request/_on_error 中仅在 session_path 已确认时才清零 pending 数据，否则保留给 _on_pi_session_switched 写入 ③ _on_pi_session_switched 写入缓存后显式清零 pending ④ 新增 _flush_pending_image_cache() 统一缓存写入方法（从 admin_window 内联逻辑抽取）⑤ VisionDescriptionBubble 头部新增 "📸 原图" 按钮（始终可见，有图片时显示）⑥ 头部标签点击即可查看原图 ⑦ 修复 set_original_images() 错误更新 _toggle_btn 而非 view_btn 的 bug ⑧ 全面调试日志覆盖（[Edini:img] 前缀，image_cache + main_window + pi_sessions 完整链路）</div>
+    <div class="timeline-tags">
+      <span>竞态修复</span><span>图片缓存</span><span>session_switched</span><span>agent_done</span><span>查看原图</span><span>调试日志</span><span>flush方法</span>
+    </div>
+  </div>
+</div>
+
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-10</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第二十二阶段：MD 渲染 mistune 重构</span>
+      <span class="status-tag status-done">完成</span>
+    </div>
+    <div class="timeline-summary">① 手写 ~250 行正则 Markdown→HTML 渲染器存在 4 个 bug（代码块双重转义、数学误判斜体、流式不分段、bold 跨行失败）② 调研 mistune / markdown-it-py / QMarkdownWidget 后选型 mistune 3.2.1（零依赖、纯 Python、性能最快）③ 自定义 _DarkRenderer 继承 HTMLRenderer，覆盖所有 tag 方法注入暗色主题 inline style ④ _format_lite = _format_full = mistune.html(text)，流式/最终渲染 pixel 级一致 ⑤ 新增语法支持：h4-h6、引用块 `>`、图片 `![alt](url)`、删除线 `~~`、任务列表 `- [ ]` ⑥ pip install --target python3.11libs/ 部署 ⑦ 57 项测试全部通过</div>
+    <div class="timeline-tags">
+      <span>mistune</span><span>Markdown渲染</span><span>pyc缓存</span><span>暗色主题</span><span>GFM</span>
+    </div>
+  </div>
+</div>
 
 <div class="timeline-item timeline-done">
   <div class="timeline-date">2026-06-09</div>

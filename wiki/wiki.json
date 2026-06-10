@@ -4,12 +4,12 @@
     "description": "Houdini AI Assistant — 自然语言驱动 Houdini 21，基于 Pi Coding Agent",
     "repo_root": "..",
     "lang": "zh-CN",
-    "tech_stack": ["Python", "PySide6", "Houdini 21", "Node.js", "TypeScript", "Pi Agent", "DeepSeek", "Anthropic", "ZhipuAI", "Qwen-VL"]
+    "tech_stack": ["Python", "PySide6", "Houdini 21", "Node.js", "TypeScript", "Pi Agent", "mistune", "DeepSeek", "Anthropic", "ZhipuAI"],
   },
   "wiki": {
     "version": "2.0",
     "created": "2026-06-03",
-    "last_updated": "2026-06-09-skills-evolution"
+    "last_updated": "2026-06-10-img-cache-race-fix"
   },
   "features": {
     "search": true,
