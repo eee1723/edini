@@ -209,6 +209,12 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
             pi_sett.get("defaultProvider", "?"),
             pi_sett.get("defaultModel", "?"),
         )
+        # Show vision model status from edini settings
+        edini_sett = get_settings()
+        self.context_panel.set_vision_model(
+            edini_sett.get("vision_provider", ""),
+            edini_sett.get("vision_model_id", ""),
+        )
         self.context_panel.set_tools_info("16 loaded, port 9876")
         from edini.ui.hotkey import install_event_filter
         install_event_filter()
@@ -222,8 +228,6 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
 
         # Save images for vision_description bubble
         self._pending_images = images
-        print(f"[Edini:img] _on_agent_submit: has_images={images is not None and len(images or []) > 0}, "
-              f"image_count={len(images) if images else 0}, session_path={self._current_session_path!r}", flush=True)
 
         # Build image metadata and show in user bubble
         if images:
@@ -272,6 +276,10 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self._round_elapsed.start()
         self._round_timer.start()
         self.status.showMessage("Processing...")
+        # Request session path so image cache + descriptions can be written.
+        # Without this, the path stays empty during normal prompt flow
+        # (it's only set by explicit new_session / switch_session commands).
+        self._rpc_client.send_get_state()
 
     def _cleanup_recognizing(self):
         """Remove recognizing placeholder if still present.
@@ -287,7 +295,6 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self._cleanup_recognizing()
         # Flush pending image cache and descriptions before clearing.
         # Handles the race where agent_end arrives before session_switched.
-        print(f"[Edini:img] _on_agent_done: flushing cache before clear, session_path={self._current_session_path!r}", flush=True)
         self._flush_pending_image_cache()
         self._flush_pending_descriptions(self._current_session_path)
         # Only clear pending data if session path is confirmed.
@@ -352,13 +359,15 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self.agent_panel._current_session_path = self._current_session_path
 
         # If session path not yet available (race: agent_end before session_switched),
-        # defer evaluation until session path arrives
+        # defer evaluation and reflection until session path arrives
         if not self._current_session_path:
             self._rpc_client.session_switched.connect(
-                self._on_deferred_eval, QtCore.Qt.QueuedConnection
+                self._on_deferred_eval_and_reflect, QtCore.Qt.QueuedConnection
             )
         else:
             self.agent_panel.finish_streaming()
+            # Trigger knowledge reflection in background
+            self._trigger_reflection()
 
         self.agent_panel.set_busy(False)
 
@@ -368,9 +377,6 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self.status.showMessage("Ready")
         # Refresh session list (message count updated)
         self.history_panel.load_sessions()
-
-        # Trigger knowledge reflection in background
-        self._trigger_reflection()
 
     def _on_tool_call(self, tool_name: str, tool_call_id: str, args: dict):
         self.agent_panel.add_tool_card(tool_name, args, tool_call_id)
@@ -474,16 +480,10 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         _on_agent_done (fallback for when agent_end races ahead of session_switched).
         """
         if not self._pending_cache_meta or not self._pending_images:
-            print(f"[Edini:img] _flush_pending_image_cache SKIP: "
-                  f"has_meta={self._pending_cache_meta is not None}, "
-                  f"has_images={self._pending_images is not None}", flush=True)
             return
         session_path = self._current_session_path
         if not session_path:
-            print(f"[Edini:img] _flush_pending_image_cache SKIP: no session_path yet", flush=True)
             return
-        print(f"[Edini:img] _flush_pending_image_cache: writing cache for session_path={session_path!r}, "
-              f"images={len(self._pending_images)}", flush=True)
         try:
             from edini.image_cache import save_images
             saved_meta = save_images(session_path, self._pending_images)
@@ -496,11 +496,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
                             "filename", self._pending_cache_meta[idx]["filename"]
                         )
                         self._pending_cache_meta[idx].pop("_b64_pending", None)
-                print(f"[Edini:img] _flush_pending_image_cache OK: {len(saved_meta)} images saved", flush=True)
-            else:
-                print(f"[Edini:img] _flush_pending_image_cache: save_images returned empty!", flush=True)
         except Exception as e:
-            print(f"[Edini:img] _flush_pending_image_cache FAIL: {e}", flush=True)
             import traceback; traceback.print_exc()
 
     def _flush_pending_descriptions(self, session_path: str):
@@ -519,9 +515,6 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         if not descriptions:
             return
 
-        print(f"[Edini:img] _render_vision_description: desc_count={len(descriptions)}, "
-              f"session_path={self._current_session_path!r}, browsing_path={self._browsing_session_path!r}", flush=True)
-
         # Load cached image data for "view original" feature
         image_base64_list: list[str] = []
         try:
@@ -537,9 +530,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
                             with open(cache_path, "rb") as f:
                                 data = f.read()
                             image_base64_list.append(_b64.b64encode(data).decode("ascii"))
-            print(f"[Edini:img] _render_vision_description: loaded {len(image_base64_list)} cached images", flush=True)
         except Exception as e:
-            print(f"[Edini:img] _render_vision_description: load cache error: {e}", flush=True)
             import traceback; traceback.print_exc()
 
         has_error = any(
@@ -559,8 +550,6 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
     def _on_vision_description(self, descriptions: list):
         """Handle vision_description notification from pi-visionizer."""
         # Vision descriptions received from pi-visionizer
-        print(f"[Edini:img] _on_vision_description: got {len(descriptions)} descriptions, "
-              f"pending_images={self._pending_images is not None and len(self._pending_images or []) > 0}", flush=True)
         # Save all image data before cleanup
         all_image_data: list[str] = []
         if self._pending_images:
@@ -800,9 +789,6 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
     def _on_pi_session_switched(self, session_path: str):
         """Called when pi confirms a session switch (new or resumed)."""
         self._current_session_path = session_path
-        print(f"[Edini:img] _on_pi_session_switched: session_path={session_path!r}, "
-              f"has_pending_meta={self._pending_cache_meta is not None}, "
-              f"has_pending_images={self._pending_images is not None}", flush=True)
 
         # Flush any pending image cache writes
         self._flush_pending_image_cache()
@@ -931,9 +917,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self.context_panel.reset_stats()
 
         # Load messages directly from local JSONL for instant rendering
-        print(f"[Edini:img] _on_session_selected: loading from {session_path!r}", flush=True)
         messages = load_pi_messages_with_images(session_path)
-        print(f"[Edini:img] _on_session_selected: got {len(messages)} messages, types={[m.get('_type', m.get('role', '?')) for m in messages]}", flush=True)
         messages = self._merge_consecutive_assistants(messages)
         messages = messages
         for m in messages:
@@ -1021,11 +1005,12 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
             self._current_session_path = ""
             self.agent_panel.clear_timeline()
 
-    def _on_deferred_eval(self, session_path: str):
-        """Called when session_switched fires after agent_done (deferred eval)."""
-        self._rpc_client.session_switched.disconnect(self._on_deferred_eval)
+    def _on_deferred_eval_and_reflect(self, session_path: str):
+        """Called when session_switched fires after agent_end (deferred eval + reflection)."""
+        self._rpc_client.session_switched.disconnect(self._on_deferred_eval_and_reflect)
         self.agent_panel._current_session_path = session_path
         self.agent_panel.finish_streaming()
+        self._trigger_reflection()
 
     def _show_eval_dashboard(self):
         """Open evaluation dashboard as a modeless dialog."""

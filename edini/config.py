@@ -50,6 +50,9 @@ PI_EXECUTABLE = _find_pi()
 # Pi extensions directory
 PI_EXTENSIONS_DIR = PROJECT_ROOT / "pi-extensions"
 
+# Edini skills directory (optional, user-curated)
+EDINI_SKILLS_DIR = PROJECT_ROOT / "skills"
+
 # Tool executor HTTP server
 TOOL_EXECUTOR_HOST = "127.0.0.1"
 TOOL_EXECUTOR_PORT = 9876
@@ -202,19 +205,65 @@ def get_pi_env() -> dict[str, str]:
 
     Pi reads ~/.pi/agent/auth.json itself on startup, so no API key
     injection via env vars is needed.
+
+    Vision model config is passed via env vars so pi-visionizer can
+    discover it without manual /visionizer-model commands.
     """
-    return {
+    env = {
         **os.environ,
         "EDINI_TOOL_PORT": str(TOOL_EXECUTOR_PORT),
     }
 
+    # Pass vision model config from Edini settings to pi-visionizer
+    edini_settings = _load_edini_settings()
+    vis_provider = edini_settings.get("vision_provider", "")
+    vis_model = edini_settings.get("vision_model_id", "")
+    if vis_provider and vis_model:
+        env["VISIONIZER_PROVIDER"] = vis_provider
+        env["VISIONIZER_MODEL_ID"] = vis_model
+
+    return env
+
+
+def _discover_skills() -> list[str]:
+    """Find SKILL.md directories under EDINI_SKILLS_DIR.
+
+    Returns a flat list of ``--skill <path>`` arguments.
+    Each immediate subdirectory containing ``SKILL.md`` is one skill.
+    Root-level ``*.md`` files are also treated as individual skills
+    (matching Pi's discovery convention).
+    """
+    args: list[str] = []
+    if not EDINI_SKILLS_DIR.is_dir():
+        return args
+
+    # Root-level .md files → individual skills
+    for f in sorted(EDINI_SKILLS_DIR.iterdir()):
+        if f.is_file() and f.suffix == ".md":
+            args.extend(["--skill", str(f)])
+
+    # Subdirectories with SKILL.md → named skills
+    for d in sorted(EDINI_SKILLS_DIR.iterdir()):
+        if d.is_dir() and (d / "SKILL.md").is_file():
+            args.extend(["--skill", str(d)])
+
+    return args
+
 
 def get_pi_command() -> list[str]:
-    """Build the Pi subprocess command."""
-    return [
+    """Build the Pi subprocess command.
+
+    Uses ``--no-skills`` to skip the global skill loading (superpowers etc.)
+    and ``--skill`` to load only skills curated under ``skills/``.
+    """
+    cmd = [
         PI_EXECUTABLE,
         "--mode", "rpc",
+        "--approve",
+        "--no-skills",
         "-e", str(PI_EXTENSIONS_DIR / "edini-tools" / "index.ts"),
         "-e", str(PI_EXTENSIONS_DIR / "edini-context" / "index.ts"),
         "-e", str(PI_EXTENSIONS_DIR / "pi-visionizer" / "src" / "index.ts"),
     ]
+    cmd.extend(_discover_skills())
+    return cmd

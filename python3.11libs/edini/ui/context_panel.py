@@ -82,9 +82,26 @@ class ContextPanel(QtWidgets.QWidget):
         self.status_label = _card_value("● Connecting...")
         pi_layout.addWidget(self.status_label)
 
-        self.provider_model_label = QtWidgets.QLabel("deepseek / deepseek-chat")
-        self.provider_model_label.setStyleSheet(f"color:#71717a;font-size:{fs(11)};border:none;")
+        # Model row: label + value
+        model_header = QtWidgets.QLabel("Chat Model")
+        model_header.setStyleSheet(f"color:#525298;font-size:{fs(10)};font-weight:600;border:none;")
+        pi_layout.addWidget(model_header)
+
+        self.provider_model_label = QtWidgets.QLabel("—")
+        self.provider_model_label.setStyleSheet(f"color:#c0c0d0;font-size:{fs(11)};border:none;")
         pi_layout.addWidget(self.provider_model_label)
+
+        # Vision model row
+        vision_header = QtWidgets.QLabel("Vision Model")
+        vision_header.setStyleSheet(f"color:#525298;font-size:{fs(10)};font-weight:600;border:none;")
+        pi_layout.addWidget(vision_header)
+
+        self.vision_model_label = QtWidgets.QLabel("⚠ Not configured")
+        self.vision_model_label.setStyleSheet(
+            f"color:#ef4444;font-size:{fs(11)};font-weight:600;border:none;"
+            f"background:#1c0c0c;border-radius:3px;padding:2px 6px;"
+        )
+        pi_layout.addWidget(self.vision_model_label)
 
         pi_layout.addWidget(_card_spacer())
 
@@ -154,6 +171,21 @@ class ContextPanel(QtWidgets.QWidget):
 
     def set_provider_model(self, provider: str, model: str):
         self.provider_model_label.setText(f"{provider} / {model}")
+
+    def set_vision_model(self, provider: str = "", model: str = ""):
+        """Update vision model display. Empty = not configured (shows warning)."""
+        if provider and model:
+            self.vision_model_label.setText(f"✓ {provider} / {model}")
+            self.vision_model_label.setStyleSheet(
+                f"color:#16a34a;font-size:{fs(11)};border:none;"
+                f"background:#0c1c0c;border-radius:3px;padding:2px 6px;"
+            )
+        else:
+            self.vision_model_label.setText("⚠ Not configured")
+            self.vision_model_label.setStyleSheet(
+                f"color:#ef4444;font-size:{fs(11)};font-weight:600;border:none;"
+                f"background:#1c0c0c;border-radius:3px;padding:2px 6px;"
+            )
 
     def set_usage(self, stats: dict):
         tokens = stats.get("tokens", {})

@@ -744,6 +744,9 @@ class SettingsDialog(QtWidgets.QDialog):
             rpc = _main_window._rpc_client
             rpc.send_set_model(chat_prov_id, chat_model_id)
 
+            # Refresh vision model status in Pi Status card
+            _main_window.context_panel.set_vision_model(
+                vision_prov_id, vision_model_id)
             if self._needs_restart:
                 self._needs_restart = False
                 try:

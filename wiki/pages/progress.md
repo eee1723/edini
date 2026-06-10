@@ -78,13 +78,21 @@
   <div class="phase-card-detail">✅ Mock Hou 模块（MockNode/MockParm/MockNodeType/MockCategory）· ✅ 105+ 单元测试（node_utils 48 + config 24 + knowledge_store 33）· ✅ 全部 22 handler 脱机测试 · ⬜ 集成测试 · ⬜ 端到端测试</div>
 </div>
 
+# 🚀 开发进度
+
+> 最后更新：2026-06-10 &nbsp;|&nbsp; 第二十四阶段：识图管道完整修复 ✅ &nbsp;|&nbsp; 规划：知识 → Skills 演化
+
+## 总览看板
+
+<div class="phase-grid">
+
 <div class="phase-card">
   <div class="phase-card-header">
     <span class="phase-card-title">🌐 多模型 & 多模态</span>
     <span class="status-tag status-done">完成</span>
   </div>
   <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:100%"></div></div>
-  <div class="phase-card-detail">✅ DeepSeek V4 Pro/V3/R1 · ✅ Anthropic Claude · ✅ Viewport 截图（Houdini 20 flipbook 单帧 + frameRange([1.0,1.0]) 修复）· ✅ pi-visionizer 视觉代理（Qwen-VL Max）· ✅ 全渠道图片输入（截图/拖拽/粘贴/文件选择 + 右键菜单）· ✅ 附件预览栏（真实缩略图，最多5张）· ✅ 视觉描述气泡（可折叠、查看原图、错误变体）· ✅ AI 工具主动读图（describe_image）· ✅ 识别中状态提示（🔍 正在识别图片…）· ✅ 时间线缩略图卡片（96×68 点击查看原图、原始文件名保留）· ✅ 图片缓存持久化（edini_images/ 目录，切换对话可回看）· ✅ 视觉描述持久化（descriptions.json 缓存，历史气泡渲染）· ✅ Defer 缓存写入 · ✅ 📷 截图 + 📁 上传按钮优化（文本标签、hover/pressed 动效、布局重排）· ✅ Ctrl+V + 右键粘贴图片 · ✅ 剪贴板多模式探测（image/mimeData/URL/raw）· ✅ Houdini 20 API 适配（saveImage/grabFrameBuffer 移除→flipbook）· ✅ QImage.save() BytesIO/QBuffer 兼容修复 · ✅ PySide6 Qt.Clipboard 枚举兼容</div>
+  <div class="phase-card-detail">✅ DeepSeek V4 Pro/V3/R1 · ✅ Anthropic Claude · ✅ Viewport 截图（Houdini 20 flipbook 单帧 + frameRange([1.0,1.0]) 修复）· ✅ pi-visionizer 视觉代理（Qwen-VL Max）· ✅ 全渠道图片输入（截图/拖拽/粘贴/文件选择 + 右键菜单）· ✅ 附件预览栏（真实缩略图，最多5张）· ✅ 视觉描述气泡（可折叠、查看原图、错误变体）· ✅ AI 工具主动读图（describe_image）· ✅ 识别中状态提示（🔍 正在识别图片…）· ✅ 时间线缩略图卡片（96×68 点击查看原图、原始文件名保留）· ✅ 图片缓存持久化（edini_images/ 目录，切换对话可回看）· ✅ 视觉描述持久化（descriptions.json 缓存，历史气泡渲染）· ✅ Defer 缓存写入 · ✅ 视觉模型配置管道修复（get_pi_env 注入 VISIONIZER_PROVIDER/MODEL_ID，会话路径自动获取）· ✅ 临时文件路径过滤 · ✅ describe_image 友好报错 · ✅ 生产环境日志清理</div>
 </div>
 
 <div class="phase-card">
@@ -112,6 +120,20 @@
 ## 近期关键节点
 
 <div class="timeline">
+
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-10</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第二十四阶段：识图管道完整修复 — 配置注入 + 会话路径 + 临时文件过滤</span>
+      <span class="status-tag status-done">完成</span>
+    </div>
+    <div class="timeline-summary">① 修复视觉模型配置丢失：get_pi_env() 未注入 VISIONIZER_PROVIDER/VISIONIZER_MODEL_ID 环境变量，导致 pi-visionizer 的 resolveConfig() 返回 undefined，图片原样发给纯文本模型→识图失败 ② 新增：从 Edini settings.json 读取 vision_provider/vision_model_id，注入到 pi 子进程环境变量中 ③ 修复会话路径缺失：_on_agent_started() 中新增 send_get_state() 调用，使 _current_session_path 在普通对话流程中也能被填充（之前仅在手动 new_session/switch_session 后设置），修复图片缓存和视觉描述无法写入磁盘的问题 ④ 修复 describe_image 临时文件报错：浏览器拖放图片时产生的 Temp 临时文件路径残留到 LLM 上下文，LLM 调用 describe_image 失败→增强 ENOENT 处理：检测 Temp 目录路径，返回引导性提示；增强 stripNoVisionNote：过滤 describe_image 关键词 + 正则过滤 Temp 临时图片路径 ⑤ 生产环境日志清理：删除 20+ 条 [Edini:img] 调试输出（image_cache.py + main_window.py + pi_sessions.py），sed 批量删除 + 语法修复 ⑥ 修复两份代码副本同步问题（edini/ vs python3.11libs/edini/）⑦ 端到端验证：历史对话可看到图片缩略图和视觉描述气泡</div>
+    <div class="timeline-tags">
+      <span>视觉配置注入</span><span>环境变量</span><span>会话路径自动获取</span><span>临时文件过滤</span><span>日志清理</span><span>describe_image修复</span><span>双副本同步</span>
+    </div>
+  </div>
+</div>
 
 <div class="timeline-item timeline-done">
   <div class="timeline-date">2026-06-10</div>

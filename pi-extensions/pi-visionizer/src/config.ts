@@ -37,11 +37,8 @@ export function getEnvConfig(): VisionizerConfig | undefined {
   return undefined;
 }
 
-/** Hardcoded default vision model — lowest priority fallback. */
-export const DEFAULT_VISION_MODEL: VisionizerConfig = {
-  provider: "aliyun",
-  modelId: "qwen-vl-max",
-};
+/** Vision is disabled when no model is explicitly configured. */
+const NO_DEFAULT: undefined = undefined;
 
 export const DEFAULT_PROMPT = [
   "Describe this image in detail and factually. Your description will be read by a coding agent that cannot see the image.",
@@ -97,6 +94,6 @@ export function getConfig(ctx: ExtensionContext): VisionizerConfig | undefined {
  * Env var config: set by Edini UI via VISIONIZER_PROVIDER / VISIONIZER_MODEL_ID
  * Hardcoded default: last resort (aliyun/qwen-vl-max)
  */
-export function resolveConfig(ctx: ExtensionContext): VisionizerConfig {
-  return getConfig(ctx) ?? getEnvConfig() ?? DEFAULT_VISION_MODEL;
+export function resolveConfig(ctx: ExtensionContext): VisionizerConfig | undefined {
+  return getConfig(ctx) ?? getEnvConfig() ?? NO_DEFAULT;
 }

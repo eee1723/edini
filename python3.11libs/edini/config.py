@@ -209,11 +209,24 @@ def get_pi_env() -> dict[str, str]:
 
     Pi reads ~/.pi/agent/auth.json itself on startup, so no API key
     injection via env vars is needed.
+
+    Vision model config is passed via env vars so pi-visionizer can
+    discover it without manual /visionizer-model commands.
     """
-    return {
+    env = {
         **os.environ,
         "EDINI_TOOL_PORT": str(TOOL_EXECUTOR_PORT),
     }
+
+    # Pass vision model config from Edini settings to pi-visionizer
+    edini_settings = _load_edini_settings()
+    vis_provider = edini_settings.get("vision_provider", "")
+    vis_model = edini_settings.get("vision_model_id", "")
+    if vis_provider and vis_model:
+        env["VISIONIZER_PROVIDER"] = vis_provider
+        env["VISIONIZER_MODEL_ID"] = vis_model
+
+    return env
 
 
 def get_pi_command() -> list[str]:

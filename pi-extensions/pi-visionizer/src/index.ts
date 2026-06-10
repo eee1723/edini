@@ -72,8 +72,13 @@ export default function (pi: ExtensionAPI) {
       try {
         stat = await fs.stat(absPath);
       } catch (err: any) {
+        const isTempPath =
+          absPath.includes(path.sep + "Temp" + path.sep) ||
+          absPath.includes(path.sep + "tmp" + path.sep);
         const msg = err?.code === "ENOENT"
-          ? `Image file not found: ${params.path}`
+          ? (isTempPath
+              ? `Image file was a temporary file that no longer exists: ${params.path}. The image was already described above — use that description instead of calling this tool again.`
+              : `Image file not found: ${params.path}`)
           : `Failed to stat image: ${err.message ?? err}`;
         return {
           content: [{ type: "text", text: msg }],
@@ -123,8 +128,14 @@ export default function (pi: ExtensionAPI) {
       const mediaType = mimeMap[ext] ?? "image/png";
       const imageBase64 = buffer.toString("base64");
 
-      // Resolve vision model config (session or hardcoded default)
+      // Resolve vision model config (must be explicitly configured)
       const cfg = resolveConfig(ctx);
+      if (!cfg) {
+        return {
+          content: [{ type: "text", text: "Vision model not configured. Set a vision provider/model in Edini Settings." }],
+          isError: true,
+        };
+      }
       const visionModel = ctx.modelRegistry.find(cfg.provider, cfg.modelId);
       if (!visionModel) {
         return {
@@ -181,8 +192,9 @@ export default function (pi: ExtensionAPI) {
       const input = model.input ?? [];
       if (input.includes("image")) return;
 
-      // Resolve config (session entry or hardcoded default)
+      // Resolve config (must be explicitly configured)
       const cfg = resolveConfig(ctx);
+      if (!cfg) return;
       // Find the vision model in pi's registry
       const visionModel = ctx.modelRegistry.find(cfg.provider, cfg.modelId);
       if (!visionModel) return;
@@ -385,15 +397,26 @@ function isTextBlock(block: unknown): block is { type: "text"; text: string } {
 }
 
 /**
- * Strip the "model does not support images" note from text content.
- * Since pi-visionizer IS providing a description, this note is misleading.
- * Uses substring matching to avoid breakage if pi changes the exact wording.
+ * Strip lines that reference image files — especially temporary files — from text content.
+ * Since pi-visionizer IS providing a description, notes about image files are misleading
+ * and can cause the model to call describe_image on non-existent temp paths.
  */
 function stripNoVisionNote(text: string): string {
-  const MARKER = "model does not support images";
+  const MARKERS = [
+    "model does not support images",
+    "describe_image",
+  ];
+  // Temp paths that look like browser/OS temp image files:
+  // C:\Users\...\AppData\Local\Temp\image_12345.png
+  // /tmp/image_12345.png
+  const TEMP_IMAGE_RE = /(?:\\|\/)Temp(?:\\|\/).*image[_\-\d]+\.(?:png|jpg|jpeg|gif|webp|bmp)/i;
   return text
     .split("\n")
-    .filter((line) => !line.includes(MARKER))
+    .filter((line) => {
+      if (MARKERS.some((m) => line.includes(m))) return false;
+      if (TEMP_IMAGE_RE.test(line)) return false;
+      return true;
+    })
     .join("\n");
 }
 

@@ -1,7 +1,9 @@
 {
+  "knowledge_enabled": true,
+  "reflection_provider": "",
+  "reflection_model": "",
   "theme_color": "purple",
   "font_scale": 0.8,
-  "knowledge_enabled": true,
-  "vision_provider": "ali",
-  "vision_model_id": "qwen3-vl-plus"
+  "vision_provider": "aliyun",
+  "vision_model_id": "qwen-vl-max"
 }
