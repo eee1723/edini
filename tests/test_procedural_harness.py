@@ -1,19 +1,15 @@
 """Tests for Edini procedural harness helpers."""
-import os
-import sys
 import unittest
 
-from tests.mock_hou import create_mock_hou
+from tests.test_node_utils import MockParm, _mock_hou
 
-_mock_hou = create_mock_hou()
-sys.modules["hou"] = _mock_hou
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "python3.11libs"))
-
-for _mod in list(sys.modules):
-    if _mod.startswith("edini"):
-        del sys.modules[_mod]
 
 from edini import harness
+
+
+class RaisingParm(MockParm):
+    def eval(self):
+        raise RuntimeError("bad expression")
 
 
 class TestHarnessImports(unittest.TestCase):
@@ -51,6 +47,20 @@ class TestCollectDiagnostics(unittest.TestCase):
         self.assertEqual(r["geometry"]["point_count"], 4)
         self.assertEqual(r["geometry"]["bounds"]["size"], [1.0, 2.0, 3.0])
         self.assertIn("parameters", r)
+
+    def test_parameter_eval_error_is_reported(self):
+        obj = _mock_hou.node("/obj")
+        node = obj.createNode("box", "bad_parm_box")
+        _mock_hou.add_node(node)
+        node._parms["bad"] = RaisingParm("bad", label="Bad Expression")
+
+        r = harness.collect_diagnostics(node.path(), include_parms=True)
+
+        self.assertTrue(r["success"])
+        self.assertEqual(r["parameters"][0]["name"], "bad")
+        self.assertEqual(r["parameters"][0]["label"], "Bad Expression")
+        self.assertIn("bad expression", r["parameters"][0]["error"])
+        self.assertNotIn("value", r["parameters"][0])
 
 
 if __name__ == "__main__":

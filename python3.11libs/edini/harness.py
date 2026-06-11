@@ -2,11 +2,7 @@
 from __future__ import annotations
 
 import datetime as _dt
-import io
-import json
 import re
-import sys
-import traceback
 from typing import Any
 
 import hou
@@ -64,6 +60,37 @@ def geometry_stats(node_path: str) -> dict[str, Any] | None:
     }
 
 
+def _parm_record(parm) -> dict[str, Any]:
+    try:
+        name = parm.name()
+    except Exception as exc:
+        name = "<unknown>"
+        name_error = str(exc)
+    else:
+        name_error = None
+
+    try:
+        label = parm.description()
+    except Exception as exc:
+        label = name
+        label_error = str(exc)
+    else:
+        label_error = None
+
+    record: dict[str, Any] = {"name": name, "label": label}
+    if name_error is not None:
+        record["name_error"] = name_error
+    if label_error is not None:
+        record["label_error"] = label_error
+
+    try:
+        record["value"] = parm.eval()
+    except Exception as exc:
+        record["error"] = str(exc)
+
+    return record
+
+
 def collect_diagnostics(
     node_path: str,
     include_geometry: bool = True,
@@ -89,9 +116,6 @@ def collect_diagnostics(
         result["geometry"] = geometry_stats(node_path)
 
     if include_parms:
-        result["parameters"] = [
-            {"name": p.name(), "label": p.description(), "value": p.eval()}
-            for p in node.parms()
-        ]
+        result["parameters"] = [_parm_record(p) for p in node.parms()]
 
     return result
