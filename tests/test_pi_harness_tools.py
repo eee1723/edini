@@ -42,3 +42,12 @@ def test_raw_python_guidance_mentions_sandbox():
 def test_viewport_guidance_mentions_safe_capture():
     text = read("pi-extensions/edini-tools/tools/scene.ts")
     assert "houdini_capture_viewport_safe" in text
+
+
+def test_procedural_modeling_skill_requires_harness():
+    text = read("skills/procedural-modeling/SKILL.md")
+    assert "houdini_run_python_sandbox" in text
+    assert "houdini_collect_diagnostics" in text
+    assert "houdini_verify_asset" in text
+    assert "Do not delete a failed procedural node" in text
+    assert "Do not explore Qt widgets" in text
