@@ -21,6 +21,10 @@ from typing import Any
 
 TOOL_HANDLERS_SIGNATURES = {
     "houdini_capture_viewport": {"required": ["filepath"]},
+    "houdini_capture_viewport_safe": {
+        "required": ["filepath"],
+        "optional": ["frame", "home_viewport"],
+    },
     "houdini_capture_network": {"required": ["filepath"], "optional": ["parent_path"]},
 }
 
@@ -31,6 +35,13 @@ class TestToolSignatureMatches(unittest.TestCase):
         """houdini_capture_viewport requires 'filepath' parameter."""
         sig = TOOL_HANDLERS_SIGNATURES["houdini_capture_viewport"]
         self.assertIn("filepath", sig["required"])
+
+    def test_capture_viewport_safe_has_filepath_and_options(self):
+        """houdini_capture_viewport_safe requires filepath and accepts safe options."""
+        sig = TOOL_HANDLERS_SIGNATURES["houdini_capture_viewport_safe"]
+        self.assertIn("filepath", sig["required"])
+        self.assertIn("frame", sig["optional"])
+        self.assertIn("home_viewport", sig["optional"])
 
     def test_capture_network_has_filepath_and_parent_path_params(self):
         """houdini_capture_network requires 'filepath', accepts 'parent_path'."""

@@ -15,7 +15,7 @@ from edini.node_utils import (
     set_param, get_param, list_nodes, get_node_info, layout_nodes,
     search_nodes, get_help, inspect_geometry,
     run_python, run_vex, create_hda, get_hda_info,
-    capture_viewport, capture_network,
+    capture_viewport, capture_viewport_safe, capture_network,
     get_selection, check_errors, set_display_flag,
 )
 from edini.harness import (
@@ -63,6 +63,11 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     ),
     "houdini_get_hda_info": lambda **kw: get_hda_info(kw["hda_name"]),
     "houdini_capture_viewport": lambda **kw: capture_viewport(kw["filepath"]),
+    "houdini_capture_viewport_safe": lambda **kw: capture_viewport_safe(
+        kw["filepath"],
+        frame=kw.get("frame", 1),
+        home_viewport=kw.get("home_viewport", True),
+    ),
     "houdini_capture_network": lambda **kw: capture_network(
         kw["filepath"],
         parent_path=kw.get("parent_path", "/obj"),

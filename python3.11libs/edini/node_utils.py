@@ -573,46 +573,61 @@ def create_hda(node_path: str, hda_name: str, hda_label: str = "") -> dict[str, 
 # ---------------------------------------------------------------------------
 
 def capture_viewport(filepath: str) -> dict[str, Any]:
-    """Capture the active scene viewport as an image file.
+    """Capture the active scene viewport as an image file."""
+    return capture_viewport_safe(filepath)
 
-    Uses Qt's grab() on the Scene Viewer pane tab widget, then saves as PNG.
-    This captures exactly what the user sees (including gizmos, handles, etc.).
-    """
+
+def capture_viewport_safe(
+    filepath: str,
+    frame: int = 1,
+    home_viewport: bool = True,
+) -> dict[str, Any]:
+    """Capture the active scene viewport using Houdini's supported flipbook API."""
+    method = "scene_viewer_flipbook"
     try:
-        from PySide6.QtWidgets import QApplication
         import os
 
         desktop = hou.ui.curDesktop()
         viewer = desktop.paneTabOfType(hou.paneTabType.SceneViewer)
         if viewer is None:
-            return {"success": False, "error": "No Scene Viewer pane found"}
+            return {
+                "success": False,
+                "error": "No Scene Viewer pane found",
+                "method": method,
+            }
 
-        # Process pending events so viewport is up-to-date
-        QApplication.processEvents()
+        viewport = viewer.curViewport()
+        if home_viewport and hasattr(viewport, "homeAll"):
+            viewport.homeAll()
 
-        # Ensure output directory exists
         os.makedirs(os.path.dirname(os.path.abspath(filepath)) or ".", exist_ok=True)
 
-        # hou.PaneTab inherits from QWidget in Houdini 21/PySide6
-        pixmap = viewer.grab()
-        pixmap.save(filepath, "PNG")
+        settings = viewer.flipbookSettings()
+        settings.output(filepath)
+        settings.outputToMPlay(False)
+        settings.frameRange((frame, frame))
+        viewer.flipbook(viewport, settings)
 
         if os.path.exists(filepath):
             size_kb = round(os.path.getsize(filepath) / 1024, 1)
-            width = pixmap.width()
-            height = pixmap.height()
             return {
                 "success": True,
                 "path": filepath,
                 "size_kb": size_kb,
-                "width": width,
-                "height": height,
+                "method": method,
             }
-        return {"success": False, "error": f"File not created: {filepath}"}
-    except AttributeError as e:
-        return {"success": False, "error": f"Viewport grab failed (API mismatch): {e}"}
+        return {
+            "success": False,
+            "error": f"Flipbook completed but file was not created: {filepath}",
+            "method": method,
+        }
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {
+            "success": False,
+            "error": str(e),
+            "method": method,
+            "note": "Safe capture does not fall back to direct Qt widget probing.",
+        }
 
 
 def capture_network(
