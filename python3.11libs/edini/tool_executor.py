@@ -18,6 +18,13 @@ from edini.node_utils import (
     capture_viewport, capture_network,
     get_selection, check_errors, set_display_flag,
 )
+from edini.harness import (
+    collect_diagnostics,
+    run_python_sandbox,
+    verify_asset,
+    commit_sandbox,
+    discard_sandbox,
+)
 
 # Map tool names to handler functions
 TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
@@ -65,6 +72,29 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
         node_path=kw.get("node_path"),
     ),
     "houdini_set_display_flag": lambda **kw: set_display_flag(kw["node_path"]),
+    "houdini_collect_diagnostics": lambda **kw: collect_diagnostics(
+        kw["node_path"],
+        include_geometry=kw.get("include_geometry", True),
+        include_parms=kw.get("include_parms", False),
+    ),
+    "houdini_run_python_sandbox": lambda **kw: run_python_sandbox(
+        kw["code"],
+        sandbox_name=kw.get("sandbox_name", "procedural"),
+        commit_on_success=kw.get("commit_on_success", False),
+        delete_on_failure=kw.get("delete_on_failure", False),
+    ),
+    "houdini_verify_asset": lambda **kw: verify_asset(
+        kw["node_path"],
+        expected=kw.get("expected", {}),
+    ),
+    "houdini_commit_sandbox": lambda **kw: commit_sandbox(
+        kw["sandbox_root_path"],
+        kw["final_name"],
+        replace_existing=kw.get("replace_existing", False),
+    ),
+    "houdini_discard_sandbox": lambda **kw: discard_sandbox(
+        kw["sandbox_root_path"],
+    ),
 }
 
 
