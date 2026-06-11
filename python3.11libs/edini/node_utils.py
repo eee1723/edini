@@ -444,6 +444,13 @@ def inspect_geometry(node_path: str) -> dict[str, Any]:
 # Script / HDA Operations
 # ---------------------------------------------------------------------------
 
+def _safe_getvalue(stream) -> tuple[str, str | None]:
+    try:
+        return stream.getvalue(), None
+    except Exception as e:
+        return "", str(e)
+
+
 def run_python(code: str) -> dict[str, Any]:
     """Execute arbitrary Python code in Houdini context.
 
@@ -464,18 +471,31 @@ def run_python(code: str) -> dict[str, Any]:
 
     try:
         exec(code, namespace)
+        output, output_error = _safe_getvalue(stdout_capture)
+        stderr, stderr_error = _safe_getvalue(stderr_capture)
+        capture_errors = [err for err in (output_error, stderr_error) if err]
+        if capture_errors:
+            return {
+                "success": False,
+                "error": "; ".join(capture_errors),
+                "output": output,
+                "stderr": stderr,
+                "warning": "Raw houdini_run_python is not sandboxed; failed code may have changed the live scene.",
+            }
         return {
             "success": True,
-            "output": stdout_capture.getvalue() or "(no output)",
-            "stderr": stderr_capture.getvalue(),
+            "output": output or "(no output)",
+            "stderr": stderr,
             "warning": "Raw houdini_run_python is not sandboxed; use harness tools for procedural assets.",
         }
     except Exception as e:
+        output, _ = _safe_getvalue(stdout_capture)
+        stderr, _ = _safe_getvalue(stderr_capture)
         return {
             "success": False,
             "error": str(e),
-            "output": stdout_capture.getvalue(),
-            "stderr": stderr_capture.getvalue(),
+            "output": output,
+            "stderr": stderr,
             "traceback": traceback.format_exc(),
             "warning": "Raw houdini_run_python is not sandboxed; failed code may have changed the live scene.",
         }

@@ -415,6 +415,22 @@ class TestRunPython(unittest.TestCase):
         self.assertTrue(r["success"])
         self.assertIn("warn text", r["stderr"])
 
+    def test_closed_stdout_returns_diagnostics(self):
+        r = run_python("import sys\nsys.stdout.close()")
+
+        self.assertFalse(r["success"])
+        self.assertIn("closed", r["error"].lower())
+        self.assertIn("i/o operation", r["error"].lower())
+        self.assertIn("warning", r)
+
+    def test_closed_stderr_with_exception_returns_diagnostics(self):
+        r = run_python("import sys\nsys.stderr.close()\nraise RuntimeError('boom')")
+
+        self.assertFalse(r["success"])
+        self.assertIn("boom", r["error"])
+        self.assertIn("RuntimeError", r["traceback"])
+        self.assertIn("warning", r)
+
 
 # ===================================================================
 # TestRunVex
