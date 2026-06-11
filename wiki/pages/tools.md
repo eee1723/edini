@@ -117,6 +117,28 @@
 
 ## 工具转发架构
 
+## Procedural Harness Tools
+
+### houdini_collect_diagnostics
+- Collect node errors, warnings, parameters, and optional geometry stats before retrying or deleting failed procedural work.
+
+### houdini_run_python_sandbox
+- Run Houdini Python inside a live procedural sandbox so failed generation keeps diagnostics and avoids overwriting live scene nodes.
+
+### houdini_verify_asset
+- Verify generated assets with geometry counts, bounds, node errors, and expected structural checks.
+
+### houdini_commit_sandbox
+- Rename a verified sandbox root into the final asset location after checks pass.
+
+### houdini_discard_sandbox
+- Delete a procedural sandbox after it is no longer needed.
+
+### houdini_capture_viewport_safe
+- Capture a viewport image through the supported safe capture path for visual verification.
+
+## Tool Forwarding Architecture
+
 ```
 Pi Extension (TypeScript)                  Houdini (Python)
 ┌─────────────────────────┐    HTTP     ┌─────────────────────────┐

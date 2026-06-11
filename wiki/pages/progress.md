@@ -121,6 +121,13 @@
 
 <div class="timeline">
 
+### Procedural Harness Phase B
+
+- Added live sandbox workflow for procedural generation.
+- Added diagnostics before retry/delete, structural asset verification, sandbox commit/discard, and safe viewport capture.
+- Updated procedural-modeling skill so agents use harness tools before raw Houdini Python.
+- Preserved Phase C path through `job_id`, `execution_mode`, diagnostics bundles, and artifact-shaped result fields.
+
 <div class="timeline-item timeline-done">
   <div class="timeline-date">2026-06-10</div>
   <div class="timeline-card">
