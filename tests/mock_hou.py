@@ -226,6 +226,8 @@ class MockNode:
             child._parms["snippet"] = MockParm("snippet", "")
             child._parms["snippet_attribname"] = MockParm("snippet_attribname", "result")
         self._children.append(child)
+        if MockNode._hou_ref is not None:
+            MockNode._hou_ref._nodes[child.path()] = child
         return child
 
     def destroy(self) -> None:

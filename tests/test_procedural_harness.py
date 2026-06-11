@@ -63,5 +63,38 @@ class TestCollectDiagnostics(unittest.TestCase):
         self.assertNotIn("value", r["parameters"][0])
 
 
+class TestRunPythonSandbox(unittest.TestCase):
+    def test_success_creates_sandbox_and_returns_job_shape(self):
+        code = """
+root = hou.node(sandbox_root_path)
+child = root.createNode("null", "OUT")
+hou.add_node(child)
+result["output_node"] = child.path()
+result["components"] = {"rungs": 8}
+"""
+        r = harness.run_python_sandbox(code, sandbox_name="ladder", commit_on_success=False)
+
+        self.assertTrue(r["success"])
+        self.assertEqual(r["execution_mode"], "live_sandbox")
+        self.assertIn("job_id", r)
+        self.assertTrue(r["root_path"].startswith("/obj/edini_sandbox_"))
+        self.assertEqual(r["result"]["components"]["rungs"], 8)
+        self.assertIsNotNone(_mock_hou.node(r["root_path"]))
+
+    def test_failure_preserves_sandbox_and_returns_traceback(self):
+        r = harness.run_python_sandbox(
+            "print('before failure')\nraise RuntimeError('sandbox boom')",
+            sandbox_name="fail_case",
+            delete_on_failure=False,
+        )
+
+        self.assertFalse(r["success"])
+        self.assertEqual(r["execution_mode"], "live_sandbox")
+        self.assertIn("sandbox boom", r["error"])
+        self.assertIn("before failure", r["output"])
+        self.assertIn("RuntimeError", r["traceback"])
+        self.assertIsNotNone(_mock_hou.node(r["root_path"]))
+
+
 if __name__ == "__main__":
     unittest.main()

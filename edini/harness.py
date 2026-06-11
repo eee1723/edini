@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import datetime as _dt
+import io
 import re
+import sys
+import traceback
 from typing import Any
 
 import hou
@@ -119,3 +122,85 @@ def collect_diagnostics(
         result["parameters"] = [_parm_record(p) for p in node.parms()]
 
     return result
+
+
+def _create_sandbox_root(sandbox_name: str) -> tuple[str, str]:
+    job_id = make_job_id(sandbox_name)
+    root_name = f"edini_sandbox_{job_id}"
+    obj = hou.node("/obj")
+    if obj is None:
+        raise RuntimeError("No /obj context")
+    root = obj.createNode("geo", root_name)
+    return job_id, root.path()
+
+
+def _destroy_node(path: str) -> None:
+    node = hou.node(path)
+    if node is not None:
+        node.destroy()
+
+
+def _safe_getvalue(stream) -> str:
+    try:
+        return stream.getvalue()
+    except Exception as e:
+        return f"<capture unavailable: {e}>"
+
+
+def run_python_sandbox(
+    code: str,
+    sandbox_name: str = "procedural",
+    commit_on_success: bool = False,
+    delete_on_failure: bool = False,
+) -> dict[str, Any]:
+    job_id, root_path = _create_sandbox_root(sandbox_name)
+    stdout_capture = io.StringIO()
+    stderr_capture = io.StringIO()
+    old_stdout = sys.stdout
+    old_stderr = sys.stderr
+    result_payload: dict[str, Any] = {}
+    namespace = {
+        "hou": hou,
+        "__builtins__": __builtins__,
+        "sandbox_root_path": root_path,
+        "result": result_payload,
+    }
+
+    sys.stdout = stdout_capture
+    sys.stderr = stderr_capture
+    try:
+        exec(code, namespace)
+        response = {
+            "success": True,
+            "job_id": job_id,
+            "execution_mode": EXECUTION_MODE_LIVE,
+            "root_path": root_path,
+            "output": _safe_getvalue(stdout_capture) or "(no output)",
+            "stderr": _safe_getvalue(stderr_capture),
+            "result": result_payload,
+            "diagnostics": collect_diagnostics(
+                result_payload.get("output_node", root_path),
+                include_geometry=True,
+                include_parms=False,
+            ),
+        }
+        response["committed"] = bool(commit_on_success)
+        return response
+    except Exception as e:
+        if delete_on_failure:
+            _destroy_node(root_path)
+        return {
+            "success": False,
+            "job_id": job_id,
+            "execution_mode": EXECUTION_MODE_LIVE,
+            "root_path": root_path,
+            "error": str(e),
+            "output": _safe_getvalue(stdout_capture),
+            "stderr": _safe_getvalue(stderr_capture),
+            "traceback": traceback.format_exc(),
+            "diagnostics": collect_diagnostics(root_path, include_geometry=True, include_parms=False),
+            "preserved": not delete_on_failure,
+        }
+    finally:
+        sys.stdout = old_stdout
+        sys.stderr = old_stderr
