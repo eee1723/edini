@@ -79,6 +79,7 @@
       <li><strong>Preserve failed nodes</strong> - Call <code>houdini_collect_diagnostics</code> before deleting failed procedural nodes.</li>
       <li><strong>Verify structurally</strong> - Use <code>houdini_verify_asset</code> and/or <code>houdini_inspect_geo</code>.</li>
       <li><strong>Capture safely</strong> - Use <code>houdini_capture_viewport_safe</code>. Do not explore Qt widgets or unsupported viewport internals.</li>
+      <li><strong>Commit only after verification</strong> - Use <code>houdini_commit_sandbox</code> after structural checks pass; use <code>houdini_discard_sandbox</code> only when the sandbox is no longer useful.</li>
     </ol>
   </section>
 
@@ -88,7 +89,8 @@
       <li>Do not use raw <code>houdini_run_python</code> for initial procedural asset generation when <code>houdini_run_python_sandbox</code> is available.</li>
       <li>Do not delete a failed procedural node before <code>houdini_collect_diagnostics</code>.</li>
       <li>Do not explore Qt widgets, main windows, viewport internals, or unsupported HOM APIs to capture images.</li>
-      <li>Diagnose failed Python SOP cooks before switching to manual node-network generation.</li>
+      <li>Diagnose failed Python SOP, VEX wrangle, or node-network attempts before switching backend.</li>
+      <li>Commit only after structural verification with <code>houdini_commit_sandbox</code>; discard with <code>houdini_discard_sandbox</code> only when the sandbox is no longer useful.</li>
     </ul>
   </section>
 </main>

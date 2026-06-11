@@ -49,5 +49,16 @@ def test_procedural_modeling_skill_requires_harness():
     assert "houdini_run_python_sandbox" in text
     assert "houdini_collect_diagnostics" in text
     assert "houdini_verify_asset" in text
+    assert "houdini_commit_sandbox" in text
+    assert "houdini_discard_sandbox" in text
     assert "Do not delete a failed procedural node" in text
+    assert "Do not explore Qt widgets" in text
+    assert "Diagnose before switching strategy" in text
+    assert "switch to Python SOP only if diagnostics" in text
+
+
+def test_procedural_modeling_preview_mentions_harness_lifecycle():
+    text = read("skills/procedural-modeling/preview.html")
+    assert "houdini_commit_sandbox" in text
+    assert "houdini_discard_sandbox" in text
     assert "Do not explore Qt widgets" in text

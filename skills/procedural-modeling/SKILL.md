@@ -45,7 +45,7 @@ This reduces VEX complexity per snippet (higher success rate) and makes debuggin
    - Density scatter: `if(rand(@ptnum) > chramp("density", fit01(@P.y, 0, 1))) removepoint(0, @ptnum)`
    - Orient along direction: `p@orient = quaternion(dihedral({0,1,0}, normalize(@vel)))`
 4. **Validate** - After VEX, always `houdini_inspect_geo` to check point counts, attributes, bounds.
-5. **Fail twice -> switch to Python SOP** - Python is far more reliable for complex logic.
+5. **Diagnose repeated failures before switching** - After repeated VEX failures, preserve the wrangle, call `houdini_collect_diagnostics` / `houdini_inspect_geo`, then switch to Python SOP only if diagnostics show VEX is unsuitable. Python SOP is often more reliable for complex logic, but diagnostics must justify the backend change.
 
 ## Python SOP Guidelines
 
@@ -65,7 +65,7 @@ Use Python SOP for: recursion (L-systems, trees), external data, complex loops, 
 - Do not use raw `houdini_run_python` for initial procedural asset generation when `houdini_run_python_sandbox` is available.
 - Do not delete a failed procedural node before `houdini_collect_diagnostics`.
 - Do not explore Qt widgets, main windows, viewport internals, or unsupported HOM APIs to capture images. Use `houdini_capture_viewport_safe` and report clean failure if capture is unavailable.
-- If a generated Python SOP fails to cook, diagnose that SOP first. Switching to manual node-network generation is allowed only after diagnostics identify why the code-first path is unsuitable.
+- If a generated Python SOP, VEX wrangle, or node-network attempt fails, diagnose that attempt first. Switching backend is allowed only after diagnostics identify why the current path is unsuitable.
 
 ## Workflow
 
@@ -73,7 +73,7 @@ Use Python SOP for: recursion (L-systems, trees), external data, complex loops, 
 2. **Choose backend** - `python_sop` for algorithmic mesh generation, `vex_wrangle` for per-element math, `node_network` for native SOP composition.
 3. **Use the harness first** - For procedural assets, use `houdini_run_python_sandbox` or future harness tools instead of raw `houdini_run_python`.
 4. **Preserve failed nodes** - Do not delete a failed procedural node before calling `houdini_collect_diagnostics`.
-5. **Diagnose before switching strategy** - For Python SOP cook errors, inspect node errors, warnings, parameters, traceback, and generated code before falling back to another backend.
+5. **Diagnose before switching strategy** - For Python SOP cook errors, VEX wrangle failures, or node-network failures, inspect node errors, warnings, parameters, traceback or generated code, and geometry state before falling back to another backend.
 6. **Verify structurally** - Use `houdini_verify_asset` and/or `houdini_inspect_geo` to check point counts, primitive counts, bounds, and expected components.
 7. **Capture safely** - Use `houdini_capture_viewport_safe` for visual verification. Do not explore Qt widgets or unsupported viewport internals during normal modeling.
 8. **Commit only after verification** - Use `houdini_commit_sandbox` only after structural checks pass. Use `houdini_discard_sandbox` only when the sandbox is no longer useful.
