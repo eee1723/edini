@@ -87,6 +87,71 @@ class MockCategory:
         return self._node_types.get(name)
 
 
+class MockAttrib:
+    def __init__(self, name: str, data_type: str = "Float"):
+        self._name = name
+        self._data_type = data_type
+
+    def name(self) -> str:
+        return self._name
+
+    def dataType(self) -> str:
+        return self._data_type
+
+
+class MockBoundingBox:
+    def __init__(self, bounds: tuple[float, float, float, float, float, float]):
+        self._bounds = bounds
+
+    def minvec(self):
+        return (self._bounds[0], self._bounds[2], self._bounds[4])
+
+    def maxvec(self):
+        return (self._bounds[1], self._bounds[3], self._bounds[5])
+
+
+class MockGeometry:
+    def __init__(
+        self,
+        point_count: int = 0,
+        prim_count: int = 0,
+        vertex_count: int = 0,
+        bounds: tuple[float, float, float, float, float, float] | None = None,
+    ):
+        self._point_count = point_count
+        self._prim_count = prim_count
+        self._vertex_count = vertex_count
+        self._bounds = bounds
+
+    def intrinsicValue(self, name: str):
+        if name == "pointcount":
+            return self._point_count
+        if name == "primitivecount":
+            return self._prim_count
+        if name == "vertexcount":
+            return self._vertex_count
+        if name == "bounds":
+            return self._bounds
+        raise KeyError(name)
+
+    def boundingBox(self):
+        if self._bounds is None:
+            return None
+        return MockBoundingBox(self._bounds)
+
+    def pointAttribs(self):
+        return [MockAttrib("P")]
+
+    def primAttribs(self):
+        return []
+
+    def vertexAttribs(self):
+        return []
+
+    def globalAttribs(self):
+        return []
+
+
 class MockNode:
     """Mock Houdini node with children, parameters, connections."""
 
@@ -110,6 +175,7 @@ class MockNode:
         self._type = MockNodeType(self._type_name)
         self._errors: list[str] = []
         self._warnings: list[str] = []
+        self._geometry = None
 
     def path(self) -> str:
         return self._path
@@ -189,7 +255,7 @@ class MockNode:
         pass
 
     def geometry(self):
-        return None
+        return self._geometry
 
     def layoutChildren(self) -> None:
         pass
@@ -259,6 +325,8 @@ class MockHou:
 
     class Ramp:
         pass
+
+    MockGeometry = MockGeometry
 
     def __init__(self):
         self._nodes: dict[str, MockNode] = {}

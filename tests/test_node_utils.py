@@ -357,6 +357,27 @@ class TestInspectGeometry(unittest.TestCase):
         self.assertFalse(r["success"])
         self.assertIn("no geometry", r["error"].lower())
 
+    def test_geometry_counts_and_bounds(self):
+        cr = create_node("box", name="geo_with_data")
+        _register_created_node(cr)
+        node = _mock_hou.node(cr["path"])
+        node._geometry = _mock_hou.MockGeometry(
+            point_count=8,
+            prim_count=6,
+            vertex_count=24,
+            bounds=(-1.0, 1.0, 0.0, 4.0, -0.5, 0.5),
+        )
+
+        r = inspect_geometry(cr["path"])
+
+        self.assertTrue(r["success"])
+        self.assertEqual(r["point_count"], 8)
+        self.assertEqual(r["prim_count"], 6)
+        self.assertEqual(r["vertex_count"], 24)
+        self.assertEqual(r["bounds"]["min"], [-1.0, 0.0, -0.5])
+        self.assertEqual(r["bounds"]["max"], [1.0, 4.0, 0.5])
+        self.assertEqual(r["bounds"]["size"], [2.0, 4.0, 1.0])
+
 
 # ===================================================================
 # TestRunPython
