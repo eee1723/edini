@@ -294,6 +294,42 @@ class TestSandboxLifecycle(unittest.TestCase):
         self.assertIsNone(_mock_hou.node(root_path))
         self.assertIsNotNone(_mock_hou.node("/obj/display_failed_asset"))
 
+    def test_commit_sandbox_is_idempotent_when_root_is_already_final_path(self):
+        r = harness.run_python_sandbox("result['ok'] = True", sandbox_name="idempotent_case")
+        root_path = r["root_path"]
+        c1 = harness.commit_sandbox(root_path, "idempotent_asset", replace_existing=False)
+        final_path = c1["final_path"]
+        final_node = _mock_hou.node(final_path)
+
+        c2 = harness.commit_sandbox(final_path, "idempotent_asset", replace_existing=True)
+
+        self.assertTrue(c2["success"])
+        self.assertTrue(c2["committed"])
+        self.assertEqual(c2["final_path"], final_path)
+        self.assertIs(_mock_hou.node(final_path), final_node)
+        self.assertFalse(final_node._destroyed)
+
+    def test_commit_sandbox_idempotent_retry_preserves_node_when_display_flag_fails(self):
+        r = harness.run_python_sandbox("result['ok'] = True", sandbox_name="idempotent_display_fail")
+        root_path = r["root_path"]
+        c1 = harness.commit_sandbox(root_path, "idempotent_display_asset", replace_existing=False)
+        final_path = c1["final_path"]
+        final_node = _mock_hou.node(final_path)
+
+        def broken_display_flag(value):
+            raise RuntimeError("retry display flag failed")
+
+        final_node.setDisplayFlag = broken_display_flag
+
+        c2 = harness.commit_sandbox(final_path, "idempotent_display_asset", replace_existing=True)
+
+        self.assertFalse(c2["success"])
+        self.assertTrue(c2["committed"])
+        self.assertEqual(c2["final_path"], final_path)
+        self.assertIn("retry display flag failed", c2["display_error"])
+        self.assertIs(_mock_hou.node(final_path), final_node)
+        self.assertFalse(final_node._destroyed)
+
     def test_commit_sandbox_rejects_name_with_separator_without_mutating_sandbox(self):
         r = harness.run_python_sandbox("result['ok'] = True", sandbox_name="bad_name_case")
         root_path = r["root_path"]

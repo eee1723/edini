@@ -291,7 +291,10 @@ def commit_sandbox(
 
     existing = hou.node(final_path)
     if existing is not None:
-        if not replace_existing:
+        same_node = existing is node or existing.path() == node.path()
+        if same_node:
+            pass
+        elif not replace_existing:
             return {
                 "success": False,
                 "sandbox_root_path": sandbox_root_path,
@@ -299,17 +302,18 @@ def commit_sandbox(
                 "committed": False,
                 "error": f"Final node already exists: {final_path}",
             }
-        try:
-            existing.destroy()
-        except Exception as e:
-            return {
-                "success": False,
-                "sandbox_root_path": sandbox_root_path,
-                "final_path": final_path,
-                "committed": False,
-                "error": f"Failed to replace existing node: {e}",
-                "traceback": traceback.format_exc(),
-            }
+        else:
+            try:
+                existing.destroy()
+            except Exception as e:
+                return {
+                    "success": False,
+                    "sandbox_root_path": sandbox_root_path,
+                    "final_path": final_path,
+                    "committed": False,
+                    "error": f"Failed to replace existing node: {e}",
+                    "traceback": traceback.format_exc(),
+                }
 
     try:
         node.setName(final_name, unique_name=False)
