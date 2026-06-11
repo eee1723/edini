@@ -11,4 +11,4 @@ Expected behavior after Phase B:
 - Visual capture uses `houdini_capture_viewport_safe`.
 - The agent does not explore Qt widgets or unsupported viewport internals when capture fails.
 
-The unit regression in `tests/test_procedural_harness.py::TestLadderRegression` verifies the structural part of this workflow without requiring Houdini.
+The bullet list is the full incident target; the unit regression in `tests/test_procedural_harness.py::TestLadderRegression` covers the sandbox, metadata, and verification slice without requiring Houdini.

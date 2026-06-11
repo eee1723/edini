@@ -372,16 +372,33 @@ result["asset_type"] = "ladder"
 result["components"] = {"rails": 2, "rungs": 8}
 """
 
-        run = harness.run_python_sandbox(code, sandbox_name="ladder")
-        verify = harness.verify_asset(
-            run["result"]["output_node"],
-            {"min_points": 1, "min_prims": 1, "bounds_nonzero": True},
-        )
+        run = harness.run_python_sandbox(code, sandbox_name="ladder_regression")
+        try:
+            self.assertTrue(run["success"])
+            verify = harness.verify_asset(
+                run["result"]["output_node"],
+                {"min_points": 1, "min_prims": 1, "bounds_nonzero": True},
+            )
 
-        self.assertTrue(run["success"])
-        self.assertEqual(run["result"]["components"], {"rails": 2, "rungs": 8})
-        self.assertTrue(verify["success"])
-        self.assertEqual(verify["geometry"]["point_count"], 240)
+            passed_check_names = {check["name"] for check in verify["checks"] if check["passed"]}
+
+            self.assertEqual(run["result"]["asset_type"], "ladder")
+            self.assertEqual(run["result"]["components"], {"rails": 2, "rungs": 8})
+            self.assertTrue(verify["success"])
+            self.assertEqual(verify["geometry"]["point_count"], 240)
+            self.assertEqual(verify["geometry"]["prim_count"], 160)
+            self.assertEqual(
+                [round(value, 2) for value in verify["geometry"]["bounds"]["size"]],
+                [1.08, 4.0, 0.08],
+            )
+            self.assertTrue(
+                {"min_points", "min_prims", "bounds_nonzero", "node_errors"}.issubset(
+                    passed_check_names
+                )
+            )
+        finally:
+            if _mock_hou.node(run["root_path"]) is not None:
+                harness.discard_sandbox(run["root_path"])
 
 
 if __name__ == "__main__":
