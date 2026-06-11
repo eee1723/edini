@@ -355,5 +355,34 @@ class TestSandboxLifecycle(unittest.TestCase):
         self.assertIsNone(_mock_hou.node("/obj/   "))
 
 
+class TestLadderRegression(unittest.TestCase):
+    def test_ladder_sandbox_preserves_components_and_verifies(self):
+        code = """
+root = hou.node(sandbox_root_path)
+out = root.createNode("null", "OUT")
+hou.add_node(out)
+out._geometry = hou.MockGeometry(
+    point_count=240,
+    prim_count=160,
+    vertex_count=640,
+    bounds=(-0.54, 0.54, 0.0, 4.0, -0.04, 0.04),
+)
+result["output_node"] = out.path()
+result["asset_type"] = "ladder"
+result["components"] = {"rails": 2, "rungs": 8}
+"""
+
+        run = harness.run_python_sandbox(code, sandbox_name="ladder")
+        verify = harness.verify_asset(
+            run["result"]["output_node"],
+            {"min_points": 1, "min_prims": 1, "bounds_nonzero": True},
+        )
+
+        self.assertTrue(run["success"])
+        self.assertEqual(run["result"]["components"], {"rails": 2, "rungs": 8})
+        self.assertTrue(verify["success"])
+        self.assertEqual(verify["geometry"]["point_count"], 240)
+
+
 if __name__ == "__main__":
     unittest.main()
