@@ -124,6 +124,28 @@ def collect_diagnostics(
     return result
 
 
+def _safe_collect_diagnostics(
+    node_path: str,
+    include_geometry: bool = True,
+    include_parms: bool = False,
+) -> dict[str, Any]:
+    try:
+        return collect_diagnostics(
+            node_path,
+            include_geometry=include_geometry,
+            include_parms=include_parms,
+        )
+    except Exception as e:
+        return {
+            "success": False,
+            "node_path": node_path,
+            "error": f"Diagnostics failed: {e}",
+            "traceback": traceback.format_exc(),
+            "include_geometry": bool(include_geometry),
+            "include_parms": bool(include_parms),
+        }
+
+
 def _create_sandbox_root(sandbox_name: str) -> tuple[str, str]:
     job_id = make_job_id(sandbox_name)
     root_name = f"edini_sandbox_{job_id}"
@@ -178,17 +200,22 @@ def run_python_sandbox(
             "output": _safe_getvalue(stdout_capture) or "(no output)",
             "stderr": _safe_getvalue(stderr_capture),
             "result": result_payload,
-            "diagnostics": collect_diagnostics(
+            "diagnostics": _safe_collect_diagnostics(
                 result_payload.get("output_node", root_path),
                 include_geometry=True,
                 include_parms=False,
             ),
         }
-        response["committed"] = bool(commit_on_success)
+        response["commit_requested"] = bool(commit_on_success)
+        response["committed"] = False
         return response
     except Exception as e:
+        execution_traceback = traceback.format_exc()
+        diagnostics = _safe_collect_diagnostics(root_path, include_geometry=True, include_parms=False)
+        deleted = False
         if delete_on_failure:
             _destroy_node(root_path)
+            deleted = True
         return {
             "success": False,
             "job_id": job_id,
@@ -197,9 +224,10 @@ def run_python_sandbox(
             "error": str(e),
             "output": _safe_getvalue(stdout_capture),
             "stderr": _safe_getvalue(stderr_capture),
-            "traceback": traceback.format_exc(),
-            "diagnostics": collect_diagnostics(root_path, include_geometry=True, include_parms=False),
+            "traceback": execution_traceback,
+            "diagnostics": diagnostics,
             "preserved": not delete_on_failure,
+            "deleted": deleted,
         }
     finally:
         sys.stdout = old_stdout

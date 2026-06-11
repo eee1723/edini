@@ -95,6 +95,89 @@ result["components"] = {"rungs": 8}
         self.assertIn("RuntimeError", r["traceback"])
         self.assertIsNotNone(_mock_hou.node(r["root_path"]))
 
+    def test_delete_on_failure_collects_diagnostics_before_deletion(self):
+        r = harness.run_python_sandbox(
+            "raise RuntimeError('delete me')",
+            sandbox_name="delete_case",
+            delete_on_failure=True,
+        )
+
+        self.assertFalse(r["success"])
+        self.assertIn("delete me", r["error"])
+        self.assertTrue(r["diagnostics"]["success"])
+        self.assertEqual(r["diagnostics"]["node_path"], r["root_path"])
+        self.assertFalse(r["preserved"])
+        self.assertTrue(r["deleted"])
+        self.assertIsNone(_mock_hou.node(r["root_path"]))
+
+    def test_deleting_sandbox_root_removes_child_paths_from_mock_registry(self):
+        code = """
+root = hou.node(sandbox_root_path)
+child = root.createNode("null", "LEFT_BEHIND")
+result["child_path"] = child.path()
+raise RuntimeError("cleanup")
+"""
+        r = harness.run_python_sandbox(code, sandbox_name="child_cleanup", delete_on_failure=True)
+
+        self.assertFalse(r["success"])
+        self.assertTrue(r["deleted"])
+        self.assertIsNone(_mock_hou.node(r["root_path"]))
+        self.assertIsNone(_mock_hou.node(f"{r['root_path']}/LEFT_BEHIND"))
+
+    def test_success_survives_diagnostics_failure(self):
+        original_collect = harness.collect_diagnostics
+
+        def broken_collect(*args, **kwargs):
+            raise RuntimeError("diagnostics boom")
+
+        harness.collect_diagnostics = broken_collect
+        try:
+            r = harness.run_python_sandbox(
+                "result['ok'] = True",
+                sandbox_name="diag_success",
+            )
+        finally:
+            harness.collect_diagnostics = original_collect
+
+        self.assertTrue(r["success"])
+        self.assertTrue(r["result"]["ok"])
+        self.assertFalse(r["diagnostics"]["success"])
+        self.assertEqual(r["diagnostics"]["node_path"], r["root_path"])
+        self.assertIn("diagnostics boom", r["diagnostics"]["error"])
+
+    def test_failure_preserves_original_error_when_diagnostics_fail(self):
+        original_collect = harness.collect_diagnostics
+
+        def broken_collect(*args, **kwargs):
+            raise RuntimeError("diagnostics boom")
+
+        harness.collect_diagnostics = broken_collect
+        try:
+            r = harness.run_python_sandbox(
+                "raise RuntimeError('original sandbox error')",
+                sandbox_name="diag_failure",
+            )
+        finally:
+            harness.collect_diagnostics = original_collect
+
+        self.assertFalse(r["success"])
+        self.assertIn("original sandbox error", r["error"])
+        self.assertIn("original sandbox error", r["traceback"])
+        self.assertFalse(r["diagnostics"]["success"])
+        self.assertEqual(r["diagnostics"]["node_path"], r["root_path"])
+        self.assertIn("diagnostics boom", r["diagnostics"]["error"])
+
+    def test_commit_on_success_requests_but_does_not_report_commit(self):
+        r = harness.run_python_sandbox(
+            "result['ok'] = True",
+            sandbox_name="commit_scaffold",
+            commit_on_success=True,
+        )
+
+        self.assertTrue(r["success"])
+        self.assertTrue(r["commit_requested"])
+        self.assertFalse(r["committed"])
+
 
 if __name__ == "__main__":
     unittest.main()

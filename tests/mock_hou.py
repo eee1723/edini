@@ -232,6 +232,9 @@ class MockNode:
 
     def destroy(self) -> None:
         self._destroyed = True
+        for child in list(self._children):
+            child.destroy()
+        self._children.clear()
         if self._parent and self in self._parent._children:
             self._parent._children.remove(self)
         # Remove from the global node registry if available
