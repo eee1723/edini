@@ -213,10 +213,16 @@ def run_python_sandbox(
         execution_traceback = traceback.format_exc()
         diagnostics = _safe_collect_diagnostics(root_path, include_geometry=True, include_parms=False)
         deleted = False
+        delete_error = None
+        delete_traceback = None
         if delete_on_failure:
-            _destroy_node(root_path)
-            deleted = True
-        return {
+            try:
+                _destroy_node(root_path)
+                deleted = True
+            except Exception as cleanup_exc:
+                delete_error = str(cleanup_exc)
+                delete_traceback = traceback.format_exc()
+        response = {
             "success": False,
             "job_id": job_id,
             "execution_mode": EXECUTION_MODE_LIVE,
@@ -226,9 +232,13 @@ def run_python_sandbox(
             "stderr": _safe_getvalue(stderr_capture),
             "traceback": execution_traceback,
             "diagnostics": diagnostics,
-            "preserved": not delete_on_failure,
+            "preserved": not deleted,
             "deleted": deleted,
         }
+        if delete_error is not None:
+            response["delete_error"] = delete_error
+            response["delete_traceback"] = delete_traceback
+        return response
     finally:
         sys.stdout = old_stdout
         sys.stderr = old_stderr

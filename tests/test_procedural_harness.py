@@ -178,6 +178,30 @@ raise RuntimeError("cleanup")
         self.assertTrue(r["commit_requested"])
         self.assertFalse(r["committed"])
 
+    def test_cleanup_failure_does_not_mask_original_sandbox_error(self):
+        original_destroy = harness._destroy_node
+
+        def broken_destroy(path):
+            raise RuntimeError("cleanup failure")
+
+        harness._destroy_node = broken_destroy
+        try:
+            r = harness.run_python_sandbox(
+                "print('before cleanup')\nraise RuntimeError('original user failure')",
+                sandbox_name="cleanup_failure",
+                delete_on_failure=True,
+            )
+        finally:
+            harness._destroy_node = original_destroy
+
+        self.assertFalse(r["success"])
+        self.assertIn("original user failure", r["error"])
+        self.assertIn("RuntimeError", r["traceback"])
+        self.assertIn("before cleanup", r["output"])
+        self.assertFalse(r["deleted"])
+        self.assertTrue(r["preserved"])
+        self.assertIn("cleanup failure", r["delete_error"])
+
 
 if __name__ == "__main__":
     unittest.main()
