@@ -370,6 +370,42 @@ def get_help(node_type_name: str) -> dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
+def _vector_to_list(value) -> list[float]:
+    try:
+        return [float(value[0]), float(value[1]), float(value[2])]
+    except Exception:
+        return [float(value.x()), float(value.y()), float(value.z())]
+
+
+def _geometry_bounds(geo) -> dict[str, list[float]] | None:
+    try:
+        raw = geo.intrinsicValue("bounds")
+        if raw is not None and len(raw) == 6:
+            mn = [float(raw[0]), float(raw[2]), float(raw[4])]
+            mx = [float(raw[1]), float(raw[3]), float(raw[5])]
+            return {
+                "min": mn,
+                "max": mx,
+                "size": [mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2]],
+            }
+    except Exception:
+        pass
+
+    try:
+        bbox = geo.boundingBox()
+        if bbox is None:
+            return None
+        mn = _vector_to_list(bbox.minvec())
+        mx = _vector_to_list(bbox.maxvec())
+        return {
+            "min": mn,
+            "max": mx,
+            "size": [mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2]],
+        }
+    except Exception:
+        return None
+
+
 def inspect_geometry(node_path: str) -> dict[str, Any]:
     """Inspect the geometry output of a SOP node."""
     try:
@@ -398,7 +434,7 @@ def inspect_geometry(node_path: str) -> dict[str, Any]:
             "prim_count": geo.intrinsicValue("primitivecount"),
             "vertex_count": geo.intrinsicValue("vertexcount"),
             "attributes": attribs,
-            "bounds": geo.boundingBox().size() if geo.boundingBox() is not None else None,
+            "bounds": _geometry_bounds(geo),
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -409,25 +445,43 @@ def inspect_geometry(node_path: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def run_python(code: str) -> dict[str, Any]:
-    """Execute arbitrary Python code in Houdini context."""
+    """Execute arbitrary Python code in Houdini context.
+
+    This is intentionally raw execution. Procedural asset generation should
+    prefer harness sandbox tools so failed cooks preserve diagnostics.
+    """
+    import io
+    import sys
+    import traceback
+
+    namespace = {"hou": hou, "__builtins__": __builtins__}
+    stdout_capture = io.StringIO()
+    stderr_capture = io.StringIO()
+    old_stdout = sys.stdout
+    old_stderr = sys.stderr
+    sys.stdout = stdout_capture
+    sys.stderr = stderr_capture
+
     try:
-        namespace = {"hou": hou, "__builtins__": __builtins__}
-        import io
-        import sys
-
-        stdout_capture = io.StringIO()
-        old_stdout = sys.stdout
-        sys.stdout = stdout_capture
-
-        try:
-            exec(code, namespace)
-        finally:
-            sys.stdout = old_stdout
-
-        output = stdout_capture.getvalue()
-        return {"success": True, "output": output if output else "(no output)"}
+        exec(code, namespace)
+        return {
+            "success": True,
+            "output": stdout_capture.getvalue() or "(no output)",
+            "stderr": stderr_capture.getvalue(),
+            "warning": "Raw houdini_run_python is not sandboxed; use harness tools for procedural assets.",
+        }
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {
+            "success": False,
+            "error": str(e),
+            "output": stdout_capture.getvalue(),
+            "stderr": stderr_capture.getvalue(),
+            "traceback": traceback.format_exc(),
+            "warning": "Raw houdini_run_python is not sandboxed; failed code may have changed the live scene.",
+        }
+    finally:
+        sys.stdout = old_stdout
+        sys.stderr = old_stderr
 
 
 def run_vex(

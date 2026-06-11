@@ -400,6 +400,21 @@ class TestRunPython(unittest.TestCase):
         self.assertFalse(r["success"])
         self.assertIn("error", r)
 
+    def test_failure_includes_traceback_and_partial_output(self):
+        r = run_python("print('before boom')\nraise RuntimeError('boom')")
+
+        self.assertFalse(r["success"])
+        self.assertIn("boom", r["error"])
+        self.assertIn("before boom", r["output"])
+        self.assertIn("RuntimeError", r["traceback"])
+        self.assertIn("not sandboxed", r["warning"])
+
+    def test_stderr_is_captured(self):
+        r = run_python("import sys\nprint('warn text', file=sys.stderr)")
+
+        self.assertTrue(r["success"])
+        self.assertIn("warn text", r["stderr"])
+
 
 # ===================================================================
 # TestRunVex
