@@ -5,6 +5,8 @@ JSON-serializable dicts with {"success": bool, ...} shape.
 """
 from __future__ import annotations
 
+import traceback
+
 import hou
 from typing import Any
 
@@ -584,10 +586,13 @@ def capture_viewport_safe(
 ) -> dict[str, Any]:
     """Capture the active scene viewport using Houdini's supported flipbook API."""
     method = "scene_viewer_flipbook"
+    stage = "initialize"
     try:
         import os
 
+        stage = "get_desktop"
         desktop = hou.ui.curDesktop()
+        stage = "find_scene_viewer"
         viewer = desktop.paneTabOfType(hou.paneTabType.SceneViewer)
         if viewer is None:
             return {
@@ -596,18 +601,26 @@ def capture_viewport_safe(
                 "method": method,
             }
 
+        stage = "get_viewport"
         viewport = viewer.curViewport()
         if home_viewport and hasattr(viewport, "homeAll"):
+            stage = "home_viewport"
             viewport.homeAll()
 
+        stage = "prepare_output"
         os.makedirs(os.path.dirname(os.path.abspath(filepath)) or ".", exist_ok=True)
 
-        settings = viewer.flipbookSettings()
+        stage = "stash_flipbook_settings"
+        base_settings = viewer.flipbookSettings()
+        settings = base_settings.stash() if hasattr(base_settings, "stash") else base_settings
+        stage = "configure_flipbook"
         settings.output(filepath)
         settings.outputToMPlay(False)
         settings.frameRange((frame, frame))
+        stage = "run_flipbook"
         viewer.flipbook(viewport, settings)
 
+        stage = "verify_output"
         if os.path.exists(filepath):
             size_kb = round(os.path.getsize(filepath) / 1024, 1)
             return {
@@ -626,6 +639,8 @@ def capture_viewport_safe(
             "success": False,
             "error": str(e),
             "method": method,
+            "stage": stage,
+            "traceback": traceback.format_exc(),
             "note": "Safe capture does not fall back to direct Qt widget probing.",
         }
 

@@ -329,15 +329,85 @@ class MockShelves:
         return None
 
 
+class MockViewport:
+    def __init__(self):
+        self.home_all_called = False
+
+    def homeAll(self) -> None:
+        self.home_all_called = True
+
+
+class MockFlipbookSettings:
+    def __init__(self):
+        self.output_path: str | None = None
+        self.output_to_mplay: bool | None = None
+        self.frame_range: tuple[int, int] | None = None
+        self.stash_called = False
+        self.stashed_settings: list[MockFlipbookSettings] = []
+        self.stashed_from: MockFlipbookSettings | None = None
+
+    def stash(self) -> MockFlipbookSettings:
+        self.stash_called = True
+        settings = MockFlipbookSettings()
+        settings.stashed_from = self
+        self.stashed_settings.append(settings)
+        return settings
+
+    def output(self, filepath: str) -> None:
+        self.output_path = filepath
+
+    def outputToMPlay(self, value: bool) -> None:
+        self.output_to_mplay = value
+
+    def frameRange(self, frame_range: tuple[int, int]) -> None:
+        self.frame_range = frame_range
+
+
+class MockSceneViewer:
+    def __init__(self):
+        self.viewport = MockViewport()
+        self.base_settings = MockFlipbookSettings()
+        self.flipbook_calls: list[tuple[MockViewport, MockFlipbookSettings]] = []
+
+    def curViewport(self) -> MockViewport:
+        return self.viewport
+
+    def flipbookSettings(self) -> MockFlipbookSettings:
+        return self.base_settings
+
+    def flipbook(
+        self,
+        viewport: MockViewport,
+        settings: MockFlipbookSettings,
+    ) -> None:
+        self.flipbook_calls.append((viewport, settings))
+        if settings.output_path:
+            with open(settings.output_path, "wb") as output:
+                output.write(b"mock flipbook")
+
+
 class MockDesktop:
+    def __init__(self, scene_viewer=None, network_editor=None):
+        self.scene_viewer = scene_viewer
+        self.network_editor = network_editor
+
     def paneTabOfType(self, tab_type):
+        if tab_type == MockHou.paneTabType.SceneViewer:
+            return self.scene_viewer
+        if tab_type == MockHou.paneTabType.NetworkEditor:
+            return self.network_editor
         return None
 
 
 class MockUI:
-    @staticmethod
-    def curDesktop():
-        return MockDesktop()
+    def __init__(self):
+        self.desktop = MockDesktop()
+
+    def curDesktop(self):
+        return self.desktop
+
+    def set_scene_viewer(self, viewer) -> None:
+        self.desktop.scene_viewer = viewer
 
 
 class MockHou:
