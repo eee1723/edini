@@ -93,12 +93,12 @@ export const houdiniVerifyAsset = {
   parameters: Type.Object({
     node_path: Type.String({ description: "Full path of the asset or node to verify" }),
     expected: Type.Optional(
-      Type.Unknown({ description: "Optional expected properties or verification criteria" })
+      Type.Record(Type.String(), Type.Unknown())
     ),
   }),
   async execute(
     _toolCallId: string,
-    params: { node_path: string; expected?: unknown }
+    params: { node_path: string; expected?: Record<string, unknown> }
   ) {
     return forwardTool("houdini_verify_asset", params);
   },

@@ -21,6 +21,12 @@ def test_harness_tools_file_contains_all_tool_names():
         assert name in text
 
 
+def test_verify_asset_expected_is_object_shaped():
+    text = read("pi-extensions/edini-tools/tools/harness.ts")
+    assert "Type.Record(Type.String(), Type.Unknown())" in text
+    assert "expected?: Record<string, unknown>" in text
+
+
 def test_index_registers_harness_tools():
     text = read("pi-extensions/edini-tools/index.ts")
     assert 'import { harnessTools } from "./tools/harness";' in text
