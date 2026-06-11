@@ -146,6 +146,168 @@ def _safe_collect_diagnostics(
         }
 
 
+def _check(name: str, passed: bool, actual, expected=None) -> dict[str, Any]:
+    record = {
+        "name": name,
+        "passed": bool(passed),
+        "actual": actual,
+    }
+    if expected is not None:
+        record["expected"] = expected
+    return record
+
+
+def verify_asset(node_path: str, expected: dict[str, Any] | None = None) -> dict[str, Any]:
+    expected = expected or {}
+    stats = geometry_stats(node_path)
+    checks: list[dict[str, Any]] = [
+        _check("geometry_exists", stats is not None, stats is not None, True)
+    ]
+
+    if stats is not None:
+        if "min_points" in expected:
+            point_count = stats.get("point_count")
+            checks.append(
+                _check(
+                    "min_points",
+                    point_count is not None and point_count >= expected["min_points"],
+                    point_count,
+                    expected["min_points"],
+                )
+            )
+        if "min_prims" in expected:
+            prim_count = stats.get("prim_count")
+            checks.append(
+                _check(
+                    "min_prims",
+                    prim_count is not None and prim_count >= expected["min_prims"],
+                    prim_count,
+                    expected["min_prims"],
+                )
+            )
+        if expected.get("bounds_nonzero"):
+            bounds = stats.get("bounds") or {}
+            size = bounds.get("size")
+            checks.append(
+                _check(
+                    "bounds_nonzero",
+                    isinstance(size, list) and any(abs(component) > 1e-6 for component in size),
+                    size,
+                    True,
+                )
+            )
+
+    diagnostics = _safe_collect_diagnostics(
+        node_path,
+        include_geometry=False,
+        include_parms=False,
+    )
+    if diagnostics.get("success"):
+        node_errors = list(diagnostics.get("node_errors") or [])
+        checks.append(_check("node_errors", len(node_errors) == 0, node_errors, []))
+    else:
+        checks.append(
+            _check(
+                "diagnostics",
+                False,
+                diagnostics.get("error", "Diagnostics failed"),
+                "success",
+            )
+        )
+
+    return {
+        "success": all(check["passed"] for check in checks),
+        "node_path": node_path,
+        "geometry": stats,
+        "checks": checks,
+    }
+
+
+def discard_sandbox(sandbox_root_path: str) -> dict[str, Any]:
+    node = hou.node(sandbox_root_path)
+    if node is None:
+        return {
+            "success": False,
+            "sandbox_root_path": sandbox_root_path,
+            "discarded": False,
+            "error": f"Sandbox root not found: {sandbox_root_path}",
+        }
+
+    try:
+        node.destroy()
+        return {
+            "success": True,
+            "sandbox_root_path": sandbox_root_path,
+            "discarded": True,
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "sandbox_root_path": sandbox_root_path,
+            "discarded": False,
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+        }
+
+
+def commit_sandbox(
+    sandbox_root_path: str,
+    final_name: str,
+    replace_existing: bool = False,
+) -> dict[str, Any]:
+    node = hou.node(sandbox_root_path)
+    final_path = f"/obj/{final_name}"
+    if node is None:
+        return {
+            "success": False,
+            "sandbox_root_path": sandbox_root_path,
+            "final_path": final_path,
+            "committed": False,
+            "error": f"Sandbox root not found: {sandbox_root_path}",
+        }
+
+    existing = hou.node(final_path)
+    if existing is not None:
+        if not replace_existing:
+            return {
+                "success": False,
+                "sandbox_root_path": sandbox_root_path,
+                "final_path": final_path,
+                "committed": False,
+                "error": f"Final node already exists: {final_path}",
+            }
+        try:
+            existing.destroy()
+        except Exception as e:
+            return {
+                "success": False,
+                "sandbox_root_path": sandbox_root_path,
+                "final_path": final_path,
+                "committed": False,
+                "error": f"Failed to replace existing node: {e}",
+                "traceback": traceback.format_exc(),
+            }
+
+    try:
+        node.setName(final_name, unique_name=False)
+        node.setDisplayFlag(True)
+        return {
+            "success": True,
+            "sandbox_root_path": sandbox_root_path,
+            "final_path": final_path,
+            "committed": True,
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "sandbox_root_path": sandbox_root_path,
+            "final_path": final_path,
+            "committed": False,
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+        }
+
+
 def _create_sandbox_root(sandbox_name: str) -> tuple[str, str]:
     job_id = make_job_id(sandbox_name)
     root_name = f"edini_sandbox_{job_id}"

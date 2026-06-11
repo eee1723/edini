@@ -183,6 +183,26 @@ class MockNode:
     def name(self) -> str:
         return self._name
 
+    def setName(self, name: str, unique_name: bool = False) -> None:
+        old_paths = {node: node._path for node in self.allSubChildren()}
+        self._name = name
+
+        def refresh_path(node: MockNode) -> None:
+            parent_path = node._parent.path() if node._parent else ""
+            if parent_path and parent_path != "/":
+                node._path = f"{parent_path}/{node._name}"
+            else:
+                node._path = f"/{node._name}"
+            for child in node._children:
+                refresh_path(child)
+
+        refresh_path(self)
+        if MockNode._hou_ref is not None:
+            for old_path in old_paths.values():
+                MockNode._hou_ref._nodes.pop(old_path, None)
+            for node in self.allSubChildren():
+                MockNode._hou_ref._nodes[node._path] = node
+
     def type(self) -> MockNodeType:
         return self._type
 

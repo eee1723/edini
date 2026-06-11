@@ -63,6 +63,41 @@ class TestCollectDiagnostics(unittest.TestCase):
         self.assertNotIn("value", r["parameters"][0])
 
 
+class TestVerifyAsset(unittest.TestCase):
+    def _make_geo_node(self, name="verify_geo", points=12, prims=6):
+        obj = _mock_hou.node("/obj")
+        node = obj.createNode("null", name)
+        _mock_hou.add_node(node)
+        node._geometry = _mock_hou.MockGeometry(
+            point_count=points,
+            prim_count=prims,
+            vertex_count=24,
+            bounds=(0.0, 1.0, 0.0, 2.0, 0.0, 0.5),
+        )
+        return node
+
+    def test_verify_passes_non_empty_geometry(self):
+        node = self._make_geo_node()
+
+        r = harness.verify_asset(
+            node.path(),
+            {"min_points": 1, "min_prims": 1, "bounds_nonzero": True},
+        )
+
+        self.assertTrue(r["success"])
+        self.assertTrue(all(check["passed"] for check in r["checks"]))
+
+    def test_verify_fails_min_points(self):
+        node = self._make_geo_node(name="verify_empty_geo", points=0, prims=0)
+
+        r = harness.verify_asset(node.path(), {"min_points": 1, "min_prims": 1})
+
+        self.assertFalse(r["success"])
+        failed_names = [check["name"] for check in r["checks"] if not check["passed"]]
+        self.assertIn("min_points", failed_names)
+        self.assertIn("min_prims", failed_names)
+
+
 class TestRunPythonSandbox(unittest.TestCase):
     def test_success_creates_sandbox_and_returns_job_shape(self):
         code = """
@@ -201,6 +236,27 @@ raise RuntimeError("cleanup")
         self.assertFalse(r["deleted"])
         self.assertTrue(r["preserved"])
         self.assertIn("cleanup failure", r["delete_error"])
+
+
+class TestSandboxLifecycle(unittest.TestCase):
+    def test_discard_sandbox_deletes_root(self):
+        r = harness.run_python_sandbox("result['ok'] = True", sandbox_name="discard_case")
+        root_path = r["root_path"]
+
+        d = harness.discard_sandbox(root_path)
+
+        self.assertTrue(d["success"])
+        self.assertIsNone(_mock_hou.node(root_path))
+
+    def test_commit_sandbox_renames_root(self):
+        r = harness.run_python_sandbox("result['ok'] = True", sandbox_name="commit_case")
+        root_path = r["root_path"]
+
+        c = harness.commit_sandbox(root_path, "committed_asset", replace_existing=False)
+
+        self.assertTrue(c["success"])
+        self.assertEqual(c["final_path"], "/obj/committed_asset")
+        self.assertIsNotNone(_mock_hou.node("/obj/committed_asset"))
 
 
 if __name__ == "__main__":
