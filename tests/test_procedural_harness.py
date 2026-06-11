@@ -12,6 +12,11 @@ class RaisingParm(MockParm):
         raise RuntimeError("bad expression")
 
 
+class RaisingGeometry:
+    def intrinsicValue(self, name):
+        raise RuntimeError(f"geometry intrinsic failed: {name}")
+
+
 class TestHarnessImports(unittest.TestCase):
     def test_harness_module_imports(self):
         self.assertTrue(hasattr(harness, "make_job_id"))
@@ -96,6 +101,18 @@ class TestVerifyAsset(unittest.TestCase):
         failed_names = [check["name"] for check in r["checks"] if not check["passed"]]
         self.assertIn("min_points", failed_names)
         self.assertIn("min_prims", failed_names)
+
+    def test_verify_returns_failure_when_geometry_stats_raise(self):
+        node = self._make_geo_node(name="verify_raising_geo")
+        node._geometry = RaisingGeometry()
+
+        r = harness.verify_asset(node.path(), {"min_points": 1})
+
+        self.assertFalse(r["success"])
+        self.assertIn("geometry intrinsic failed", r["error"])
+        self.assertIn("RuntimeError", r["traceback"])
+        failed_names = [check["name"] for check in r["checks"] if not check["passed"]]
+        self.assertIn("geometry_stats", failed_names)
 
 
 class TestRunPythonSandbox(unittest.TestCase):
@@ -257,6 +274,49 @@ class TestSandboxLifecycle(unittest.TestCase):
         self.assertTrue(c["success"])
         self.assertEqual(c["final_path"], "/obj/committed_asset")
         self.assertIsNotNone(_mock_hou.node("/obj/committed_asset"))
+
+    def test_commit_sandbox_reports_committed_when_display_flag_fails_after_rename(self):
+        r = harness.run_python_sandbox("result['ok'] = True", sandbox_name="display_fail_case")
+        root_path = r["root_path"]
+        node = _mock_hou.node(root_path)
+
+        def broken_display_flag(value):
+            raise RuntimeError("display flag failed")
+
+        node.setDisplayFlag = broken_display_flag
+
+        c = harness.commit_sandbox(root_path, "display_failed_asset", replace_existing=False)
+
+        self.assertFalse(c["success"])
+        self.assertTrue(c["committed"])
+        self.assertEqual(c["final_path"], "/obj/display_failed_asset")
+        self.assertIn("display flag failed", c["display_error"])
+        self.assertIsNone(_mock_hou.node(root_path))
+        self.assertIsNotNone(_mock_hou.node("/obj/display_failed_asset"))
+
+    def test_commit_sandbox_rejects_name_with_separator_without_mutating_sandbox(self):
+        r = harness.run_python_sandbox("result['ok'] = True", sandbox_name="bad_name_case")
+        root_path = r["root_path"]
+
+        c = harness.commit_sandbox(root_path, "foo/bar", replace_existing=False)
+
+        self.assertFalse(c["success"])
+        self.assertFalse(c["committed"])
+        self.assertIn("invalid", c["error"].lower())
+        self.assertIsNotNone(_mock_hou.node(root_path))
+        self.assertIsNone(_mock_hou.node("/obj/foo/bar"))
+
+    def test_commit_sandbox_rejects_whitespace_name_without_mutating_sandbox(self):
+        r = harness.run_python_sandbox("result['ok'] = True", sandbox_name="blank_name_case")
+        root_path = r["root_path"]
+
+        c = harness.commit_sandbox(root_path, "   ", replace_existing=False)
+
+        self.assertFalse(c["success"])
+        self.assertFalse(c["committed"])
+        self.assertIn("invalid", c["error"].lower())
+        self.assertIsNotNone(_mock_hou.node(root_path))
+        self.assertIsNone(_mock_hou.node("/obj/   "))
 
 
 if __name__ == "__main__":

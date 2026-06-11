@@ -159,7 +159,20 @@ def _check(name: str, passed: bool, actual, expected=None) -> dict[str, Any]:
 
 def verify_asset(node_path: str, expected: dict[str, Any] | None = None) -> dict[str, Any]:
     expected = expected or {}
-    stats = geometry_stats(node_path)
+    try:
+        stats = geometry_stats(node_path)
+    except Exception as e:
+        return {
+            "success": False,
+            "node_path": node_path,
+            "geometry": None,
+            "checks": [
+                _check("geometry_stats", False, str(e), "geometry stats")
+            ],
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+        }
+
     checks: list[dict[str, Any]] = [
         _check("geometry_exists", stats is not None, stats is not None, True)
     ]
@@ -255,6 +268,16 @@ def commit_sandbox(
     final_name: str,
     replace_existing: bool = False,
 ) -> dict[str, Any]:
+    stripped_name = final_name.strip()
+    if not stripped_name or "/" in final_name or "\\" in final_name or stripped_name == "..":
+        return {
+            "success": False,
+            "sandbox_root_path": sandbox_root_path,
+            "final_path": "",
+            "committed": False,
+            "error": f"Invalid final node name: {final_name!r}",
+        }
+
     node = hou.node(sandbox_root_path)
     final_path = f"/obj/{final_name}"
     if node is None:
@@ -290,13 +313,6 @@ def commit_sandbox(
 
     try:
         node.setName(final_name, unique_name=False)
-        node.setDisplayFlag(True)
-        return {
-            "success": True,
-            "sandbox_root_path": sandbox_root_path,
-            "final_path": final_path,
-            "committed": True,
-        }
     except Exception as e:
         return {
             "success": False,
@@ -306,6 +322,26 @@ def commit_sandbox(
             "error": str(e),
             "traceback": traceback.format_exc(),
         }
+    actual_final_path = node.path()
+
+    try:
+        node.setDisplayFlag(True)
+    except Exception as e:
+        return {
+            "success": False,
+            "sandbox_root_path": sandbox_root_path,
+            "final_path": actual_final_path,
+            "committed": True,
+            "display_error": str(e),
+            "display_traceback": traceback.format_exc(),
+        }
+
+    return {
+        "success": True,
+        "sandbox_root_path": sandbox_root_path,
+        "final_path": actual_final_path,
+        "committed": True,
+    }
 
 
 def _create_sandbox_root(sandbox_name: str) -> tuple[str, str]:
