@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import datetime as _dt
 import io
+import math
 import re
 import sys
 import traceback
+import uuid
 from typing import Any
 
 import hou
@@ -17,7 +19,59 @@ EXECUTION_MODE_LIVE = "live_sandbox"
 def make_job_id(label: str = "job") -> str:
     safe = re.sub(r"[^A-Za-z0-9_]+", "_", label).strip("_").lower() or "job"
     stamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    return f"{stamp}_{safe}"
+    return f"{stamp}_{safe}_{uuid.uuid4().hex[:8]}"
+
+
+def to_jsonable(value: Any, _seen: set[int] | None = None) -> Any:
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else str(value)
+
+    if _seen is None:
+        _seen = set()
+    value_id = id(value)
+    if value_id in _seen:
+        return f"<recursive {type(value).__name__}>"
+
+    if isinstance(value, dict):
+        _seen.add(value_id)
+        try:
+            result = {}
+            for key, item in value.items():
+                json_key = to_jsonable(key, _seen)
+                if not isinstance(json_key, (str, int, float, bool)) and json_key is not None:
+                    json_key = repr(json_key)
+                result[json_key] = to_jsonable(item, _seen)
+            return result
+        finally:
+            _seen.remove(value_id)
+
+    if isinstance(value, (list, tuple)):
+        _seen.add(value_id)
+        try:
+            return [to_jsonable(item, _seen) for item in value]
+        finally:
+            _seen.remove(value_id)
+
+    if isinstance(value, set):
+        _seen.add(value_id)
+        try:
+            return [to_jsonable(item, _seen) for item in sorted(value, key=repr)]
+        finally:
+            _seen.remove(value_id)
+
+    path = getattr(value, "path", None)
+    if callable(path):
+        try:
+            return to_jsonable(path(), _seen)
+        except Exception:
+            pass
+
+    try:
+        return repr(value)
+    except Exception:
+        return f"<unrepresentable {type(value).__name__}>"
 
 
 def _vector_to_list(value) -> list[float]:
@@ -87,7 +141,7 @@ def _parm_record(parm) -> dict[str, Any]:
         record["label_error"] = label_error
 
     try:
-        record["value"] = parm.eval()
+        record["value"] = to_jsonable(parm.eval())
     except Exception as exc:
         record["error"] = str(exc)
 
@@ -401,7 +455,7 @@ def run_python_sandbox(
             "root_path": root_path,
             "output": _safe_getvalue(stdout_capture) or "(no output)",
             "stderr": _safe_getvalue(stderr_capture),
-            "result": result_payload,
+            "result": to_jsonable(result_payload),
             "diagnostics": _safe_collect_diagnostics(
                 result_payload.get("output_node", root_path),
                 include_geometry=True,

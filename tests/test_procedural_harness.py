@@ -1,4 +1,5 @@
 """Tests for Edini procedural harness helpers."""
+import json
 import unittest
 
 from tests.test_node_utils import MockParm, _mock_hou
@@ -20,6 +21,27 @@ class RaisingGeometry:
 class TestHarnessImports(unittest.TestCase):
     def test_harness_module_imports(self):
         self.assertTrue(hasattr(harness, "make_job_id"))
+
+
+class TestMakeJobId(unittest.TestCase):
+    def test_repeated_same_label_ids_are_unique_and_keep_sanitized_label(self):
+        original_datetime = harness._dt.datetime
+
+        class FixedDatetime:
+            @classmethod
+            def now(cls):
+                return original_datetime(2026, 6, 11, 12, 30, 5)
+
+        harness._dt.datetime = FixedDatetime
+        try:
+            first = harness.make_job_id("Fancy Label!")
+            second = harness.make_job_id("Fancy Label!")
+        finally:
+            harness._dt.datetime = original_datetime
+
+        self.assertNotEqual(first, second)
+        self.assertIn("fancy_label", first)
+        self.assertIn("fancy_label", second)
 
 
 class TestCollectDiagnostics(unittest.TestCase):
@@ -66,6 +88,17 @@ class TestCollectDiagnostics(unittest.TestCase):
         self.assertEqual(r["parameters"][0]["label"], "Bad Expression")
         self.assertIn("bad expression", r["parameters"][0]["error"])
         self.assertNotIn("value", r["parameters"][0])
+
+    def test_parameter_values_are_json_serializable(self):
+        obj = _mock_hou.node("/obj")
+        node = obj.createNode("box", "object_parm_box")
+        _mock_hou.add_node(node)
+        node._parms["target"] = MockParm("target", node, label="Target Node")
+
+        r = harness.collect_diagnostics(node.path(), include_parms=True)
+
+        json.dumps(r)
+        self.assertEqual(r["parameters"][0]["value"], node.path())
 
 
 class TestVerifyAsset(unittest.TestCase):
@@ -132,6 +165,21 @@ result["components"] = {"rungs": 8}
         self.assertTrue(r["root_path"].startswith("/obj/edini_sandbox_"))
         self.assertEqual(r["result"]["components"]["rungs"], 8)
         self.assertIsNotNone(_mock_hou.node(r["root_path"]))
+
+    def test_result_payload_is_json_serializable_when_user_stores_node(self):
+        code = """
+root = hou.node(sandbox_root_path)
+child = root.createNode("null", "OUT")
+hou.add_node(child)
+result["output_node"] = child.path()
+result["node"] = child
+"""
+
+        r = harness.run_python_sandbox(code, sandbox_name="json_payload", commit_on_success=False)
+
+        json.dumps(r)
+        self.assertTrue(r["success"])
+        self.assertEqual(r["result"]["node"], r["result"]["output_node"])
 
     def test_failure_preserves_sandbox_and_returns_traceback(self):
         r = harness.run_python_sandbox(
