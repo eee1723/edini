@@ -192,12 +192,32 @@ def _safe_collect_diagnostics(
     except Exception as e:
         return {
             "success": False,
-            "node_path": node_path,
+            "node_path": to_jsonable(node_path),
             "error": f"Diagnostics failed: {e}",
             "traceback": traceback.format_exc(),
             "include_geometry": bool(include_geometry),
             "include_parms": bool(include_parms),
         }
+
+
+def _node_path_for_diagnostics(value: Any, fallback: str) -> str:
+    if isinstance(value, str):
+        return value
+
+    path = getattr(value, "path", None)
+    if callable(path):
+        try:
+            path_value = path()
+        except Exception:
+            pass
+        else:
+            if isinstance(path_value, str):
+                return path_value
+
+    jsonable = to_jsonable(value)
+    if isinstance(jsonable, str):
+        return jsonable
+    return fallback
 
 
 def _check(name: str, passed: bool, actual, expected=None) -> dict[str, Any]:
@@ -457,7 +477,7 @@ def run_python_sandbox(
             "stderr": _safe_getvalue(stderr_capture),
             "result": to_jsonable(result_payload),
             "diagnostics": _safe_collect_diagnostics(
-                result_payload.get("output_node", root_path),
+                _node_path_for_diagnostics(result_payload.get("output_node", root_path), root_path),
                 include_geometry=True,
                 include_parms=False,
             ),

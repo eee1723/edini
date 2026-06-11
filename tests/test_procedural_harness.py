@@ -181,6 +181,24 @@ result["node"] = child
         self.assertTrue(r["success"])
         self.assertEqual(r["result"]["node"], r["result"]["output_node"])
 
+    def test_output_node_object_is_json_serializable_and_drives_diagnostics(self):
+        code = """
+root = hou.node(sandbox_root_path)
+child = root.createNode("null", "OUT")
+hou.add_node(child)
+child._geometry = hou.MockGeometry(point_count=3, prim_count=1, vertex_count=3)
+result["output_node"] = child
+"""
+
+        r = harness.run_python_sandbox(code, sandbox_name="json_output_node", commit_on_success=False)
+
+        json.dumps(r)
+        self.assertTrue(r["success"])
+        self.assertEqual(r["result"]["output_node"], f"{r['root_path']}/OUT")
+        self.assertTrue(r["diagnostics"]["success"])
+        self.assertEqual(r["diagnostics"]["node_path"], f"{r['root_path']}/OUT")
+        self.assertEqual(r["diagnostics"]["geometry"]["point_count"], 3)
+
     def test_failure_preserves_sandbox_and_returns_traceback(self):
         r = harness.run_python_sandbox(
             "print('before failure')\nraise RuntimeError('sandbox boom')",
