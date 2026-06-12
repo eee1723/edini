@@ -49,16 +49,45 @@ This reduces VEX complexity per snippet (higher success rate) and makes debuggin
 
 ## Python SOP Guidelines
 
-Prefer creating a real Python SOP node over `houdini_run_python` so the result persists:
+When using `houdini_run_python_sandbox`, the sandbox creates a Python SOP node (`edini_generate`) for you and injects your code as the SOP's `python` parameter. Your code runs inside a Python SOP cooking context — use `hou.pwd()` and `node.geometry()` directly:
 
 ```python
-# Via houdini_run_python_sandbox - creates a persistent Python SOP in a sandbox
-geo_node = hou.node("/obj").createNode("geo", "procedural_result")
-py = geo_node.createNode("python", "generate")
-py.parm("python").set("node = hou.pwd()\ngeo = node.geometry()\n# generation code here")
+# Inside houdini_run_python_sandbox — this IS a Python SOP context
+node = hou.pwd()
+geo = node.geometry()
+geo.clear()
+
+# Add attributes BEFORE creating geometry
+geo.addAttrib(hou.attribType.Point, "height", 0.0)
+geo.addAttrib(hou.attribType.Prim, "group_id", 0)
+
+# Build geometry
+pt = geo.createPoint()
+pt.setPosition((0, 0, 0))
+pt.setAttribValue("height", 1.5)
+
+poly = geo.createPolygon()
+poly.addVertex(pt)
+poly.setAttribValue("group_id", 0)
 ```
 
-Use Python SOP for: recursion (L-systems, trees), external data, complex loops, CSG, mesh operations.
+For node network generation inside a sandbox, create child nodes under `hou.pwd().parent()`:
+
+```python
+node = hou.pwd()
+container = node.parent()  # the sandbox geo container
+box = container.createNode("box", "my_box")
+box.parm("size").set((1, 1, 1))
+```
+
+Use Python SOP for: recursive geometry (L-systems, trees), external data parsing, complex loops, CSG operations, mesh manipulation.
+
+For raw `houdini_run_python` (non-sandbox, expert use), create nodes at `/obj` level:
+```python
+geo_node = hou.node("/obj").createNode("geo", "procedural_result")
+py = geo_node.createNode("python", "generate")
+py.parm("python").set("node = hou.pwd()\ngeo = node.geometry()\n# code")
+```
 
 ## Harness Rules
 
@@ -72,7 +101,7 @@ Use Python SOP for: recursion (L-systems, trees), external data, complex loops, 
 1. **Create a recipe first** - State asset type, backend, parameters, and expected structural checks.
 2. **Choose backend** - `python_sop` for algorithmic mesh generation, `vex_wrangle` for per-element math, `node_network` for native SOP composition.
 3. **Use the harness first** - For procedural assets, use `houdini_run_python_sandbox` or future harness tools instead of raw `houdini_run_python`.
-4. **Preserve failed nodes** - Do not delete a failed procedural node before calling `houdini_collect_diagnostics`.
+4. **Trust sandbox diagnostics** - The sandbox result includes `diagnostics` and `structural_checks` (has_geometry, point_count, bounds_nonzero). No need for separate `houdini_inspect_geo` or `houdini_check_errors` calls.
 5. **Diagnose before switching strategy** - For Python SOP cook errors, VEX wrangle failures, or node-network failures, inspect node errors, warnings, parameters, traceback or generated code, and geometry state before falling back to another backend.
 6. **Verify structurally** - Use `houdini_verify_asset` and/or `houdini_inspect_geo` to check point counts, primitive counts, bounds, and expected components.
 7. **Capture safely** - Use `houdini_capture_viewport_safe` for visual verification. Do not explore Qt widgets or unsupported viewport internals during normal modeling.
