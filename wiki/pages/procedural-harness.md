@@ -15,7 +15,7 @@ Procedural Harness 是 Edini 给 Houdini 程序化建模加上的一层执行护
 | Diagnostics | `houdini_collect_diagnostics` 收集节点错误、警告、参数、几何统计、bounds | 失败后应先看到诊断，而不是马上删除节点 |
 | Structural verify | `houdini_verify_asset` 检查 `min_points`、`min_prims`、`bounds_nonzero`、node errors | commit 前应有结构证据 |
 | Lifecycle | `houdini_commit_sandbox` / `houdini_discard_sandbox` 管理沙盒去留 | 通过后改名提交，废弃时显式删除 |
-| Safe capture | `houdini_capture_viewport_safe` 只走支持的 flipbook 路径 | 截图失败时应干净报告，不探索 Qt 私有接口 |
+| Safe capture | `houdini_capture_review` 支持多视角接触表截取 | 截图失败时应干净报告，不探索 Qt 私有接口 |
 | Skill guidance | `procedural-modeling` 明确要求 harness-first | 生成程序化资产时不应优先 raw run |
 | Pi tools | Pi extension 暴露 harness tool schema | Agent 可直接选择 sandbox/verify/commit/diagnostics 工具 |
 
@@ -25,7 +25,7 @@ Procedural Harness 是 Edini 给 Houdini 程序化建模加上的一层执行护
 2. 观察它是否先调用 `houdini_run_python_sandbox`，并返回 `job_id`、`execution_mode: live_sandbox`、`root_path`。
 3. 如果生成失败，观察是否保留失败沙盒，并调用 `houdini_collect_diagnostics` 读取错误、警告、traceback 或几何状态。
 4. 如果生成成功，观察是否调用 `houdini_verify_asset`，至少检查非空几何和非零 bounds。
-5. 结构检查通过后，再观察是否调用 `houdini_capture_viewport_safe` 做视觉确认。
+5. 结构检查通过后，再观察是否调用 `houdini_capture_review` 做视觉确认。
 6. 用户确认或结果足够明确后，再调用 `houdini_commit_sandbox` 把沙盒改成最终资产名。
 7. 不需要的沙盒应通过 `houdini_discard_sandbox` 清理。
 

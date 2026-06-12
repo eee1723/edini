@@ -145,64 +145,6 @@ export const houdiniDiscardSandbox = {
   },
 };
 
-export const houdiniCaptureViewportSafe = {
-  name: "houdini_capture_viewport_safe",
-  label: "Capture Houdini Viewport Safely",
-  description:
-    "Capture a Houdini viewport image using the procedural harness safe capture path.",
-  promptSnippet: "Safely capture a Houdini viewport screenshot to a file",
-  promptGuidelines: [
-    "Use houdini_capture_viewport_safe for visual verification after creating or changing procedural assets.",
-    "Always pass target_path to frame and focus the viewport on the generated asset — this prevents other scene objects from cluttering the screenshot.",
-    "Use isolate_target=true to hide other /obj geo nodes while capturing.",
-    "Use shading_mode='smooth' for a clear shaded view instead of wireframe.",
-    "If safe capture fails, report the failure and diagnostics instead of trying Qt widget or viewport internals through Python.",
-  ],
-  parameters: Type.Object({
-    filepath: Type.String({
-      description: "Output file path for the screenshot, usually a PNG file",
-    }),
-    frame: Type.Optional(
-      Type.Number({ description: "Optional frame to capture before saving the screenshot" })
-    ),
-    home_viewport: Type.Optional(
-      Type.Boolean({ description: "Home the viewport before capturing" })
-    ),
-    target_path: Type.Optional(
-      Type.String({ description: "Node path to frame and set as current before capture. Ensures the generated asset fills the viewport." })
-    ),
-    isolate_target: Type.Optional(
-      Type.Boolean({ description: "Hide other /obj geo nodes while capturing to avoid scene clutter. Requires target_path." })
-    ),
-    shading_mode: Type.Optional(
-      Type.String({ description: "Force viewport shading mode: 'smooth', 'smooth_wire', 'flat', 'wire', or 'current' (default). 'smooth' is best for reviewing generated geometry." })
-    ),
-  }),
-  async execute(
-    _toolCallId: string,
-    params: {
-      filepath: string;
-      frame?: number;
-      home_viewport?: boolean;
-      target_path?: string;
-      isolate_target?: boolean;
-      shading_mode?: string;
-    }
-  ) {
-    return forwardTool("houdini_capture_viewport_safe", params);
-  },
-};
-
-export const harnessTools = [
-  houdiniCollectDiagnostics,
-  houdiniRunPythonSandbox,
-  houdiniVerifyAsset,
-  houdiniCommitSandbox,
-  houdiniDiscardSandbox,
-  houdiniCaptureViewportSafe,
-  houdiniCaptureReview,
-];
-
 export const houdiniCaptureReview = {
   name: "houdini_capture_review",
   label: "Capture Procedural Review",
@@ -217,7 +159,7 @@ export const houdiniCaptureReview = {
     "For animated/growth assets: use frames=[1,10,20,30] to get a time contact sheet.",
     "Always pass target_path — it automatically isolates the target and frames each view.",
     "The output is a single concatenated PNG — call describe_image once on it.",
-    "If you only need a single view, use houdini_capture_viewport_safe instead.",
+    "If you only need a single view, use views=['perspective'].",
   ],
   parameters: Type.Object({
     filepath: Type.String({
@@ -261,3 +203,12 @@ export const houdiniCaptureReview = {
     return forwardTool("houdini_capture_review", params);
   },
 };
+
+export const harnessTools = [
+  houdiniCollectDiagnostics,
+  houdiniRunPythonSandbox,
+  houdiniVerifyAsset,
+  houdiniCommitSandbox,
+  houdiniDiscardSandbox,
+  houdiniCaptureReview,
+];

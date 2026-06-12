@@ -93,7 +93,7 @@ py.parm("python").set("node = hou.pwd()\ngeo = node.geometry()\n# code")
 
 - Do not use raw `houdini_run_python` for initial procedural asset generation when `houdini_run_python_sandbox` is available.
 - Do not delete a failed procedural node before `houdini_collect_diagnostics`.
-- Do not explore Qt widgets, main windows, viewport internals, or unsupported HOM APIs to capture images. Use `houdini_capture_viewport_safe` and report clean failure if capture is unavailable.
+- Do not explore Qt widgets, main windows, viewport internals, or unsupported HOM APIs to capture images. Use `houdini_capture_review` and report clean failure if capture is unavailable.
 - If a generated Python SOP, VEX wrangle, or node-network attempt fails, diagnose that attempt first. Switching backend is allowed only after diagnostics identify why the current path is unsuitable.
 
 ## Workflow
@@ -104,23 +104,21 @@ py.parm("python").set("node = hou.pwd()\ngeo = node.geometry()\n# code")
 4. **Trust sandbox diagnostics** - The sandbox result includes `diagnostics` and `structural_checks` (has_geometry, point_count, bounds_nonzero). No need for separate `houdini_inspect_geo` or `houdini_check_errors` calls.
 5. **Diagnose before switching strategy** - For Python SOP cook errors, VEX wrangle failures, or node-network failures, inspect node errors, warnings, parameters, traceback or generated code, and geometry state before falling back to another backend.
 6. **Verify structurally** - Use `houdini_verify_asset` and/or `houdini_inspect_geo` to check point counts, primitive counts, bounds, and expected components.
-7. **Capture safely** - Use `houdini_capture_viewport_safe` for visual verification. Do not explore Qt widgets or unsupported viewport internals during normal modeling.
+7. **Capture safely** - Use `houdini_capture_review` for visual verification. Do not explore Qt widgets or unsupported viewport internals during normal modeling.
 8. **Commit only after verification** - Use `houdini_commit_sandbox` only after structural checks pass. Use `houdini_discard_sandbox` only when the sandbox is no longer useful.
 
 ### Capture (Screenshots)
 
-**For single-view quick verification**, use `houdini_capture_viewport_safe`:
+**Use `houdini_capture_review`** for all visual verification — single-view, multi-view, or time-lapse:
 ```
-houdini_capture_viewport_safe(
+# Single perspective view
+houdini_capture_review(
   filepath="screenshots/result.png",
   target_path="/obj/my_asset/OUT",
-  isolate_target=true,
+  views=["perspective"],
   shading_mode="smooth"
 )
-```
 
-**For thorough review, use `houdini_capture_review`** — captures multiple views and/or frames into a single contact sheet:
-```
 # 4-view quad (perspective + three orthographic)
 houdini_capture_review(
   filepath="screenshots/review.png",
@@ -139,8 +137,8 @@ houdini_capture_review(
 ```
 
 - **Always pass `target_path`** — frames and isolates the generated asset.
-- **Only use `houdini_capture_viewport_safe` or `houdini_capture_review`** — `houdini_capture_network` is unsupported in Houdini 21.
-- If safe capture returns an error, do not retry or explore alternative capture methods. Trust geometry diagnostics instead.
+- **Only use `houdini_capture_review`** — it handles single views, multi-view quad, and frame-range contact sheets in one tool. `houdini_capture_viewport` and `houdini_capture_viewport_safe` have been removed.
+- If capture returns an error, do not retry or explore alternative capture methods. Trust geometry diagnostics instead.
 - `describe_image` is a best-effort visual confirmation. If it returns ambiguous results, rely on geometry stats as authoritative.
 - Visual verification via capture is supplementary; structural diagnostics are primary.
 

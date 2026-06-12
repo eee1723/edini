@@ -158,7 +158,7 @@ Pi 搜索：`~/.pi/agent/AGENTS.md` → 父目录 `AGENTS.md`/`CLAUDE.md` → `.
 
 The user has attached N reference image(s). You MUST:
 1. Use **describe_image** on each reference image
-2. After making changes, capture the viewport with **houdini_capture_viewport**
+2. After making changes, capture the viewport with **houdini_capture_review**
 3. Compare the captured result against the reference image description
 4. Only report completion after confirming the result matches the reference
 5. If they don't match, adjust parameters and re-verify — do NOT skip
@@ -172,7 +172,7 @@ The user has attached N reference image(s). You MUST:
 
 用户附带了 N 张参考图。你必须：
 1. 对每张参考图使用 describe_image 理解用户期望
-2. 修改完成后，用 houdini_capture_viewport 截取视口
+2. 修改完成后，用 houdini_capture_review 截取视口
 3. 将截图描述与参考图描述进行对比
 4. 只有确认结果匹配参考后才能报告完成
 5. 如不匹配，调整参数并重新验证 — 不得跳过
@@ -311,7 +311,7 @@ If a tool returns {"success": false, "error": "..."}:
 
 **Verification workflow:**
 1. Make the change
-2. houdini_capture_viewport → save PNG
+2. houdini_capture_review → save PNG (use views=['perspective'] for single view, or ['perspective','top','front','right'] for quad-view)
 3. describe_image on the file → get description
 4. Compare to expectations or reference
 5. If mismatched → adjust and repeat 2-4
@@ -344,7 +344,7 @@ If a tool returns {"success": false, "error": "..."}:
 
 **验证工作流：**
 1. 做出更改
-2. houdini_capture_viewport → 保存 PNG
+2. houdini_capture_review → 保存 PNG（单视角用 views=['perspective']，四视图用 ['perspective','top','front','right']）
 3. describe_image 描述截图
 4. 与预期或参考对比
 5. 不匹配 → 调整并重复 2-4
@@ -395,7 +395,7 @@ If a tool returns {"success": false, "error": "..."}:
 | 9 | `houdini_get_selection` ✨ | — | **获取用户选中的节点** |
 | 10 | `houdini_check_errors` ✨ | node_path? | **扫描节点错误/警告** |
 | 11 | `houdini_set_display_flag` ✨ | node_path | **设置视口显示节点** |
-| 12 | `houdini_capture_viewport` | filepath | 截取视口为 PNG |
+| 12 | `houdini_capture_review` | filepath, target_path, views, frames | 截取多视角接触表 |
 | 13 | `houdini_capture_network` | filepath, parent_path? | 截取节点网络 |
 
 ### 查询工具（4 个）

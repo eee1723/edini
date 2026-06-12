@@ -16,7 +16,7 @@ def test_harness_tools_file_contains_all_tool_names():
         "houdini_verify_asset",
         "houdini_commit_sandbox",
         "houdini_discard_sandbox",
-        "houdini_capture_viewport_safe",
+        "houdini_capture_review",
     ]:
         assert name in text
 
@@ -39,9 +39,9 @@ def test_raw_python_guidance_mentions_sandbox():
     assert "houdini_run_python_sandbox" in text
 
 
-def test_viewport_guidance_mentions_safe_capture():
-    text = read("pi-extensions/edini-tools/tools/scene.ts")
-    assert "houdini_capture_viewport_safe" in text
+def test_review_guidance_mentions_views():
+    text = read("pi-extensions/edini-tools/tools/harness.ts")
+    assert "views=['perspective','top','front','right']" in text
 
 
 def test_procedural_modeling_skill_requires_harness():

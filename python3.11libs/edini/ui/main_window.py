@@ -390,7 +390,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         except (json.JSONDecodeError, TypeError):
             data = {}
 
-        if tool_name == "houdini_capture_viewport" and data.get("success"):
+        if tool_name == "houdini_capture_network" and data.get("success"):
             path = data.get("path", "")
             w = data.get("width", 0)
             h = data.get("height", 0)
@@ -398,13 +398,11 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
                 self._last_capture_path = path
                 self.agent_panel.add_inline_capture_image(path, w, h)
 
-        elif tool_name == "houdini_capture_network" and data.get("success"):
+        elif tool_name == "houdini_capture_review" and data.get("success"):
             path = data.get("path", "")
-            w = data.get("width", 0)
-            h = data.get("height", 0)
             if path:
                 self._last_capture_path = path
-                self.agent_panel.add_inline_capture_image(path, w, h)
+                self.agent_panel.add_inline_capture_image(path, 0, 0)
 
         elif tool_name == "describe_image":
             # Render as unified VisionDescriptionBubble (same pipeline as user-uploaded images)

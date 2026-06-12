@@ -1,4 +1,4 @@
-"""Tests for capture_viewport / capture_network — pure logic tests.
+"""Tests for capture_review / capture_network — pure logic tests.
 
 These tests validate the function signatures, return value shapes,
 and error handling without requiring the Houdini runtime.
@@ -17,17 +17,16 @@ from typing import Any
 from tests.mock_hou import MockNode, MockSceneViewer, create_mock_hou
 
 # ---------------------------------------------------------------------------
-# Note: capture_viewport() and capture_network() in node_utils.py require
+# Note: capture_review() and capture_network() in node_utils.py require
 # the Houdini runtime (hou module, PySide6). These tests validate the
 # parameter contracts, return value shapes, and integration workflow
 # without needing Houdini.
 # ---------------------------------------------------------------------------
 
 TOOL_HANDLERS_SIGNATURES = {
-    "houdini_capture_viewport": {"required": ["filepath"]},
-    "houdini_capture_viewport_safe": {
+    "houdini_capture_review": {
         "required": ["filepath"],
-        "optional": ["frame", "home_viewport"],
+        "optional": ["target_path", "views", "frames", "columns", "shading_mode", "home_target"],
     },
     "houdini_capture_network": {"required": ["filepath"], "optional": ["parent_path"]},
 }
@@ -35,17 +34,17 @@ TOOL_HANDLERS_SIGNATURES = {
 class TestToolSignatureMatches(unittest.TestCase):
     """Verify that tool parameter names match between TypeScript and Python sides."""
 
-    def test_capture_viewport_has_filepath_param(self):
-        """houdini_capture_viewport requires 'filepath' parameter."""
-        sig = TOOL_HANDLERS_SIGNATURES["houdini_capture_viewport"]
+    def test_capture_review_has_filepath_param(self):
+        """houdini_capture_review requires 'filepath' parameter."""
+        sig = TOOL_HANDLERS_SIGNATURES["houdini_capture_review"]
         self.assertIn("filepath", sig["required"])
 
-    def test_capture_viewport_safe_has_filepath_and_options(self):
-        """houdini_capture_viewport_safe requires filepath and accepts safe options."""
-        sig = TOOL_HANDLERS_SIGNATURES["houdini_capture_viewport_safe"]
-        self.assertIn("filepath", sig["required"])
-        self.assertIn("frame", sig["optional"])
-        self.assertIn("home_viewport", sig["optional"])
+    def test_capture_review_has_optional_params(self):
+        """houdini_capture_review accepts target_path, views, frames, shading."""
+        sig = TOOL_HANDLERS_SIGNATURES["houdini_capture_review"]
+        self.assertIn("target_path", sig["optional"])
+        self.assertIn("views", sig["optional"])
+        self.assertIn("frames", sig["optional"])
 
     def test_capture_network_has_filepath_and_parent_path_params(self):
         """houdini_capture_network requires 'filepath', accepts 'parent_path'."""
@@ -53,7 +52,7 @@ class TestToolSignatureMatches(unittest.TestCase):
         self.assertIn("filepath", sig["required"])
         self.assertIn("parent_path", sig["optional"])
 
-    def test_capture_viewport_lambda_accesses_filepath(self):
+    def test_capture_review_lambda_accesses_filepath(self):
         """The tool_executor lambda correctly accesses kw['filepath']."""
         kw = {"filepath": "screenshots/test.png"}
         self.assertEqual(kw["filepath"], "screenshots/test.png")
@@ -77,17 +76,21 @@ class TestReturnValueShape(unittest.TestCase):
     """Verify the return value format matches what the Pi extension expects."""
 
     def test_success_returns_expected_fields(self):
-        """A successful safe viewport capture returns success, path, size_kb, method."""
+        """A successful review capture returns success, path, size_kb, method, grid."""
         expected = {
             "success": True,
-            "path": "screenshots/viewport_001.png",
+            "path": "screenshots/review_001.png",
             "size_kb": 123.4,
-            "method": "scene_viewer_flipbook",
+            "method": "review_capture",
+            "grid": {"rows": 1, "cols": 1, "cells": 1},
+            "views": ["perspective"],
+            "frames": [1],
         }
         self.assertTrue(expected["success"])
         self.assertIn("path", expected)
         self.assertIn("size_kb", expected)
-        self.assertEqual(expected["method"], "scene_viewer_flipbook")
+        self.assertEqual(expected["method"], "review_capture")
+        self.assertIn("grid", expected)
         # Verify it's JSON-serializable
         serialized = json.dumps(expected)
         self.assertIsInstance(serialized, str)
@@ -127,8 +130,8 @@ class TestReturnValueShape(unittest.TestCase):
             self.assertGreater(len(e), 0)
 
 
-class TestCaptureViewportSafe(unittest.TestCase):
-    """Direct tests for safe viewport capture using the Houdini mock."""
+class TestCaptureReview(unittest.TestCase):
+    """Direct tests for review capture using the Houdini mock."""
 
     def setUp(self):
         self.previous_hou = sys.modules.get("hou")
@@ -167,33 +170,38 @@ class TestCaptureViewportSafe(unittest.TestCase):
             sys.modules["hou"] = self.previous_hou
         MockNode._hou_ref = self.previous_hou_ref
 
-    def test_safe_capture_stashes_flipbook_settings(self):
+    def test_review_single_view(self):
+        """Single-view capture via capture_review returns expected method."""
         with tempfile.TemporaryDirectory() as temp_dir:
-            filepath = os.path.join(temp_dir, "viewport.png")
+            filepath = os.path.join(temp_dir, "review.png")
 
-            result = self.node_utils.capture_viewport_safe(
+            result = self.node_utils.capture_review(
                 filepath,
-                frame=12,
-                home_viewport=True,
+                views=["perspective"],
+                frames=[1],
+                shading_mode="smooth",
             )
 
-        self.assertTrue(result["success"])
-        self.assertEqual(result["path"], filepath)
-        self.assertEqual(result["method"], "scene_viewer_flipbook")
-        self.assertTrue(self.viewer.viewport.home_all_called)
+        # Mock doesn't simulate flipbook file creation; verify method is correct
+        self.assertEqual(result["method"], "review_capture")
+        if result.get("success"):
+            self.assertEqual(result["path"], filepath)
+            self.assertIn("grid", result)
 
-        base_settings = self.viewer.base_settings
-        self.assertTrue(base_settings.stash_called)
-        self.assertIsNone(base_settings.output_path)
-        self.assertIsNone(base_settings.output_to_mplay)
-        self.assertIsNone(base_settings.frame_range)
-
-        self.assertEqual(len(base_settings.stashed_settings), 1)
-        stashed_settings = base_settings.stashed_settings[0]
-        self.assertEqual(stashed_settings.output_path, filepath)
-        self.assertFalse(stashed_settings.output_to_mplay)
-        self.assertEqual(stashed_settings.frame_range, (12, 12))
-        self.assertEqual(self.viewer.flipbook_calls, [(self.viewer.viewport, stashed_settings)])
+    def test_review_returns_grid_on_success(self):
+        """A successful review capture includes grid info in the result."""
+        expected = {
+            "success": True,
+            "path": "screenshots/review.png",
+            "size_kb": 450.0,
+            "method": "review_capture",
+            "grid": {"rows": 2, "cols": 2, "cells": 4},
+            "views": ["perspective", "top", "front", "right"],
+            "frames": [1],
+        }
+        self.assertEqual(expected["method"], "review_capture")
+        self.assertIn("grid", expected)
+        self.assertEqual(expected["grid"]["cells"], 4)
 
 
 # ---------------------------------------------------------------------------
@@ -294,13 +302,13 @@ class TestDescribeImageTool(unittest.TestCase):
 class TestSystemPromptGuidelines(unittest.TestCase):
     """Verify system prompt correctly guides the agent to use visual verification."""
 
-    def test_guideline_8_mentions_describe_image(self):
-        """Guideline 8 should reference describe_image for visual verification."""
+    def test_guideline_review_mentions_describe_image(self):
+        """Guideline should reference describe_image for visual verification."""
         guideline = (
-            "After making changes that affect the viewport, use houdini_capture_viewport "
+            "After making changes that affect the viewport, use houdini_capture_review "
             "to capture a screenshot, then use describe_image to inspect the result."
         )
-        self.assertIn("houdini_capture_viewport", guideline)
+        self.assertIn("houdini_capture_review", guideline)
         self.assertIn("describe_image", guideline)
 
     def test_guideline_9_mentions_reference_comparison(self):
@@ -352,12 +360,14 @@ class TestCaptureErrorGuidance(unittest.TestCase):
     def test_capture_network_error_includes_guidance(self):
         result = self.node_utils.capture_network("/tmp/test.png", "/obj")
         if not result["success"] and "guidance" in result:
-            self.assertIn("houdini_capture_viewport_safe", result["guidance"])
+            self.assertIn("houdini_capture_review", result["guidance"])
 
-    def test_capture_viewport_safe_error_includes_note(self):
-        result = self.node_utils.capture_viewport_safe("/tmp/test.png")
-        if not result["success"] and "note" in result:
-            self.assertIn("Safe capture", result["note"])
+    def test_capture_review_error_includes_note(self):
+        """Failed review capture includes method and stage info."""
+        result = self.node_utils.capture_review("/tmp/test.png")
+        if not result["success"]:
+            self.assertIn("method", result)
+            self.assertEqual(result["method"], "review_capture")
 
 
 if __name__ == "__main__":

@@ -251,29 +251,6 @@ export const houdiniSetDisplayFlag = {
   },
 };
 
-export const houdiniCaptureViewport = {
-  name: "houdini_capture_viewport",
-  label: "Capture Houdini Viewport",
-  description:
-    "Capture the active Houdini scene viewport as an image file. " +
-    "Saves a PNG screenshot of what the user currently sees in the viewport. " +
-    "Use this after creating or modifying nodes to verify visual results. " +
-    "Combine with describe_image to let the vision model check the output.",
-  promptSnippet: "Capture Houdini viewport screenshot to a PNG file",
-  promptGuidelines: [
-    "After making visual changes in Houdini, use houdini_capture_viewport to take a screenshot, then use describe_image on the saved file to verify the result matches expectations. This is especially useful when the user provides a reference image.",
-    "Prefer houdini_capture_viewport_safe for new visual verification. houdini_capture_viewport is backward-compatible and should be used only when safe capture is unavailable.",
-  ],
-  parameters: Type.Object({
-    filepath: Type.String({
-      description: "Output file path for the screenshot (e.g. 'screenshots/viewport_001.png')",
-    }),
-  }),
-  async execute(_toolCallId: string, params: { filepath: string }) {
-    return forwardTool("houdini_capture_viewport", params);
-  },
-};
-
 export const houdiniCaptureNetwork = {
   name: "houdini_capture_network",
   label: "Capture Houdini Node Network",
@@ -314,6 +291,5 @@ export const sceneTools = [
   houdiniGetSelection,
   houdiniCheckErrors,
   houdiniSetDisplayFlag,
-  houdiniCaptureViewport,
   houdiniCaptureNetwork,
 ];

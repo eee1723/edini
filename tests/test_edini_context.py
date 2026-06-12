@@ -117,14 +117,14 @@ class TestReferenceImageDetection(unittest.TestCase):
 
 The user has attached 2 reference image(s). You MUST:
 1. Use **describe_image** on each reference image to understand what the user wants
-2. After making changes, capture the viewport with **houdini_capture_viewport**
+2. After making changes, capture the viewport with **houdini_capture_review**
 3. Compare the captured result against the reference image description
 4. Only report completion after confirming the result matches the reference
 5. If they don't match, adjust parameters and re-verify - do NOT skip this step
 """
         self.assertIn("REFERENCE IMAGE DETECTED", directive)
         self.assertIn("describe_image", directive)
-        self.assertIn("houdini_capture_viewport", directive)
+        self.assertIn("houdini_capture_review", directive)
         self.assertIn("do NOT skip", directive)
 
     def test_no_directive_when_no_images(self):
@@ -153,7 +153,7 @@ class TestEndToEndWorkflow(unittest.TestCase):
 
         capture_result = {"success": True, "path": "screenshots/viewport_001.png"}
         self.assertTrue(capture_result["success"])
-        workflow.append({"step": "capture_viewport", "data": capture_result})
+        workflow.append({"step": "capture_review", "data": capture_result})
 
         describe_result = {
             "content": [{"type": "text", "text": "Sparse smoke, not matching reference density"}]
@@ -164,11 +164,11 @@ class TestEndToEndWorkflow(unittest.TestCase):
         matches = "dense" in describe_result["content"][0]["text"].lower()
         if not matches:
             workflow.append({"step": "adjust_params"})
-            workflow.append({"step": "capture_viewport", "data": {"success": True}})
+            workflow.append({"step": "capture_review", "data": {"success": True}})
             workflow.append({"step": "describe_image", "data": {}})
 
         steps = [w["step"] for w in workflow]
-        self.assertIn("capture_viewport", steps)
+        self.assertIn("capture_review", steps)
         self.assertIn("describe_image", steps)
         self.assertIn("adjust_params", steps)
 

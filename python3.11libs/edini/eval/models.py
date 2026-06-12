@@ -44,12 +44,10 @@ class EvalResult:
     # Dimension scores [0.0, 1.0]
     tool_accuracy: float | None
     task_completion: float | None
+    total_score: float
     efficiency: float
     reliability: float
     cost: float
-    sandbox_adoption_rate: float = 1.0
-
-    total_score: float
 
     # Per-call eval details
     tool_call_details: list[dict]
@@ -57,3 +55,5 @@ class EvalResult:
     # Derived stats
     tool_calls_count: int
     total_latency_ms: int
+
+    sandbox_adoption_rate: float = 1.0

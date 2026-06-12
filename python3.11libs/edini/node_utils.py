@@ -5,6 +5,7 @@ JSON-serializable dicts with {"success": bool, ...} shape.
 """
 from __future__ import annotations
 
+import os
 import traceback
 
 import hou
@@ -607,175 +608,12 @@ def create_hda(node_path: str, hda_name: str, hda_label: str = "") -> dict[str, 
 
 
 # ---------------------------------------------------------------------------
-# Capture / Screenshot Operations
+# Capture Operations
+#
+# Use capture_review() and capture_network() below.
+# capture_viewport() and capture_viewport_safe() have been removed;
+# single-frame captures are handled by capture_review(views=["perspective"]).
 # ---------------------------------------------------------------------------
-
-def capture_viewport(filepath: str) -> dict[str, Any]:
-    """Capture the active scene viewport as an image file."""
-    return capture_viewport_safe(filepath)
-
-
-def capture_viewport_safe(
-    filepath: str,
-    frame: int = 1,
-    home_viewport: bool = True,
-    target_path: str | None = None,
-    isolate_target: bool = False,
-    shading_mode: str = "current",
-) -> dict[str, Any]:
-    """Capture the active scene viewport using Houdini's supported flipbook API.
-
-    Args:
-        filepath: Output image path (PNG recommended).
-        frame: Frame number to capture at.
-        home_viewport: Home the viewport before capturing.
-        target_path: If set, frame this specific node and make it current.
-        isolate_target: Hide other /obj geo nodes while capturing.
-        shading_mode: Force viewport shading — 'smooth', 'smooth_wire',
-                      'flat', 'wire', or 'current' (default, no change).
-    """
-    method = "scene_viewer_flipbook"
-    stage = "initialize"
-
-    # State we need to restore after capture
-    _restore_hidden: list[str] = []
-    _restore_shading: Any = None
-
-    try:
-        import os
-
-        stage = "get_desktop"
-        desktop = hou.ui.curDesktop()
-        stage = "find_scene_viewer"
-        viewer = desktop.paneTabOfType(hou.paneTabType.SceneViewer)
-        if viewer is None:
-            return {
-                "success": False,
-                "error": "No Scene Viewer pane found",
-                "method": method,
-            }
-
-        stage = "get_viewport"
-        viewport = viewer.curViewport()
-
-        # ── Shading mode (non-critical enhancement) ──
-        try:
-            shading_map = {
-                "smooth": hou.glShadingType.Smooth,
-                "smooth_wire": hou.glShadingType.SmoothWire,
-                "flat": hou.glShadingType.Flat,
-                "flat_wire": hou.glShadingType.FlatWire,
-                "wire": hou.glShadingType.Wire,
-            }
-            if shading_mode in shading_map:
-                vp_settings = viewport.settings()
-                display_set = vp_settings.displaySet(hou.displaySetType.DisplayModel)
-                _restore_shading = display_set.shadedMode()
-                display_set.setShadedMode(shading_map[shading_mode])
-        except Exception:
-            pass  # non-critical, continue with current shading
-
-        # ── Target framing / isolation ──
-        target_node = None
-        if target_path:
-            target_node = hou.node(target_path)
-            if target_node is not None:
-                try:
-                    target_node.setDisplayFlag(True)
-                    target_node.setCurrent(True, clear_all_selected=True)
-                except Exception:
-                    pass
-
-        # Isolate: hide other /obj geo nodes
-        try:
-            if isolate_target and target_node is not None:
-                obj = hou.node("/obj")
-                if obj is not None:
-                    for child in obj.children():
-                        if child.path() != target_node.path():
-                            try:
-                                if child.isDisplayFlagSet():
-                                    child.setDisplayFlag(False)
-                                    _restore_hidden.append(child.path())
-                            except Exception:
-                                pass
-        except Exception:
-            pass
-
-        # Frame the target (after isolation for accurate bounds)
-        try:
-            if target_node is not None:
-                viewport.frameSelected()
-            elif home_viewport and hasattr(viewport, "homeAll"):
-                viewport.homeAll()
-        except Exception:
-            if home_viewport and hasattr(viewport, "homeAll"):
-                try:
-                    viewport.homeAll()
-                except Exception:
-                    pass
-
-        # Force viewport redraw before capture (non-critical)
-        try:
-            viewport.draw(True, True)
-        except Exception:
-            pass
-
-        stage = "prepare_output"
-        os.makedirs(os.path.dirname(os.path.abspath(filepath)) or ".", exist_ok=True)
-
-        stage = "stash_flipbook_settings"
-        base_settings = viewer.flipbookSettings()
-        settings = base_settings.stash() if hasattr(base_settings, "stash") else base_settings
-        stage = "configure_flipbook"
-        settings.output(filepath)
-        settings.outputToMPlay(False)
-        settings.frameRange((frame, frame))
-        stage = "run_flipbook"
-        viewer.flipbook(viewport, settings)
-
-        stage = "verify_output"
-        if os.path.exists(filepath):
-            size_kb = round(os.path.getsize(filepath) / 1024, 1)
-            return {
-                "success": True,
-                "path": filepath,
-                "size_kb": size_kb,
-                "method": method,
-            }
-        return {
-            "success": False,
-            "error": f"Flipbook completed but file was not created: {filepath}",
-            "method": method,
-        }
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "method": method,
-            "stage": stage,
-            "traceback": traceback.format_exc(),
-            "note": "Safe capture does not fall back to direct Qt widget probing. "
-                    "Verify geometry with houdini_inspect_geo or sandbox diagnostics instead. "
-                    "Do not retry capture or explore alternative capture methods.",
-        }
-    finally:
-        # ── Restore viewport state ──
-        try:
-            if _restore_hidden:
-                for path in _restore_hidden:
-                    node = hou.node(path)
-                    if node is not None:
-                        node.setDisplayFlag(True)
-        except Exception:
-            pass
-        try:
-            if _restore_shading is not None:
-                vp_settings = viewport.settings()
-                display_set = vp_settings.displaySet(hou.displaySetType.DisplayModel)
-                display_set.setShadedMode(_restore_shading)
-        except Exception:
-            pass
 
 
 def capture_network(
@@ -825,7 +663,7 @@ def capture_network(
             "success": False,
             "error": f"Network grab failed (API mismatch): {e}",
             "guidance": "NetworkEditor.grab is not available in Houdini 21. "
-                        "Use houdini_capture_viewport_safe for viewport screenshots instead. "
+                        "Use houdini_capture_review for viewport screenshots instead. "
                         "To verify node network structure, use houdini_layout_nodes or houdini_list_nodes.",
         }
     except Exception as e:
@@ -904,8 +742,8 @@ def _capture_single_view(
     viewport: Any,
     filepath: str,
     frame: int,
-) -> bool:
-    """Capture a single viewport frame via flipbook. Returns True on success."""
+) -> tuple[bool, str]:
+    """Capture a single viewport frame via flipbook. Returns (success, error_detail)."""
     try:
         base_settings = viewer.flipbookSettings()
         settings = base_settings.stash() if hasattr(base_settings, "stash") else base_settings
@@ -913,9 +751,12 @@ def _capture_single_view(
         settings.outputToMPlay(False)
         settings.frameRange((frame, frame))
         viewer.flipbook(viewport, settings)
-        return os.path.exists(filepath)
-    except Exception:
-        return False
+        if os.path.exists(filepath):
+            return True, ""
+        return False, f"flipbook ran but no file at {filepath}"
+    except Exception as e:
+        import traceback as _tb
+        return False, f"{e}\n{_tb.format_exc()}"
 
 
 def capture_review(
@@ -977,6 +818,7 @@ def capture_review(
     _restore_hidden: list[str] = []
     _restore_shading: Any = None
     _restore_view_type: Any = None
+    _restore_grid: bool | None = None
 
     try:
         stage = "get_viewer"
@@ -1004,6 +846,14 @@ def capture_review(
         except Exception:
             pass
 
+        # ── Grid: hide for clean capture ──
+        try:
+            grid_set = vp_settings.displaySet(hou.displaySetType.Grid)
+            _restore_grid = not grid_set.isHidden()
+            grid_set.setHidden(True)
+        except Exception:
+            pass
+
         # ── Target ──
         target_node = None
         if target_path:
@@ -1011,6 +861,7 @@ def capture_review(
             if target_node is not None:
                 try:
                     target_node.setDisplayFlag(True)
+                    target_node.setCurrent(True, clear_all_selected=True)
                 except Exception:
                     pass
                 try:
@@ -1024,14 +875,21 @@ def capture_review(
             if target_node is not None:
                 obj = hou.node("/obj")
                 if obj is not None:
+                    target_path_val = target_node.path()
                     for child in obj.children():
-                        if child.path() != target_node.path():
-                            try:
-                                if child.isDisplayFlagSet():
-                                    child.setDisplayFlag(False)
-                                    _restore_hidden.append(child.path())
-                            except Exception:
-                                pass
+                        child_path = child.path()
+                        # Skip: exact match, or ancestor of target (e.g. /obj/bicycle
+                        # is ancestor of /obj/bicycle/OUT — hiding it would hide the target)
+                        if child_path == target_path_val:
+                            continue
+                        if target_path_val.startswith(child_path + "/"):
+                            continue
+                        try:
+                            if child.isDisplayFlagSet():
+                                child.setDisplayFlag(False)
+                                _restore_hidden.append(child_path)
+                        except Exception:
+                            pass
         except Exception:
             pass
 
@@ -1066,19 +924,23 @@ def capture_review(
                     except Exception:
                         pass
 
-                # Frame target
+                # Frame target: perspective uses frameSelected, ortho uses homeAll for padding
                 if home_target and target_node is not None:
                     try:
-                        viewport.frameSelected()
+                        if view_name == "perspective":
+                            viewport.frameSelected()
+                        else:
+                            viewport.homeAll()
                         viewport.draw(True, True)
                     except Exception:
                         pass
 
                 # Capture
-                if _capture_single_view(viewer, viewport, tmp_path, frame):
+                ok, err_detail = _capture_single_view(viewer, viewport, tmp_path, frame)
+                if ok:
                     captured.append(tmp_path)
                 else:
-                    cell_errors.append(f"{view_name}@f{frame}")
+                    cell_errors.append(f"{view_name}@f{frame}: {err_detail[:120]}")
 
         # ── Concatenate ──
         stage = "concat"
@@ -1138,6 +1000,13 @@ def capture_review(
         }
     finally:
         # ── Restore state ──
+        try:
+            if _restore_grid is not None:
+                vp_settings = viewport.settings()
+                grid_set = vp_settings.displaySet(hou.displaySetType.Grid)
+                grid_set.setHidden(not _restore_grid)
+        except Exception:
+            pass
         try:
             if _restore_view_type is not None:
                 viewport.changeType(_restore_view_type)

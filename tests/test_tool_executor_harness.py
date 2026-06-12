@@ -56,7 +56,7 @@ class TestHarnessToolHandlers(unittest.TestCase):
             "houdini_verify_asset",
             "houdini_commit_sandbox",
             "houdini_discard_sandbox",
-            "houdini_capture_viewport_safe",
+            "houdini_capture_review",
         }
 
         self.assertTrue(expected.issubset(set(self.tool_handlers)))

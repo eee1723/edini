@@ -138,8 +138,10 @@
 ### houdini_discard_sandbox
 - Delete a procedural sandbox after it is no longer needed.
 
-### houdini_capture_viewport_safe
-- Capture a viewport image through the supported safe capture path for visual verification.
+### houdini_capture_review
+- Capture multi-view, multi-frame review contact sheets for procedural assets.
+- Supports single views (`views=["perspective"]`), 4-view quads, and frame-range time-lapses.
+- Always pass `target_path` — it automatically isolates the target and frames each view.
 - If capture fails, report the clean failure and diagnostics instead of probing Qt widgets or unsupported viewport internals.
 
 ## Tool Forwarding Architecture

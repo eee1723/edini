@@ -206,7 +206,7 @@ class EvaluatorPipeline:
         elif first_tool in ("houdini_run_python", "houdini_run_vex",
                             "edini_get_eval_stats"):
             optimal = 2
-        elif first_tool in ("houdini_capture_viewport",
+        elif first_tool in ("houdini_capture_review",
                             "houdini_capture_network"):
             optimal = 2
         elif first_tool in ("houdini_create_hda",):

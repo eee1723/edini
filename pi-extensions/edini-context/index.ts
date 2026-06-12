@@ -60,7 +60,7 @@ export default function (pi: ExtensionAPI) {
 
 The user has attached ${event.images.length} reference image(s). You MUST:
 1. Use **describe_image** on each reference image to understand what the user wants
-2. After making changes, capture the viewport with **houdini_capture_viewport**
+2. After making changes, capture the viewport with **houdini_capture_review**
 3. Compare the captured result against the reference image description
 4. Only report completion after confirming the result matches the reference
 5. If they don't match, adjust parameters and re-verify — do NOT skip this step
@@ -106,7 +106,7 @@ If a tool returns {"success": false, "error": "..."}:
 
 Before reporting completion, decide whether to capture:
 
-**🔴 MUST capture & describe (houdini_capture_viewport + describe_image):**
+**🔴 MUST capture & describe (houdini_capture_review + describe_image):**
 - User provided a reference image
 - Creating effects: smoke, fire, water, pyro, particles, volume, fluid
 - Changing shaders, materials, lighting, or cameras
@@ -126,7 +126,7 @@ Before reporting completion, decide whether to capture:
 
 **Verification workflow:**
 1. Make the change
-2. houdini_capture_viewport → save PNG
+2. houdini_capture_review → save PNG (use views=['perspective'] for single view, or ['perspective','top','front','right'] for quad-view)
 3. describe_image on the file → get description
 4. Compare to expectations or reference
 5. If mismatched → adjust parameters, repeat 2-4
