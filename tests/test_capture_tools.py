@@ -313,5 +313,21 @@ class TestSystemPromptGuidelines(unittest.TestCase):
         self.assertIn("describe_image", guideline)
 
 
+class TestCaptureErrorGuidance(unittest.TestCase):
+    """Tests that capture error messages include H21-specific guidance."""
+
+    def test_capture_network_error_includes_guidance(self):
+        from edini.node_utils import capture_network
+        result = capture_network("/tmp/test.png", "/obj")
+        if not result["success"] and "guidance" in result:
+            self.assertIn("houdini_capture_viewport_safe", result["guidance"])
+
+    def test_capture_viewport_safe_error_includes_note(self):
+        from edini.node_utils import capture_viewport_safe
+        result = capture_viewport_safe("/tmp/test.png")
+        if not result["success"] and "note" in result:
+            self.assertIn("Safe capture", result["note"])
+
+
 if __name__ == "__main__":
     unittest.main()

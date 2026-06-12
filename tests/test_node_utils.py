@@ -565,5 +565,40 @@ class TestSetDisplayFlag(unittest.TestCase):
         self.assertIn("not found", r["error"].lower())
 
 
+class TestSetParamsBatch(unittest.TestCase):
+    """Tests for set_params_batch() — bulk parameter setting."""
+
+    def setUp(self):
+        cr = create_node("box", name="batch_test", parent_path="/obj")
+        _register_created_node(cr)
+        self.node_path = cr["path"]
+        node = _mock_hou.node(self.node_path)
+        node._parms["tx"] = MockParm("tx", 0.0)
+        node._parms["ty"] = MockParm("ty", 0.0)
+        node._parms["tz"] = MockParm("tz", 0.0)
+
+    def test_set_params_batch_all_success(self):
+        from edini.node_utils import set_params_batch
+        result = set_params_batch(self.node_path, {"tx": 1.5, "ty": 2.0, "tz": 3.0})
+        self.assertTrue(result["success"])
+        self.assertEqual(result["set_count"], 3)
+        self.assertEqual(result["total_count"], 3)
+        self.assertNotIn("partial", result)
+
+    def test_set_params_batch_missing_param(self):
+        from edini.node_utils import set_params_batch
+        result = set_params_batch(self.node_path, {"tx": 1.0, "nonexistent": 99})
+        self.assertTrue(result["success"])
+        self.assertTrue(result.get("partial"))
+        self.assertEqual(result["set_count"], 1)
+        self.assertIn("nonexistent", result["failed_params"])
+
+    def test_set_params_batch_node_not_found(self):
+        from edini.node_utils import set_params_batch
+        result = set_params_batch("/obj/missing", {"tx": 1.0})
+        self.assertFalse(result["success"])
+        self.assertIn("not found", result["error"])
+
+
 if __name__ == "__main__":
     unittest.main()

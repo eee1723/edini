@@ -62,3 +62,11 @@ def test_procedural_modeling_preview_mentions_harness_lifecycle():
     assert "houdini_commit_sandbox" in text
     assert "houdini_discard_sandbox" in text
     assert "Do not explore Qt widgets" in text
+
+
+def test_batch_params_schema_exists():
+    """Verify the houdini_set_params_batch tool is defined in Pi extension."""
+    text = read("pi-extensions/edini-tools/tools/scene.ts")
+    assert "houdini_set_params_batch" in text, (
+        "houdini_set_params_batch should be defined in scene.ts"
+    )

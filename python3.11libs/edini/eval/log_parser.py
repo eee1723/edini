@@ -8,6 +8,19 @@ from typing import Optional
 from edini.eval.models import StructuredSession, ToolCallRecord
 
 
+def _extract_sandbox_action(
+    tool_name: str, params: dict
+) -> tuple[str | None, str | None]:
+    """Extract sandbox action and root path from harness tool calls."""
+    if tool_name == "houdini_run_python_sandbox":
+        return "create", params.get("sandbox_name") or params.get("sandbox_root_path")
+    elif tool_name == "houdini_discard_sandbox":
+        return "discard", params.get("sandbox_root_path")
+    elif tool_name == "houdini_commit_sandbox":
+        return "commit", params.get("sandbox_root_path")
+    return None, None
+
+
 class LogParser:
     """Parses Pi JSONL session files into StructuredSession."""
 
@@ -136,10 +149,16 @@ class LogParser:
 
                 # Match with pending toolCall to get params
                 params = {}
+                sandbox_action = None
+                sandbox_root_path = None
                 if tool_call_id and tool_call_id in pending_calls:
                     pending = pending_calls.pop(tool_call_id)
                     tool_name = tool_name or pending["tool_name"]
                     params = pending["params"]
+                    # Extract sandbox metadata from harness tool calls
+                    sandbox_action, sandbox_root_path = _extract_sandbox_action(
+                        tool_name, params
+                    )
 
                 tool_calls.append(ToolCallRecord(
                     index=len(tool_calls),
@@ -148,10 +167,15 @@ class LogParser:
                     result_success=bool(result_success),
                     error_message=error_msg,
                     latency_ms=0,
+                    sandbox_action=sandbox_action,
+                    sandbox_root_path=sandbox_root_path,
                 ))
 
         # Handle orphaned toolCalls (assistant issued a toolCall but no toolResult yet)
         for call_id, pending in pending_calls.items():
+            orphan_action, orphan_root = _extract_sandbox_action(
+                pending["tool_name"], pending["params"]
+            )
             tool_calls.append(ToolCallRecord(
                 index=len(tool_calls),
                 tool_name=pending["tool_name"],
@@ -159,6 +183,8 @@ class LogParser:
                 result_success=False,
                 error_message="No toolResult received (session may be in progress)",
                 latency_ms=0,
+                sandbox_action=orphan_action,
+                sandbox_root_path=orphan_root,
             ))
 
         return StructuredSession(

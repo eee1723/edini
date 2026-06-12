@@ -14,6 +14,9 @@ class ToolCallRecord:
     result_success: bool
     error_message: str | None
     latency_ms: int
+    sandbox_job_id: str | None = None
+    sandbox_action: str | None = None       # "create" | "discard" | "commit"
+    sandbox_root_path: str | None = None
 
 
 @dataclasses.dataclass
@@ -44,6 +47,7 @@ class EvalResult:
     efficiency: float
     reliability: float
     cost: float
+    sandbox_adoption_rate: float = 1.0
 
     total_score: float
 

@@ -26,6 +26,50 @@ from edini.harness import (
     discard_sandbox,
 )
 
+# Knowledge and eval handlers (available only in Houdini runtime)
+try:
+    from edini.ui.knowledge_store import search_entries
+except ImportError:
+    def search_entries(query="", category="", limit=10):
+        return {"success": False, "error": "Knowledge store not available in this context"}
+
+try:
+    from edini.eval.evaluator import EvalStore
+except ImportError:
+    EvalStore = None
+
+
+def _edini_get_eval_stats(period: int = 10) -> dict[str, Any]:
+    """Get evaluation statistics for recent sessions."""
+    if EvalStore is None:
+        return {"success": False, "error": "Eval system not available in this context"}
+    try:
+        store = EvalStore()
+        sessions = store.get_recent_sessions(period)
+        if not sessions:
+            return {"success": True, "sessions_analyzed": 0, "message": "No evaluation data yet"}
+
+        dims = ["reliability", "efficiency", "cost", "tool_accuracy", "task_completion"]
+        scores = {d: [] for d in dims}
+        for s in sessions:
+            for d in dims:
+                score = getattr(s, d, None)
+                if score is not None:
+                    scores[d].append(score)
+
+        avg = {d: round(sum(v) / len(v), 2) if v else None for d, v in scores.items()}
+        weakest = min((d for d in dims if avg[d] is not None), key=lambda d: avg[d], default=None)
+
+        return {
+            "success": True,
+            "sessions_analyzed": len(sessions),
+            "average_scores": avg,
+            "weakest_dimension": weakest,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 # Map tool names to handler functions
 TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     "houdini_get_scene_info": lambda **kw: get_scene_info(),
@@ -102,6 +146,14 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     ),
     "houdini_discard_sandbox": lambda **kw: discard_sandbox(
         kw["sandbox_root_path"],
+    ),
+    "edini_search_knowledge": lambda **kw: search_entries(
+        query=kw.get("query", ""),
+        category=kw.get("category", ""),
+        limit=kw.get("limit", 10),
+    ),
+    "edini_get_eval_stats": lambda **kw: _edini_get_eval_stats(
+        period=kw.get("period", 10),
     ),
 }
 
