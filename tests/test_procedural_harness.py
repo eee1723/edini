@@ -421,6 +421,66 @@ class TestSandboxLifecycle(unittest.TestCase):
         self.assertIsNone(_mock_hou.node("/obj/   "))
 
 
+class TestSandboxStructure(unittest.TestCase):
+    """Tests that run_python_sandbox returns correct structure and diagnostics.
+
+    These tests verify the NEW sandbox model (Task 1.2 will implement it).
+    Currently they SHOULD FAIL — the sandbox hasn't been rewritten yet.
+    """
+
+    def setUp(self):
+        pass  # _mock_hou is module-level from test_node_utils
+
+    def test_sandbox_result_has_required_fields(self):
+        """Sandbox result includes job_id, root_path, output_node, diagnostics."""
+        code = "node = hou.pwd()\ngeo = node.geometry()\ngeo.clear()\npt = geo.createPoint()\npt.setPosition((1,2,3))"
+        result = harness.run_python_sandbox(code, sandbox_name="test_struct")
+        for field in ["job_id", "root_path", "output_node", "diagnostics", "structural_checks"]:
+            self.assertIn(field, result, f"Missing field: {field}")
+        self.assertIn("edini_generate", result.get("output_node", ""))
+
+    def test_sandbox_diagnostics_has_geometry(self):
+        """Diagnostics bundle includes geometry stats."""
+        code = "node = hou.pwd()\ngeo = node.geometry()\ngeo.clear()\npt = geo.createPoint()\npt.setPosition((0,0,0))"
+        result = harness.run_python_sandbox(code, sandbox_name="test_diag")
+        diag = result.get("diagnostics", {})
+        self.assertTrue(diag.get("success"))
+        geo = diag.get("geometry")
+        self.assertIsNotNone(geo)
+
+    def test_sandbox_structural_checks_included(self):
+        """Structural checks summary always present in result."""
+        code = "node = hou.pwd()\ngeo = node.geometry()\ngeo.clear()\npt = geo.createPoint()\npt.setPosition((0,0,0))"
+        result = harness.run_python_sandbox(code, sandbox_name="test_struct_chk")
+        checks = result.get("structural_checks", {})
+        self.assertIn("has_geometry", checks)
+        self.assertIn("point_count", checks)
+        self.assertIn("bounds_nonzero", checks)
+
+    def test_sandbox_cook_error_preserves_node(self):
+        """Sandbox with failing code preserves the node and collects errors."""
+        code = """
+node = hou.pwd()
+geo = node.geometry()
+geo.clear()
+raise ValueError("intentional test error")
+"""
+        result = harness.run_python_sandbox(code, sandbox_name="test_error",
+                                             delete_on_failure=False)
+        self.assertFalse(result["success"])
+        self.assertTrue(result.get("preserved", False))
+        self.assertIn("error", result)
+        self.assertIn("ValueError", result.get("error", ""))
+
+    def test_sandbox_delete_on_failure_cleans_up(self):
+        """Sandbox with delete_on_failure=True removes the sandbox on error."""
+        code = 'raise RuntimeError("test cleanup")'
+        result = harness.run_python_sandbox(code, sandbox_name="test_del",
+                                             delete_on_failure=True)
+        self.assertFalse(result["success"])
+        self.assertTrue(result.get("deleted", False))
+
+
 class TestLadderRegression(unittest.TestCase):
     def test_ladder_sandbox_preserves_components_and_verifies(self):
         code = """

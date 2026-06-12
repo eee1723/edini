@@ -99,6 +99,46 @@ class MockAttrib:
         return self._data_type
 
 
+class MockPoint:
+    """Mock Houdini point for builder-mode geometry."""
+
+    def __init__(self):
+        self._pos = (0.0, 0.0, 0.0)
+        self._attribs: dict[str, Any] = {}
+
+    def setPosition(self, pos):
+        self._pos = (float(pos[0]), float(pos[1]), float(pos[2]))
+
+    def position(self):
+        return self._pos
+
+    def setAttribValue(self, name: str, value: Any) -> None:
+        self._attribs[name] = value
+
+    def attribValue(self, name: str) -> Any:
+        return self._attribs.get(name)
+
+
+class MockPrim:
+    """Mock Houdini primitive for builder-mode geometry."""
+
+    def __init__(self):
+        self._vertices: list[MockPoint] = []
+        self._attribs: dict[str, Any] = {}
+
+    def addVertex(self, pt: MockPoint) -> None:
+        self._vertices.append(pt)
+
+    def vertices(self) -> list[MockPoint]:
+        return list(self._vertices)
+
+    def setAttribValue(self, name: str, value: Any) -> None:
+        self._attribs[name] = value
+
+    def attribValue(self, name: str) -> Any:
+        return self._attribs.get(name)
+
+
 class MockBoundingBox:
     def __init__(self, bounds: tuple[float, float, float, float, float, float]):
         self._bounds = bounds
@@ -111,6 +151,12 @@ class MockBoundingBox:
 
 
 class MockGeometry:
+    """Mock Houdini geometry supporting both stats-mode and builder-mode.
+
+    Stats-mode (constructor): pass fixed point_count/prim_count/bounds.
+    Builder-mode (createPoint/createPolygon): mutable geometry built incrementally.
+    """
+
     def __init__(
         self,
         point_count: int = 0,
@@ -122,6 +168,45 @@ class MockGeometry:
         self._prim_count = prim_count
         self._vertex_count = vertex_count
         self._bounds = bounds
+        self._builder_mode = False
+        self._points: list[MockPoint] = []
+        self._prims: list[MockPrim] = []
+        self._builder_attribs: dict[str, Any] = {}
+
+    def clear(self) -> None:
+        """Clear geometry and switch to builder mode."""
+        self._builder_mode = True
+        self._points.clear()
+        self._prims.clear()
+        self._point_count = 0
+        self._prim_count = 0
+        self._vertex_count = 0
+
+    def addAttrib(self, attrib_type, name: str, default_value: Any) -> None:
+        """Add an attribute (no-op in mock but tracked)."""
+        self._builder_attribs[name] = default_value
+
+    def createPoint(self) -> MockPoint:
+        """Create a point in builder mode."""
+        self._builder_mode = True
+        pt = MockPoint()
+        self._points.append(pt)
+        self._point_count = len(self._points)
+        return pt
+
+    def createPolygon(self) -> MockPrim:
+        """Create a polygon in builder mode."""
+        self._builder_mode = True
+        prim = MockPrim()
+        self._prims.append(prim)
+        self._prim_count = len(self._prims)
+        return prim
+
+    def points(self) -> list[MockPoint]:
+        return list(self._points)
+
+    def prims(self) -> list[MockPrim]:
+        return list(self._prims)
 
     def intrinsicValue(self, name: str):
         if name == "pointcount":
@@ -131,13 +216,20 @@ class MockGeometry:
         if name == "vertexcount":
             return self._vertex_count
         if name == "bounds":
+            if self._builder_mode and self._points:
+                # Compute bounds from builder points
+                xs = [p.position()[0] for p in self._points]
+                ys = [p.position()[1] for p in self._points]
+                zs = [p.position()[2] for p in self._points]
+                return (min(xs), max(xs), min(ys), max(ys), min(zs), max(zs))
             return self._bounds
         raise KeyError(name)
 
     def boundingBox(self):
-        if self._bounds is None:
+        b = self.intrinsicValue("bounds")
+        if b is None:
             return None
-        return MockBoundingBox(self._bounds)
+        return MockBoundingBox(b)
 
     def pointAttribs(self):
         return [MockAttrib("P")]
