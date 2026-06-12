@@ -9,8 +9,12 @@ To run:   python tests/test_capture_tools.py
 import sys
 import os
 import json
+import importlib
+import tempfile
 import unittest
 from typing import Any
+
+from tests.mock_hou import MockNode, MockSceneViewer, create_mock_hou
 
 # ---------------------------------------------------------------------------
 # Note: capture_viewport() and capture_network() in node_utils.py require
@@ -21,6 +25,10 @@ from typing import Any
 
 TOOL_HANDLERS_SIGNATURES = {
     "houdini_capture_viewport": {"required": ["filepath"]},
+    "houdini_capture_viewport_safe": {
+        "required": ["filepath"],
+        "optional": ["frame", "home_viewport"],
+    },
     "houdini_capture_network": {"required": ["filepath"], "optional": ["parent_path"]},
 }
 
@@ -31,6 +39,13 @@ class TestToolSignatureMatches(unittest.TestCase):
         """houdini_capture_viewport requires 'filepath' parameter."""
         sig = TOOL_HANDLERS_SIGNATURES["houdini_capture_viewport"]
         self.assertIn("filepath", sig["required"])
+
+    def test_capture_viewport_safe_has_filepath_and_options(self):
+        """houdini_capture_viewport_safe requires filepath and accepts safe options."""
+        sig = TOOL_HANDLERS_SIGNATURES["houdini_capture_viewport_safe"]
+        self.assertIn("filepath", sig["required"])
+        self.assertIn("frame", sig["optional"])
+        self.assertIn("home_viewport", sig["optional"])
 
     def test_capture_network_has_filepath_and_parent_path_params(self):
         """houdini_capture_network requires 'filepath', accepts 'parent_path'."""
@@ -62,19 +77,17 @@ class TestReturnValueShape(unittest.TestCase):
     """Verify the return value format matches what the Pi extension expects."""
 
     def test_success_returns_expected_fields(self):
-        """A successful capture returns success, path, size_kb, width, height."""
+        """A successful safe viewport capture returns success, path, size_kb, method."""
         expected = {
             "success": True,
             "path": "screenshots/viewport_001.png",
             "size_kb": 123.4,
-            "width": 800,
-            "height": 600,
+            "method": "scene_viewer_flipbook",
         }
         self.assertTrue(expected["success"])
         self.assertIn("path", expected)
         self.assertIn("size_kb", expected)
-        self.assertIn("width", expected)
-        self.assertIn("height", expected)
+        self.assertEqual(expected["method"], "scene_viewer_flipbook")
         # Verify it's JSON-serializable
         serialized = json.dumps(expected)
         self.assertIsInstance(serialized, str)
@@ -112,6 +125,75 @@ class TestReturnValueShape(unittest.TestCase):
         for e in errors:
             self.assertIsInstance(e, str)
             self.assertGreater(len(e), 0)
+
+
+class TestCaptureViewportSafe(unittest.TestCase):
+    """Direct tests for safe viewport capture using the Houdini mock."""
+
+    def setUp(self):
+        self.previous_hou = sys.modules.get("hou")
+        self.previous_hou_ref = MockNode._hou_ref
+        self.previous_edini_modules = {
+            name: module
+            for name, module in sys.modules.items()
+            if name.startswith("edini")
+        }
+
+        runtime_path = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "python3.11libs")
+        )
+        if runtime_path not in sys.path:
+            sys.path.insert(0, runtime_path)
+
+        self.mock_hou = create_mock_hou()
+        self.viewer = MockSceneViewer()
+        self.mock_hou.ui.set_scene_viewer(self.viewer)
+        sys.modules["hou"] = self.mock_hou
+
+        for mod_name in list(sys.modules):
+            if mod_name.startswith("edini"):
+                del sys.modules[mod_name]
+        self.node_utils = importlib.import_module("edini.node_utils")
+
+    def tearDown(self):
+        for mod_name in list(sys.modules):
+            if mod_name.startswith("edini"):
+                del sys.modules[mod_name]
+        sys.modules.update(self.previous_edini_modules)
+
+        if self.previous_hou is None:
+            sys.modules.pop("hou", None)
+        else:
+            sys.modules["hou"] = self.previous_hou
+        MockNode._hou_ref = self.previous_hou_ref
+
+    def test_safe_capture_stashes_flipbook_settings(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            filepath = os.path.join(temp_dir, "viewport.png")
+
+            result = self.node_utils.capture_viewport_safe(
+                filepath,
+                frame=12,
+                home_viewport=True,
+            )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["path"], filepath)
+        self.assertEqual(result["method"], "scene_viewer_flipbook")
+        self.assertTrue(self.viewer.viewport.home_all_called)
+
+        base_settings = self.viewer.base_settings
+        self.assertTrue(base_settings.stash_called)
+        self.assertIsNone(base_settings.output_path)
+        self.assertIsNone(base_settings.output_to_mplay)
+        self.assertIsNone(base_settings.frame_range)
+
+        self.assertEqual(len(base_settings.stashed_settings), 1)
+        stashed_settings = base_settings.stashed_settings[0]
+        self.assertEqual(stashed_settings.output_path, filepath)
+        self.assertFalse(stashed_settings.output_to_mplay)
+        self.assertEqual(stashed_settings.frame_range, (12, 12))
+        self.assertEqual(self.viewer.flipbook_calls, [(self.viewer.viewport, stashed_settings)])
 
 
 # ---------------------------------------------------------------------------

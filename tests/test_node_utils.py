@@ -357,6 +357,27 @@ class TestInspectGeometry(unittest.TestCase):
         self.assertFalse(r["success"])
         self.assertIn("no geometry", r["error"].lower())
 
+    def test_geometry_counts_and_bounds(self):
+        cr = create_node("box", name="geo_with_data")
+        _register_created_node(cr)
+        node = _mock_hou.node(cr["path"])
+        node._geometry = _mock_hou.MockGeometry(
+            point_count=8,
+            prim_count=6,
+            vertex_count=24,
+            bounds=(-1.0, 1.0, 0.0, 4.0, -0.5, 0.5),
+        )
+
+        r = inspect_geometry(cr["path"])
+
+        self.assertTrue(r["success"])
+        self.assertEqual(r["point_count"], 8)
+        self.assertEqual(r["prim_count"], 6)
+        self.assertEqual(r["vertex_count"], 24)
+        self.assertEqual(r["bounds"]["min"], [-1.0, 0.0, -0.5])
+        self.assertEqual(r["bounds"]["max"], [1.0, 4.0, 0.5])
+        self.assertEqual(r["bounds"]["size"], [2.0, 4.0, 1.0])
+
 
 # ===================================================================
 # TestRunPython
@@ -378,6 +399,37 @@ class TestRunPython(unittest.TestCase):
         r = run_python("def")
         self.assertFalse(r["success"])
         self.assertIn("error", r)
+
+    def test_failure_includes_traceback_and_partial_output(self):
+        r = run_python("print('before boom')\nraise RuntimeError('boom')")
+
+        self.assertFalse(r["success"])
+        self.assertIn("boom", r["error"])
+        self.assertIn("before boom", r["output"])
+        self.assertIn("RuntimeError", r["traceback"])
+        self.assertIn("not sandboxed", r["warning"])
+
+    def test_stderr_is_captured(self):
+        r = run_python("import sys\nprint('warn text', file=sys.stderr)")
+
+        self.assertTrue(r["success"])
+        self.assertIn("warn text", r["stderr"])
+
+    def test_closed_stdout_returns_diagnostics(self):
+        r = run_python("import sys\nsys.stdout.close()")
+
+        self.assertFalse(r["success"])
+        self.assertIn("closed", r["error"].lower())
+        self.assertIn("i/o operation", r["error"].lower())
+        self.assertIn("warning", r)
+
+    def test_closed_stderr_with_exception_returns_diagnostics(self):
+        r = run_python("import sys\nsys.stderr.close()\nraise RuntimeError('boom')")
+
+        self.assertFalse(r["success"])
+        self.assertIn("boom", r["error"])
+        self.assertIn("RuntimeError", r["traceback"])
+        self.assertIn("warning", r)
 
 
 # ===================================================================

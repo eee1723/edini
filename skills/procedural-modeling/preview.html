@@ -1,708 +1,98 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Edini Skill: procedural-modeling</title>
 <style>
   :root {
-    --bg: #0d0d1a;
-    --surface: #151528;
-    --card: #1a1a30;
-    --border: #2a2a4a;
-    --text: #e5e5eb;
-    --muted: #8888a0;
-    --accent: #8b5cf6;
-    --accent2: #a78bfa;
-    --green: #22c55e;
-    --yellow: #eab308;
-    --red: #ef4444;
-    --blue: #3b82f6;
-    --cyan: #06b6d4;
-    --orange: #f97316;
-    --code-bg: #1e1e38;
+    --bg: #101114;
+    --surface: #181b20;
+    --panel: #20242b;
+    --border: #343a43;
+    --text: #eceff3;
+    --muted: #aab2bd;
+    --accent: #40c4aa;
+    --warning: #f2b84b;
+    --code: #101820;
   }
-
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-
+  * { box-sizing: border-box; }
   body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans SC", sans-serif;
+    margin: 0;
     background: var(--bg);
     color: var(--text);
-    line-height: 1.7;
-    padding: 0;
-  }
-
-  /* Header */
-  .header {
-    background: linear-gradient(135deg, #1a1040 0%, #0d0d1a 100%);
-    border-bottom: 1px solid var(--border);
-    padding: 40px 0 30px;
-    text-align: center;
-  }
-  .header .badge {
-    display: inline-block;
-    background: linear-gradient(135deg, var(--accent), #6d28d9);
-    color: white;
-    font-size: 12px;
-    font-weight: 600;
-    padding: 4px 14px;
-    border-radius: 20px;
-    letter-spacing: 1px;
-    text-transform: uppercase;
-    margin-bottom: 12px;
-  }
-  .header h1 {
-    font-size: 32px;
-    font-weight: 700;
-    background: linear-gradient(90deg, var(--accent2), var(--cyan));
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    margin-bottom: 8px;
-  }
-  .header .subtitle {
-    color: var(--muted);
-    font-size: 14px;
-    max-width: 700px;
-    margin: 0 auto;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     line-height: 1.6;
   }
-
-  /* Meta bar */
-  .meta-bar {
+  header {
+    border-bottom: 1px solid var(--border);
     background: var(--surface);
-    border-bottom: 1px solid var(--border);
-    padding: 12px 0;
+    padding: 28px 24px;
   }
-  .meta-bar .inner {
-    max-width: 900px;
+  main {
+    max-width: 960px;
     margin: 0 auto;
-    padding: 0 24px;
-    display: flex;
-    gap: 24px;
-    flex-wrap: wrap;
-    align-items: center;
-    font-size: 13px;
-    color: var(--muted);
+    padding: 28px 24px 56px;
   }
-  .meta-bar .tag {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    background: var(--card);
-    border: 1px solid var(--border);
-    padding: 3px 10px;
-    border-radius: 4px;
-    color: var(--accent2);
-    font-size: 12px;
-  }
-
-  /* Main content */
-  .content {
-    max-width: 900px;
-    margin: 0 auto;
-    padding: 32px 24px 80px;
-  }
-
-  /* Section */
-  .section {
-    margin-bottom: 36px;
-  }
-  .section > h2 {
-    font-size: 20px;
-    font-weight: 700;
-    color: var(--text);
-    margin-bottom: 16px;
-    padding-bottom: 8px;
-    border-bottom: 2px solid var(--accent);
-    display: inline-block;
-  }
-  .section > h3 {
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--accent2);
-    margin: 20px 0 10px;
-  }
-  .section p {
-    margin-bottom: 12px;
-    color: var(--text);
-  }
-
-  /* Core principle highlight */
-  .principle {
-    background: linear-gradient(135deg, rgba(139,92,246,0.12), rgba(6,182,212,0.08));
-    border: 1px solid rgba(139,92,246,0.3);
-    border-radius: 10px;
-    padding: 20px 24px;
-    margin-bottom: 28px;
-    font-size: 15px;
-    line-height: 1.7;
-  }
-  .principle strong {
-    color: var(--accent2);
-  }
-
-  /* Warning box */
-  .warning {
-    background: rgba(234,179,8,0.08);
-    border: 1px solid rgba(234,179,8,0.3);
-    border-radius: 8px;
-    padding: 16px 20px;
-    margin: 16px 0;
-  }
-  .warning .label {
-    color: var(--yellow);
-    font-weight: 700;
-    font-size: 14px;
-    margin-bottom: 6px;
-  }
-
-  /* Tables */
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    margin: 12px 0 20px;
-    font-size: 14px;
-  }
-  thead th {
-    background: var(--card);
-    color: var(--accent2);
-    font-weight: 600;
-    text-align: left;
-    padding: 10px 14px;
-    border-bottom: 2px solid var(--accent);
-    font-size: 13px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
-  tbody td {
-    padding: 10px 14px;
-    border-bottom: 1px solid var(--border);
-    vertical-align: top;
-  }
-  tbody tr:hover {
-    background: rgba(139,92,246,0.05);
-  }
-  tbody td:first-child {
-    color: var(--cyan);
-    font-weight: 500;
-    white-space: nowrap;
-  }
-  tbody td code {
-    background: var(--code-bg);
-    color: var(--green);
-    padding: 1px 6px;
-    border-radius: 3px;
-    font-size: 13px;
-    font-family: "JetBrains Mono", "Fira Code", "Consolas", monospace;
-  }
-  tbody td strong {
-    color: var(--orange);
-  }
-
-  /* Code blocks */
-  pre {
-    background: var(--code-bg);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 18px 20px;
-    margin: 12px 0 20px;
-    overflow-x: auto;
-    font-size: 13px;
-    line-height: 1.6;
-    font-family: "JetBrains Mono", "Fira Code", "Consolas", monospace;
-    color: var(--text);
-  }
-  pre .comment { color: #6a6a8a; }
-  pre .keyword { color: var(--accent2); }
-  pre .string { color: var(--green); }
-  pre .fn { color: var(--cyan); }
-  pre .var { color: var(--orange); }
-  pre .op { color: var(--muted); }
-
-  /* VEX inline code */
+  h1, h2 { line-height: 1.2; }
+  h1 { margin: 0 0 8px; font-size: 30px; }
+  h2 { margin-top: 32px; color: var(--accent); font-size: 20px; }
+  p { color: var(--muted); }
   code {
-    background: var(--code-bg);
-    color: var(--green);
-    padding: 2px 7px;
-    border-radius: 4px;
-    font-size: 13px;
-    font-family: "JetBrains Mono", "Fira Code", "Consolas", monospace;
-  }
-
-  /* Ordered list */
-  ol {
-    padding-left: 0;
-    counter-reset: step;
-    list-style: none;
-  }
-  ol > li {
-    counter-increment: step;
-    padding: 10px 0 10px 48px;
-    position: relative;
-    border-left: 2px solid var(--border);
-    margin-left: 18px;
-    font-size: 14px;
-  }
-  ol > li::before {
-    content: counter(step);
-    position: absolute;
-    left: -15px;
-    top: 8px;
-    background: var(--accent);
-    color: white;
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 13px;
-    font-weight: 700;
-  }
-  ol > li strong {
-    color: var(--accent2);
-  }
-
-  /* Numbered list inside VEX guidelines */
-  .vex-guidelines {
-    list-style: none;
-    padding: 0;
-    counter-reset: vexstep;
-  }
-  .vex-guidelines > li {
-    counter-increment: vexstep;
-    padding: 12px 16px 12px 16px;
-    margin-bottom: 8px;
-    background: var(--card);
+    background: var(--code);
     border: 1px solid var(--border);
-    border-radius: 8px;
-    font-size: 14px;
-    position: relative;
-  }
-  .vex-guidelines > li::before {
-    content: counter(vexstep);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    border-radius: 50%;
-    background: var(--accent);
-    color: white;
-    font-size: 12px;
-    font-weight: 700;
-    margin-right: 10px;
-    vertical-align: middle;
-  }
-  .vex-guidelines > li strong {
-    color: var(--accent2);
-  }
-
-  /* Template code list */
-  .template-list {
-    margin: 10px 0 0 0;
-    padding: 0;
-    list-style: none;
-  }
-  .template-list li {
-    padding: 8px 12px;
-    margin-bottom: 4px;
     border-radius: 4px;
-    font-size: 13px;
+    color: #b9f6e6;
+    padding: 1px 6px;
   }
-  .template-list li:nth-child(odd) {
-    background: rgba(139,92,246,0.05);
-  }
-  .template-list .tpl-name {
-    color: var(--cyan);
-    font-weight: 600;
-  }
-
-  /* Pitfalls */
-  .pitfalls {
-    list-style: none;
-    padding: 0;
-  }
-  .pitfalls li {
-    padding: 10px 16px;
-    margin-bottom: 6px;
-    background: rgba(239,68,68,0.06);
-    border-left: 3px solid var(--red);
-    border-radius: 0 6px 6px 0;
-    font-size: 14px;
-  }
-  .pitfalls li code {
-    color: var(--orange);
-  }
-
-  /* Copernicus steps */
-  .cop-steps {
-    list-style: none;
-    padding: 0;
-    counter-reset: copstep;
-  }
-  .cop-steps li {
-    counter-increment: copstep;
-    padding: 10px 16px 10px 48px;
-    margin-bottom: 6px;
-    background: var(--card);
+  ol, ul { padding-left: 24px; }
+  li { margin: 8px 0; }
+  .callout {
+    background: var(--panel);
     border: 1px solid var(--border);
+    border-left: 4px solid var(--warning);
     border-radius: 6px;
-    position: relative;
-    font-size: 14px;
+    margin: 24px 0;
+    padding: 16px 18px;
   }
-  .cop-steps li::before {
-    content: counter(copstep);
-    position: absolute;
-    left: 14px;
-    top: 10px;
-    color: var(--accent);
-    font-weight: 700;
-    font-size: 15px;
-  }
-  .cop-steps li code {
-    color: var(--cyan);
-  }
-
-  /* Stat box */
-  .stats {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-    gap: 12px;
-    margin: 20px 0;
-  }
-  .stat-box {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 16px;
-    text-align: center;
-  }
-  .stat-box .val {
-    font-size: 28px;
-    font-weight: 700;
-    margin-bottom: 4px;
-  }
-  .stat-box .label {
-    font-size: 12px;
-    color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
-  .stat-box.red .val { color: var(--red); }
-  .stat-box.green .val { color: var(--green); }
-  .stat-box.blue .val { color: var(--blue); }
-  .stat-box.purple .val { color: var(--accent); }
-
-  /* Raw markdown toggle */
-  .raw-toggle {
-    position: fixed;
-    bottom: 20px;
-    right: 20px;
-    background: var(--accent);
-    color: white;
-    border: none;
-    padding: 10px 20px;
-    border-radius: 8px;
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-    z-index: 100;
-    box-shadow: 0 4px 12px rgba(139,92,246,0.4);
-    transition: transform 0.15s, box-shadow 0.15s;
-  }
-  .raw-toggle:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(139,92,246,0.5);
-  }
-
-  .raw-md {
-    display: none;
-    background: var(--code-bg);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 24px;
-    margin-top: 20px;
-    white-space: pre-wrap;
-    font-family: "JetBrains Mono", "Fira Code", "Consolas", monospace;
-    font-size: 13px;
-    line-height: 1.7;
-    color: var(--muted);
-    max-height: 600px;
-    overflow-y: auto;
-  }
-  .raw-md.visible {
-    display: block;
-  }
-
-  /* Frontmatter display */
-  .frontmatter {
-    background: var(--code-bg);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 16px 20px;
-    margin-bottom: 28px;
-    font-family: "JetBrains Mono", "Fira Code", "Consolas", monospace;
-    font-size: 13px;
-    line-height: 1.8;
-  }
-  .frontmatter .fm-key { color: var(--cyan); }
-  .frontmatter .fm-val { color: var(--green); }
 </style>
 </head>
 <body>
+<header>
+  <main>
+    <h1>procedural-modeling</h1>
+    <p>Skill preview for code-first Houdini procedural modeling with the Edini harness workflow.</p>
+  </main>
+</header>
+<main>
+  <section class="callout">
+    <strong>Harness-first rule:</strong>
+    Use <code>houdini_run_python_sandbox</code> for initial procedural asset generation when available.
+  </section>
 
-<!-- Header -->
-<div class="header">
-  <div class="badge">Edini Skill</div>
-  <h1>procedural-modeling</h1>
-  <div class="subtitle">
-    当用户提到程序化建模、VEX 脚本、Python SOP、算法化几何体生成时，Agent 加载此 Skill 指导代码优先的程序化建模流程。
-  </div>
-</div>
-
-<!-- Meta bar -->
-<div class="meta-bar">
-  <div class="inner">
-    <span>📄 455 words</span>
-    <span>📁 skills/procedural-modeling/SKILL.md</span>
-    <span class="tag">⚡ 每次对话自动加载</span>
-    <span class="tag">🎯 关键词触发</span>
-    <span class="tag">🇨🇳 中文支持</span>
-  </div>
-</div>
-
-<!-- Content -->
-<div class="content">
-
-  <!-- Frontmatter -->
-  <div class="section">
-    <h2>📋 Frontmatter (触发条件)</h2>
-    <div class="frontmatter">
-      <span class="fm-key">name</span>: <span class="fm-val">procedural-modeling</span><br>
-      <span class="fm-key">description</span>: <span class="fm-val">Use when the user mentions procedural modeling, programmatic generation, VEX scripting, Python SOP, algorithmic geometry, parametric design, <em style="color:#f97316">程序化建模</em>, <em style="color:#f97316">程序化生成</em>, or wants to create geometry/effects through code rather than manual node placement. Also use when the user asks to generate patterns, fractals, L-systems, scatter with rules, or any task where code drives geometry creation.</span>
-    </div>
-  </div>
-
-  <!-- Core Principle -->
-  <div class="section">
-    <h2>🎯 核心原则</h2>
-    <div class="principle">
-      <strong>Code-first approach:</strong> 当用户需要程序化结果时，编写和执行代码（Python SOP 或 VEX），而不是手动创建大量节点。代码迭代更快，更容易参数化，Agent 可以自我验证。
-    </div>
-  </div>
-
-  <!-- Language Selection -->
-  <div class="section">
-    <h2>🔀 语言选择策略</h2>
-    <table>
-      <thead>
-        <tr><th>任务类型</th><th>使用</th><th>原因</th></tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>逐元素数学、噪声、向量操作</td>
-          <td><strong>VEX</strong> (Attribute Wrangle)</td>
-          <td>并行、快速、惯用</td>
-        </tr>
-        <tr>
-          <td>递归、外部数据、复杂算法</td>
-          <td><strong>Python SOP</strong></td>
-          <td>完整 Python、库支持、递归</td>
-        </tr>
-        <tr>
-          <td>节点网络生成</td>
-          <td><strong>hou Python API</strong></td>
-          <td>唯一选择</td>
-        </tr>
-        <tr>
-          <td>程序化贴图 (Copernicus)</td>
-          <td><strong>Python → 节点 CRUD</strong></td>
-          <td>Copernicus 基于节点</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-
-  <!-- Stats -->
-  <div class="section">
-    <h2>📊 调研数据支撑</h2>
-    <div class="stats">
-      <div class="stat-box red">
-        <div class="val">36%</div>
-        <div class="label">VEX 执行成功率</div>
-      </div>
-      <div class="stat-box green">
-        <div class="val">Python</div>
-        <div class="label">推荐主力语言</div>
-      </div>
-      <div class="stat-box blue">
-        <div class="val">455</div>
-        <div class="label">Skill 词数</div>
-      </div>
-      <div class="stat-box purple">
-        <div class="val">22</div>
-        <div class="label">已有 Houdini 工具</div>
-      </div>
-    </div>
-    <div class="warning">
-      <div class="label">⚠️ 关键发现</div>
-      <p>LLM 从零生成 VEX 代码的执行成功率仅 <strong style="color:var(--red)">36%</strong>（HoudiniVexBench 基准测试）。因此必须使用模板适配策略而非从零生成。</p>
-    </div>
-  </div>
-
-  <!-- VEX Guidelines -->
-  <div class="section">
-    <h2>⚙️ VEX 指导原则</h2>
-    <ol class="vex-guidelines">
-      <li>
-        <strong>短片段</strong> — 一个 wrangle = 一个操作。5 个变换 → 5 个 wrangle 串联执行。
-      </li>
-      <li>
-        <strong>模板模式</strong> — 基于已知构建块适配，而非从零编写：
-        <ul class="template-list">
-          <li>
-            <span class="tpl-name">噪声位移：</span><code>@P += normalize(@N) * noise(@P * chf("freq")) * chf("amp")</code>
-          </li>
-          <li>
-            <span class="tpl-name">密度散射：</span><code>if(rand(@ptnum) > chramp("density", fit01(@P.y, 0, 1))) removepoint(0, @ptnum)</code>
-          </li>
-          <li>
-            <span class="tpl-name">方向对齐：</span><code>p@orient = quaternion(dihedral({0,1,0}, normalize(@vel)))</code>
-          </li>
-        </ul>
-      </li>
-      <li>
-        <strong>验证</strong> — 执行 VEX 后，始终调用 <code>houdini_inspect_geo</code> 检查点数、属性、包围盒。
-      </li>
-      <li>
-        <strong>失败两次 → 切换 Python SOP</strong> — Python 对复杂逻辑远比 VEX 可靠。
-      </li>
-    </ol>
-  </div>
-
-  <!-- Python SOP -->
-  <div class="section">
-    <h2>🐍 Python SOP 指导</h2>
-    <p>优先创建<strong>持久化 Python SOP 节点</strong>而非临时的 <code>houdini_run_python</code>，这样结果保留在场景中且可参数化：</p>
-    <pre><span class="comment"># 通过 houdini_run_python — 创建一个持久化 Python SOP</span>
-<span class="var">geo_node</span> <span class="op">=</span> hou.<span class="fn">node</span>(<span class="string">"/obj"</span>).<span class="fn">createNode</span>(<span class="string">"geo"</span>, <span class="string">"procedural_result"</span>)
-<span class="var">py</span> <span class="op">=</span> geo_node.<span class="fn">createNode</span>(<span class="string">"python"</span>, <span class="string">"generate"</span>)
-py.<span class="fn">parm</span>(<span class="string">"python"</span>).<span class="fn">set</span>(<span class="string">"node = hou.pwd()\ngeo = node.geometry()\n# 生成代码在此"</span>)</pre>
-    <p>Python SOP 适用场景：<strong>递归</strong>（L-system、树木）、<strong>外部数据</strong>、<strong>复杂循环</strong>、<strong>CSG</strong>、<strong>网格操作</strong>。</p>
-  </div>
-
-  <!-- Workflow -->
-  <div class="section">
-    <h2>🔄 工作流</h2>
+  <section>
+    <h2>Workflow</h2>
     <ol>
-      <li><strong>理解意图</strong> — 什么形状/图案/效果？哪些参数需要可调？</li>
-      <li><strong>选择方法</strong> — VEX（逐元素）/ Python SOP（算法化）/ 节点网络（标准操作）</li>
-      <li><strong>增量构建</strong> — 一步一步来，每步后 <code>houdini_inspect_geo</code> 验证</li>
-      <li><strong>视觉验证</strong> — <code>houdini_capture_viewport</code> + <code>describe_image</code> 检查视觉效果</li>
-      <li><strong>参数化</strong> — VEX 用 <code>ch()</code>/<code>chramp()</code>/<code>chv()</code>，Python SOP 用 spare 参数</li>
+      <li><strong>Create a recipe first</strong> - State asset type, backend, parameters, and expected structural checks.</li>
+      <li><strong>Choose backend</strong> - <code>python_sop</code>, <code>vex_wrangle</code>, or <code>node_network</code>.</li>
+      <li><strong>Use the harness first</strong> - Prefer <code>houdini_run_python_sandbox</code> over raw execution.</li>
+      <li><strong>Preserve failed nodes</strong> - Call <code>houdini_collect_diagnostics</code> before deleting failed procedural nodes.</li>
+      <li><strong>Verify structurally</strong> - Use <code>houdini_verify_asset</code> and/or <code>houdini_inspect_geo</code>.</li>
+      <li><strong>Capture safely</strong> - Use <code>houdini_capture_viewport_safe</code>. Do not explore Qt widgets or unsupported viewport internals.</li>
+      <li><strong>Commit only after verification</strong> - Use <code>houdini_commit_sandbox</code> after structural checks pass; use <code>houdini_discard_sandbox</code> only when the sandbox is no longer useful.</li>
     </ol>
-  </div>
+  </section>
 
-  <!-- Pitfalls -->
-  <div class="section">
-    <h2>🐛 常见 VEX 陷阱</h2>
-    <ul class="pitfalls">
-      <li><code>rand()</code> 返回 float；需要向量时使用 <code>set(rand(s), rand(s+1), rand(s+2))</code></li>
-      <li>没有 <code>float3</code> — 使用 <code>vector</code> 加 <code>set()</code></li>
-      <li><code>foreach</code> 语法：<code>foreach (elem; array) { ... }</code></li>
-      <li>矩阵乘法顺序：<code>P * M</code> 而非 <code>M * P</code>（列优先）</li>
+  <section>
+    <h2>Harness Rules</h2>
+    <ul>
+      <li>Do not use raw <code>houdini_run_python</code> for initial procedural asset generation when <code>houdini_run_python_sandbox</code> is available.</li>
+      <li>Do not delete a failed procedural node before <code>houdini_collect_diagnostics</code>.</li>
+      <li>Do not explore Qt widgets, main windows, viewport internals, or unsupported HOM APIs to capture images.</li>
+      <li>Diagnose failed Python SOP, VEX wrangle, or node-network attempts before switching backend.</li>
+      <li>Commit only after structural verification with <code>houdini_commit_sandbox</code>; discard with <code>houdini_discard_sandbox</code> only when the sandbox is no longer useful.</li>
     </ul>
-  </div>
-
-  <!-- Copernicus -->
-  <div class="section">
-    <h2>🎨 Copernicus（程序化贴图）</h2>
-    <ol class="cop-steps">
-      <li>通过 <code>houdini_run_python</code> 在 <code>/img</code> 上下文中创建节点</li>
-      <li>优先使用 Copernicus 节点（<code>copernicus::noise/ramp/math/merge</code>）而非旧版 COP2</li>
-      <li>通过 <code>sopimport</code> COP 节点导入 SOP 数据</li>
-      <li>通过 <code>hou.node(...).parm("execute").pressButton()</code> 在 ROP 上烘焙贴图</li>
-    </ol>
-  </div>
-
-  <!-- Raw Markdown -->
-  <div class="section">
-    <h2>📝 原始 Markdown</h2>
-    <button class="raw-toggle" onclick="toggleRaw()">显示/隐藏 源码</button>
-    <div id="rawMd" class="raw-md">---
-name: procedural-modeling
-description: Use when the user mentions procedural modeling, programmatic generation, VEX scripting, Python SOP, algorithmic geometry, parametric design, 程序化建模, 程序化生成, or wants to create geometry/effects through code rather than manual node placement. Also use when the user asks to generate patterns, fractals, L-systems, scatter with rules, or any task where code drives geometry creation.
----
-
-# Procedural Modeling in Houdini
-
-**Code-first approach:** When the user wants procedural results, write and execute code (Python SOP or VEX) rather than manually creating dozens of nodes.
-
-## Language Selection
-
-| Task | Use | Why |
-|------|-----|-----|
-| Per-element math, noise, vector ops | **VEX** (Attribute Wrangle) | Parallel, fast, idiomatic |
-| Recursion, external data, complex algorithms | **Python SOP** | Full Python, libraries, recursion |
-| Node network generation | **hou Python API** | Only option |
-| Procedural textures (Copernicus) | **Python → node CRUD** | Copernicus is node-based |
-
-## VEX Guidelines
-
-**VEX generated from scratch fails 64% of the time.** Mitigate with:
-
-1. **Short snippets** — One wrangle = one operation. 5 transforms → 5 wrangles in sequence.
-2. **Template patterns** — Adapt known building blocks rather than writing from zero:
-   - Noise displacement: `@P += normalize(@N) * noise(@P * chf("freq")) * chf("amp")`
-   - Density scatter: `if(rand(@ptnum) > chramp("density", fit01(@P.y, 0, 1))) removepoint(0, @ptnum)`
-   - Orient along direction: `p@orient = quaternion(dihedral({0,1,0}, normalize(@vel)))`
-3. **Validate** — After VEX, always `houdini_inspect_geo` to check point counts, attributes, bounds.
-4. **Fail twice → switch to Python SOP** — Python is far more reliable for complex logic.
-
-## Python SOP Guidelines
-
-Prefer creating a real Python SOP node over `houdini_run_python` so the result persists:
-
-```python
-# Via houdini_run_python — creates a persistent Python SOP
-geo_node = hou.node("/obj").createNode("geo", "procedural_result")
-py = geo_node.createNode("python", "generate")
-py.parm("python").set("node = hou.pwd()\ngeo = node.geometry()\n# generation code here")
-```
-
-Use Python SOP for: recursion (L-systems, trees), external data, complex loops, CSG, mesh operations.
-
-## Workflow
-
-1. **Understand intent** — What shape/pattern/effect? What parameters should be adjustable?
-2. **Choose approach** — VEX (per-element) / Python SOP (algorithmic) / node network (standard ops)
-3. **Build incrementally** — One step at a time, `houdini_inspect_geo` after each step
-4. **Visual verify** — `houdini_capture_viewport` + `describe_image` for visual results
-5. **Parameterize** — Use `ch()`/`chramp()`/`chv()` in VEX, spare parameters in Python SOP
-
-## Common VEX Pitfalls
-
-- `rand()` returns float; for vectors use `set(rand(s), rand(s+1), rand(s+2))`
-- No `float3` — use `vector` with `set()`
-- `foreach` syntax: `foreach (elem; array) { ... }`
-- Matrix multiply order: `P * M` not `M * P` (column-major)
-
-## Copernicus (Procedural Textures)
-
-1. Create nodes via `houdini_run_python` in `/img` context
-2. Prefer Copernicus nodes (`copernicus::noise/ramp/math/merge`) over legacy COP2
-3. Import SOP data via `sopimport` COP node
-4. Bake via `hou.node(...).parm("execute").pressButton()` on ROP</div>
-  </div>
-
-</div>
-
-<script>
-function toggleRaw() {
-  document.getElementById('rawMd').classList.toggle('visible');
-}
-</script>
+  </section>
+</main>
 </body>
 </html>

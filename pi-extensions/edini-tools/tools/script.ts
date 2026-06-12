@@ -23,10 +23,11 @@ export const houdiniRunPython = {
   name: "houdini_run_python",
   label: "Run Houdini Python",
   description:
-    "Execute arbitrary Python code in the Houdini environment. Use sparingly — prefer dedicated tools when available.",
+    "Execute arbitrary Python code in the Houdini environment. This is not sandboxed; prefer dedicated tools or houdini_run_python_sandbox when available.",
   promptSnippet: "Run Python code in Houdini",
   promptGuidelines: [
-    "Use houdini_run_python only when other dedicated tools cannot accomplish the task.",
+    "Use houdini_run_python only when dedicated tools and the sandbox cannot accomplish the task.",
+    "For procedural modeling, prefer houdini_run_python_sandbox so failed cooks preserve diagnostics and do not overwrite live scene nodes.",
   ],
   parameters: Type.Object({
     code: Type.String({ description: "Python code to execute" }),

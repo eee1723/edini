@@ -87,6 +87,71 @@ class MockCategory:
         return self._node_types.get(name)
 
 
+class MockAttrib:
+    def __init__(self, name: str, data_type: str = "Float"):
+        self._name = name
+        self._data_type = data_type
+
+    def name(self) -> str:
+        return self._name
+
+    def dataType(self) -> str:
+        return self._data_type
+
+
+class MockBoundingBox:
+    def __init__(self, bounds: tuple[float, float, float, float, float, float]):
+        self._bounds = bounds
+
+    def minvec(self):
+        return (self._bounds[0], self._bounds[2], self._bounds[4])
+
+    def maxvec(self):
+        return (self._bounds[1], self._bounds[3], self._bounds[5])
+
+
+class MockGeometry:
+    def __init__(
+        self,
+        point_count: int = 0,
+        prim_count: int = 0,
+        vertex_count: int = 0,
+        bounds: tuple[float, float, float, float, float, float] | None = None,
+    ):
+        self._point_count = point_count
+        self._prim_count = prim_count
+        self._vertex_count = vertex_count
+        self._bounds = bounds
+
+    def intrinsicValue(self, name: str):
+        if name == "pointcount":
+            return self._point_count
+        if name == "primitivecount":
+            return self._prim_count
+        if name == "vertexcount":
+            return self._vertex_count
+        if name == "bounds":
+            return self._bounds
+        raise KeyError(name)
+
+    def boundingBox(self):
+        if self._bounds is None:
+            return None
+        return MockBoundingBox(self._bounds)
+
+    def pointAttribs(self):
+        return [MockAttrib("P")]
+
+    def primAttribs(self):
+        return []
+
+    def vertexAttribs(self):
+        return []
+
+    def globalAttribs(self):
+        return []
+
+
 class MockNode:
     """Mock Houdini node with children, parameters, connections."""
 
@@ -110,12 +175,33 @@ class MockNode:
         self._type = MockNodeType(self._type_name)
         self._errors: list[str] = []
         self._warnings: list[str] = []
+        self._geometry = None
 
     def path(self) -> str:
         return self._path
 
     def name(self) -> str:
         return self._name
+
+    def setName(self, name: str, unique_name: bool = False) -> None:
+        old_paths = {node: node._path for node in self.allSubChildren()}
+        self._name = name
+
+        def refresh_path(node: MockNode) -> None:
+            parent_path = node._parent.path() if node._parent else ""
+            if parent_path and parent_path != "/":
+                node._path = f"{parent_path}/{node._name}"
+            else:
+                node._path = f"/{node._name}"
+            for child in node._children:
+                refresh_path(child)
+
+        refresh_path(self)
+        if MockNode._hou_ref is not None:
+            for old_path in old_paths.values():
+                MockNode._hou_ref._nodes.pop(old_path, None)
+            for node in self.allSubChildren():
+                MockNode._hou_ref._nodes[node._path] = node
 
     def type(self) -> MockNodeType:
         return self._type
@@ -160,10 +246,15 @@ class MockNode:
             child._parms["snippet"] = MockParm("snippet", "")
             child._parms["snippet_attribname"] = MockParm("snippet_attribname", "result")
         self._children.append(child)
+        if MockNode._hou_ref is not None:
+            MockNode._hou_ref._nodes[child.path()] = child
         return child
 
     def destroy(self) -> None:
         self._destroyed = True
+        for child in list(self._children):
+            child.destroy()
+        self._children.clear()
         if self._parent and self in self._parent._children:
             self._parent._children.remove(self)
         # Remove from the global node registry if available
@@ -189,7 +280,7 @@ class MockNode:
         pass
 
     def geometry(self):
-        return None
+        return self._geometry
 
     def layoutChildren(self) -> None:
         pass
@@ -238,15 +329,85 @@ class MockShelves:
         return None
 
 
+class MockViewport:
+    def __init__(self):
+        self.home_all_called = False
+
+    def homeAll(self) -> None:
+        self.home_all_called = True
+
+
+class MockFlipbookSettings:
+    def __init__(self):
+        self.output_path: str | None = None
+        self.output_to_mplay: bool | None = None
+        self.frame_range: tuple[int, int] | None = None
+        self.stash_called = False
+        self.stashed_settings: list[MockFlipbookSettings] = []
+        self.stashed_from: MockFlipbookSettings | None = None
+
+    def stash(self) -> MockFlipbookSettings:
+        self.stash_called = True
+        settings = MockFlipbookSettings()
+        settings.stashed_from = self
+        self.stashed_settings.append(settings)
+        return settings
+
+    def output(self, filepath: str) -> None:
+        self.output_path = filepath
+
+    def outputToMPlay(self, value: bool) -> None:
+        self.output_to_mplay = value
+
+    def frameRange(self, frame_range: tuple[int, int]) -> None:
+        self.frame_range = frame_range
+
+
+class MockSceneViewer:
+    def __init__(self):
+        self.viewport = MockViewport()
+        self.base_settings = MockFlipbookSettings()
+        self.flipbook_calls: list[tuple[MockViewport, MockFlipbookSettings]] = []
+
+    def curViewport(self) -> MockViewport:
+        return self.viewport
+
+    def flipbookSettings(self) -> MockFlipbookSettings:
+        return self.base_settings
+
+    def flipbook(
+        self,
+        viewport: MockViewport,
+        settings: MockFlipbookSettings,
+    ) -> None:
+        self.flipbook_calls.append((viewport, settings))
+        if settings.output_path:
+            with open(settings.output_path, "wb") as output:
+                output.write(b"mock flipbook")
+
+
 class MockDesktop:
+    def __init__(self, scene_viewer=None, network_editor=None):
+        self.scene_viewer = scene_viewer
+        self.network_editor = network_editor
+
     def paneTabOfType(self, tab_type):
+        if tab_type == MockHou.paneTabType.SceneViewer:
+            return self.scene_viewer
+        if tab_type == MockHou.paneTabType.NetworkEditor:
+            return self.network_editor
         return None
 
 
 class MockUI:
-    @staticmethod
-    def curDesktop():
-        return MockDesktop()
+    def __init__(self):
+        self.desktop = MockDesktop()
+
+    def curDesktop(self):
+        return self.desktop
+
+    def set_scene_viewer(self, viewer) -> None:
+        self.desktop.scene_viewer = viewer
 
 
 class MockHou:
@@ -259,6 +420,8 @@ class MockHou:
 
     class Ramp:
         pass
+
+    MockGeometry = MockGeometry
 
     def __init__(self):
         self._nodes: dict[str, MockNode] = {}

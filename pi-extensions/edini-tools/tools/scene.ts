@@ -239,6 +239,7 @@ export const houdiniCaptureViewport = {
   promptSnippet: "Capture Houdini viewport screenshot to a PNG file",
   promptGuidelines: [
     "After making visual changes in Houdini, use houdini_capture_viewport to take a screenshot, then use describe_image on the saved file to verify the result matches expectations. This is especially useful when the user provides a reference image.",
+    "Prefer houdini_capture_viewport_safe for new visual verification. houdini_capture_viewport is backward-compatible and should be used only when safe capture is unavailable.",
   ],
   parameters: Type.Object({
     filepath: Type.String({

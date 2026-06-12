@@ -5,6 +5,8 @@ JSON-serializable dicts with {"success": bool, ...} shape.
 """
 from __future__ import annotations
 
+import traceback
+
 import hou
 from typing import Any
 
@@ -370,6 +372,42 @@ def get_help(node_type_name: str) -> dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
+def _vector_to_list(value) -> list[float]:
+    try:
+        return [float(value[0]), float(value[1]), float(value[2])]
+    except Exception:
+        return [float(value.x()), float(value.y()), float(value.z())]
+
+
+def _geometry_bounds(geo) -> dict[str, list[float]] | None:
+    try:
+        raw = geo.intrinsicValue("bounds")
+        if raw is not None and len(raw) == 6:
+            mn = [float(raw[0]), float(raw[2]), float(raw[4])]
+            mx = [float(raw[1]), float(raw[3]), float(raw[5])]
+            return {
+                "min": mn,
+                "max": mx,
+                "size": [mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2]],
+            }
+    except Exception:
+        pass
+
+    try:
+        bbox = geo.boundingBox()
+        if bbox is None:
+            return None
+        mn = _vector_to_list(bbox.minvec())
+        mx = _vector_to_list(bbox.maxvec())
+        return {
+            "min": mn,
+            "max": mx,
+            "size": [mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2]],
+        }
+    except Exception:
+        return None
+
+
 def inspect_geometry(node_path: str) -> dict[str, Any]:
     """Inspect the geometry output of a SOP node."""
     try:
@@ -398,7 +436,7 @@ def inspect_geometry(node_path: str) -> dict[str, Any]:
             "prim_count": geo.intrinsicValue("primitivecount"),
             "vertex_count": geo.intrinsicValue("vertexcount"),
             "attributes": attribs,
-            "bounds": geo.boundingBox().size() if geo.boundingBox() is not None else None,
+            "bounds": _geometry_bounds(geo),
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -408,26 +446,64 @@ def inspect_geometry(node_path: str) -> dict[str, Any]:
 # Script / HDA Operations
 # ---------------------------------------------------------------------------
 
-def run_python(code: str) -> dict[str, Any]:
-    """Execute arbitrary Python code in Houdini context."""
+def _safe_getvalue(stream) -> tuple[str, str | None]:
     try:
-        namespace = {"hou": hou, "__builtins__": __builtins__}
-        import io
-        import sys
-
-        stdout_capture = io.StringIO()
-        old_stdout = sys.stdout
-        sys.stdout = stdout_capture
-
-        try:
-            exec(code, namespace)
-        finally:
-            sys.stdout = old_stdout
-
-        output = stdout_capture.getvalue()
-        return {"success": True, "output": output if output else "(no output)"}
+        return stream.getvalue(), None
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return "", str(e)
+
+
+def run_python(code: str) -> dict[str, Any]:
+    """Execute arbitrary Python code in Houdini context.
+
+    This is intentionally raw execution. Procedural asset generation should
+    prefer harness sandbox tools so failed cooks preserve diagnostics.
+    """
+    import io
+    import sys
+    import traceback
+
+    namespace = {"hou": hou, "__builtins__": __builtins__}
+    stdout_capture = io.StringIO()
+    stderr_capture = io.StringIO()
+    old_stdout = sys.stdout
+    old_stderr = sys.stderr
+    sys.stdout = stdout_capture
+    sys.stderr = stderr_capture
+
+    try:
+        exec(code, namespace)
+        output, output_error = _safe_getvalue(stdout_capture)
+        stderr, stderr_error = _safe_getvalue(stderr_capture)
+        capture_errors = [err for err in (output_error, stderr_error) if err]
+        if capture_errors:
+            return {
+                "success": False,
+                "error": "; ".join(capture_errors),
+                "output": output,
+                "stderr": stderr,
+                "warning": "Raw houdini_run_python is not sandboxed; failed code may have changed the live scene.",
+            }
+        return {
+            "success": True,
+            "output": output or "(no output)",
+            "stderr": stderr,
+            "warning": "Raw houdini_run_python is not sandboxed; use harness tools for procedural assets.",
+        }
+    except Exception as e:
+        output, _ = _safe_getvalue(stdout_capture)
+        stderr, _ = _safe_getvalue(stderr_capture)
+        return {
+            "success": False,
+            "error": str(e),
+            "output": output,
+            "stderr": stderr,
+            "traceback": traceback.format_exc(),
+            "warning": "Raw houdini_run_python is not sandboxed; failed code may have changed the live scene.",
+        }
+    finally:
+        sys.stdout = old_stdout
+        sys.stderr = old_stderr
 
 
 def run_vex(
@@ -499,46 +575,74 @@ def create_hda(node_path: str, hda_name: str, hda_label: str = "") -> dict[str, 
 # ---------------------------------------------------------------------------
 
 def capture_viewport(filepath: str) -> dict[str, Any]:
-    """Capture the active scene viewport as an image file.
+    """Capture the active scene viewport as an image file."""
+    return capture_viewport_safe(filepath)
 
-    Uses Qt's grab() on the Scene Viewer pane tab widget, then saves as PNG.
-    This captures exactly what the user sees (including gizmos, handles, etc.).
-    """
+
+def capture_viewport_safe(
+    filepath: str,
+    frame: int = 1,
+    home_viewport: bool = True,
+) -> dict[str, Any]:
+    """Capture the active scene viewport using Houdini's supported flipbook API."""
+    method = "scene_viewer_flipbook"
+    stage = "initialize"
     try:
-        from PySide6.QtWidgets import QApplication
         import os
 
+        stage = "get_desktop"
         desktop = hou.ui.curDesktop()
+        stage = "find_scene_viewer"
         viewer = desktop.paneTabOfType(hou.paneTabType.SceneViewer)
         if viewer is None:
-            return {"success": False, "error": "No Scene Viewer pane found"}
+            return {
+                "success": False,
+                "error": "No Scene Viewer pane found",
+                "method": method,
+            }
 
-        # Process pending events so viewport is up-to-date
-        QApplication.processEvents()
+        stage = "get_viewport"
+        viewport = viewer.curViewport()
+        if home_viewport and hasattr(viewport, "homeAll"):
+            stage = "home_viewport"
+            viewport.homeAll()
 
-        # Ensure output directory exists
+        stage = "prepare_output"
         os.makedirs(os.path.dirname(os.path.abspath(filepath)) or ".", exist_ok=True)
 
-        # hou.PaneTab inherits from QWidget in Houdini 21/PySide6
-        pixmap = viewer.grab()
-        pixmap.save(filepath, "PNG")
+        stage = "stash_flipbook_settings"
+        base_settings = viewer.flipbookSettings()
+        settings = base_settings.stash() if hasattr(base_settings, "stash") else base_settings
+        stage = "configure_flipbook"
+        settings.output(filepath)
+        settings.outputToMPlay(False)
+        settings.frameRange((frame, frame))
+        stage = "run_flipbook"
+        viewer.flipbook(viewport, settings)
 
+        stage = "verify_output"
         if os.path.exists(filepath):
             size_kb = round(os.path.getsize(filepath) / 1024, 1)
-            width = pixmap.width()
-            height = pixmap.height()
             return {
                 "success": True,
                 "path": filepath,
                 "size_kb": size_kb,
-                "width": width,
-                "height": height,
+                "method": method,
             }
-        return {"success": False, "error": f"File not created: {filepath}"}
-    except AttributeError as e:
-        return {"success": False, "error": f"Viewport grab failed (API mismatch): {e}"}
+        return {
+            "success": False,
+            "error": f"Flipbook completed but file was not created: {filepath}",
+            "method": method,
+        }
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {
+            "success": False,
+            "error": str(e),
+            "method": method,
+            "stage": stage,
+            "traceback": traceback.format_exc(),
+            "note": "Safe capture does not fall back to direct Qt widget probing.",
+        }
 
 
 def capture_network(
