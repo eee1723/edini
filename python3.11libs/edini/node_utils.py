@@ -641,7 +641,9 @@ def capture_viewport_safe(
             "method": method,
             "stage": stage,
             "traceback": traceback.format_exc(),
-            "note": "Safe capture does not fall back to direct Qt widget probing.",
+            "note": "Safe capture does not fall back to direct Qt widget probing. "
+                    "Verify geometry with houdini_inspect_geo or sandbox diagnostics instead. "
+                    "Do not retry capture or explore alternative capture methods.",
         }
 
 
@@ -688,7 +690,13 @@ def capture_network(
             }
         return {"success": False, "error": f"File not created: {filepath}"}
     except AttributeError as e:
-        return {"success": False, "error": f"Network grab failed (API mismatch): {e}"}
+        return {
+            "success": False,
+            "error": f"Network grab failed (API mismatch): {e}",
+            "guidance": "NetworkEditor.grab is not available in Houdini 21. "
+                        "Use houdini_capture_viewport_safe for viewport screenshots instead. "
+                        "To verify node network structure, use houdini_layout_nodes or houdini_list_nodes.",
+        }
     except Exception as e:
         return {"success": False, "error": str(e)}
 
