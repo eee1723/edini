@@ -114,6 +114,9 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
         kw["filepath"],
         frame=kw.get("frame", 1),
         home_viewport=kw.get("home_viewport", True),
+        target_path=kw.get("target_path"),
+        isolate_target=kw.get("isolate_target", False),
+        shading_mode=kw.get("shading_mode", "current"),
     ),
     "houdini_capture_network": lambda **kw: capture_network(
         kw["filepath"],

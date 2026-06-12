@@ -110,6 +110,18 @@ py.parm("python").set("node = hou.pwd()\ngeo = node.geometry()\n# code")
 ### Capture (Screenshots)
 
 - **Only use `houdini_capture_viewport_safe`** — `houdini_capture_network` is unsupported in Houdini 21 (`NetworkEditor.grab` removed).
+- **Always pass `target_path`** pointing to the generated asset's output/display node — this frames the viewport on the actual result, not the entire scene.
+- **Use `isolate_target=true`** to temporarily hide other /obj geo nodes. Prevents other scene objects from cluttering the screenshot.
+- **Use `shading_mode="smooth"`** for a clean shaded view. Wireframe mode makes it hard to evaluate generated geometry.
+- **Example call:**
+  ```
+  houdini_capture_viewport_safe(
+    filepath="screenshots/result.png",
+    target_path="/obj/my_asset/OUT",
+    isolate_target=true,
+    shading_mode="smooth"
+  )
+  ```
 - If safe capture returns an error, do not retry or explore alternative capture methods. Trust geometry diagnostics instead.
 - `describe_image` is a best-effort visual confirmation. If it returns ambiguous results ("faint", "ghostly"), rely on geometry stats (point/prim counts, bounds) as the authoritative verification.
 - Visual verification via capture is supplementary; structural diagnostics are primary.

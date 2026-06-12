@@ -619,10 +619,28 @@ def capture_viewport_safe(
     filepath: str,
     frame: int = 1,
     home_viewport: bool = True,
+    target_path: str | None = None,
+    isolate_target: bool = False,
+    shading_mode: str = "current",
 ) -> dict[str, Any]:
-    """Capture the active scene viewport using Houdini's supported flipbook API."""
+    """Capture the active scene viewport using Houdini's supported flipbook API.
+
+    Args:
+        filepath: Output image path (PNG recommended).
+        frame: Frame number to capture at.
+        home_viewport: Home the viewport before capturing.
+        target_path: If set, frame this specific node and make it current.
+        isolate_target: Hide other /obj geo nodes while capturing.
+        shading_mode: Force viewport shading — 'smooth', 'smooth_wire',
+                      'flat', 'wire', or 'current' (default, no change).
+    """
     method = "scene_viewer_flipbook"
     stage = "initialize"
+
+    # State we need to restore after capture
+    _restore_hidden: list[str] = []
+    _restore_shading: Any = None
+
     try:
         import os
 
@@ -639,9 +657,69 @@ def capture_viewport_safe(
 
         stage = "get_viewport"
         viewport = viewer.curViewport()
-        if home_viewport and hasattr(viewport, "homeAll"):
-            stage = "home_viewport"
-            viewport.homeAll()
+
+        # ── Shading mode (non-critical enhancement) ──
+        try:
+            shading_map = {
+                "smooth": hou.glShadingType.Smooth,
+                "smooth_wire": hou.glShadingType.SmoothWire,
+                "flat": hou.glShadingType.Flat,
+                "flat_wire": hou.glShadingType.FlatWire,
+                "wire": hou.glShadingType.Wire,
+            }
+            if shading_mode in shading_map:
+                vp_settings = viewport.settings()
+                display_set = vp_settings.displaySet(hou.displaySetType.DisplayModel)
+                _restore_shading = display_set.shadedMode()
+                display_set.setShadedMode(shading_map[shading_mode])
+        except Exception:
+            pass  # non-critical, continue with current shading
+
+        # ── Target framing / isolation ──
+        target_node = None
+        if target_path:
+            target_node = hou.node(target_path)
+            if target_node is not None:
+                try:
+                    target_node.setDisplayFlag(True)
+                    target_node.setCurrent(True, clear_all_selected=True)
+                except Exception:
+                    pass
+
+        # Isolate: hide other /obj geo nodes
+        try:
+            if isolate_target and target_node is not None:
+                obj = hou.node("/obj")
+                if obj is not None:
+                    for child in obj.children():
+                        if child.path() != target_node.path():
+                            try:
+                                if child.isDisplayFlagSet():
+                                    child.setDisplayFlag(False)
+                                    _restore_hidden.append(child.path())
+                            except Exception:
+                                pass
+        except Exception:
+            pass
+
+        # Frame the target (after isolation for accurate bounds)
+        try:
+            if target_node is not None:
+                viewport.frameSelected()
+            elif home_viewport and hasattr(viewport, "homeAll"):
+                viewport.homeAll()
+        except Exception:
+            if home_viewport and hasattr(viewport, "homeAll"):
+                try:
+                    viewport.homeAll()
+                except Exception:
+                    pass
+
+        # Force viewport redraw before capture (non-critical)
+        try:
+            viewport.draw(True, True)
+        except Exception:
+            pass
 
         stage = "prepare_output"
         os.makedirs(os.path.dirname(os.path.abspath(filepath)) or ".", exist_ok=True)
@@ -681,6 +759,23 @@ def capture_viewport_safe(
                     "Verify geometry with houdini_inspect_geo or sandbox diagnostics instead. "
                     "Do not retry capture or explore alternative capture methods.",
         }
+    finally:
+        # ── Restore viewport state ──
+        try:
+            if _restore_hidden:
+                for path in _restore_hidden:
+                    node = hou.node(path)
+                    if node is not None:
+                        node.setDisplayFlag(True)
+        except Exception:
+            pass
+        try:
+            if _restore_shading is not None:
+                vp_settings = viewport.settings()
+                display_set = vp_settings.displaySet(hou.displaySetType.DisplayModel)
+                display_set.setShadedMode(_restore_shading)
+        except Exception:
+            pass
 
 
 def capture_network(
