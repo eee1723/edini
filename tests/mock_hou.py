@@ -110,6 +110,58 @@ class MockBoundingBox:
         return (self._bounds[1], self._bounds[3], self._bounds[5])
 
 
+class MockPoint:
+    """Mock Houdini point in builder-mode geometry."""
+
+    def __init__(self):
+        self._pos = (0.0, 0.0, 0.0)
+        self._attrib_values: dict[str, Any] = {}
+
+    def setPosition(self, pos: tuple[float, float, float]) -> None:
+        self._pos = pos
+
+    def position(self) -> tuple[float, float, float]:
+        return self._pos
+
+    def setAttribValue(self, name: str, value: Any) -> None:
+        self._attrib_values[name] = value
+
+    def attribValue(self, name: str) -> Any:
+        return self._attrib_values.get(name, 0.0)
+
+
+class MockVertex:
+    """Mock Houdini vertex in builder-mode geometry."""
+
+    def __init__(self, point: MockPoint):
+        self._point = point
+
+    def point(self) -> MockPoint:
+        return self._point
+
+
+class MockPrim:
+    """Mock Houdini primitive in builder-mode geometry."""
+
+    def __init__(self):
+        self._vertices: list[MockVertex] = []
+        self._attrib_values: dict[str, Any] = {}
+
+    def addVertex(self, point: MockPoint) -> MockVertex:
+        vtx = MockVertex(point)
+        self._vertices.append(vtx)
+        return vtx
+
+    def vertices(self) -> list[MockVertex]:
+        return list(self._vertices)
+
+    def setAttribValue(self, name: str, value: Any) -> None:
+        self._attrib_values[name] = value
+
+    def attribValue(self, name: str) -> Any:
+        return self._attrib_values.get(name, 0.0)
+
+
 class MockGeometry:
     def __init__(
         self,
@@ -122,13 +174,58 @@ class MockGeometry:
         self._prim_count = prim_count
         self._vertex_count = vertex_count
         self._bounds = bounds
+        # Builder-mode fields (populated by createPoint/createPolygon/addAttrib)
+        self._points: list[MockPoint] = []
+        self._prims: list[MockPrim] = []
+        self._builder_attribs: list[tuple[Any, str, Any]] = []  # (attribType, name, default)
+        self._builder_mode = False
+
+    def clear(self) -> None:
+        self._points.clear()
+        self._prims.clear()
+        self._builder_attribs.clear()
+        self._point_count = 0
+        self._prim_count = 0
+        self._vertex_count = 0
+        self._bounds = None
+        self._builder_mode = True
+
+    def addAttrib(self, attrib_type: Any, name: str, default: Any) -> None:
+        self._builder_attribs.append((attrib_type, name, default))
+        self._builder_mode = True
+
+    def createPoint(self) -> MockPoint:
+        pt = MockPoint()
+        self._points.append(pt)
+        self._point_count = len(self._points)
+        self._builder_mode = True
+        return pt
+
+    def createPolygon(self) -> MockPrim:
+        prim = MockPrim()
+        self._prims.append(prim)
+        self._prim_count = len(self._prims)
+        self._builder_mode = True
+        return prim
+
+    def points(self) -> list[MockPoint]:
+        return list(self._points)
+
+    def prims(self) -> list[MockPrim]:
+        return list(self._prims)
 
     def intrinsicValue(self, name: str):
         if name == "pointcount":
+            if self._builder_mode:
+                return len(self._points)
             return self._point_count
         if name == "primitivecount":
+            if self._builder_mode:
+                return len(self._prims)
             return self._prim_count
         if name == "vertexcount":
+            if self._builder_mode and self._prims:
+                return sum(len(p.vertices()) for p in self._prims)
             return self._vertex_count
         if name == "bounds":
             return self._bounds
@@ -136,6 +233,13 @@ class MockGeometry:
 
     def boundingBox(self):
         if self._bounds is None:
+            if self._builder_mode and self._points:
+                # Compute bounds from points
+                xs = [p.position()[0] for p in self._points]
+                ys = [p.position()[1] for p in self._points]
+                zs = [p.position()[2] for p in self._points]
+                self._bounds = (min(xs), max(xs), min(ys), max(ys), min(zs), max(zs))
+                return MockBoundingBox(self._bounds)
             return None
         return MockBoundingBox(self._bounds)
 
@@ -150,6 +254,18 @@ class MockGeometry:
 
     def globalAttribs(self):
         return []
+
+    def findPointAttrib(self, name: str):
+        for _, aname, _ in self._builder_attribs:
+            if aname == name:
+                return MockAttrib(name)
+        return None
+
+    def findPrimAttrib(self, name: str):
+        for _, aname, _ in self._builder_attribs:
+            if aname == name:
+                return MockAttrib(name)
+        return None
 
 
 class MockNode:
@@ -277,9 +393,30 @@ class MockNode:
         return self._warnings
 
     def cook(self, force: bool = False) -> None:
-        pass
+        if self._type_name == "python" and force:
+            code_parm = self._parms.get("python")
+            if code_parm is not None:
+                code_text = code_parm.eval() if hasattr(code_parm, 'eval') else str(code_parm)
+                # Simulate Python SOP cooking: exec user code with hou.pwd() = this node
+                import sys as _sys
+                _old_pwd_path = None
+                if MockNode._hou_ref is not None:
+                    _old_pwd_path = MockNode._hou_ref._pwd_path
+                    MockNode._hou_ref._pwd_path = self._path
+                try:
+                    exec(code_text, {"hou": _sys.modules.get("hou"), "node": self})
+                except Exception:
+                    err = _sys.exc_info()[1]
+                    self._errors.append(str(err) if err else "Unknown cook error")
+                finally:
+                    if MockNode._hou_ref is not None and _old_pwd_path is not None:
+                        MockNode._hou_ref._pwd_path = _old_pwd_path
 
     def geometry(self):
+        if self._type_name == "python":
+            if self._geometry is None:
+                self._geometry = MockGeometry()
+            return self._geometry
         return self._geometry
 
     def layoutChildren(self) -> None:
@@ -420,6 +557,12 @@ class MockHou:
 
     class Ramp:
         pass
+
+    class attribType:
+        Point = 0
+        Prim = 1
+        Vertex = 2
+        Global = 3
 
     MockGeometry = MockGeometry
 
