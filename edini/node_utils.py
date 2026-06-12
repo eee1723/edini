@@ -245,6 +245,42 @@ def set_param(node_path: str, param_name: str, value: Any) -> dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
+def set_params_batch(node_path: str, params: dict[str, Any]) -> dict[str, Any]:
+    """Set multiple parameters on a node in a single call."""
+    try:
+        node = hou.node(node_path)
+        if node is None:
+            return {"success": False, "error": f"Node not found: {node_path}"}
+
+        failed: list[str] = []
+        for name, value in params.items():
+            parm = node.parm(name)
+            if parm is None:
+                failed.append(name)
+                continue
+            try:
+                parm.set(value)
+            except Exception as e:
+                failed.append(f"{name}: {e}")
+
+        if failed:
+            return {
+                "success": True,
+                "partial": True,
+                "set_count": len(params) - len(failed),
+                "total_count": len(params),
+                "failed_params": failed,
+                "warning": f"{len(failed)} parameter(s) could not be set",
+            }
+        return {
+            "success": True,
+            "set_count": len(params),
+            "total_count": len(params),
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 def get_param(node_path: str, param_name: str) -> dict[str, Any]:
     """Read a parameter value from a node."""
     try:

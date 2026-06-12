@@ -112,6 +112,29 @@ export const houdiniSetParam = {
   },
 };
 
+export const houdiniSetParamsBatch = {
+  name: "houdini_set_params_batch",
+  label: "Set Multiple Houdini Parameters",
+  description:
+    "Set multiple parameters on a single Houdini node in one call. Much faster than calling houdini_set_param repeatedly.",
+  promptSnippet: "Set multiple parameters on a Houdini node at once",
+  promptGuidelines: [
+    "Use houdini_set_params_batch when setting 3+ parameters on the same node — it's significantly faster than individual calls.",
+  ],
+  parameters: Type.Object({
+    node_path: Type.String({ description: "Full path of the node" }),
+    params: Type.Record(Type.String(), Type.Unknown(), {
+      description: "Map of parameter names to values",
+    }),
+  }),
+  async execute(
+    _toolCallId: string,
+    params: { node_path: string; params: Record<string, unknown> }
+  ) {
+    return forwardTool("houdini_set_params_batch", params);
+  },
+};
+
 export const houdiniGetParam = {
   name: "houdini_get_param",
   label: "Get Houdini Parameter",
@@ -284,6 +307,7 @@ export const sceneTools = [
   houdiniDeleteNode,
   houdiniConnectNodes,
   houdiniSetParam,
+  houdiniSetParamsBatch,
   houdiniGetParam,
   houdiniListNodes,
   houdiniLayoutNodes,
