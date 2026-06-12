@@ -78,6 +78,13 @@ Use Python SOP for: recursion (L-systems, trees), external data, complex loops, 
 7. **Capture safely** - Use `houdini_capture_viewport_safe` for visual verification. Do not explore Qt widgets or unsupported viewport internals during normal modeling.
 8. **Commit only after verification** - Use `houdini_commit_sandbox` only after structural checks pass. Use `houdini_discard_sandbox` only when the sandbox is no longer useful.
 
+### Capture (Screenshots)
+
+- **Only use `houdini_capture_viewport_safe`** — `houdini_capture_network` is unsupported in Houdini 21 (`NetworkEditor.grab` removed).
+- If safe capture returns an error, do not retry or explore alternative capture methods. Trust geometry diagnostics instead.
+- `describe_image` is a best-effort visual confirmation. If it returns ambiguous results ("faint", "ghostly"), rely on geometry stats (point/prim counts, bounds) as the authoritative verification.
+- Visual verification via capture is supplementary; structural diagnostics are primary.
+
 ## Common VEX Pitfalls
 
 - **Wrong run-over class** - point/prim/vertex/detail produces completely different results. Always set explicitly.
