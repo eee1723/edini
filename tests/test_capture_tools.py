@@ -316,15 +316,46 @@ class TestSystemPromptGuidelines(unittest.TestCase):
 class TestCaptureErrorGuidance(unittest.TestCase):
     """Tests that capture error messages include H21-specific guidance."""
 
+    def setUp(self):
+        self.previous_hou = sys.modules.get("hou")
+        self.previous_hou_ref = MockNode._hou_ref
+        self.previous_edini_modules = {
+            name: module
+            for name, module in sys.modules.items()
+            if name.startswith("edini")
+        }
+        runtime_path = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "python3.11libs")
+        )
+        if runtime_path not in sys.path:
+            sys.path.insert(0, runtime_path)
+        self.mock_hou = create_mock_hou()
+        self.viewer = MockSceneViewer()
+        self.mock_hou.ui.set_scene_viewer(self.viewer)
+        sys.modules["hou"] = self.mock_hou
+        for mod_name in list(sys.modules):
+            if mod_name.startswith("edini"):
+                del sys.modules[mod_name]
+        self.node_utils = importlib.import_module("edini.node_utils")
+
+    def tearDown(self):
+        for mod_name in list(sys.modules):
+            if mod_name.startswith("edini"):
+                del sys.modules[mod_name]
+        sys.modules.update(self.previous_edini_modules)
+        if self.previous_hou is None:
+            sys.modules.pop("hou", None)
+        else:
+            sys.modules["hou"] = self.previous_hou
+        MockNode._hou_ref = self.previous_hou_ref
+
     def test_capture_network_error_includes_guidance(self):
-        from edini.node_utils import capture_network
-        result = capture_network("/tmp/test.png", "/obj")
+        result = self.node_utils.capture_network("/tmp/test.png", "/obj")
         if not result["success"] and "guidance" in result:
             self.assertIn("houdini_capture_viewport_safe", result["guidance"])
 
     def test_capture_viewport_safe_error_includes_note(self):
-        from edini.node_utils import capture_viewport_safe
-        result = capture_viewport_safe("/tmp/test.png")
+        result = self.node_utils.capture_viewport_safe("/tmp/test.png")
         if not result["success"] and "note" in result:
             self.assertIn("Safe capture", result["note"])
 

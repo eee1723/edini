@@ -15,7 +15,7 @@ from edini.node_utils import (
     set_param, set_params_batch, get_param, list_nodes, get_node_info, layout_nodes,
     search_nodes, get_help, inspect_geometry,
     run_python, run_vex, create_hda, get_hda_info,
-    capture_viewport, capture_viewport_safe, capture_network,
+    capture_viewport, capture_viewport_safe, capture_review, capture_network,
     get_selection, check_errors, set_display_flag,
 )
 from edini.harness import (
