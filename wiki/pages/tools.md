@@ -1,14 +1,16 @@
 # 🔧 工具清单
 
-> Edini 19 个 Houdini 工具的完整目录。最后更新：2026-06-08。
+> Edini 27 个 Houdini 工具的完整目录。最后更新：2026-06-12。
 
 ## 工具总览
 
 | 分类 | 数量 | 工具 |
 |------|------|------|
-| 场景/节点 | 11 | Scene Info · Create · Delete · Connect · Set Param · Get Param · List · Layout |
+| 场景/节点 | 11 | Scene Info · Create · Delete · Connect · Set Param · Get Param · List · Layout · Selection · Errors · Display Flag |
 | 查询/检查 | 4 | Search · Help · Node Info · Inspect Geo |
 | 脚本/HDA | 4 | Run Python · Run VEX · Create HDA · Get HDA Info |
+| 捕获 | 2 | Capture Viewport Safe · Capture Network |
+| Procedural Harness | 6 | Sandbox · Diagnostics · Verify · Commit · Discard · Safe Capture |
 
 ## 场景工具 (scene.ts)
 
@@ -119,6 +121,8 @@
 
 ## Procedural Harness Tools
 
+> 程序化建模默认走这组工具：先沙盒生成，再诊断/验证，最后提交或丢弃。详细手测重点见 [Procedural Harness](procedural-harness.html)。
+
 ### houdini_collect_diagnostics
 - Collect node errors, warnings, parameters, and optional geometry stats before retrying or deleting failed procedural work.
 
@@ -136,6 +140,7 @@
 
 ### houdini_capture_viewport_safe
 - Capture a viewport image through the supported safe capture path for visual verification.
+- If capture fails, report the clean failure and diagnostics instead of probing Qt widgets or unsupported viewport internals.
 
 ## Tool Forwarding Architecture
 

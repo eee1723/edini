@@ -4,12 +4,12 @@
     "description": "Houdini AI Assistant — 自然语言驱动 Houdini 21，基于 Pi Coding Agent",
     "repo_root": "..",
     "lang": "zh-CN",
-    "tech_stack": ["Python", "PySide6", "Houdini 21", "Node.js", "TypeScript", "Pi Agent", "mistune", "DeepSeek", "Anthropic", "ZhipuAI"],
+    "tech_stack": ["Python", "PySide6", "Houdini 21", "Node.js", "TypeScript", "Pi Agent", "mistune", "DeepSeek", "Anthropic", "ZhipuAI"]
   },
   "wiki": {
     "version": "2.0",
     "created": "2026-06-03",
-    "last_updated": "2026-06-10-img-cache-race-fix"
+    "last_updated": "2026-06-12-procedural-harness-guide"
   },
   "features": {
     "search": true,
@@ -29,10 +29,11 @@
     {"id": "architecture", "title": "架构地图", "icon": "🏗️", "order": 2},
     {"id": "progress", "title": "开发进度", "icon": "🚀", "order": 3, "filterable": true},
     {"id": "tools", "title": "工具清单", "icon": "🔧", "order": 4},
-    {"id": "pitfalls", "title": "踩坑记录", "icon": "⚠️", "order": 5, "filterable": true},
-    {"id": "references", "title": "参考资料", "icon": "📚", "order": 6},
-    {"id": "handoff", "title": "Agent交接", "icon": "🤖", "order": 7},
-    {"id": "evaluation", "title": "评估系统", "icon": "📐", "order": 8},
-    {"id": "skills-evolution", "title": "知识→Skills演化", "icon": "🧠", "order": 9}
+    {"id": "procedural-harness", "title": "Procedural Harness", "icon": "🧪", "order": 5},
+    {"id": "pitfalls", "title": "踩坑记录", "icon": "⚠️", "order": 6, "filterable": true},
+    {"id": "references", "title": "参考资料", "icon": "📚", "order": 7},
+    {"id": "handoff", "title": "Agent交接", "icon": "🤖", "order": 8},
+    {"id": "evaluation", "title": "评估系统", "icon": "📐", "order": 9},
+    {"id": "skills-evolution", "title": "知识→Skills演化", "icon": "🧠", "order": 10}
   ]
 }

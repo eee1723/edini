@@ -1,6 +1,6 @@
 # 📊 仪表盘
 
-> **当前阶段**：知识 → Skills 演化 — Traces → Knowledge → Skills 闭环 &nbsp;|&nbsp; **状态**：21 阶段完成，规划 Hivemind 式持续学习 &nbsp;|&nbsp; **最后更新**：2026-06-09
+> **当前阶段**：Procedural Harness Phase B 已合入主线 &nbsp;|&nbsp; **状态**：沙盒生成 / 诊断 / 验证 / 提交流程完成 &nbsp;|&nbsp; **最后更新**：2026-06-12
 
 ## 快速导航
 
@@ -8,7 +8,8 @@
 |------|------|
 | [架构地图](architecture.html) | Edini 三层架构（Houdini ↔ JSON-RPC ↔ Pi Agent）及数据流 |
 | [开发进度](progress.html) | 进度看板 · 已完成工作 · 下一步任务 |
-| [工具清单](tools.html) | 16 个 Houdini 工具的完整目录 |
+| [工具清单](tools.html) | 27 个 Houdini 工具的完整目录 |
+| [Procedural Harness](procedural-harness.html) | 程序化建模沙盒、诊断、验证、提交流程与手测重点 |
 | [踩坑记录](pitfalls.html) | 开发中的踩坑记录，支持分类/优先级/状态筛选 |
 | [参考资料](references.html) | 外部文档 · 设计决策 · API 参考 |
 | [Agent交接](handoff.html) | 给新 Agent 和开发者的快速上下文 |
@@ -21,9 +22,9 @@
 |------|------|
 | UI 面板 | ✅ 三栏布局 · Thinking 面板 · Tool Call 面板 · 时间线 Widget bubble · Markdown 双格式化器（完整解析 + 流式安全）· 文本选择 · 历史气泡合并 · 知识过滤 · 智能滚动 · 4 层统一字号 · 无文字裁切 |
 | Houdini 集成 | ✅ MainMenuCommon.xml · 包注册 |
-| 工具执行器 | ✅ HTTP Server · 16 工具路由 · 健康检查 · 实时工具卡片 |
+| 工具执行器 | ✅ HTTP Server · 27 工具路由 · Procedural Harness handlers · 健康检查 · 实时工具卡片 |
 | Houdini 操作 | ✅ 场景查询 · 节点 CRUD · 参数读写 · 布局 · 搜索 |
-| Pi 扩展 | ✅ 16 tools (TypeBox) · edini-context 铁律注入 + Houdini 上下文 |
+| Pi 扩展 | ✅ 27 tools (TypeBox) · harness tool schema · edini-context 铁律注入 + Houdini 上下文 |
 | 安装部署 | ✅ install.py · setup_pi.bat · settings.json 持久化 |
 | Session 管理 | ✅ pi 接管会话（cwd=HIP）· pi_sessions.py 读 JSONL · 浏览模式 · new/switch/set_name/get_state RPC |
 | 多模型 | ✅ DeepSeek · Anthropic · OpenAI · Google · 智谱(ZhipuAI Coding Plan) · 阿里云百炼(aliyun) · 35 内置供应商自动同步 · 自定义供应商支持 · 视觉模型独立配置 |
@@ -38,6 +39,7 @@
 | 知识检索 | ✅ edini_search_knowledge 工具已实现 |
 | 知识→Skills | ⬜ Traces → Skills 自动提取（规划中） |
 | 评估系统 | ✅ 5 维度评分 · LogParser · SQLite · EvalDashboard · edini_get_eval_stats · LLM-as-Judge (deepseek-chat) |
+| Procedural Harness | ✅ `houdini_run_python_sandbox` · diagnostics before delete · structural verify · safe capture · commit/discard lifecycle · [手测清单](procedural-harness.html) |
 
 ## 技术栈
 
