@@ -16,6 +16,22 @@
 
 **经验教训**：`edini/` 和 `python3.11libs/edini/` 是两个独立的安装路径，同步时不能简单覆盖，需要双向对比确保功能完整。最好用 `diff` 对比后再合并。
 
+## Procedural Harness Handoff (2026-06-12)
+
+- Worktree: `E:/edini/.worktrees/procedural-harness`
+- Branch: `codex/procedural-harness`
+- Current HEAD: `0930850 fix(harness): sanitize output diagnostics path`
+- Base plan: `docs/superpowers/plans/2026-06-11-edini-procedural-harness.md`
+- Design spec: `docs/superpowers/specs/2026-06-11-edini-procedural-harness-design.md`
+- Status: Phase B procedural harness is implemented, documented, and final-review approved after two JSON-safety fixes.
+- Scope landed: live procedural sandbox, diagnostics before retry/delete, structural verification, commit/discard lifecycle, safe flipbook viewport capture, Pi harness tools, procedural-modeling skill guidance, and ladder regression coverage.
+- Phase C path preserved: harness results include `job_id`, `execution_mode`, diagnostics bundles, JSON-safe result payloads, and artifact-shaped fields so an external worker can replace live sandbox execution later.
+- Final focused verification: `python -m pytest tests/test_node_utils.py tests/test_procedural_harness.py tests/test_tool_executor_harness.py tests/test_capture_tools.py tests/test_pi_harness_tools.py -q` -> `111 passed, 743 warnings`.
+- Compile/read checks passed: Python `py_compile` for harness/node_utils/tool_executor source/runtime copies, Pi TS file readability check, and source/runtime copy comparisons.
+- Full-suite blocker: `python -m pytest tests -q` still has one unrelated failure, `tests/test_config.py::TestGetPiEnv::test_vision_env_not_set_when_configured`, where `VISIONIZER_PROVIDER` is `openai` but the test expects `None`.
+- Diff check: the procedural harness branch does not modify `edini/config.py`, `python3.11libs/edini/config.py`, or `tests/test_config.py`; do not mix that config behavior decision into the harness commits unless explicitly choosing to resolve the blocker.
+- Next continuation step: decide/fix the config test behavior, rerun full verification, then use the finishing branch workflow to choose merge, PR, keep-as-is, or discard.
+
 ## 一句话总结
 
 Edini 是 Houdini 21 的 AI 助手：Python/PySide6 面板 → JSON-RPC 进程通信 → Pi Agent AI 后端 → 22 个 Houdini 工具。知识沉淀采用两层架构（铁律 + 知识库），对话结束后 ReflectWorker 后台反思 → KnowledgeZone 面板确认 → 自动去重合并。
