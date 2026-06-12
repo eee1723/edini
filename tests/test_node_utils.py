@@ -568,9 +568,18 @@ class TestSetDisplayFlag(unittest.TestCase):
 class TestSetParamsBatch(unittest.TestCase):
     """Tests for set_params_batch() — bulk parameter setting."""
 
+    def setUp(self):
+        cr = create_node("box", name="batch_test", parent_path="/obj")
+        _register_created_node(cr)
+        self.node_path = cr["path"]
+        node = _mock_hou.node(self.node_path)
+        node._parms["tx"] = MockParm("tx", 0.0)
+        node._parms["ty"] = MockParm("ty", 0.0)
+        node._parms["tz"] = MockParm("tz", 0.0)
+
     def test_set_params_batch_all_success(self):
         from edini.node_utils import set_params_batch
-        result = set_params_batch("/obj/geo1", {"tx": 1.5, "ty": 2.0, "tz": 3.0})
+        result = set_params_batch(self.node_path, {"tx": 1.5, "ty": 2.0, "tz": 3.0})
         self.assertTrue(result["success"])
         self.assertEqual(result["set_count"], 3)
         self.assertEqual(result["total_count"], 3)
@@ -578,7 +587,7 @@ class TestSetParamsBatch(unittest.TestCase):
 
     def test_set_params_batch_missing_param(self):
         from edini.node_utils import set_params_batch
-        result = set_params_batch("/obj/geo1", {"tx": 1.0, "nonexistent": 99})
+        result = set_params_batch(self.node_path, {"tx": 1.0, "nonexistent": 99})
         self.assertTrue(result["success"])
         self.assertTrue(result.get("partial"))
         self.assertEqual(result["set_count"], 1)
