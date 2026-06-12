@@ -109,21 +109,39 @@ py.parm("python").set("node = hou.pwd()\ngeo = node.geometry()\n# code")
 
 ### Capture (Screenshots)
 
-- **Only use `houdini_capture_viewport_safe`** — `houdini_capture_network` is unsupported in Houdini 21 (`NetworkEditor.grab` removed).
-- **Always pass `target_path`** pointing to the generated asset's output/display node — this frames the viewport on the actual result, not the entire scene.
-- **Use `isolate_target=true`** to temporarily hide other /obj geo nodes. Prevents other scene objects from cluttering the screenshot.
-- **Use `shading_mode="smooth"`** for a clean shaded view. Wireframe mode makes it hard to evaluate generated geometry.
-- **Example call:**
-  ```
-  houdini_capture_viewport_safe(
-    filepath="screenshots/result.png",
-    target_path="/obj/my_asset/OUT",
-    isolate_target=true,
-    shading_mode="smooth"
-  )
-  ```
+**For single-view quick verification**, use `houdini_capture_viewport_safe`:
+```
+houdini_capture_viewport_safe(
+  filepath="screenshots/result.png",
+  target_path="/obj/my_asset/OUT",
+  isolate_target=true,
+  shading_mode="smooth"
+)
+```
+
+**For thorough review, use `houdini_capture_review`** — captures multiple views and/or frames into a single contact sheet:
+```
+# 4-view quad (perspective + three orthographic)
+houdini_capture_review(
+  filepath="screenshots/review.png",
+  target_path="/obj/my_asset/OUT",
+  views=["perspective", "top", "front", "right"],
+  shading_mode="smooth"
+)
+
+# Frame range time-lapse
+houdini_capture_review(
+  filepath="screenshots/growth.png",
+  target_path="/obj/my_asset/OUT",
+  frames=[1, 10, 20, 30],
+  shading_mode="smooth"
+)
+```
+
+- **Always pass `target_path`** — frames and isolates the generated asset.
+- **Only use `houdini_capture_viewport_safe` or `houdini_capture_review`** — `houdini_capture_network` is unsupported in Houdini 21.
 - If safe capture returns an error, do not retry or explore alternative capture methods. Trust geometry diagnostics instead.
-- `describe_image` is a best-effort visual confirmation. If it returns ambiguous results ("faint", "ghostly"), rely on geometry stats (point/prim counts, bounds) as the authoritative verification.
+- `describe_image` is a best-effort visual confirmation. If it returns ambiguous results, rely on geometry stats as authoritative.
 - Visual verification via capture is supplementary; structural diagnostics are primary.
 
 ## Common VEX Pitfalls

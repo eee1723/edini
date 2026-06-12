@@ -118,6 +118,15 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
         isolate_target=kw.get("isolate_target", False),
         shading_mode=kw.get("shading_mode", "current"),
     ),
+    "houdini_capture_review": lambda **kw: capture_review(
+        kw["filepath"],
+        target_path=kw.get("target_path"),
+        views=kw.get("views"),
+        frames=kw.get("frames"),
+        columns=kw.get("columns", 0),
+        shading_mode=kw.get("shading_mode", "smooth"),
+        home_target=kw.get("home_target", True),
+    ),
     "houdini_capture_network": lambda **kw: capture_network(
         kw["filepath"],
         parent_path=kw.get("parent_path", "/obj"),

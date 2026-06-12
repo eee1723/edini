@@ -832,6 +832,334 @@ def capture_network(
         return {"success": False, "error": str(e)}
 
 
+# ---------------------------------------------------------------------------
+# Review Capture — multi-view + frame-range contact sheets
+# ---------------------------------------------------------------------------
+
+_VIEW_TYPE_MAP: dict[str, Any] = {}  # populated lazily in Houdini
+
+
+def _get_view_type(view_name: str) -> Any:
+    """Map a view name string to hou.geometryViewportType enum."""
+    if not _VIEW_TYPE_MAP:
+        try:
+            _VIEW_TYPE_MAP.update({
+                "perspective": hou.geometryViewportType.Perspective,
+                "top": hou.geometryViewportType.Top,
+                "bottom": hou.geometryViewportType.Bottom,
+                "front": hou.geometryViewportType.Front,
+                "back": hou.geometryViewportType.Back,
+                "right": hou.geometryViewportType.Right,
+                "left": hou.geometryViewportType.Left,
+            })
+        except Exception:
+            pass
+    return _VIEW_TYPE_MAP.get(view_name.lower())
+
+
+def _concat_images_grid(image_paths: list[str], output_path: str, columns: int) -> bool:
+    """Concatenate multiple images into a grid using Pillow.
+
+    Returns True on success, False if Pillow not available or any error.
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        return False
+
+    try:
+        imgs: list[Image.Image] = []
+        for p in image_paths:
+            if os.path.exists(p):
+                imgs.append(Image.open(p))
+        if not imgs:
+            return False
+
+        cols = max(1, min(columns, len(imgs)))
+        rows = (len(imgs) + cols - 1) // cols
+
+        # Use the largest width/height across all images
+        cell_w = max(img.width for img in imgs)
+        cell_h = max(img.height for img in imgs)
+
+        canvas = Image.new("RGB", (cell_w * cols, cell_h * rows), (30, 30, 30))
+        for i, img in enumerate(imgs):
+            r, c = i // cols, i % cols
+            x, y = c * cell_w, r * cell_h
+            # Center the image in its cell if smaller
+            ox = (cell_w - img.width) // 2
+            oy = (cell_h - img.height) // 2
+            canvas.paste(img, (x + ox, y + oy))
+            img.close()
+
+        canvas.save(output_path, "PNG")
+        canvas.close()
+        return True
+    except Exception:
+        return False
+
+
+def _capture_single_view(
+    viewer: Any,
+    viewport: Any,
+    filepath: str,
+    frame: int,
+) -> bool:
+    """Capture a single viewport frame via flipbook. Returns True on success."""
+    try:
+        base_settings = viewer.flipbookSettings()
+        settings = base_settings.stash() if hasattr(base_settings, "stash") else base_settings
+        settings.output(filepath)
+        settings.outputToMPlay(False)
+        settings.frameRange((frame, frame))
+        viewer.flipbook(viewport, settings)
+        return os.path.exists(filepath)
+    except Exception:
+        return False
+
+
+def capture_review(
+    filepath: str,
+    target_path: str | None = None,
+    views: list[str] | None = None,
+    frames: list[int] | None = None,
+    columns: int = 0,
+    shading_mode: str = "smooth",
+    home_target: bool = True,
+) -> dict[str, Any]:
+    """Capture a review contact sheet — multi-view, multi-frame snapshots.
+
+    Captures each (view × frame) combination as a separate flipbook pass,
+    then concatenates all captures into a single grid image using Pillow.
+
+    Args:
+        filepath: Output image path (PNG).
+        target_path: Node to frame and isolate. Required for predictable results.
+        views: View types to capture. Default: ["perspective"].
+               Supported: "perspective", "top", "front", "right",
+               "bottom", "back", "left".
+        frames: Frame numbers to capture. Default: [1].
+                Use [1, 10, 20, 30] for a 4-frame time contact sheet.
+        columns: Grid columns. 0 = auto (√n rounded up). Default: 0.
+        shading_mode: "smooth", "wire", "flat", etc. Default: "smooth".
+        home_target: Frame the target before each view capture. Default: True.
+
+    Returns:
+        {success, path, size_kb, grid: {rows, cols, cells},
+         captured: [list of individual file paths]}
+    """
+    import os
+    import uuid
+    import tempfile
+
+    method = "review_capture"
+    stage = "initialize"
+
+    if views is None:
+        views = ["perspective"]
+    if frames is None:
+        frames = [1]
+
+    # Validate inputs
+    valid_views = {"perspective", "top", "front", "right", "bottom", "back", "left"}
+    views = [v.lower() for v in views if v.lower() in valid_views]
+    if not views:
+        views = ["perspective"]
+    frames = sorted(set(frames))
+    if not frames:
+        frames = [1]
+
+    total_cells = len(views) * len(frames)
+    if columns <= 0:
+        columns = max(1, int(total_cells ** 0.5 + 0.5)) if total_cells > 1 else 1
+
+    # ── State to restore ──
+    _restore_hidden: list[str] = []
+    _restore_shading: Any = None
+    _restore_view_type: Any = None
+
+    try:
+        stage = "get_viewer"
+        desktop = hou.ui.curDesktop()
+        viewer = desktop.paneTabOfType(hou.paneTabType.SceneViewer)
+        if viewer is None:
+            return {"success": False, "error": "No Scene Viewer pane found", "method": method}
+
+        viewport = viewer.curViewport()
+        _restore_view_type = viewport.type() if hasattr(viewport, "type") else None
+
+        # ── Shading ──
+        try:
+            shading_map = {
+                "smooth": hou.glShadingType.Smooth,
+                "smooth_wire": hou.glShadingType.SmoothWire,
+                "flat": hou.glShadingType.Flat,
+                "wire": hou.glShadingType.Wire,
+            }
+            if shading_mode in shading_map:
+                vp_settings = viewport.settings()
+                display_set = vp_settings.displaySet(hou.displaySetType.DisplayModel)
+                _restore_shading = display_set.shadedMode()
+                display_set.setShadedMode(shading_map[shading_mode])
+        except Exception:
+            pass
+
+        # ── Target ──
+        target_node = None
+        if target_path:
+            target_node = hou.node(target_path)
+            if target_node is not None:
+                try:
+                    target_node.setDisplayFlag(True)
+                except Exception:
+                    pass
+                try:
+                    if hasattr(hou, "setFrame"):
+                        hou.setFrame(frames[0])
+                except Exception:
+                    pass
+
+        # ── Isolate ──
+        try:
+            if target_node is not None:
+                obj = hou.node("/obj")
+                if obj is not None:
+                    for child in obj.children():
+                        if child.path() != target_node.path():
+                            try:
+                                if child.isDisplayFlagSet():
+                                    child.setDisplayFlag(False)
+                                    _restore_hidden.append(child.path())
+                            except Exception:
+                                pass
+        except Exception:
+            pass
+
+        # ── Prepare output ──
+        stage = "prepare_output"
+        os.makedirs(os.path.dirname(os.path.abspath(filepath)) or ".", exist_ok=True)
+
+        # ── Capture each cell ──
+        stage = "capture_cells"
+        tmp_dir = os.path.dirname(os.path.abspath(filepath))
+        captured: list[str] = []
+        cell_errors: list[str] = []
+
+        for fi, frame in enumerate(frames):
+            # Set frame
+            try:
+                if hasattr(hou, "setFrame"):
+                    hou.setFrame(frame)
+            except Exception:
+                pass
+
+            for vi, view_name in enumerate(views):
+                cell_index = fi * len(views) + vi
+                tmp_path = os.path.join(tmp_dir, f"_edini_review_{uuid.uuid4().hex[:8]}.png")
+
+                # Change view type
+                view_type = _get_view_type(view_name)
+                if view_type is not None:
+                    try:
+                        viewport.changeType(view_type)
+                        viewport.draw(True, True)
+                    except Exception:
+                        pass
+
+                # Frame target
+                if home_target and target_node is not None:
+                    try:
+                        viewport.frameSelected()
+                        viewport.draw(True, True)
+                    except Exception:
+                        pass
+
+                # Capture
+                if _capture_single_view(viewer, viewport, tmp_path, frame):
+                    captured.append(tmp_path)
+                else:
+                    cell_errors.append(f"{view_name}@f{frame}")
+
+        # ── Concatenate ──
+        stage = "concat"
+        if not captured:
+            return {
+                "success": False,
+                "error": f"All {total_cells} captures failed: {', '.join(cell_errors)}" if cell_errors else "No captures succeeded",
+                "method": method,
+                "stage": stage,
+            }
+
+        concat_ok = _concat_images_grid(captured, filepath, columns)
+
+        # Clean up temp files
+        for tmp_path in captured:
+            try:
+                if os.path.exists(tmp_path) and tmp_path != filepath:
+                    os.remove(tmp_path)
+            except Exception:
+                pass
+
+        if not concat_ok:
+            # If concatenation failed, keep the first capture as fallback
+            if captured and os.path.exists(captured[0]):
+                import shutil
+                shutil.copy(captured[0], filepath)
+
+        if os.path.exists(filepath):
+            size_kb = round(os.path.getsize(filepath) / 1024, 1)
+            actual_cols = min(columns, len(captured))
+            actual_rows = (len(captured) + actual_cols - 1) // actual_cols
+            return {
+                "success": True,
+                "path": filepath,
+                "size_kb": size_kb,
+                "method": method,
+                "grid": {"rows": actual_rows, "cols": actual_cols, "cells": len(captured)},
+                "captured": captured[:10],  # truncate for tool result size
+                "errors": cell_errors[:10] if cell_errors else [],
+                "views": views,
+                "frames": frames,
+            }
+        return {
+            "success": False,
+            "error": f"Output file not created: {filepath}",
+            "method": method,
+            "stage": stage,
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "method": method,
+            "stage": stage,
+            "traceback": traceback.format_exc(),
+        }
+    finally:
+        # ── Restore state ──
+        try:
+            if _restore_view_type is not None:
+                viewport.changeType(_restore_view_type)
+        except Exception:
+            pass
+        try:
+            if _restore_hidden:
+                for path in _restore_hidden:
+                    node = hou.node(path)
+                    if node is not None:
+                        node.setDisplayFlag(True)
+        except Exception:
+            pass
+        try:
+            if _restore_shading is not None:
+                vp_settings = viewport.settings()
+                display_set = vp_settings.displaySet(hou.displaySetType.DisplayModel)
+                display_set.setShadedMode(_restore_shading)
+        except Exception:
+            pass
+
+
 def get_hda_info(hda_name: str) -> dict[str, Any]:
     """Get information about an HDA definition."""
     try:

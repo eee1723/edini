@@ -200,4 +200,64 @@ export const harnessTools = [
   houdiniCommitSandbox,
   houdiniDiscardSandbox,
   houdiniCaptureViewportSafe,
+  houdiniCaptureReview,
 ];
+
+export const houdiniCaptureReview = {
+  name: "houdini_capture_review",
+  label: "Capture Procedural Review",
+  description:
+    "Capture a multi-view, multi-frame review contact sheet for procedural assets. " +
+    "Supports 4-view (perspective+top+front+right) for complete shape verification, " +
+    "frame ranges for time-based review (e.g. growth animation), and combinations of both.",
+  promptSnippet: "Capture a review contact sheet of the generated asset",
+  promptGuidelines: [
+    "Use houdini_capture_review after generating a procedural asset to verify it from multiple angles.",
+    "For static assets: use views=['perspective','top','front','right'] to get a 2×2 quad-view.",
+    "For animated/growth assets: use frames=[1,10,20,30] to get a time contact sheet.",
+    "Always pass target_path — it automatically isolates the target and frames each view.",
+    "The output is a single concatenated PNG — call describe_image once on it.",
+    "If you only need a single view, use houdini_capture_viewport_safe instead.",
+  ],
+  parameters: Type.Object({
+    filepath: Type.String({
+      description: "Output file path for the contact sheet PNG",
+    }),
+    target_path: Type.Optional(
+      Type.String({ description: "Node path to frame and isolate. The generated asset's display/output node." })
+    ),
+    views: Type.Optional(
+      Type.Array(Type.String(), {
+        description: "View angles to capture. Default: ['perspective']. Use ['perspective','top','front','right'] for 2×2 quad-view.",
+      })
+    ),
+    frames: Type.Optional(
+      Type.Array(Type.Number(), {
+        description: "Frame numbers to capture. Default: [1]. Use [1,10,20,30] for a time-lapse contact sheet.",
+      })
+    ),
+    columns: Type.Optional(
+      Type.Number({ description: "Grid columns. 0 = auto (best-fit). Default: 0." })
+    ),
+    shading_mode: Type.Optional(
+      Type.String({ description: "Viewport shading: 'smooth', 'wire', 'flat'. Default: 'smooth'." })
+    ),
+    home_target: Type.Optional(
+      Type.Boolean({ description: "Frame the target before each view capture. Default: true." })
+    ),
+  }),
+  async execute(
+    _toolCallId: string,
+    params: {
+      filepath: string;
+      target_path?: string;
+      views?: string[];
+      frames?: number[];
+      columns?: number;
+      shading_mode?: string;
+      home_target?: boolean;
+    }
+  ) {
+    return forwardTool("houdini_capture_review", params);
+  },
+};
