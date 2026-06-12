@@ -12,7 +12,7 @@ from typing import Any, Callable
 
 from edini.node_utils import (
     get_scene_info,  create_node, delete_node, connect_nodes,
-    set_param, get_param, list_nodes, get_node_info, layout_nodes,
+    set_param, set_params_batch, get_param, list_nodes, get_node_info, layout_nodes,
     search_nodes, get_help, inspect_geometry,
     run_python, run_vex, create_hda, get_hda_info,
     capture_viewport, capture_viewport_safe, capture_network,
@@ -40,6 +40,9 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     ),
     "houdini_set_param": lambda **kw: set_param(
         kw["node_path"], kw["param_name"], kw["value"],
+    ),
+    "houdini_set_params_batch": lambda **kw: set_params_batch(
+        kw["node_path"], kw["params"],
     ),
     "houdini_get_param": lambda **kw: get_param(kw["node_path"], kw["param_name"]),
     "houdini_list_nodes": lambda **kw: list_nodes(
