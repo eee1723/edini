@@ -9,6 +9,7 @@ Provides MockNode, MockParm, and a mock hou module that supports:
 from __future__ import annotations
 
 import re
+import traceback as _traceback_module
 from typing import Any
 
 
@@ -337,6 +338,8 @@ class MockNode:
         if node_type_name == "attribwrangle":
             child._parms["snippet"] = MockParm("snippet", "")
             child._parms["snippet_attribname"] = MockParm("snippet_attribname", "result")
+        elif node_type_name == "python":
+            child._parms["python"] = MockParm("python", "")
         self._children.append(child)
         if MockNode._hou_ref is not None:
             MockNode._hou_ref._nodes[child.path()] = child
@@ -369,9 +372,32 @@ class MockNode:
         return self._warnings
 
     def cook(self, force: bool = False) -> None:
-        pass
+        if force and self._type_name == "python":
+            code_parm = self._parms.get("python")
+            code = code_parm.eval() if code_parm else ""
+            if code:
+                hou_ref = MockNode._hou_ref
+                if hou_ref is None:
+                    return
+                try:
+                    # Simulate Python SOP cooking context: hou.pwd() returns this node
+                    old_pwd = hou_ref._pwd_path
+                    hou_ref._pwd_path = self._path
+                    result_payload = {}
+                    namespace = {
+                        "hou": hou_ref,
+                        "sandbox_root_path": self._parent._path if self._parent else "",
+                        "result": result_payload,
+                    }
+                    exec(code, namespace)
+                    hou_ref._pwd_path = old_pwd
+                except Exception as e:
+                    hou_ref._pwd_path = old_pwd
+                    self._errors.append(f"Python error: {_traceback_module.format_exc()}")
 
     def geometry(self):
+        if self._geometry is None:
+            self._geometry = MockGeometry()
         return self._geometry
 
     def layoutChildren(self) -> None:

@@ -452,42 +452,86 @@ def run_python_sandbox(
     delete_on_failure: bool = False,
 ) -> dict[str, Any]:
     job_id, root_path = _create_sandbox_root(sandbox_name)
+
+    # Create Python SOP inside sandbox
+    sandbox_root = hou.node(root_path)
+    py_sop = sandbox_root.createNode("python", "edini_generate")
+    py_sop.parm("python").set(code)
+    output_node_path = py_sop.path()
+
+    # Capture stdout/stderr from cooking
     stdout_capture = io.StringIO()
     stderr_capture = io.StringIO()
     old_stdout = sys.stdout
     old_stderr = sys.stderr
-    result_payload: dict[str, Any] = {}
-    namespace = {
-        "hou": hou,
-        "__builtins__": __builtins__,
-        "sandbox_root_path": root_path,
-        "result": result_payload,
-    }
-
     sys.stdout = stdout_capture
     sys.stderr = stderr_capture
+
     try:
-        exec(code, namespace)
+        py_sop.cook(force=True)
+        cook_errors = list(py_sop.errors() or [])
+        cook_warnings = list(py_sop.warnings() or [])
+
+        if cook_errors:
+            raise RuntimeError("; ".join(cook_errors))
+
+        # Build diagnostics (always, for both success and failure)
+        diag = _safe_collect_diagnostics(
+            output_node_path,
+            include_geometry=True,
+            include_parms=False,
+        )
+
+        # Build structural checks summary
+        geo_stats = diag.get("geometry") or {}
+        structural_checks = {
+            "has_geometry": geo_stats.get("point_count", 0) > 0,
+            "point_count": geo_stats.get("point_count", 0),
+            "prim_count": geo_stats.get("prim_count", 0),
+            "bounds_nonzero": (
+                isinstance(geo_stats.get("bounds", {}).get("size"), list)
+                and any(abs(c) > 1e-6 for c in geo_stats["bounds"]["size"])
+                if geo_stats.get("bounds", {}).get("size") else False
+            ),
+        }
+
         response = {
             "success": True,
             "job_id": job_id,
             "execution_mode": EXECUTION_MODE_LIVE,
             "root_path": root_path,
+            "output_node": output_node_path,
             "output": _safe_getvalue(stdout_capture) or "(no output)",
             "stderr": _safe_getvalue(stderr_capture),
-            "result": to_jsonable(result_payload),
-            "diagnostics": _safe_collect_diagnostics(
-                _node_path_for_diagnostics(result_payload.get("output_node", root_path), root_path),
-                include_geometry=True,
-                include_parms=False,
-            ),
+            "diagnostics": diag,
+            "structural_checks": structural_checks,
+            "commit_requested": bool(commit_on_success),
+            "committed": False,
         }
-        response["commit_requested"] = bool(commit_on_success)
-        response["committed"] = False
+
+        if commit_on_success:
+            commit_result = commit_sandbox(root_path, sandbox_name)
+            response["committed"] = commit_result.get("committed", False)
+            if commit_result.get("success"):
+                response["final_path"] = commit_result.get("final_path", "")
+            else:
+                response["commit_error"] = commit_result.get("error", "")
+
         return response
+
     except Exception as e:
         execution_traceback = traceback.format_exc()
-        diagnostics = _safe_collect_diagnostics(root_path, include_geometry=True, include_parms=False)
+        diagnostics = _safe_collect_diagnostics(
+            output_node_path, include_geometry=True, include_parms=False,
+        )
+        geo_stats = diagnostics.get("geometry") or {}
+        structural_checks = {
+            "has_geometry": geo_stats.get("point_count", 0) > 0,
+            "point_count": geo_stats.get("point_count", 0),
+            "prim_count": geo_stats.get("prim_count", 0),
+            "bounds_nonzero": False,
+        }
+
         deleted = False
         delete_error = None
         delete_traceback = None
@@ -498,18 +542,23 @@ def run_python_sandbox(
             except Exception as cleanup_exc:
                 delete_error = str(cleanup_exc)
                 delete_traceback = traceback.format_exc()
+
         response = {
             "success": False,
             "job_id": job_id,
             "execution_mode": EXECUTION_MODE_LIVE,
             "root_path": root_path,
+            "output_node": output_node_path,
             "error": str(e),
             "output": _safe_getvalue(stdout_capture),
             "stderr": _safe_getvalue(stderr_capture),
             "traceback": execution_traceback,
             "diagnostics": diagnostics,
+            "structural_checks": structural_checks,
             "preserved": not deleted,
             "deleted": deleted,
+            "commit_requested": bool(commit_on_success),
+            "committed": False,
         }
         if delete_error is not None:
             response["delete_error"] = delete_error
