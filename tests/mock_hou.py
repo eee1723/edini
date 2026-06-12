@@ -396,7 +396,7 @@ class MockNode:
                     self._errors.append(f"Python error: {_traceback_module.format_exc()}")
 
     def geometry(self):
-        if self._geometry is None:
+        if self._geometry is None and self._type.name() == "python":
             self._geometry = MockGeometry()
         return self._geometry
 
