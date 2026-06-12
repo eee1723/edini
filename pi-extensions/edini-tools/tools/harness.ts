@@ -27,6 +27,7 @@ export const houdiniCollectDiagnostics = {
   promptSnippet: "Collect diagnostics for a Houdini node",
   promptGuidelines: [
     "Use houdini_collect_diagnostics after a failed cook, blank output, or unexpected procedural result before changing strategy or deleting nodes.",
+    "For sandbox executions, diagnostics are already included in the sandbox result — separate diagnostics call is only needed for non-sandbox nodes.",
   ],
   parameters: Type.Object({
     node_path: Type.String({ description: "Full path of the node to inspect" }),
@@ -56,8 +57,10 @@ export const houdiniRunPythonSandbox = {
     "Execute Houdini Python code inside a procedural sandbox before committing changes to the live scene.",
   promptSnippet: "Run Python code in a Houdini procedural sandbox",
   promptGuidelines: [
-    "Create assets in a sandbox first, verify them, then commit the sandbox when the result is correct.",
-    "Do not delete a failed sandbox before collecting diagnostics from the failed result.",
+    "ALWAYS use houdini_run_python_sandbox for initial procedural asset generation instead of raw houdini_run_python.",
+    "The sandbox provides a Python SOP context — use hou.pwd() and node.geometry() directly in your code.",
+    "The sandbox result includes diagnostics and structural_checks (has_geometry, point_count, bounds_nonzero) — no need for separate inspect_geo or check_errors calls.",
+    "Do not delete a failed sandbox before reviewing the diagnostics in the result.",
   ],
   parameters: Type.Object({
     code: Type.String({ description: "Python code to execute in the sandbox" }),
