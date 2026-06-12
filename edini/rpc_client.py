@@ -380,7 +380,7 @@ class _RpcWorker(QObject):
                 try:
                     payload = json.loads(message)
                     if isinstance(payload, dict) and payload.get("event") == "vision_description":
-                        self.vision_description.emit(payload.get("descriptions", []))
+                        self.vision_description.emit(payload)  # full payload (includes source, imageData, imagePath)
                         return
                 except (json.JSONDecodeError, TypeError):
                     pass

@@ -333,22 +333,7 @@ class _RpcWorker(QObject):
             self.agent_started.emit()
 
         elif event_type == "agent_end":
-            # Surface LLM errors: a failed call ends the round with an
-            # assistant message carrying errorMessage (e.g. 400 quota,
-            # network failure) and empty content — without this check the
-            # panel shows nothing and the round just silently ends.
-            messages = event.get("messages", [])
-            last = messages[-1] if messages else {}
-            if isinstance(last, dict) and last.get("role") == "assistant":
-                err = last.get("errorMessage", "")
-                if not err and last.get("stopReason") == "error":
-                    err = "LLM call failed (no error detail from provider)"
-                if err:
-                    self.error_occurred.emit(err)
             self.agent_finished.emit()
-
-        elif event_type == "auto_retry_start":
-            self.extension_info.emit("⟳ LLM 请求失败，自动重试中...")
 
         elif event_type == "response":
             if not event.get("success", True):
@@ -395,7 +380,7 @@ class _RpcWorker(QObject):
                 try:
                     payload = json.loads(message)
                     if isinstance(payload, dict) and payload.get("event") == "vision_description":
-                        self.vision_description.emit(payload.get("descriptions", []))
+                        self.vision_description.emit(payload)  # full payload (includes source, imageData, imagePath)
                         return
                 except (json.JSONDecodeError, TypeError):
                     pass

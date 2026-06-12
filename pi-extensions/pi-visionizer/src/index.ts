@@ -160,6 +160,7 @@ export default function (pi: ExtensionAPI) {
 
       onUpdate?.({ content: [{ type: "text", text: "Describing image…" }] });
 
+      const t0 = Date.now();
       const result = await describeImage({
         imageBase64,
         mediaType,
@@ -168,17 +169,43 @@ export default function (pi: ExtensionAPI) {
         prompt: params.prompt || cfg.prompt || DEFAULT_PROMPT,
         requireHttps: cfg.requireHttps !== false,
       });
+      const elapsedMs = Date.now() - t0;
+
+      const modelLabel = `${cfg.provider}/${cfg.modelId}`;
+      const description = result.description || "(no description returned)";
+
+      // Notify Edini UI so it can render a unified VisionDescriptionBubble
+      // (same pipeline as user-uploaded images)
+      try {
+        ctx.ui.notify(JSON.stringify({
+          event: "vision_description",
+          descriptions: [{
+            mimeType: mediaType,
+            description: result.error && !result.description
+              ? `[Error: ${result.error}]`
+              : description,
+            model: modelLabel,
+            elapsedMs,
+          }],
+          imageData: imageBase64,
+          imagePath: params.path,
+          source: "describe_image",
+        }), "info");
+      } catch {
+        // notification is best-effort
+      }
 
       if (result.error && !result.description) {
         return {
           content: [{ type: "text", text: `Failed to describe image: ${result.error}` }],
           isError: true,
+          details: { path: params.path, mediaType, size: buffer.length, model: modelLabel, elapsedMs },
         };
       }
 
       return {
-        content: [{ type: "text", text: result.description || "(no description returned)" }],
-        details: { path: params.path, mediaType, size: buffer.length },
+        content: [{ type: "text", text: description }],
+        details: { path: params.path, mediaType, size: buffer.length, model: modelLabel, elapsedMs },
       };
     },
   });

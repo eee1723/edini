@@ -407,13 +407,18 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
                 self.agent_panel.add_inline_capture_image(path, w, h)
 
         elif tool_name == "describe_image":
+            # Render as unified VisionDescriptionBubble (same pipeline as user-uploaded images)
             content = data.get("content", [])
+            details = data.get("details", {})
             if isinstance(content, list) and len(content) > 0:
                 text = content[0].get("text", "")
             else:
                 text = data.get("description", "") or str(data)
             if text:
-                self.agent_panel.add_inline_description(text)
+                image_path = details.get("path", "")
+                model_label = details.get("model", "vision-model")
+                elapsed_ms = details.get("elapsedMs", 0)
+                self._add_vision_bubble_for_describe(text, image_path, model_label, elapsed_ms)
 
     def _on_thinking(self, text: str):
         self.agent_panel.add_thinking_step(0, text)
@@ -547,9 +552,88 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
             )
         self.agent_panel.timeline_view.add_widget(bubble)
 
-    def _on_vision_description(self, descriptions: list):
+    def _add_vision_bubble_for_describe(
+        self, text: str, image_path: str, model_label: str, elapsed_ms: int
+    ):
+        """Render a VisionDescriptionBubble for an agent-initiated describe_image call.
+
+        Same pipeline as user-uploaded image descriptions — reads the image file
+        for the 'view original' thumbnail, uses the vision model metadata, and
+        shows a recognizable header.
+        """
+        # Determine if this describes a screenshot we just captured
+        is_screenshot = bool(image_path and self._last_capture_path
+            and os.path.normpath(image_path) == os.path.normpath(self._last_capture_path))
+
+        # Build description dict matching VisionDescriptionBubble format
+        elapsed_str = f"{elapsed_ms / 1000:.1f}s" if elapsed_ms > 0 else ""
+        model_str = model_label or "vision"
+
+        header_icon = "📸 截图识别完成" if is_screenshot else "👁️ 图片识别完成"
+        header_parts = [header_icon, f"· {model_str}"]
+        if elapsed_str:
+            header_parts.append(f"· {elapsed_str}")
+
+        desc = [{
+            "mimeType": "image/png",
+            "description": text,
+            "model": model_str,
+            "elapsedMs": elapsed_ms,
+        }]
+
+        # Read image file for view-original thumbnail
+        image_base64_list: list[str] = []
+        if image_path and os.path.isfile(image_path):
+            try:
+                import base64 as _b64
+                with open(image_path, "rb") as f:
+                    image_base64_list.append(_b64.b64encode(f.read()).decode("ascii"))
+            except Exception:
+                pass
+
+        # Cache screenshot if it's a capture
+        if is_screenshot and image_base64_list:
+            self._cache_screenshot(image_path, image_base64_list[0])
+
+        bubble = VisionDescriptionBubble.create_from_notification(desc, image_base64_list)
+        # Override header for screenshot context
+        if is_screenshot:
+            bubble._header_label.setText(" ".join(header_parts))
+        self.agent_panel.timeline_view.add_widget(bubble)
+
+    def _cache_screenshot(self, image_path: str, base64_data: str):
+        """Cache an agent-captured screenshot into edini_images/ for persistence."""
+        session_path = self._current_session_path or self._browsing_session_path
+        if not session_path:
+            return
+        try:
+            import base64 as _b64
+            from edini.image_cache import get_image_cache_dir, save_images
+            img_dir = str(get_image_cache_dir(session_path))
+            os.makedirs(img_dir, exist_ok=True)
+            # Write image file
+            img_data = _b64.b64decode(base64_data)
+            fname = os.path.basename(image_path) or "screenshot_capture.png"
+            dest = os.path.join(img_dir, fname)
+            with open(dest, "wb") as f:
+                f.write(img_data)
+            # Save via existing save_images pipeline
+            save_images(session_path, [{
+                "data": base64_data,
+                "mimeType": "image/png",
+                "filename": fname,
+                "source": "agent_capture",
+            }])
+        except Exception:
+            pass
+
+    def _on_vision_description(self, payload: dict):
         """Handle vision_description notification from pi-visionizer."""
-        # Vision descriptions received from pi-visionizer
+        # Skip describe_image sourced notifications — already rendered via tool result
+        if payload.get("source") == "describe_image":
+            return
+
+        descriptions = payload.get("descriptions", [])
         # Save all image data before cleanup
         all_image_data: list[str] = []
         if self._pending_images:
