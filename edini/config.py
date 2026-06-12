@@ -53,6 +53,24 @@ PI_EXTENSIONS_DIR = PROJECT_ROOT / "pi-extensions"
 # Edini skills directory (optional, user-curated)
 EDINI_SKILLS_DIR = PROJECT_ROOT / "skills"
 
+PI_EXTENSION_ENTRIES = (
+    {
+        "name": "edini-tools",
+        "description": "Houdini scene and node operation tools",
+        "path": PI_EXTENSIONS_DIR / "edini-tools" / "index.ts",
+    },
+    {
+        "name": "edini-context",
+        "description": "Houdini context and knowledge injection",
+        "path": PI_EXTENSIONS_DIR / "edini-context" / "index.ts",
+    },
+    {
+        "name": "pi-visionizer",
+        "description": "Vision support for text-only models",
+        "path": PI_EXTENSIONS_DIR / "pi-visionizer" / "src" / "index.ts",
+    },
+)
+
 # Tool executor HTTP server
 TOOL_EXECUTOR_HOST = "127.0.0.1"
 TOOL_EXECUTOR_PORT = 9876
@@ -225,6 +243,63 @@ def get_pi_env() -> dict[str, str]:
     return env
 
 
+def _read_skill_frontmatter(skill_path: Path) -> dict[str, str]:
+    """Read the YAML-like front matter from a skill markdown file."""
+    try:
+        text = skill_path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    if not text.startswith("---"):
+        return {}
+    end = text.find("\n---", 3)
+    if end == -1:
+        return {}
+
+    data: dict[str, str] = {}
+    for line in text[3:end].splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        data[key.strip()] = value.strip().strip("\"'")
+    return data
+
+
+def _discover_skill_records() -> list[dict[str, Any]]:
+    """Discover project skills with metadata for command building and UI."""
+    records: list[dict[str, Any]] = []
+    if not EDINI_SKILLS_DIR.is_dir():
+        return records
+
+    # Root-level .md files -> individual skills. README.md is documentation.
+    for f in sorted(EDINI_SKILLS_DIR.iterdir()):
+        if f.is_file() and f.suffix == ".md" and f.name.lower() != "readme.md":
+            meta = _read_skill_frontmatter(f)
+            records.append({
+                "name": meta.get("name") or f.stem,
+                "description": meta.get("description", ""),
+                "path": str(f),
+                "entry": str(f),
+                "exists": f.is_file(),
+                "source": "project",
+            })
+
+    # Subdirectories with SKILL.md -> named skills.
+    for d in sorted(EDINI_SKILLS_DIR.iterdir()):
+        skill_file = d / "SKILL.md"
+        if d.is_dir() and skill_file.is_file():
+            meta = _read_skill_frontmatter(skill_file)
+            records.append({
+                "name": meta.get("name") or d.name,
+                "description": meta.get("description", ""),
+                "path": str(d),
+                "entry": str(skill_file),
+                "exists": skill_file.is_file(),
+                "source": "project",
+            })
+
+    return records
+
+
 def _discover_skills() -> list[str]:
     """Find SKILL.md directories under EDINI_SKILLS_DIR.
 
@@ -234,20 +309,47 @@ def _discover_skills() -> list[str]:
     (matching Pi's discovery convention).
     """
     args: list[str] = []
-    if not EDINI_SKILLS_DIR.is_dir():
-        return args
-
-    # Root-level .md files → individual skills
-    for f in sorted(EDINI_SKILLS_DIR.iterdir()):
-        if f.is_file() and f.suffix == ".md":
-            args.extend(["--skill", str(f)])
-
-    # Subdirectories with SKILL.md → named skills
-    for d in sorted(EDINI_SKILLS_DIR.iterdir()):
-        if d.is_dir() and (d / "SKILL.md").is_file():
-            args.extend(["--skill", str(d)])
-
+    for record in _discover_skill_records():
+        args.extend(["--skill", record["path"]])
     return args
+
+
+def get_pi_capabilities() -> dict[str, Any]:
+    """Return the Pi extensions and skills Edini will load."""
+    extensions = []
+    for item in PI_EXTENSION_ENTRIES:
+        path = item["path"]
+        extensions.append({
+            "name": item["name"],
+            "description": item["description"],
+            "path": str(path),
+            "exists": path.is_file(),
+            "source": "project",
+        })
+
+    package_path = PROJECT_ROOT / "package.json"
+    package_info = {
+        "path": str(package_path),
+        "exists": package_path.is_file(),
+        "name": "",
+        "description": "",
+    }
+    if package_path.is_file():
+        try:
+            data = json.loads(package_path.read_text(encoding="utf-8"))
+            package_info["name"] = data.get("name", "")
+            package_info["description"] = data.get("description", "")
+        except (json.JSONDecodeError, OSError):
+            package_info["description"] = "Unable to parse package.json"
+
+    return {
+        "project_root": str(PROJECT_ROOT),
+        "global_skills_disabled": True,
+        "skills_dir": str(EDINI_SKILLS_DIR),
+        "extensions": extensions,
+        "skills": _discover_skill_records(),
+        "package": package_info,
+    }
 
 
 def get_pi_command() -> list[str]:
@@ -261,9 +363,8 @@ def get_pi_command() -> list[str]:
         "--mode", "rpc",
         "--approve",
         "--no-skills",
-        "-e", str(PI_EXTENSIONS_DIR / "edini-tools" / "index.ts"),
-        "-e", str(PI_EXTENSIONS_DIR / "edini-context" / "index.ts"),
-        "-e", str(PI_EXTENSIONS_DIR / "pi-visionizer" / "src" / "index.ts"),
     ]
+    for item in PI_EXTENSION_ENTRIES:
+        cmd.extend(["-e", str(item["path"])])
     cmd.extend(_discover_skills())
     return cmd

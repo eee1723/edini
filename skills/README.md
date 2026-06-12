@@ -43,4 +43,5 @@ Instructions for the agent...
 
 ## Current skills
 
-(none — add skills as needed)
+- `procedural-modeling` — Houdini procedural modeling workflow guidance for VEX, Python SOPs, algorithmic geometry, and parametric generation.
+- `grill-me` — Local project skill for review/critique workflows.

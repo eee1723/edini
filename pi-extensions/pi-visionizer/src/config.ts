@@ -37,8 +37,13 @@ export function getEnvConfig(): VisionizerConfig | undefined {
   return undefined;
 }
 
-/** Vision is disabled when no model is explicitly configured. */
-const NO_DEFAULT: undefined = undefined;
+/** Hardcoded default vision model — lowest priority fallback.
+ * Must match the provider name registered in ~/.pi/agent/models.json
+ * (this project registers DashScope as "ali", not "aliyun"). */
+export const DEFAULT_VISION_MODEL: VisionizerConfig = {
+  provider: "ali",
+  modelId: "qwen3-vl-plus",
+};
 
 export const DEFAULT_PROMPT = [
   "Describe this image in detail and factually. Your description will be read by a coding agent that cannot see the image.",

@@ -272,6 +272,55 @@ class TestGetPiCommand(unittest.TestCase):
         self.assertIn("edini-context", cmd_str)
         self.assertIn("pi-visionizer", cmd_str)
 
+    def test_loads_project_skills_only(self):
+        """Command disables global skills and loads skills from this project."""
+        cmd = cfg.get_pi_command()
+        self.assertIn("--no-skills", cmd)
+
+        skill_paths = [
+            cmd[i + 1] for i, part in enumerate(cmd[:-1])
+            if part == "--skill"
+        ]
+        self.assertFalse(
+            any(Path(p).name.lower() == "readme.md" for p in skill_paths),
+            skill_paths,
+        )
+        self.assertTrue(
+            any(Path(p).name == "procedural-modeling" for p in skill_paths),
+            skill_paths,
+        )
+
+    def test_reports_pi_capabilities(self):
+        """Capability inventory lists loaded extensions and project skills."""
+        caps = cfg.get_pi_capabilities()
+        self.assertTrue(caps["global_skills_disabled"])
+        self.assertEqual(caps["project_root"], str(cfg.PROJECT_ROOT))
+
+        extension_names = {e["name"] for e in caps["extensions"]}
+        self.assertIn("edini-tools", extension_names)
+        self.assertIn("edini-context", extension_names)
+        self.assertIn("pi-visionizer", extension_names)
+
+        skill_names = {s["name"] for s in caps["skills"]}
+        self.assertIn("procedural-modeling", skill_names)
+
+        proc = next(s for s in caps["skills"] if s["name"] == "procedural-modeling")
+        self.assertIn("程序化建模", proc["description"])
+
+    def test_root_pi_package_manifest_declares_edini_capabilities(self):
+        """Root package.json groups Edini extensions and project skills."""
+        manifest_path = cfg.PROJECT_ROOT / "package.json"
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(data["name"], "edini-pi")
+        self.assertTrue(data["private"])
+        self.assertIn("pi-package", data["keywords"])
+
+        pi_config = data["pi"]
+        self.assertIn("./skills", pi_config["skills"])
+        self.assertIn("./pi-extensions/edini-tools/index.ts", pi_config["extensions"])
+        self.assertIn("./pi-extensions/edini-context/index.ts", pi_config["extensions"])
+        self.assertIn("./pi-extensions/pi-visionizer/src/index.ts", pi_config["extensions"])
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # TestGetPiEnv
@@ -294,16 +343,23 @@ class TestGetPiEnv(unittest.TestCase):
         # Should contain at least PATH
         self.assertIn("PATH", env)
 
-    def test_vision_env_not_set_when_configured(self):
-        """Vision env vars are NOT injected via get_pi_env (pi reads its own config)."""
+    def test_vision_env_set_when_configured(self):
+        """Vision env vars are injected so pi-visionizer can resolve the model."""
         with tempfile.TemporaryDirectory() as tmp:
             settings_path = Path(tmp) / "settings.json"
             data = {"vision_provider": "openai", "vision_model_id": "gpt-4o"}
             settings_path.write_text(json.dumps(data), encoding="utf-8")
             with patch.object(cfg, "EDINI_SETTINGS_FILE", settings_path):
                 env = cfg.get_pi_env()
-            self.assertIsNone(env.get("VISIONIZER_PROVIDER"))
-            self.assertIsNone(env.get("VISIONIZER_MODEL_ID"))
+            self.assertEqual(env.get("VISIONIZER_PROVIDER"), "openai")
+            self.assertEqual(env.get("VISIONIZER_MODEL_ID"), "gpt-4o")
+
+    def test_vision_env_not_set_when_unconfigured(self):
+        """No vision env vars when edini settings have no vision model."""
+        with patch.object(cfg, "EDINI_SETTINGS_FILE", Path("/nonexistent/settings.json")):
+            env = cfg.get_pi_env()
+        self.assertIsNone(env.get("VISIONIZER_PROVIDER"))
+        self.assertIsNone(env.get("VISIONIZER_MODEL_ID"))
 
 
 

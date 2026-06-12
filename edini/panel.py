@@ -18,7 +18,9 @@ from PySide6.QtWidgets import (
 
 from edini.config import (
     PANEL_DEFAULT_WIDTH, PANEL_DEFAULT_HEIGHT,
-    get_settings, save_settings,
+    read_pi_auth, write_pi_auth,
+    read_pi_settings, write_pi_settings,
+    migrate_legacy_settings,
 )
 from edini.rpc_client import RpcClient
 from edini.tool_executor import ToolExecutor
@@ -36,6 +38,12 @@ class EdiniPanel(QWidget):
 
         self._setup_ui()
         self._connect_signals()
+
+        # Migrate legacy edini settings (api_key/provider/model_id) into
+        # pi's native config files BEFORE starting the pi subprocess.
+        migration_msg = migrate_legacy_settings()
+        if migration_msg:
+            self._add_system_message(migration_msg)
 
         self._tool_executor.start()
         self._rpc_client.start()
@@ -114,8 +122,8 @@ class EdiniPanel(QWidget):
         self._status_label.setStyleSheet("color: #888; font-size: 11px;")
         status_layout.addWidget(self._status_label)
 
-        settings = get_settings()
-        self._model_label = QLabel(f"Model: {settings.get('model_id', '?')}")
+        pi_settings = read_pi_settings()
+        self._model_label = QLabel(f"Model: {pi_settings.get('defaultModel', '?')}")
         self._model_label.setStyleSheet("color: #888; font-size: 11px;")
         status_layout.addWidget(self._model_label)
 
@@ -141,28 +149,47 @@ class EdiniPanel(QWidget):
         self._rpc_client.stats_updated.connect(self._on_stats_updated)
 
     def _on_settings(self) -> None:
-        """Open the settings dialog."""
+        """Open the settings dialog (reads/writes pi's native config files)."""
         dlg = _SettingsDialog(self)
-        if dlg.exec() == QDialog.Accepted:
-            data = dlg.get_values()
-            api_changed = "api_key" in data and data["api_key"]
-            model_changed = "provider" in data or "model_id" in data
+        if dlg.exec() != QDialog.Accepted:
+            return
 
-            save_settings(data)
+        data = dlg.get_values()
+        provider = data["provider"]
+        model_id = data["model_id"]
+        new_key = data["api_key"]
 
-            if "model_id" in data:
-                self._model_label.setText(f"Model: {data['model_id']}")
+        # Persist default provider/model to ~/.pi/agent/settings.json
+        pi_settings = read_pi_settings()
+        model_changed = (
+            pi_settings.get("defaultProvider") != provider
+            or pi_settings.get("defaultModel") != model_id
+        )
+        if model_changed:
+            pi_settings["defaultProvider"] = provider
+            pi_settings["defaultModel"] = model_id
+            write_pi_settings(pi_settings)
 
-            if api_changed:
-                self._add_system_message("⚙ API key updated. Restarting Pi...")
-                self._rpc_client.restart()
+        # Persist API key to ~/.pi/agent/auth.json.
+        # Blank key = keep the existing credential for this provider,
+        # e.g. a subscription (OAuth) login created via `pi` CLI.
+        key_changed = False
+        if new_key:
+            auth = read_pi_auth()
+            existing = auth.get(provider, {})
+            if existing.get("type") != "api_key" or existing.get("key") != new_key:
+                auth[provider] = {"type": "api_key", "key": new_key}
+                write_pi_auth(auth)
+                key_changed = True
 
-            if model_changed and not api_changed:
-                s = get_settings()
-                self._rpc_client.send_set_model(s["provider"], s["model_id"])
-                self._add_system_message(
-                    f"⚙ Switched to {s['provider']}/{s['model_id']}"
-                )
+        self._model_label.setText(f"Model: {model_id}")
+
+        if key_changed:
+            self._add_system_message("⚙ API key updated. Restarting Pi...")
+            self._rpc_client.restart()
+        elif model_changed:
+            self._rpc_client.send_set_model(provider, model_id)
+            self._add_system_message(f"⚙ Switched to {provider}/{model_id}")
 
     # ------------------------------------------------------------------
     # Signal Handlers
@@ -527,36 +554,54 @@ class _ToolCard(QFrame):
 # ==========================================================================
 
 class _SettingsDialog(QDialog):
-    """Dialog for configuring API key, provider, and model."""
+    """Dialog for configuring provider, model, and (optionally) API key.
+
+    Reads and writes pi's native config files (~/.pi/agent/). The API key
+    field may be left blank to keep the provider's existing credential —
+    including subscription (OAuth) logins created with `pi` CLI's /login.
+    """
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.setWindowTitle("Edini Settings")
         self.setMinimumWidth(400)
 
-        settings = get_settings()
+        pi_settings = read_pi_settings()
+        auth = read_pi_auth()
 
         layout = QVBoxLayout(self)
 
         form = QFormLayout()
 
-        self._api_key = QLineEdit()
-        self._api_key.setEchoMode(QLineEdit.Password)
-        self._api_key.setPlaceholderText("sk-...")
-        self._api_key.setText(settings.get("api_key", ""))
-        form.addRow("API Key:", self._api_key)
-
         self._provider = QLineEdit()
-        self._provider.setPlaceholderText("deepseek")
-        self._provider.setText(settings.get("provider", ""))
+        self._provider.setPlaceholderText("anthropic")
+        self._provider.setText(pi_settings.get("defaultProvider", ""))
         form.addRow("Provider:", self._provider)
 
         self._model_id = QLineEdit()
-        self._model_id.setPlaceholderText("deepseek-chat")
-        self._model_id.setText(settings.get("model_id", ""))
+        self._model_id.setPlaceholderText("claude-sonnet-4-5")
+        self._model_id.setText(pi_settings.get("defaultModel", ""))
         form.addRow("Model ID:", self._model_id)
 
+        self._api_key = QLineEdit()
+        self._api_key.setEchoMode(QLineEdit.Password)
+        self._api_key.setPlaceholderText("Leave blank to keep existing login")
+        form.addRow("API Key:", self._api_key)
+
         layout.addLayout(form)
+
+        # Show which credentials pi already has configured
+        if auth:
+            creds = ", ".join(
+                f"{prov} ({entry.get('type', '?')})"
+                for prov, entry in auth.items()
+            )
+            cred_label = QLabel(f"Existing credentials: {creds}")
+        else:
+            cred_label = QLabel("Existing credentials: none")
+        cred_label.setWordWrap(True)
+        cred_label.setStyleSheet("color: #8a8; font-size: 11px;")
+        layout.addWidget(cred_label)
 
         # Preset buttons
         preset_layout = QHBoxLayout()
@@ -575,7 +620,9 @@ class _SettingsDialog(QDialog):
         # Info label
         info = QLabel(
             "<b>DeepSeek:</b> create ~/.pi/agent/models.json first (see README).<br>"
-            "<b>Anthropic:</b> no extra config needed."
+            "<b>Anthropic (API key):</b> paste your key above.<br>"
+            "<b>Anthropic (subscription):</b> run <code>pi</code> in a terminal, "
+            "use <code>/login</code>, then leave API Key blank here."
         )
         info.setWordWrap(True)
         info.setStyleSheet("color: #aaa; font-size: 11px;")
@@ -602,16 +649,9 @@ class _SettingsDialog(QDialog):
         self.accept()
 
     def get_values(self) -> dict[str, str]:
-        """Return changed values only."""
-        old = get_settings()
-        result: dict[str, str] = {}
-        new_api = self._api_key.text().strip()
-        if new_api != old.get("api_key", ""):
-            result["api_key"] = new_api
-        new_prov = self._provider.text().strip()
-        if new_prov != old.get("provider", ""):
-            result["provider"] = new_prov
-        new_model = self._model_id.text().strip()
-        if new_model != old.get("model_id", ""):
-            result["model_id"] = new_model
-        return result
+        """Return the current dialog values."""
+        return {
+            "provider": self._provider.text().strip(),
+            "model_id": self._model_id.text().strip(),
+            "api_key": self._api_key.text().strip(),
+        }

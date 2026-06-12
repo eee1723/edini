@@ -47,7 +47,11 @@ class LogParser:
         tool_calls: list[ToolCallRecord] = []
         thinking_steps: list[str] = []
         assistant_responses: list[str] = []
-        pending_tool: dict | None = None
+
+        # Two-pass approach:
+        #   Pass 1: Collect toolCall blocks from assistant messages → {toolCallId: params}
+        #   Pass 2: Match toolResult messages with their toolCallId to build ToolCallRecord
+        pending_calls: dict[str, dict] = {}  # toolCallId -> {tool_name, params}
 
         for line in lines[1:]:
             line = line.strip()
@@ -88,10 +92,20 @@ class LogParser:
                                 thinking_steps.append(
                                     block.get("thinking", "")
                                 )
+                            elif block.get("type") == "toolCall":
+                                # Capture tool call arguments from assistant message
+                                call_id = block.get("id", "")
+                                tool_name = block.get("name", "")
+                                params = block.get("arguments", {})
+                                if call_id:
+                                    pending_calls[call_id] = {
+                                        "tool_name": tool_name,
+                                        "params": params,
+                                    }
 
             elif role == "toolResult":
-                # Pi RPC format: tool results have toolName in message
                 tool_name = msg.get("toolName", "")
+                tool_call_id = msg.get("toolCallId", "")
                 content = msg.get("content", "")
 
                 # Extract result text from content blocks
@@ -120,14 +134,32 @@ class LogParser:
                         except json.JSONDecodeError:
                             pass
 
+                # Match with pending toolCall to get params
+                params = {}
+                if tool_call_id and tool_call_id in pending_calls:
+                    pending = pending_calls.pop(tool_call_id)
+                    tool_name = tool_name or pending["tool_name"]
+                    params = pending["params"]
+
                 tool_calls.append(ToolCallRecord(
                     index=len(tool_calls),
                     tool_name=tool_name or "unknown",
-                    params={},
+                    params=params,
                     result_success=bool(result_success),
                     error_message=error_msg,
                     latency_ms=0,
                 ))
+
+        # Handle orphaned toolCalls (assistant issued a toolCall but no toolResult yet)
+        for call_id, pending in pending_calls.items():
+            tool_calls.append(ToolCallRecord(
+                index=len(tool_calls),
+                tool_name=pending["tool_name"],
+                params=pending["params"],
+                result_success=False,
+                error_message="No toolResult received (session may be in progress)",
+                latency_ms=0,
+            ))
 
         return StructuredSession(
             session_id=session_id,

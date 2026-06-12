@@ -1,6 +1,6 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-10 &nbsp;|&nbsp; 第二十三阶段：图片缓存竞态修复 ✅ &nbsp;|&nbsp; 规划：知识 → Skills 演化
+> 最后更新：2026-06-11 &nbsp;|&nbsp; 第二十五阶段：程序化建模 Skill + LogParser 修复 ✅ &nbsp;|&nbsp; 规划：Skill 效果追踪 → Copernicus
 
 ## 总览看板
 
@@ -80,7 +80,7 @@
 
 # 🚀 开发进度
 
-> 最后更新：2026-06-10 &nbsp;|&nbsp; 第二十四阶段：识图管道完整修复 ✅ &nbsp;|&nbsp; 规划：知识 → Skills 演化
+> 最后更新：2026-06-11 &nbsp;|&nbsp; 第二十五阶段：程序化建模 Skill + LogParser 修复 ✅ &nbsp;|&nbsp; 规划：Skill 效果追踪 → Copernicus
 
 ## 总览看板
 
@@ -115,11 +115,32 @@
   <div class="phase-card-detail">✅ 5 维度评估管道（3 确定性 + 2 LLM-as-Judge）· ✅ SQLite 评估仓库（sessions/tool_calls/judge_logs/daily_aggregates）· ✅ LogParser 从 Pi JSONL 解析会话 · ✅ 增量评估（只评未评分的会话）· ✅ EvalDashboard UI（概览卡片 + 趋势图 + 会话列表）· ✅ AgentEval 工具（edini_get_eval_stats 自省）· ✅ 后台自动评估 · ✅ 8 个真实 Houdini 会话实测通过 · ✅ Wiki 设计理念文档 · ✅ 纯确定性评估(force_no_judge)跑通16会话 / LLM Judge可选 / ⚡ Re-evaluate按钮</div>
 </div>
 
+<div class="phase-card">
+  <div class="phase-card-header">
+    <span class="phase-card-title">🛠️ Skill 系统</span>
+    <span class="status-tag status-active">进行中</span>
+  </div>
+  <div class="progress-bar-bg"><div class="progress-bar-fill progress-active" style="width:40%"></div></div>
+  <div class="phase-card-detail">✅ Skill 目录自动发现（--no-skills + --skill 逐目录加载）· ✅ procedural-modeling Skill（程序化建模指导：VEX/Python 选型、run-over class、分而治之、模板模式、失败切换策略）· ✅ grill-me Skill（追问式设计审查）· ⬜ houdini_search_knowledge Skill · ⬜ Skill 使用效果追踪 · ⬜ 自动 Skill 提取</div>
 </div>
 
-## 近期关键节点
+</div>
 
 <div class="timeline">
+
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-11</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第二十五阶段：程序化建模 Skill + LogParser 参数提取修复</span>
+      <span class="status-tag status-done">完成</span>
+    </div>
+    <div class="timeline-summary">① 调研 AI+Houdini 程序化建模可行性：HoudiniVexBench 基准测试显示 VEX 从零生成执行成功率仅 36%（Claude Opus 4.5 最高分 0.512），确认 Python SOP 优先策略 ② 创建 procedural-modeling Skill（644 词）：语言选择策略表（VEX/Python SOP/hou API/Copernicus）、VEX run-over class（point/prim/vertex/detail）首选设置、分而治之思考策略、模板模式适配、失败两次自动切换 Python、常见 VEX 陷阱 4 条、Copernicus 程序化贴图 4 步流程 ③ 修复 LogParser 重大 bug：ToolCallRecord.params 永远为 {}（写死 params={}），改为两阶段匹配——从 assistant 消息提取 toolCall.arguments（含完整 VEX/Python 代码），用 toolCallId 与 toolResult 匹配回填。修复后 98% tool call 有参数（之前 0%），评估系统现在可以分析 VEX 代码模式/长度/失败原因 ④ 全部 157 测试通过</div>
+    <div class="timeline-tags">
+      <span>procedural-modeling</span><span>Skill系统</span><span>VEX run-over class</span><span>分而治之</span><span>LogParser修复</span><span>参数提取</span><span>98%参数覆盖率</span><span>HoudiniVexBench</span>
+    </div>
+  </div>
+</div>
 
 <div class="timeline-item timeline-done">
   <div class="timeline-date">2026-06-10</div>
@@ -450,9 +471,10 @@
 | 优先级 | 任务 | 说明 |
 |------|------|------|
 | **P0** | **优化 ReflectWorker 提取质量** | 现有系统已在工作，先让 knowledge 质量上去 |
-| **P1** | **增加 Skill 提取维度** | 在 reflection prompt 中加 skill 模板，自动写入 `skills/` 目录 |
+| **P1** | **Skill 使用效果追踪** | 基于 LogParser 修复后的参数数据，追踪 procedural-modeling Skill 对 VEX/Python 成功率的影响 |
+| **P1** | **Copernicus 程序化贴图 Skill** | 在 procedural-modeling Skill 基础上扩展 COPs 专用指导 |
 | **P2** | **跨 Agent 共享（Hivemind）** | 把 knowledge/skills 推到共享存储（Git repo / S3） |
-| **P3** | **反馈循环：Skill 使用效果追踪** | 跟踪哪些 skill 真正被用到了，淘汰无效 skill |
+| **P2** | **增加 Skill 自动提取** | 在 reflection prompt 中加 skill 模板，自动写入 `skills/` 目录 |
 | P2 | Judge模型优化 | 接入 Anthropic Claude 做 Judge（结构化输出更强）、V4 Pro reasoning_tokens 兼容 |
 | P3 | 效率基线优化 | 基于任务类型百分位计算效率评分，而非固定启发式 |
 | P3 | Python 面板 | 支持嵌入 Houdini Pane Tab |
@@ -523,3 +545,6 @@
 - ✅ Shelf tool 预设自动应用（创建后匹配 tool 脚本，执行 pressButton/set）
 - ✅ 变更树参数紧凑显示（≤2 参数全显，3+ 折叠摘要）
 - ✅ diff 自动过滤 Houdini 内部生成的子节点
+- ✅ procedural-modeling Skill（程序化建模指导：语言选择策略、VEX run-over class、分而治之、模板模式、失败切换、Copernicus 流程）
+- ✅ Skill 目录自动发现（--no-skills + --skill 逐目录加载，支持 SKILL.md 子目录和根级 .md）
+- ✅ LogParser toolCall 参数提取（两阶段匹配：assistant toolCall.arguments → toolResult 回填，98% 参数覆盖率）

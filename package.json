@@ -1,0 +1,23 @@
+{
+  "name": "edini-pi",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pi package manifest for Edini's Houdini tools, context injection, vision bridge, and curated skills.",
+  "keywords": [
+    "pi-package",
+    "pi-coding-agent",
+    "pi-extension",
+    "houdini",
+    "edini"
+  ],
+  "pi": {
+    "extensions": [
+      "./pi-extensions/edini-tools/index.ts",
+      "./pi-extensions/edini-context/index.ts",
+      "./pi-extensions/pi-visionizer/src/index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  }
+}

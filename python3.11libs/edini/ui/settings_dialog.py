@@ -18,6 +18,7 @@ from edini.config import (
     read_pi_settings, write_pi_settings,
     get_pi_ai_providers, get_pi_ai_models, get_pi_ai_vision_models,
     get_provider_auth_status, get_configured_providers,
+    get_pi_capabilities,
 )
 from edini.ui.theme import THEMES, get_theme, set_theme, set_font_scale, fs
 from edini.ui.knowledge_store import rules_count, entries_count, load_rules
@@ -128,6 +129,8 @@ class SettingsDialog(QtWidgets.QDialog):
             self._build_appearance_tab(), "\U0001f3a8 Appearance")
         self._tabs.addTab(
             self._build_knowledge_tab(get_settings()), "\U0001f4da Knowledge")
+        self._tabs.addTab(
+            self._build_capabilities_tab(), "\U0001f9e9 Pi Capabilities")
         layout.addWidget(self._tabs, 1)
 
         # Buttons
@@ -700,6 +703,108 @@ class SettingsDialog(QtWidgets.QDialog):
         self._refresh_knowledge_stats()
 
     # ═══════════════════════════════════════════════════════════════════
+    # Tab 4: Pi Capabilities
+    # ═══════════════════════════════════════════════════════════════════
+
+    def _build_capabilities_tab(self) -> QtWidgets.QWidget:
+        w = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(w)
+        layout.setSpacing(12)
+        layout.setContentsMargins(12, 12, 12, 12)
+
+        caps = get_pi_capabilities()
+        package = caps.get("package", {})
+
+        layout.addWidget(_section_label("Load Policy"))
+        policy_card = QtWidgets.QFrame()
+        policy_card.setStyleSheet("""
+            QFrame {
+                background: #10101a;
+                border: 1px solid #1e1e2c;
+                border-radius: 6px;
+            }
+        """)
+        policy_layout = QtWidgets.QVBoxLayout(policy_card)
+        policy_layout.setContentsMargins(12, 10, 12, 10)
+        policy_layout.setSpacing(5)
+
+        global_policy = "disabled" if caps.get("global_skills_disabled") else "enabled"
+        package_status = (
+            f"{package.get('name') or 'package.json'}"
+            if package.get("exists") else "not created yet"
+        )
+        for text in [
+            f"Project root: {caps.get('project_root', '')}",
+            f"Global Pi skills: {global_policy}",
+            f"Project skills directory: {caps.get('skills_dir', '')}",
+            f"Local Pi package manifest: {package_status}",
+        ]:
+            label = QtWidgets.QLabel(text)
+            label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+            label.setStyleSheet(f"color:#a1a1aa;font-size:{fs(10)};")
+            policy_layout.addWidget(label)
+        layout.addWidget(policy_card)
+
+        layout.addWidget(_section_label("Extensions Loaded at Pi Start"))
+        self._extensions_table = QtWidgets.QTableWidget(0, 4)
+        self._extensions_table.setHorizontalHeaderLabels(
+            ["Status", "Extension", "Purpose", "Path"])
+        _configure_capability_table(self._extensions_table)
+        self._populate_capability_table(
+            self._extensions_table,
+            caps.get("extensions", []),
+            usage_text="Loaded",
+        )
+        layout.addWidget(self._extensions_table)
+
+        layout.addWidget(_section_label("Project Skills Available on Demand"))
+        self._skills_table = QtWidgets.QTableWidget(0, 5)
+        self._skills_table.setHorizontalHeaderLabels(
+            ["Status", "Skill", "Description", "Path", "Usage"])
+        _configure_capability_table(self._skills_table)
+        self._populate_capability_table(
+            self._skills_table,
+            caps.get("skills", []),
+            usage_text="Not tracked",
+        )
+        layout.addWidget(self._skills_table)
+
+        hint = QtWidgets.QLabel(
+            "Extensions are executable Pi tools loaded at startup. "
+            "Skills are workflow documents loaded by Pi when their trigger "
+            "description matches the task. Skill usage counts will appear "
+            "after Edini records skill activation events in session logs.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet(f"color:#71717a;font-size:{fs(10)};padding:4px 0;")
+        layout.addWidget(hint)
+
+        return w
+
+    def _populate_capability_table(
+        self,
+        table: QtWidgets.QTableWidget,
+        rows: list[dict],
+        usage_text: str,
+    ) -> None:
+        table.setRowCount(0)
+        has_usage_col = table.columnCount() >= 5
+        for item in rows:
+            row = table.rowCount()
+            table.insertRow(row)
+
+            status = "OK" if item.get("exists") else "Missing"
+            table.setItem(row, 0, _table_item(status))
+            table.setItem(row, 1, _table_item(item.get("name", "")))
+            table.setItem(row, 2, _table_item(item.get("description", "")))
+            path_item = _table_item(item.get("path", ""))
+            path_item.setToolTip(item.get("path", ""))
+            table.setItem(row, 3, path_item)
+            if has_usage_col:
+                table.setItem(row, 4, _table_item(usage_text))
+
+        table.resizeRowsToContents()
+
+    # ═══════════════════════════════════════════════════════════════════
     # Save
     # ═══════════════════════════════════════════════════════════════════
 
@@ -717,9 +822,17 @@ class SettingsDialog(QtWidgets.QDialog):
         pi_sett["defaultThinkingLevel"] = thinking
         write_pi_settings(pi_sett)
 
-        # Vision model
+        # Vision model — passed to pi-visionizer via env vars at pi spawn,
+        # so a change only takes effect after a pi restart.
         vision_prov_id = self._vision_provider.currentData() or ""
-        vision_model_id = self._vision_model.currentData() or ""
+        vision_model_id = (
+            self._vision_model.currentData()
+            or self._vision_model.currentText().strip())
+
+        old_settings = get_settings()
+        if (old_settings.get("vision_provider", "") != vision_prov_id
+                or old_settings.get("vision_model_id", "") != vision_model_id):
+            self._needs_restart = True
 
         save_settings({
             "knowledge_enabled": self._knowledge_check.isChecked(),
@@ -882,6 +995,29 @@ def _section_label(text: str) -> QtWidgets.QLabel:
     lbl = QtWidgets.QLabel(f"<b>{text}</b>")
     lbl.setStyleSheet(f"color:#c8ccd4;font-size:{fs(12)};font-weight:600;")
     return lbl
+
+
+def _configure_capability_table(table: QtWidgets.QTableWidget) -> None:
+    table.verticalHeader().setVisible(False)
+    table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+    table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+    table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+    table.setWordWrap(False)
+    table.setAlternatingRowColors(False)
+    table.horizontalHeader().setStretchLastSection(False)
+    table.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.Fixed)
+    table.horizontalHeader().setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeToContents)
+    table.horizontalHeader().setSectionResizeMode(2, QtWidgets.QHeaderView.Stretch)
+    table.horizontalHeader().setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeToContents)
+    table.horizontalHeader().resizeSection(0, 62)
+    if table.columnCount() >= 5:
+        table.horizontalHeader().setSectionResizeMode(4, QtWidgets.QHeaderView.ResizeToContents)
+
+
+def _table_item(text: str) -> QtWidgets.QTableWidgetItem:
+    item = QtWidgets.QTableWidgetItem(str(text))
+    item.setFlags(item.flags() & ~QtCore.Qt.ItemIsEditable)
+    return item
 
 
 def _btn_style(bg: str, fg: str = "#e5e5eb") -> str:

@@ -1486,190 +1486,161 @@ def _open_image_file(path: str):
 # Formatting helpers (unchanged)
 # ═══════════════════════════════════════════════════════════════════════
 
+# ── Markdown renderer (mistune-based) ───────────────────────────────
+
+import mistune as _mistune
+from mistune import HTMLRenderer as _HTMLRenderer
+
+
+class _DarkRenderer(_HTMLRenderer):
+    """Custom HTML renderer that injects dark-theme inline styles."""
+
+    # ── Block elements ──
+
+    def heading(self, text, level, **attrs):
+        sizes = {1: 20, 2: 17, 3: 15, 4: 14, 5: 13, 6: 12}
+        margins = {1: '10px 0 4px 0', 2: '8px 0 3px 0', 3: '6px 0 2px 0',
+                   4: '5px 0 2px 0', 5: '4px 0 2px 0', 6: '4px 0 2px 0'}
+        sz = fs(sizes.get(level, 14))
+        mg = margins.get(level, '4px 0 2px 0')
+        return (
+            f'<h{level} style="font-size:{sz};font-weight:600;'
+            f'color:#e5e5eb;margin:{mg};line-height:1.3;">'
+            f'{text}</h{level}>\n'
+        )
+
+    def paragraph(self, text):
+        return f'<p style="margin:6px 0;line-height:1.45;">{text}</p>'
+
+    def block_code(self, code, info=None, **attrs):
+        esc = html.escape(code.rstrip('\n'))
+        lang_cls = f' class="language-{info}"' if info else ''
+        return (
+            '<pre style="background:#0e0e15;color:#d4d4d4;padding:8px;'
+            f'border-radius:4px;font-family:monospace;font-size:{fs(11)};'
+            f'overflow-x:auto;margin:4px 0;"><code{lang_cls}>'
+            f'{esc}</code></pre>\n'
+        )
+
+    def list(self, text, ordered, **attrs):
+        tag = 'ol' if ordered else 'ul'
+        return f'<{tag} style="padding-left:20px;margin:2px 0;">{text}</{tag}>\n'
+
+    def list_item(self, text, **attrs):
+        return f'<li style="margin:1px 0;line-height:1.45;">{text}</li>\n'
+
+    def table(self, text):
+        return (
+            f'<table style="border-collapse:collapse;margin:4px 0;'
+            f'font-size:{fs(11)};width:100%;">{text}</table>\n'
+        )
+
+    def table_head(self, text):
+        return f'<thead>{text}</thead>'
+
+    def table_body(self, text):
+        return f'<tbody>{text}</tbody>'
+
+    def table_row(self, text):
+        return f'<tr>{text}</tr>'
+
+    def table_cell(self, text, align=None, head=False):
+        tag = 'th' if head else 'td'
+        align_style = f'text-align:{align};' if align else 'text-align:left;'
+        return (
+            f'<{tag} style="padding:2px 8px;{align_style}'
+            f'border:1px solid #2a2a3c;">{text}</{tag}>'
+        )
+
+    def thematic_break(self):
+        return '<hr style="border:none;border-top:1px solid #2a2a3c;margin:6px 0;">\n'
+
+    def block_quote(self, text):
+        return (
+            '<blockquote style="border-left:3px solid #3a3a4c;'
+            f'margin:4px 0;padding:4px 12px;color:#a1a1aa;font-size:{fs(12)};">'
+            f'{text}</blockquote>\n'
+        )
+
+    # ── Inline elements ──
+
+    def codespan(self, text):
+        esc = html.escape(text)
+        return (
+            '<code style="background:#1a1a24;color:#67e8f9;padding:1px 4px;'
+            f'border-radius:3px;font-family:monospace;font-size:{fs(11)};">'
+            f'{esc}</code>'
+        )
+
+    def link(self, text, url, title=None):
+        return f'<a href="{url}" style="color:#60a5fa;text-decoration:none;">{text}</a>'
+
+    def image(self, text, url, title=None):
+        return (
+            f'<img src="{url}" alt="{text}" style="max-width:100%;'
+            f'border-radius:4px;margin:4px 0;"' +
+            (f' title="{title}"' if title else '') +
+            ' />'
+        )
+
+    def emphasis(self, text):
+        return f'<i>{text}</i>'
+
+    def strong(self, text):
+        return f'<b>{text}</b>'
+
+    def strikethrough(self, text):
+        return f'<del style="color:#71717a;">{text}</del>'
+
+    def linebreak(self):
+        return '<br>'
+
+    def softbreak(self):
+        return '<br>'
+
+    # Task list items (from task_lists plugin)
+    def task_list_item(self, text, checked=False):
+        inner = '\u2705 ' if checked else '\u2610 '
+        return f'<li style="margin:1px 0;line-height:1.45;">{inner}{text}</li>\n'
+
+
+# ── Singleton parser instance ──
+
+_md_parser = _mistune.create_markdown(
+    renderer=_DarkRenderer(),
+    escape=True,
+    hard_wrap=True,
+    plugins=['table', 'strikethrough', 'task_lists'],
+)
+
+
 def _format_lite(text: str) -> str:
-    """Lightweight streaming-safe formatter.
+    """Streaming formatter — identical output to _format_full.
 
-    Only applies inline formatting that works on incomplete text.
-    Does NOT parse code blocks, lists, headers, or tables — incomplete
-    versions of these would produce broken HTML.
+    Uses the same mistune parser so streaming and finalized display are
+    pixel-identical at every chunk boundary.
     """
-    out = html.escape(text)
-
-    # **bold** (after escape, the ** are literal)
-    out = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', out)
-
-    # *italic* — but not **, and not * inside words
-    out = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'<i>\1</i>', out)
-
-    # `inline code`
-    out = re.sub(
-        r'`([^`]+)`',
-        r'<code style="background:#1a1a24;color:#67e8f9;padding:1px 4px;'
-        r'border-radius:3px;font-family:monospace;font-size:11px;">\1</code>',
-        out,
-    )
-
-    # newlines → <br>
-    out = out.replace('\n', '<br>')
-
-    return out
+    try:
+        return _format_full(text)
+    except Exception:
+        # If mistune fails, fall back to inline formatting
+        return _format_inline_fallback(text)
 
 
 def _format_full(text: str) -> str:
-    """Convert Markdown-ish text to rich HTML for final display.
+    """Convert Markdown to rich HTML with dark-theme inline styles.
 
-    Supports: headers (# ## ###), bold, italic, inline code, code blocks,
-    unordered/ordered lists, tables, horizontal rules.
+    Full GFM support via mistune: headers, bold, italic, inline code,
+    code blocks, ordered/unordered lists, task lists, tables, links,
+    images, strikethrough, blockquotes, horizontal rules.
     """
-    esc = html.escape(text)
+    return _md_parser(text)
 
-    # ── Step 1: Extract code blocks and protect with placeholders ──
-    code_blocks: list[str] = []
-
-    def _extract_code_block(m):
-        lang = m.group(1)
-        code_raw = m.group(2)
-        code_escaped = html.escape(code_raw)
-        idx = len(code_blocks)
-        html_block = (
-            '<pre style="background:#0e0e15;color:#d4d4d4;padding:8px;'
-            f'border-radius:4px;font-family:monospace;font-size:{fs(11)};'
-            'overflow-x:auto;margin:4px 0;"><code>' + code_escaped + '</code></pre>'
-        )
-        code_blocks.append(html_block)
-        return f'__CODE_BLOCK_{idx}__'
-
-    esc = re.sub(r'```(\w*)\n(.*?)```', _extract_code_block, esc, flags=re.DOTALL)
-
-    # ── Step 2: Split into paragraphs ──
-    paragraphs = esc.split('\n\n')
-
-    # ── Step 3: Classify and render each paragraph ──
-    rendered: list[str] = []
-
-    def _build_table_rows(rows, cell_tag):
-        result = ''
-        for row in rows:
-            cells = row.strip().strip('|').split('|')
-            result += '<tr>'
-            for cell in cells:
-                result += (
-                    f'<{cell_tag} style="padding:2px 8px;text-align:left;'
-                    f'border:1px solid #2a2a3c;">{cell.strip()}</{cell_tag}>'
-                )
-            result += '</tr>'
-        return result
-
-    def _render_body(body_lines: list[str]):
-        """Render non-header body lines — try table/list, fall back to paragraph."""
-        bl = [l for l in body_lines if l.strip()]
-        if not bl:
-            return
-        n = len(bl)
-
-        # Table
-        if n >= 2 and all('|' in l for l in bl):
-            has_sep = any(re.match(r'^[\|\s\-\:]+$', l.strip()) for l in bl)
-            if has_sep:
-                sep_idx = None
-                for i, l in enumerate(bl):
-                    if re.match(r'^[\|\s\-\:]+$', l.strip()):
-                        sep_idx = i
-                        break
-                if sep_idx is not None:
-                    header_rows = bl[:sep_idx]
-                    body_rows = bl[sep_idx + 1:]
-                    rendered.append(
-                        '<table style="border-collapse:collapse;margin:4px 0;'
-                        f'font-size:{fs(11)};width:100%;">'
-                        f'<thead>{_build_table_rows(header_rows, "th")}</thead>'
-                        f'<tbody>{_build_table_rows(body_rows, "td")}</tbody>'
-                        '</table>'
-                    )
-                    return
-
-        # Unordered list
-        if all(re.match(r'^[\-\*]\s+', l) for l in bl):
-            items = ''.join(
-                '<li style="margin:1px 0;line-height:1.45;">'
-                + re.sub(r'^[\-\*]\s+', '', l) + '</li>'
-                for l in bl
-            )
-            rendered.append(f'<ul style="padding-left:20px;margin:2px 0;">{items}</ul>')
-            return
-
-        # Ordered list
-        if all(re.match(r'^\d+\.\s+', l) for l in bl):
-            items = ''.join(
-                '<li style="margin:1px 0;line-height:1.45;">'
-                + re.sub(r'^\d+\.\s+', '', l) + '</li>'
-                for l in bl
-            )
-            rendered.append(f'<ol style="padding-left:20px;margin:2px 0;">{items}</ol>')
-            return
-
-        # Plain paragraph
-        body = '\n'.join(body_lines)
-        rendered.append(f'<p style="margin:2px 0;line-height:1.45;">{body}</p>')
-
-    for para in paragraphs:
-        if not para.strip():
-            continue
-        lines = para.strip().split('\n')
-
-        # Header as first line of paragraph (with body following)
-        if len(lines) >= 1:
-            hm = re.match(r'^(#{1,3})\s+(.+)$', lines[0])
-            if hm:
-                level = len(hm.group(1))
-                size = {1: f'{fs(20)}', 2: f'{fs(17)}', 3: f'{fs(15)}'}[level]
-                margin = {1: '10px 0 4px 0', 2: '8px 0 3px 0', 3: '6px 0 2px 0'}[level]
-                rendered.append(
-                    f'<h{level} style="font-size:{size};font-weight:600;'
-                    f'color:#e5e5eb;margin:{margin};line-height:1.3;">'
-                    f'{hm.group(2)}</h{level}>'
-                )
-                remaining = lines[1:]
-                if remaining:
-                    _render_body(remaining)
-                continue
-
-        # Horizontal rule: ---
-        if len(lines) == 1 and re.match(r'^-{3,}$', lines[0].strip()):
-            rendered.append(
-                '<hr style="border:none;border-top:1px solid #2a2a3c;margin:6px 0;">'
-            )
-            continue
-
-        # Everything else: table, list, or paragraph
-        _render_body(lines)
-
-    out = ''.join(rendered)
-
-    # ── Step 4: Inline formatting on the assembled HTML ──
-    # (applied after block-level rendering so inline code inside lists works)
-
-    # **bold**
-    out = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', out)
-
-    # *italic* — careful not to match ** or * inside words
-    out = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'<i>\1</i>', out)
-
-    # `inline code` (NOT inside <pre> blocks — resolved already)
-    out = re.sub(
-        r'`([^`]+)`',
-        r'<code style="background:#1a1a24;color:#67e8f9;padding:1px 4px;'
-        r'border-radius:3px;font-family:monospace;font-size:11px;">\1</code>',
-        out,
-    )
-
-    # ── Step 5: Restore code block placeholders ──
-    for i, block_html in enumerate(code_blocks):
-        out = out.replace(f'__CODE_BLOCK_{i}__', block_html)
-
-    # ── Step 6: Remaining single newlines → <br> ──
+def _format_inline_fallback(text: str) -> str:
+    """Fallback: lightweight inline formatter if mistune fails."""
+    import html as _html
+    out = _html.escape(text)
     out = out.replace('\n', '<br>')
-
     return out
 
 
