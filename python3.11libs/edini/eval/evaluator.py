@@ -88,6 +88,7 @@ class EvaluatorPipeline:
         reliability = self._eval_reliability(session)
         efficiency = self._eval_efficiency(session)
         cost = self._eval_cost(session)
+        sandbox_adoption = self._eval_sandbox_adoption(session)
 
         # 2. LLM-as-Judge evaluations (sampled)
         tool_accuracy: float | None = None
@@ -156,6 +157,7 @@ class EvaluatorPipeline:
             efficiency=efficiency,
             reliability=reliability,
             cost=cost,
+            sandbox_adoption_rate=round(sandbox_adoption, 3),
             total_score=round(total_score, 3),
             tool_call_details=call_details,
             tool_calls_count=len(session.tool_calls),
@@ -215,6 +217,26 @@ class EvaluatorPipeline:
         actual = len(calls)
         score = min(1.0, optimal / max(1, actual))
         return round(score, 3)
+
+    def _eval_sandbox_adoption(self, session: StructuredSession) -> float:
+        """Evaluate sandbox adoption rate for procedural tasks.
+
+        Returns 1.0 if no procedural work was done (neutral).
+        Otherwise: sandbox_commits / (raw_python_runs + sandbox_commits).
+        """
+        sandbox_commits = sum(
+            1 for tc in session.tool_calls
+            if tc.sandbox_action == "commit"
+        )
+        raw_python_runs = sum(
+            1 for tc in session.tool_calls
+            if tc.tool_name == "houdini_run_python"
+            and tc.sandbox_action is None
+        )
+        total = sandbox_commits + raw_python_runs
+        if total == 0:
+            return 1.0  # no procedural work done, neutral
+        return round(sandbox_commits / total, 3)
 
     def _eval_cost(self, session: StructuredSession) -> float:
         """Cost score — higher = cheaper.
