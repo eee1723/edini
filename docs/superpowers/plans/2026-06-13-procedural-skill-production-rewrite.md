@@ -1,3 +1,36 @@
+# Procedural Modeling Skill Production Rewrite
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Rewrite the procedural-modeling skill and its supporting prompt infrastructure so that procedural assets are generated with proper detail, exposed parameters, modular components, and verified through a mandatory structural repair loop.
+
+**Architecture:** Four files change: (1) SKILL.md gets a complete rewrite with new sections for code-first priority, recipe templates, modular components, parameter exposure, detail standards, probe-first, and visual verification protocol; (2) pi-visionizer config exports a 3D-specific verification prompt; (3) edini-context injects an upgraded verification workflow with mandatory repair loops; (4) harness.ts tool guidelines enforce no-first-commit and structured verification.
+
+**Tech Stack:** Markdown (skill), TypeScript (Pi extensions)
+
+---
+
+## File Structure
+
+| Path | Action | Responsibility |
+|------|--------|----------------|
+| `skills/procedural-modeling/SKILL.md` | Rewrite | Core skill document — all procedural modeling rules |
+| `pi-extensions/pi-visionizer/src/config.ts` | Modify | Add `PROCEDURAL_VERIFY_PROMPT` export |
+| `pi-extensions/edini-context/index.ts` | Modify | Update Visual Verification Rules with repair loop |
+| `pi-extensions/edini-tools/tools/harness.ts` | Modify | Update promptGuidelines for sandbox and capture tools |
+
+---
+
+## Task 1: Rewrite SKILL.md — Core Sections
+
+**Files:**
+- Rewrite: `skills/procedural-modeling/SKILL.md`
+
+- [ ] **Step 1: Replace the entire SKILL.md with the production version**
+
+Replace the full content of `skills/procedural-modeling/SKILL.md` with:
+
+```markdown
 ---
 name: procedural-modeling
 description: Use when the user mentions procedural modeling, programmatic generation, VEX scripting, Python SOP, algorithmic geometry, parametric design, 程序化建模, 程序化生成, or wants to create geometry/effects through code rather than manual node placement. Also use when the user asks to generate patterns, fractals, L-systems, scatter with rules, or any task where code drives geometry creation.
@@ -163,7 +196,7 @@ A procedural asset is NOT complete when it has correct topology. It MUST also pa
 - Level 1: Raw primitives (box, cylinder) — NEVER ACCEPTABLE
 - Level 2: Shaped primitives with correct proportions — STILL NOT ENOUGH
 - Level 3: Refined shapes with bevels, proper normals, some surface detail — MINIMUM ACCEPTABLE
-- Level 4: Production quality with micro-detail and variation — TARGET
+- Level 4: Production quality with micro-detail, variation, proper edge flow — TARGET
 
 ### Per-component detail checklist:
 - [ ] No perfectly sharp 90° edges on visible surfaces
@@ -201,7 +234,7 @@ n.destroy()
 
 ## Thinking Strategy: Divide & Conquer
 
-**Build small procedural components first, then combine.** Do not try to generate one monolithic script. Instead:
+**Build small procedural components first, then combine.** Do not try to generate one monolithic script that does everything. Instead:
 
 1. Decompose the goal into independent sub-components (e.g., base shape + scatter rule + orientation + variation)
 2. Build and verify each component separately (one wrangle / one Python SOP per component)
@@ -212,7 +245,7 @@ n.destroy()
 
 **VEX generated from scratch fails 64% of the time.** Mitigate with:
 
-1. **Set the run-over class FIRST** — Before writing any VEX logic:
+1. **Set the run-over class FIRST** — Before writing any VEX logic, determine which class to use:
    - **Points**: per-point operations (position, velocity, custom attributes) — most common
    - **Primitives**: per-face operations (face normals, groups, coloring)
    - **Vertices**: per-vertex operations (UV manipulation, vertex normals)
@@ -264,19 +297,17 @@ box.parm("sizez").set(1)
 
 ### String Safety
 When embedding string literals in Python code that will pass through JSON → parm.set():
-- Avoid backtick characters
+- Avoid backtick characters (`` ` ``)
 - Escape backslashes as `\\\\` (double-escape for JSON + Python)
 - Use raw strings (`r"..."`) for paths
-- For special characters in data (key labels, etc.), use unicode escapes
+- For special characters in data (key labels, etc.), use unicode escapes: ``` for backtick
 
 ## Harness Rules
 
 - Do not use raw `houdini_run_python` for initial procedural asset generation when `houdini_run_python_sandbox` is available.
 - Do not delete a failed procedural node before `houdini_collect_diagnostics`.
 - Do not explore Qt widgets, main windows, viewport internals, or unsupported HOM APIs to capture images. Use `houdini_capture_review` and report clean failure if capture is unavailable.
-- If a generated Python SOP, VEX wrangle, or node-network attempt fails, diagnose that attempt first. Diagnose before switching strategy — switch to Python SOP only if diagnostics confirm the current backend is unsuitable.
-- Use `houdini_verify_asset` to run structural checks (point count, bounds, attribute presence) before visual verification.
-- Use `houdini_discard_sandbox` to cleanly abort a failed attempt when diagnostics show the approach is fundamentally wrong.
+- If a generated Python SOP, VEX wrangle, or node-network attempt fails, diagnose that attempt first. Switching backend is allowed only after diagnostics identify why the current path is unsuitable.
 - **NEVER use `commit_on_success=true` on first sandbox execution.** Always capture and verify visually before committing.
 
 ## Workflow
@@ -336,6 +367,7 @@ Format: structured list, not prose.
 
 **Use `houdini_capture_review`** for all visual verification:
 ```
+# Always use 4-view for procedural assets
 houdini_capture_review(
   filepath="screenshots/asset_review.png",
   target_path="/obj/asset_name/OUT",
@@ -362,12 +394,12 @@ houdini_capture_review(
 Node parameter names differ from older versions. Always use these exact names:
 
 ### Line SOP
-| Purpose | Parm name | Type |
-|---------|-----------|------|
-| Origin X/Y/Z | `originx`, `originy`, `originz` | float |
-| Direction X/Y/Z | `dirx`, `diry`, `dirz` | float |
-| Length | `dist` | float |
-| Num points | `points` | int |
+| Purpose | Parm name | Type | Example |
+|---------|-----------|------|---------|
+| Origin X/Y/Z | `originx`, `originy`, `originz` | float | `line.parm("originx").set(0.0)` |
+| Direction X/Y/Z | `dirx`, `diry`, `dirz` | float | `line.parm("dirx").set(1.0)` |
+| Length | `dist` | float | `line.parm("dist").set(2.5)` |
+| Num points | `points` | int | `line.parm("points").set(2)` |
 
 ### Circle SOP
 | Purpose | Parm name | Type |
@@ -394,12 +426,6 @@ Node parameter names differ from older versions. Always use these exact names:
 | Rotate | `rx`, `ry`, `rz` |
 | Scale | `sx`, `sy`, `sz` |
 
-### PolyExtrude SOP
-| Purpose | Parm name |
-|---------|-----------|
-| Distance | `dist` |
-| Output front | `outputfront` (1=front faces only) |
-
 ### Discovery
 If unsure about a node's parm names, create a throwaway probe:
 ```python
@@ -408,10 +434,322 @@ for p in n.parms():
     print(f"{p.name()} = {p.eval()}")
 n.destroy()
 ```
+```
 
-## Copernicus (Procedural Textures)
+- [ ] **Step 2: Verify SKILL.md markdown is valid**
 
-1. Create nodes via `houdini_run_python_sandbox` or future image-context harness tools in `/img` context
-2. Prefer Copernicus nodes (`copernicus::noise/ramp/math/merge`) over legacy COP2
-3. Import SOP data via `sopimport` COP node
-4. Bake via `hou.node(...).parm("execute").pressButton()` on ROP
+Check that code fences are balanced:
+
+```powershell
+$content = Get-Content "F:\zz\Edini\skills\procedural-modeling\SKILL.md" -Raw; ($content | Select-String '```' -AllMatches).Matches.Count
+```
+
+Expected: even number (balanced code fences)
+
+- [ ] **Step 3: Commit**
+
+```powershell
+git add skills/procedural-modeling/SKILL.md
+git commit -m "docs(skill): rewrite procedural-modeling for production quality
+
+- Add Code-First Priority (prefer Python/VEX over node assembly)
+- Add Recipe Template with components, params, anchors, verification
+- Add Modular Components section (Copy-to-Points pattern)
+- Add Parameter Exposure rules (spare parms + ch())
+- Add Detail Standards (minimum level 3, mandatory post-processing)
+- Add Probe-First Rule for unknown node types
+- Add Visual Verification Protocol with 3D prompt and repair loop
+- Add String Safety guidance for JSON pipeline"
+```
+
+---
+
+## Task 2: Add 3D Verification Prompt to pi-visionizer
+
+**Files:**
+- Modify: `pi-extensions/pi-visionizer/src/config.ts:63`
+
+- [ ] **Step 1: Add PROCEDURAL_VERIFY_PROMPT export after DEFAULT_PROMPT**
+
+After line 63 (the closing of `DEFAULT_PROMPT`), add:
+
+```typescript
+export const PROCEDURAL_VERIFY_PROMPT = [
+  "You are verifying a procedural 3D asset captured from Houdini viewport (multi-view contact sheet).",
+  "",
+  "CHECK EACH VIEW FOR THESE DEFECTS:",
+  "",
+  "1. ORIENTATION: Are all components oriented correctly?",
+  "   - Wheels/discs should be VERTICAL (upright), not lying flat",
+  "   - Roofs/tops should be on TOP, not on the side",
+  "   - Handles/bars should be HORIZONTAL",
+  "   - Flag any component that appears rotated 90° from expected",
+  "",
+  "2. PROPORTIONS: Do parts have reasonable proportions?",
+  "   - Compare sub-component sizes to the whole",
+  "   - Flag any part that is drastically too large or too small",
+  "",
+  "3. SYMMETRY: If the object should be symmetric, is it?",
+  "   - Check left/right and front/back symmetry where expected",
+  "   - Flag missing or extra parts on one side",
+  "",
+  "4. COMPLETENESS: Are all expected sub-components visible?",
+  "   - If something is described as having N parts, can you count N?",
+  "   - Flag components that are described but not visible",
+  "",
+  "5. INTERSECTION: Are parts overlapping when they should not?",
+  "   - Bodies passing through other bodies",
+  "   - Components embedded inside others",
+  "",
+  "6. SCALE: Are sub-parts at correct scale relative to the whole?",
+  "",
+  "7. DETAIL LEVEL: Rate the geometry refinement:",
+  "   - 1 = Raw boxes/cylinders (unacceptable)",
+  "   - 2 = Shaped primitives, correct proportions but no refinement",
+  "   - 3 = Beveled edges, proper normals, some surface detail (minimum acceptable)",
+  "   - 4 = Production quality with micro-detail and variation",
+  "",
+  "OUTPUT FORMAT (use exactly this structure):",
+  "DEFECTS:",
+  "- [critical/major/minor] description of defect",
+  "- [critical/major/minor] description of defect",
+  "DETAIL_LEVEL: N",
+  "ORIENTATION_OK: yes/no (if no, describe what is wrong)",
+  "MISSING_COMPONENTS: list or 'none'",
+  "VERDICT: fix (list what) | accept",
+].join("\n");
+```
+
+- [ ] **Step 2: Verify TypeScript syntax**
+
+```powershell
+node -e "const fs=require('fs'); const c=fs.readFileSync('pi-extensions/pi-visionizer/src/config.ts','utf8'); if(c.includes('PROCEDURAL_VERIFY_PROMPT')) console.log('OK: prompt exported'); else process.exit(1)"
+```
+
+Expected: `OK: prompt exported`
+
+- [ ] **Step 3: Commit**
+
+```powershell
+git add pi-extensions/pi-visionizer/src/config.ts
+git commit -m "feat(visionizer): add PROCEDURAL_VERIFY_PROMPT for 3D asset verification
+
+Structured checklist for orientation, proportion, symmetry, completeness,
+intersection, scale, and detail level. Used by describe_image during
+procedural modeling verification loops."
+```
+
+---
+
+## Task 3: Update edini-context Verification Flow
+
+**Files:**
+- Modify: `pi-extensions/edini-context/index.ts:105-134`
+
+- [ ] **Step 1: Replace the Visual Verification Rules section**
+
+Replace lines 105-133 (from `## Visual Verification Rules` to the closing backtick before the `// Inject iron rules` comment) with:
+
+```typescript
+## Visual Verification Rules
+
+Before reporting completion, decide whether to capture:
+
+**🔴 MUST capture & verify (houdini_capture_review + describe_image with 3D prompt):**
+- Procedural asset generation (ANY geometry created via sandbox or code)
+- User provided a reference image
+- Creating effects: smoke, fire, water, pyro, particles, volume, fluid
+- Changing shaders, materials, lighting, or cameras
+- User says "match", "look like", or "adjust"
+
+**🟡 SHOULD capture:**
+- Modifying existing visible geometry
+- 3+ parameter changes on the same node
+- User asks "how does it look?"
+
+**🟢 SKIP capture:**
+- Read-only operations (get_*, search_*, list_*, check_errors)
+- Layout-only (layout_nodes)
+- Utility nodes (null, switch, merge, output)
+- HDA management
+
+**Procedural Asset Verification Workflow (MANDATORY for all procedural generation):**
+1. Generate asset via houdini_run_python_sandbox (commit_on_success=false ALWAYS)
+2. Apply post-processing (bevel, subdivide, normal) if not already included
+3. houdini_capture_review with views=['perspective','top','front','right']
+4. describe_image with CUSTOM PROMPT for 3D verification (check orientation, proportions, completeness, detail level)
+5. IF critical/major defects found:
+   a. Fix the SPECIFIC defect — do NOT regenerate from scratch
+   b. Re-capture and re-describe
+   c. Repeat up to 3 repair cycles
+6. IF 3 repairs fail → report remaining defects to user and ask for direction
+7. IF no critical/major defects AND detail_level >= 3 → commit
+
+**The 3D verification prompt for describe_image:**
+When verifying procedural assets, pass this prompt to describe_image:
+"Verify this procedural 3D asset. Check: 1) ORIENTATION (wheels vertical, roof on top), 2) PROPORTIONS, 3) SYMMETRY, 4) COMPLETENESS (all components present?), 5) INTERSECTION, 6) SCALE, 7) DETAIL_LEVEL (1-4, must be >=3). Report: DEFECTS list, DETAIL_LEVEL, ORIENTATION_OK, MISSING_COMPONENTS, VERDICT (fix/accept)."
+
+**Non-procedural verification workflow:**
+1. Make the change
+2. houdini_capture_review → save PNG
+3. describe_image on the file → get description
+4. Compare to expectations or reference
+5. If mismatched → adjust parameters, repeat 2-4
+6. Match confirmed → report completion
+```
+
+- [ ] **Step 2: Verify file is syntactically valid**
+
+```powershell
+node -e "const fs=require('fs'); fs.readFileSync('pi-extensions/edini-context/index.ts','utf8'); console.log('OK')"
+```
+
+Expected: `OK`
+
+- [ ] **Step 3: Commit**
+
+```powershell
+git add pi-extensions/edini-context/index.ts
+git commit -m "feat(context): add mandatory repair loop for procedural asset verification
+
+- Procedural generation now requires 4-view capture + 3D verification prompt
+- Mandatory repair loop (up to 3 cycles) for critical/major defects
+- Explicit prohibition on commit_on_success=true for first sandbox
+- Separate workflow for procedural vs non-procedural verification"
+```
+
+---
+
+## Task 4: Update harness.ts promptGuidelines
+
+**Files:**
+- Modify: `pi-extensions/edini-tools/tools/harness.ts:59-64` and `156-162`
+
+- [ ] **Step 1: Update houdiniRunPythonSandbox guidelines**
+
+Replace lines 59-64 (the `promptGuidelines` array for `houdiniRunPythonSandbox`) with:
+
+```typescript
+  promptGuidelines: [
+    "ALWAYS use houdini_run_python_sandbox for initial procedural asset generation instead of raw houdini_run_python.",
+    "The sandbox provides a Python SOP context — use hou.pwd() and node.geometry() directly in your code.",
+    "The sandbox result includes diagnostics and structural_checks (has_geometry, point_count, bounds_nonzero) — no need for separate inspect_geo or check_errors calls.",
+    "Do not delete a failed sandbox before reviewing the diagnostics in the result.",
+    "NEVER set commit_on_success=true on the first sandbox execution. Always capture (4-view quad) and verify with describe_image using the 3D verification prompt BEFORE committing.",
+    "If describe_image reports critical or major defects (wrong orientation, missing components, detail_level < 3), fix the specific issue and re-verify — do NOT commit until verification passes.",
+    "Before using unfamiliar node types in your code, PROBE their parameter names first (create + inspect + destroy).",
+  ],
+```
+
+- [ ] **Step 2: Update houdiniCaptureReview guidelines**
+
+Replace lines 156-162 (the `promptGuidelines` array for `houdiniCaptureReview`) with:
+
+```typescript
+  promptGuidelines: [
+    "Use houdini_capture_review after generating a procedural asset to verify it from multiple angles.",
+    "For procedural assets: ALWAYS use views=['perspective','top','front','right'] for complete structural verification.",
+    "For animated/growth assets: use frames=[1,10,20,30] to get a time contact sheet.",
+    "Always pass target_path — it automatically isolates the target and frames each view.",
+    "The output is a single concatenated PNG — call describe_image with the 3D verification prompt on it.",
+    "After describe_image, if VERDICT is 'fix': repair the specific defect, re-capture, and re-verify (up to 3 cycles).",
+    "Do NOT skip the describe_image step. Do NOT commit before visual verification passes.",
+  ],
+```
+
+- [ ] **Step 3: Verify file is valid**
+
+```powershell
+node -e "const fs=require('fs'); const c=fs.readFileSync('pi-extensions/edini-tools/tools/harness.ts','utf8'); console.log('Lines:', c.split('\n').length); if(c.includes('NEVER set commit_on_success')) console.log('OK: sandbox guideline present'); if(c.includes('3D verification prompt')) console.log('OK: capture guideline present')"
+```
+
+Expected:
+```
+Lines: ~220
+OK: sandbox guideline present
+OK: capture guideline present
+```
+
+- [ ] **Step 4: Commit**
+
+```powershell
+git add pi-extensions/edini-tools/tools/harness.ts
+git commit -m "feat(harness): enforce verification-before-commit and probe-first in tool guidelines
+
+- Sandbox: prohibit commit_on_success=true on first run, require 3D verify prompt
+- Capture: mandate 4-view quad + describe_image with 3D prompt for procedural assets
+- Both: require repair loop (up to 3 cycles) before commit"
+```
+
+---
+
+## Task 5: Final Verification
+
+- [ ] **Step 1: Check all modified files are readable**
+
+```powershell
+$files = @(
+  "skills/procedural-modeling/SKILL.md",
+  "pi-extensions/pi-visionizer/src/config.ts",
+  "pi-extensions/edini-context/index.ts",
+  "pi-extensions/edini-tools/tools/harness.ts"
+)
+foreach ($f in $files) {
+  if (Test-Path $f) { Write-Output "OK: $f" } else { Write-Output "MISSING: $f" }
+}
+```
+
+Expected: all OK
+
+- [ ] **Step 2: Verify SKILL.md has balanced code fences**
+
+```powershell
+$content = Get-Content "skills/procedural-modeling/SKILL.md" -Raw
+$count = ([regex]::Matches($content, '```')).Count
+if ($count % 2 -eq 0) { "OK: $count fences (balanced)" } else { "ERROR: $count fences (unbalanced)" }
+```
+
+Expected: `OK: N fences (balanced)`
+
+- [ ] **Step 3: Verify key terms exist in each file**
+
+```powershell
+$checks = @{
+  "skills/procedural-modeling/SKILL.md" = @("Code-First Priority", "Recipe Template", "Modular Components", "Parameter Exposure", "Detail Standards", "Probe-First", "Visual Verification Protocol", "Copy-to-Points")
+  "pi-extensions/pi-visionizer/src/config.ts" = @("PROCEDURAL_VERIFY_PROMPT", "ORIENTATION", "DETAIL_LEVEL")
+  "pi-extensions/edini-context/index.ts" = @("Procedural Asset Verification Workflow", "commit_on_success=false", "repair cycles")
+  "pi-extensions/edini-tools/tools/harness.ts" = @("NEVER set commit_on_success=true", "3D verification prompt", "PROBE their parameter names")
+}
+foreach ($file in $checks.Keys) {
+  $content = Get-Content $file -Raw
+  foreach ($term in $checks[$file]) {
+    if ($content -match [regex]::Escape($term)) { Write-Output "  OK: '$term'" } else { Write-Output "  MISSING: '$term' in $file" }
+  }
+}
+```
+
+Expected: all OK
+
+- [ ] **Step 4: Run existing tests to confirm no regressions**
+
+```powershell
+python -m pytest tests/test_pi_harness_tools.py tests/test_capture_tools.py -q
+```
+
+Expected: existing tests pass (these check file content patterns)
+
+- [ ] **Step 5: Final commit if any fixes were needed**
+
+Only if Steps 2-4 revealed issues that required fixes.
+
+---
+
+## Verification Checklist (Post-Implementation)
+
+- [ ] `skills/procedural-modeling/SKILL.md` contains all 8 new sections
+- [ ] `SKILL.md` code fences are balanced (even count)
+- [ ] `pi-visionizer/src/config.ts` exports `PROCEDURAL_VERIFY_PROMPT`
+- [ ] `edini-context/index.ts` has "Procedural Asset Verification Workflow" with 3 repair cycles
+- [ ] `harness.ts` sandbox guidelines prohibit `commit_on_success=true` on first run
+- [ ] `harness.ts` capture guidelines require 3D verification prompt
+- [ ] Existing tests pass without regression

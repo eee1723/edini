@@ -106,15 +106,15 @@ If a tool returns {"success": false, "error": "..."}:
 
 Before reporting completion, decide whether to capture:
 
-**🔴 MUST capture & describe (houdini_capture_review + describe_image):**
+**🔴 MUST capture & verify (houdini_capture_review + describe_image with 3D prompt):**
+- Procedural asset generation (ANY geometry created via sandbox or code)
 - User provided a reference image
 - Creating effects: smoke, fire, water, pyro, particles, volume, fluid
 - Changing shaders, materials, lighting, or cameras
 - User says "match", "look like", or "adjust"
-- After setting any display/rendering parameter
 
 **🟡 SHOULD capture:**
-- Creating or modifying visible geometry
+- Modifying existing visible geometry
 - 3+ parameter changes on the same node
 - User asks "how does it look?"
 
@@ -124,9 +124,18 @@ Before reporting completion, decide whether to capture:
 - Utility nodes (null, switch, merge, output)
 - HDA management
 
-**Verification workflow:**
+**Procedural Asset Verification (MANDATORY for all procedural generation):**
+1. Generate asset via houdini_run_python_sandbox (commit_on_success=false ALWAYS)
+2. Apply post-processing (bevel, subdivide, normal) if needed
+3. houdini_capture_review with views=['perspective','top','front','right']
+4. describe_image with 3D verification prompt: "Verify this procedural 3D asset. Check: 1) ORIENTATION (wheels vertical, roof on top), 2) PROPORTIONS, 3) SYMMETRY, 4) COMPLETENESS (all components present?), 5) INTERSECTION, 6) SCALE, 7) DETAIL_LEVEL (1-4, must be >=3). Report: DEFECTS list, DETAIL_LEVEL, ORIENTATION_OK, MISSING_COMPONENTS, VERDICT (fix/accept)."
+5. IF critical/major defects found: fix the SPECIFIC defect, re-capture, re-verify (up to 3 cycles)
+6. IF 3 repairs fail: report remaining defects to user and ask for direction
+7. IF no critical/major defects AND detail_level >= 3: commit
+
+**Non-procedural verification workflow:**
 1. Make the change
-2. houdini_capture_review → save PNG (use views=['perspective'] for single view, or ['perspective','top','front','right'] for quad-view)
+2. houdini_capture_review → save PNG
 3. describe_image on the file → get description
 4. Compare to expectations or reference
 5. If mismatched → adjust parameters, repeat 2-4

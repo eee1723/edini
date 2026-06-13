@@ -61,6 +61,9 @@ export const houdiniRunPythonSandbox = {
     "The sandbox provides a Python SOP context — use hou.pwd() and node.geometry() directly in your code.",
     "The sandbox result includes diagnostics and structural_checks (has_geometry, point_count, bounds_nonzero) — no need for separate inspect_geo or check_errors calls.",
     "Do not delete a failed sandbox before reviewing the diagnostics in the result.",
+    "NEVER set commit_on_success=true on the first sandbox execution. Always capture (4-view quad) and verify with describe_image using the 3D verification prompt BEFORE committing.",
+    "If describe_image reports critical or major defects (wrong orientation, missing components, detail_level < 3), fix the specific issue and re-verify — do NOT commit until verification passes.",
+    "Before using unfamiliar node types in your code, PROBE their parameter names first (create + inspect + destroy).",
   ],
   parameters: Type.Object({
     code: Type.String({ description: "Python code to execute in the sandbox" }),
@@ -155,10 +158,12 @@ export const houdiniCaptureReview = {
   promptSnippet: "Capture a review contact sheet of the generated asset",
   promptGuidelines: [
     "Use houdini_capture_review after generating a procedural asset to verify it from multiple angles.",
-    "For static assets: use views=['perspective','top','front','right'] to get a 2×2 quad-view.",
+    "For procedural assets: ALWAYS use views=['perspective','top','front','right'] for complete structural verification.",
     "For animated/growth assets: use frames=[1,10,20,30] to get a time contact sheet.",
     "Always pass target_path — it automatically isolates the target and frames each view.",
-    "The output is a single concatenated PNG — call describe_image once on it.",
+    "The output is a single concatenated PNG — call describe_image with the 3D verification prompt on it.",
+    "After describe_image, if VERDICT is 'fix': repair the specific defect, re-capture, and re-verify (up to 3 cycles).",
+    "Do NOT skip the describe_image step. Do NOT commit before visual verification passes.",
     "If you only need a single view, use views=['perspective'].",
   ],
   parameters: Type.Object({
@@ -186,6 +191,11 @@ export const houdiniCaptureReview = {
     ),
     home_target: Type.Optional(
       Type.Boolean({ description: "Frame the target before each view capture. Default: true." })
+    ),
+    resolution: Type.Optional(
+      Type.Tuple([Type.Number(), Type.Number()], {
+        description: "Capture resolution (width, height) per cell. Default: viewport native. Use (960, 540) for consistent quad-view cells."
+      })
     ),
   }),
   async execute(

@@ -38,11 +38,10 @@ export function getEnvConfig(): VisionizerConfig | undefined {
 }
 
 /** Hardcoded default vision model — lowest priority fallback.
- * Must match the provider name registered in ~/.pi/agent/models.json
- * (this project registers DashScope as "ali", not "aliyun"). */
+ * Must match the provider name registered in ~/.pi/agent/models.json */
 export const DEFAULT_VISION_MODEL: VisionizerConfig = {
-  provider: "ali",
-  modelId: "qwen3-vl-plus",
+  provider: "aliyun",
+  modelId: "qwen-vl-max",
 };
 
 export const DEFAULT_PROMPT = [
@@ -61,6 +60,50 @@ export const DEFAULT_PROMPT = [
   "- Describe the structure, labels, relationships, and key data points",
   "",
   "For any other image type, describe all visible elements, text, and context factually.",
+].join("\n");
+
+export const PROCEDURAL_VERIFY_PROMPT = [
+  "You are verifying a procedural 3D asset captured from Houdini viewport (multi-view contact sheet).",
+  "",
+  "CHECK EACH VIEW FOR THESE DEFECTS:",
+  "",
+  "1. ORIENTATION: Are all components oriented correctly?",
+  "   - Wheels/discs should be VERTICAL (upright), not lying flat",
+  "   - Roofs/tops should be on TOP, not on the side",
+  "   - Handles/bars should be HORIZONTAL",
+  "   - Flag any component that appears rotated 90 degrees from expected",
+  "",
+  "2. PROPORTIONS: Do parts have reasonable proportions?",
+  "   - Compare sub-component sizes to the whole",
+  "   - Flag any part that is drastically too large or too small",
+  "",
+  "3. SYMMETRY: If the object should be symmetric, is it?",
+  "   - Check left/right and front/back symmetry where expected",
+  "   - Flag missing or extra parts on one side",
+  "",
+  "4. COMPLETENESS: Are all expected sub-components visible?",
+  "   - If something is described as having N parts, can you count N?",
+  "   - Flag components that are described but not visible",
+  "",
+  "5. INTERSECTION: Are parts overlapping when they should not?",
+  "   - Bodies passing through other bodies",
+  "   - Components embedded inside others",
+  "",
+  "6. SCALE: Are sub-parts at correct scale relative to the whole?",
+  "",
+  "7. DETAIL LEVEL: Rate the geometry refinement:",
+  "   - 1 = Raw boxes/cylinders (unacceptable)",
+  "   - 2 = Shaped primitives, correct proportions but no refinement",
+  "   - 3 = Beveled edges, proper normals, some surface detail (minimum acceptable)",
+  "   - 4 = Production quality with micro-detail and variation",
+  "",
+  "OUTPUT FORMAT (use exactly this structure):",
+  "DEFECTS:",
+  "- [critical/major/minor] description of defect",
+  "DETAIL_LEVEL: N",
+  "ORIENTATION_OK: yes/no (if no, describe what is wrong)",
+  "MISSING_COMPONENTS: list or none",
+  "VERDICT: fix (list what) | accept",
 ].join("\n");
 
 /**
@@ -100,5 +143,5 @@ export function getConfig(ctx: ExtensionContext): VisionizerConfig | undefined {
  * Hardcoded default: last resort (aliyun/qwen-vl-max)
  */
 export function resolveConfig(ctx: ExtensionContext): VisionizerConfig | undefined {
-  return getConfig(ctx) ?? getEnvConfig() ?? NO_DEFAULT;
+  return getConfig(ctx) ?? getEnvConfig() ?? DEFAULT_VISION_MODEL;
 }
