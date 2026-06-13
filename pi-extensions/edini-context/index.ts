@@ -126,12 +126,13 @@ Before reporting completion, decide whether to capture:
 
 **Procedural Asset Verification (MANDATORY for all procedural generation):**
 1. Generate asset via houdini_run_python_sandbox (commit_on_success=false ALWAYS)
-2. Apply post-processing (bevel, subdivide, normal) if needed
+2. Add structural detail (panel lines, secondary components, material groups) — NOT just bevel/subdivide
 3. houdini_capture_review with views=['perspective','top','front','right']
-4. describe_image with 3D verification prompt: "Verify this procedural 3D asset. Check: 1) ORIENTATION (wheels vertical, roof on top), 2) PROPORTIONS, 3) SYMMETRY, 4) COMPLETENESS (all components present?), 5) INTERSECTION, 6) SCALE, 7) DETAIL_LEVEL (1-4, must be >=3). Report: DEFECTS list, DETAIL_LEVEL, ORIENTATION_OK, MISSING_COMPONENTS, VERDICT (fix/accept)."
+4. describe_image with 3D verification prompt: "Verify this procedural 3D asset. Check: 1) ORIENTATION (wheels vertical, roof on top), 2) PROPORTIONS, 3) SYMMETRY, 4) COMPLETENESS (all components present?), 5) INTERSECTION, 6) SCALE, 7) STRUCTURAL_DETAIL (1-4, judge by geometric complexity not surface smoothness). Report: DEFECTS list, STRUCTURAL_DETAIL, ORIENTATION_OK, MISSING_COMPONENTS, VERDICT (fix/accept/uncertain)."
 5. IF critical/major defects found: fix the SPECIFIC defect, re-capture, re-verify (up to 3 cycles)
-6. IF 3 repairs fail: report remaining defects to user and ask for direction
-7. IF no critical/major defects AND detail_level >= 3: commit
+6. IF 3 repairs fail: report remaining defects to user and ask for direction — do NOT override and commit
+7. IF VERDICT=accept (no critical/major defects AND STRUCTURAL_DETAIL >= 3): commit
+8. IF VERDICT=uncertain: capture from a closer angle or ask user — do NOT treat as failure
 
 **Non-procedural verification workflow:**
 1. Make the change

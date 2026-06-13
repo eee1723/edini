@@ -151,26 +151,44 @@ float profile = chramp("profile", @curveu);  // Ramp widget
 
 ## Detail Standards
 
-A procedural asset is NOT complete when it has correct topology. It MUST also pass these detail checks:
+A procedural asset is NOT complete when it has correct topology. Detail means STRUCTURAL COMPLEXITY, not surface smoothing.
 
-### Mandatory post-processing (apply ALL that are relevant):
-1. **Edge treatment** — PolyBevel (offset 0.01-0.05) on hard edges of mechanical objects
-2. **Subdivision** — At least 1 pass on organic surfaces (set crease weights on sharp edges first)
-3. **Normal computation** — Facet or Normal SOP with appropriate cusp angle (30-60°)
-4. **Surface variation** — At least ONE of: VEX noise displacement, panel lines, seam geometry, texture-ready UVs
+**Do NOT stack PolyBevel + Subdivide as a substitute for real detail.** These are surface treatments that add no structural information. They are fine as finishing touches, but they do NOT raise the detail level.
 
-### Detail level rating (never commit level 1-2):
+### What counts as real detail:
+- **Separate geometric parts** — door panels as distinct geometry, not painted on
+- **Panel lines / seams as geometry** — inset faces or extruded edges, not just color
+- **Secondary components** — bolts, hinges, vents, handles, trim pieces
+- **Varied cross-sections** — a car fender's cross-section changes along its length
+- **Functional sub-shapes** — brake calipers, mirror housings, key dish concavity
+- **Construction logic** — visible how the object would be manufactured/assembled
+
+### What does NOT count as detail:
+- PolyBevel on all edges (this is finishing, not detail)
+- Subdivide passes (this is smoothing, not detail)
+- Normal recalculation (this is shading, not detail)
+- Noise displacement (unless creating specific surface texture like bark or leather)
+
+### Detail level rating:
 - Level 1: Raw primitives (box, cylinder) — NEVER ACCEPTABLE
-- Level 2: Shaped primitives with correct proportions — STILL NOT ENOUGH
-- Level 3: Refined shapes with bevels, proper normals, some surface detail — MINIMUM ACCEPTABLE
-- Level 4: Production quality with micro-detail and variation — TARGET
+- Level 2: Correct silhouette but featureless, no sub-parts — NOT ENOUGH
+- Level 3: Distinct sub-components, shaped profiles, panel lines or seams — MINIMUM
+- Level 4: Secondary components (bolts, vents), varied cross-sections, construction logic — TARGET
 
-### Per-component detail checklist:
-- [ ] No perfectly sharp 90° edges on visible surfaces
-- [ ] Proper normal direction (no black faces from flipped normals)
-- [ ] At least one surface variation technique applied
-- [ ] Organic forms have subdivision + crease weights
-- [ ] Mechanical forms have bevel + panel lines or seams
+### Finishing (apply AFTER structural detail is sufficient):
+1. **Normal SOP** — cusp angle 30-60° for correct shading
+2. **PolyBevel** — offset 0.01-0.03 on hard edges ONLY if asset will be rendered with smooth shading
+3. **Subdivide** — ONLY on organic forms that need smoothing (not mechanical parts)
+
+### Material Group Organization
+
+No texturing required, but geometry MUST be organized for future material assignment:
+- Assign primitive groups by material zone: `body`, `glass`, `rubber`, `metal_trim`, `chrome`, etc.
+- Use `@shop_materialpath` attribute or primitive groups — either works
+- Each visually distinct surface = separate group
+- Example: car → groups: `body_paint`, `glass`, `rubber_tire`, `chrome_trim`, `interior`, `headlight_lens`
+
+This enables one-click material assignment later without re-selecting geometry.
 
 ## Probe-First Rule
 
@@ -190,6 +208,48 @@ n.destroy()
 - Torus: `radx`/`rady` not `radius`
 - Line: `dist` not `length`, controlled by `order` mode
 
+## Common Pitfalls
+
+Mistakes that waste 30-50% of procedural generation time. Avoid them.
+
+### pscale semantics in Copy-to-Points
+- `@pscale = 1.0` means **original size** of the source geometry (no scaling)
+- `@pscale = wheel_radius` does NOT give you a wheel of that radius — it SCALES by that factor
+- If your wheel geometry is already modeled at correct radius, set `@pscale = 1.0`
+- If you need to scale: `@pscale = desired_size / source_geo_size`
+
+### Attribute name collisions
+- If both body and component have `@Cd`, Copy-to-Points may produce unexpected results
+- Rule: only set `@Cd` on the FINAL merged output, not on intermediate component streams
+- Use `material_zone` (string) for material intent, not `@Cd` color
+
+### Group expression syntax in Copy-to-Points
+- `targetgroup` parameter uses Houdini group syntax, NOT Python expressions
+- Valid: `wheel_anchors` (group name), `@component_id==wheel` (attribute expression)
+- Invalid: Python string operations, f-strings, regex
+
+### Orient quaternion for Copy-to-Points
+- `@orient` is a **quaternion** `(x, y, z, w)` — NOT Euler angles
+- Identity (no rotation): `(0, 0, 0, 1)`
+- 90° around Y: `(0, 0.7071, 0, 0.7071)`
+- Use `hou.Quaternion(angle_degrees, axis_vector)` in Python to compute:
+  ```python
+  import hou
+  q = hou.Quaternion()
+  q.setToRotation(90, hou.Vector3(0, 1, 0))
+  orient = (q[0], q[1], q[2], q[3])  # (x, y, z, w)
+  ```
+
+### Node destruction cascades
+- If you destroy a node that has downstream connections, those connections break
+- Always disconnect outputs before destroying: `node.setInput(idx, None)` on all consumers
+- Better: rebuild the network in correct order rather than patching live connections
+
+### Attribute creation order
+- `geo.addAttrib()` MUST be called BEFORE creating any geometry that uses it
+- Creating points first, then adding attribute = crash or silent failure
+- Pattern: all `addAttrib` calls at the top, then geometry creation
+
 ## Language Selection
 
 | Task | Use | Why |
@@ -207,6 +267,81 @@ n.destroy()
 2. Build and verify each component separately (one wrangle / one Python SOP per component)
 3. Combine with merge/Copy-to-Points/switch nodes
 4. Verify the combined result visually
+
+## Common Procedural Patterns
+
+Use these proven patterns as building blocks. Don't reinvent from scratch.
+
+### Cross-Section Skinning (vehicles, bottles, pipes with varying profiles)
+```python
+# Define cross-section curves at different positions along a spine
+sections = []
+for i, (pos, radius, shape_func) in enumerate(profile_data):
+    pts = [shape_func(angle, radius) + pos for angle in angles]
+    sections.append(pts)
+# Skin between sections by connecting corresponding points with quads
+for i in range(len(sections) - 1):
+    for j in range(num_pts):
+        j_next = (j + 1) % num_pts
+        poly = geo.createPolygon()
+        poly.addVertex(sections[i][j])
+        poly.addVertex(sections[i][j_next])
+        poly.addVertex(sections[i+1][j_next])
+        poly.addVertex(sections[i+1][j])
+```
+
+### Radial Array (wheels, gears, fan blades, clock faces)
+```python
+import math
+for i in range(count):
+    angle = 2 * math.pi * i / count
+    x = radius * math.cos(angle)
+    z = radius * math.sin(angle)
+    # Create component at (x, center_y, z) with orient pointing outward
+```
+
+### Profile Curve + Sweep (moldings, rims, tire treads)
+```python
+# Define 2D profile as a list of (x, y) points
+profile = [(0, 0), (0.1, 0), (0.1, 0.05), (0.08, 0.08), ...]
+# Create as NURBS or polygon curve, then use Sweep SOP along a path
+```
+
+### Panel Lines / Seams as Geometry (mechanical surfaces)
+```python
+# Method 1: Inset faces then extrude inward (creates grooves)
+# Method 2: Create thin strip geometry along edges (separate group for material)
+# Method 3: In VEX, select edges by angle threshold and create edge geometry
+```
+Panel lines are separate primitives in group `seam` — not color/attribute tricks.
+
+### Boolean Subtraction for Cutouts (windows, vents, air intakes)
+```python
+# Create cutter geometry (box, cylinder) at the cut location
+# Use Boolean SOP: input0=body, input1=cutter, operation=subtract
+# Result: clean cutout with proper topology
+```
+
+### Group-Based Assembly (standard structure for any asset)
+```python
+# Every component gets a primitive group for material assignment
+geo.addAttrib(hou.attribType.Prim, "material_zone", "")
+# When creating each component's polygons:
+for poly in component_polys:
+    poly.setAttribValue("material_zone", "chrome_trim")
+    geo.findGroup(hou.primType.Polygon, "chrome_trim")  # or createGroup
+```
+
+### Anchor Points for Copy-to-Points (standard pattern)
+```python
+# Output to a separate geometry stream or group
+pt = geo.createPoint()
+pt.setPosition(anchor_pos)
+pt.setAttribValue("orient", quaternion_as_tuple)  # (x, y, z, w)
+pt.setAttribValue("pscale", 1.0)  # 1.0 = original size of component
+pt.setAttribValue("component_id", "wheel")
+# Group the anchors: geo.createPointGroup("wheel_anchors").add(pt)
+```
 
 ## VEX Guidelines
 
@@ -286,7 +421,7 @@ When embedding string literals in Python code that will pass through JSON → pa
 3. **Choose backend** — `python_sop` for algorithmic mesh generation, `vex_wrangle` for per-element math, `hybrid` for both.
 4. **Generate with sandbox** — Use `houdini_run_python_sandbox` with `commit_on_success=false`.
 5. **Trust sandbox diagnostics** — The result includes `diagnostics` and `structural_checks`. No need for separate inspect calls.
-6. **Add post-processing** — Apply detail standards: bevel, subdivide, normal, noise as needed.
+6. **Add structural detail** — Panel lines, seams, secondary components, varied cross-sections. Then finishing: Normal SOP, optional bevel on render-visible hard edges.
 7. **Expose parameters** — Add spare parms to the Python SOP for all recipe parameters.
 8. **Capture and verify** — Use `houdini_capture_review` with 4-view quad, then `describe_image` with the 3D verification prompt.
 9. **Repair loop** — If verification finds defects, fix the SPECIFIC issue and re-verify. See Visual Verification Protocol.

@@ -62,7 +62,7 @@ export const houdiniRunPythonSandbox = {
     "The sandbox result includes diagnostics and structural_checks (has_geometry, point_count, bounds_nonzero) — no need for separate inspect_geo or check_errors calls.",
     "Do not delete a failed sandbox before reviewing the diagnostics in the result.",
     "NEVER set commit_on_success=true on the first sandbox execution. Always capture (4-view quad) and verify with describe_image using the 3D verification prompt BEFORE committing.",
-    "If describe_image reports critical or major defects (wrong orientation, missing components, detail_level < 3), fix the specific issue and re-verify — do NOT commit until verification passes.",
+    "If describe_image reports critical or major defects (wrong orientation, missing components, STRUCTURAL_DETAIL < 3), fix the specific issue and re-verify — do NOT commit until verification passes or user approves.",
     "Before using unfamiliar node types in your code, PROBE their parameter names first (create + inspect + destroy).",
   ],
   parameters: Type.Object({
@@ -116,6 +116,12 @@ export const houdiniCommitSandbox = {
   description:
     "Commit a verified procedural sandbox into the live Houdini scene with a final node name.",
   promptSnippet: "Commit a verified Houdini sandbox",
+  promptGuidelines: [
+    "HARD GATE: Do NOT call houdini_commit_sandbox unless describe_image has been called on a capture of this sandbox AND returned VERDICT=accept (or VERDICT=uncertain with no critical/major defects).",
+    "If describe_image returned VERDICT=fix, you MUST fix the defects and re-verify before committing. You cannot override the verification result.",
+    "If you have not yet called houdini_capture_review + describe_image on this sandbox, do that first.",
+    "After 3 failed repair attempts, ask the user — do NOT commit anyway.",
+  ],
   parameters: Type.Object({
     sandbox_root_path: Type.String({ description: "Full path of the sandbox root node" }),
     final_name: Type.String({ description: "Final node name to use after committing" }),
