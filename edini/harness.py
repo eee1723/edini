@@ -341,6 +341,8 @@ def commit_sandbox(
     sandbox_root_path: str,
     final_name: str,
     replace_existing: bool = False,
+    orientation_checks: list[dict] | None = None,
+    skip_orientation: bool = False,
 ) -> dict[str, Any]:
     stripped_name = final_name.strip()
     if not stripped_name or "/" in final_name or "\\" in final_name or stripped_name == "..":
@@ -389,6 +391,29 @@ def commit_sandbox(
                     "traceback": traceback.format_exc(),
                 }
 
+    # ── Orientation gate ──
+    # If the agent supplied orientation_checks OR the asset has a component_id
+    # attribute, run verify_orientation and refuse to commit on failure.
+    orientation_result = None
+    if not skip_orientation:
+        orientation_result = _run_orientation_gate(
+            sandbox_root_path, orientation_checks
+        )
+        if orientation_result is not None and not orientation_result.get("passed_all"):
+            return {
+                "success": False,
+                "sandbox_root_path": sandbox_root_path,
+                "final_path": final_path,
+                "committed": False,
+                "error": (
+                    "Orientation verification failed — refusing to commit. "
+                    "Fix the defects below (each comes with a fix quaternion), "
+                    "or pass skip_orientation=true only if you have a documented "
+                    "reason."
+                ),
+                "orientation": orientation_result,
+            }
+
     try:
         node.setName(final_name, unique_name=False)
     except Exception as e:
@@ -414,11 +439,105 @@ def commit_sandbox(
             "display_traceback": traceback.format_exc(),
         }
 
-    return {
+    result = {
         "success": True,
         "sandbox_root_path": sandbox_root_path,
         "final_path": actual_final_path,
         "committed": True,
+    }
+    if orientation_result is not None:
+        result["orientation"] = orientation_result
+    return result
+
+
+def _run_orientation_gate(
+    sandbox_root_path: str,
+    orientation_checks: list[dict] | None,
+) -> dict[str, Any] | None:
+    """Run verify_orientation against the sandbox display node.
+
+    Returns None if no checks are available (no `component_id` attribute and
+    no explicit `orientation_checks` supplied). Otherwise returns the
+    verification summary with `passed_all` set.
+    """
+    from edini.node_utils import verify_orientation
+
+    # Find the actual cook output — sandbox_root_path is a container; the
+    # display node inside is typically `edini_generate` or the root itself.
+    root = hou.node(sandbox_root_path)
+    if root is None:
+        return None
+
+    target = root
+    # Walk down to a displayed SOP if available
+    for child_name in ("edini_generate", "OUT", "out"):
+        child = root.node(child_name) if hasattr(root, "node") else None
+        if child is not None:
+            try:
+                geo = child.geometry()
+                if geo is not None:
+                    target = child
+                    break
+            except Exception:
+                continue
+    # Fall back to recursing for any displayed child
+    if target is root:
+        try:
+            for sub in [c for c in root.allSubChildren() if hasattr(c, "geometry")]:
+                try:
+                    if sub.geometry() is not None and sub.isDisplayFlag():
+                        target = sub
+                        break
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    try:
+        geo = target.geometry()
+    except Exception:
+        return None
+    if geo is None:
+        return None
+
+    has_component_id = geo.findPrimAttrib("component_id") is not None
+    if not orientation_checks and not has_component_id:
+        # No checks to run; agent didn't declare any, asset has no component_id
+        return None
+
+    checks = orientation_checks or []
+    if not checks:
+        # Asset has component_id but agent didn't declare expected axes.
+        # Don't block commit silently — return an advisory result.
+        avail = sorted(set(
+            str(p.stringAttribValue("component_id"))
+            for p in geo.prims()
+            if p.stringAttribValue("component_id")
+        ))[:20]
+        return {
+            "passed_all": True,
+            "advisory": (
+                "Asset has @component_id attribute but no orientation_checks "
+                "were supplied to commit_sandbox. Add orientation_checks for: "
+                f"{avail}. Set skip_orientation=true to silence this advisory."
+            ),
+            "available_component_ids": avail,
+        }
+
+    result = verify_orientation(target.path(), checks)
+    if not result.get("success"):
+        return {
+            "passed_all": False,
+            "error": result.get("error", "verify_orientation failed"),
+            "details": result,
+        }
+
+    return {
+        "passed_all": result.get("failed", 1) == 0,
+        "passed": result.get("passed", 0),
+        "failed": result.get("failed", 0),
+        "total": result.get("total", 0),
+        "checks": result.get("checks", []),
     }
 
 

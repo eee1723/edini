@@ -110,23 +110,110 @@ export const houdiniVerifyAsset = {
   },
 };
 
+export const houdiniVerifyOrientation = {
+  name: "houdini_verify_orientation",
+  label: "Verify Component Orientations",
+  description:
+    "Programmatically verify per-component axis orientations via PCA on point positions. " +
+    "Authoritative for orientation correctness — vision models cannot reliably detect " +
+    "wheels lying flat or handlebars pointing the wrong way.",
+  promptSnippet: "Verify component orientations via PCA",
+  promptGuidelines: [
+    "Authoritative orientation check: wheels must have radial symmetry axis horizontal, handlebars must have long axis transverse, etc.",
+    "MUST be called before houdini_commit_sandbox if the asset has any @component_id-tagged parts. commit_sandbox will refuse otherwise.",
+    "Each check requires: component_id (matching the @component_id prim attr), kind (radial | elongated | planar), expected_axis (X/Y/Z or -X/-Y/-Z).",
+    "kind=radial: symmetry axis = smallest eigenvalue's vector (wheel axle, gear axis).",
+    "kind=elongated: long axis = largest eigenvalue's vector (handlebar, tube, crank).",
+    "kind=planar: surface normal = smallest eigenvalue's vector (fender, saddle, body panel).",
+    "When a check fails, the result includes a 'hint' field with the exact hou.Quaternion to apply.",
+    "Set signed=true ONLY when direction matters (e.g. saddle normal must point +Y, not just be along Y).",
+  ],
+  parameters: Type.Object({
+    node_path: Type.String({
+      description: "Full path of the SOP node whose geometry contains the components",
+    }),
+    checks: Type.Array(
+      Type.Object({
+        component_id: Type.String({
+          description: "Primitive attribute value used to filter (matches @component_id)",
+        }),
+        kind: Type.Union([
+          Type.Literal("radial"),
+          Type.Literal("elongated"),
+          Type.Literal("planar"),
+        ], { description: "radial=smallest eig (axle), elongated=largest eig (long axis), planar=smallest eig (normal)" }),
+        expected_axis: Type.Union([
+          Type.Literal("X"), Type.Literal("Y"), Type.Literal("Z"),
+          Type.Literal("-X"), Type.Literal("-Y"), Type.Literal("-Z"),
+        ], { description: "Expected dominant axis for this kind's eigenvector" }),
+        tolerance_deg: Type.Optional(
+          Type.Number({ description: "Allowed angular deviation. Default 15." })
+        ),
+        signed: Type.Optional(
+          Type.Boolean({ description: "Direction matters (default false — axis is a line)" })
+        ),
+      })
+    ),
+  }),
+  async execute(
+    _toolCallId: string,
+    params: {
+      node_path: string;
+      checks: Array<{
+        component_id: string;
+        kind: "radial" | "elongated" | "planar";
+        expected_axis: "X" | "Y" | "Z" | "-X" | "-Y" | "-Z";
+        tolerance_deg?: number;
+        signed?: boolean;
+      }>;
+    }
+  ) {
+    return forwardTool("houdini_verify_orientation", params);
+  },
+};
+
 export const houdiniCommitSandbox = {
   name: "houdini_commit_sandbox",
   label: "Commit Houdini Sandbox",
   description:
-    "Commit a verified procedural sandbox into the live Houdini scene with a final node name.",
+    "Commit a verified procedural sandbox into the live Houdini scene with a final node name. " +
+    "Runs houdini_verify_orientation as a hard gate when the asset has @component_id tags.",
   promptSnippet: "Commit a verified Houdini sandbox",
   promptGuidelines: [
-    "HARD GATE: Do NOT call houdini_commit_sandbox unless describe_image has been called on a capture of this sandbox AND returned VERDICT=accept (or VERDICT=uncertain with no critical/major defects).",
-    "If describe_image returned VERDICT=fix, you MUST fix the defects and re-verify before committing. You cannot override the verification result.",
-    "If you have not yet called houdini_capture_review + describe_image on this sandbox, do that first.",
+    "HARD GATE: Do NOT call houdini_commit_sandbox unless houdini_verify_orientation has been called on this sandbox AND all checks passed (or the asset has no @component_id tags).",
+    "If houdini_verify_orientation returned any failed checks, fix them using the provided hint quaternion and re-verify before committing. You cannot override the gate.",
+    "If you have not yet called houdini_capture_review + describe_image on this sandbox, do that first for visual sanity (note: vision models cannot reliably detect orientation — verify_orientation is authoritative for that).",
     "After 3 failed repair attempts, ask the user — do NOT commit anyway.",
+    "Pass orientation_checks inline if you have not called houdini_verify_orientation separately; it runs the same gate at commit time.",
+    "Use skip_orientation=true ONLY with a documented reason (e.g. abstract art where orientation is intentionally ambiguous).",
   ],
   parameters: Type.Object({
     sandbox_root_path: Type.String({ description: "Full path of the sandbox root node" }),
     final_name: Type.String({ description: "Final node name to use after committing" }),
     replace_existing: Type.Optional(
       Type.Boolean({ description: "Replace an existing node with the same final name" })
+    ),
+    orientation_checks: Type.Optional(
+      Type.Array(
+        Type.Object({
+          component_id: Type.String(),
+          kind: Type.Union([
+            Type.Literal("radial"),
+            Type.Literal("elongated"),
+            Type.Literal("planar"),
+          ]),
+          expected_axis: Type.Union([
+            Type.Literal("X"), Type.Literal("Y"), Type.Literal("Z"),
+            Type.Literal("-X"), Type.Literal("-Y"), Type.Literal("-Z"),
+          ]),
+          tolerance_deg: Type.Optional(Type.Number()),
+          signed: Type.Optional(Type.Boolean()),
+        }),
+        { description: "Orientation checks to run as a commit gate (same schema as houdini_verify_orientation)" }
+      )
+    ),
+    skip_orientation: Type.Optional(
+      Type.Boolean({ description: "Bypass orientation gate. Only use with a documented reason." })
     ),
   }),
   async execute(
@@ -135,6 +222,14 @@ export const houdiniCommitSandbox = {
       sandbox_root_path: string;
       final_name: string;
       replace_existing?: boolean;
+      orientation_checks?: Array<{
+        component_id: string;
+        kind: "radial" | "elongated" | "planar";
+        expected_axis: "X" | "Y" | "Z" | "-X" | "-Y" | "-Z";
+        tolerance_deg?: number;
+        signed?: boolean;
+      }>;
+      skip_orientation?: boolean;
     }
   ) {
     return forwardTool("houdini_commit_sandbox", params);
@@ -224,6 +319,7 @@ export const harnessTools = [
   houdiniCollectDiagnostics,
   houdiniRunPythonSandbox,
   houdiniVerifyAsset,
+  houdiniVerifyOrientation,
   houdiniCommitSandbox,
   houdiniDiscardSandbox,
   houdiniCaptureReview,

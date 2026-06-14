@@ -459,29 +459,38 @@ def get_provider_auth_status(provider: str) -> dict:
 
 
 def get_configured_providers() -> list[dict]:
+    """Return configured providers grouped by origin.
+
+    - ``kind="builtin"``: pi-ai built-in providers that have auth.
+    - ``kind="custom"``: user-defined providers in models.json that have auth.
+      Orphan auth.json entries (key present, no matching built-in or
+      models.json provider) are ignored so stale leftovers don't pollute
+      the list.
+    """
     all_providers = get_pi_ai_providers()
-    extra_ids = set()
-    for p in read_pi_auth().keys():
-        extra_ids.add(p)
-    for p in read_pi_models().get("providers", {}).keys():
-        extra_ids.add(p)
-    result = []
+    pi_ai_ids = {p["id"] for p in all_providers}
+    models_providers = read_pi_models().get("providers", {})
+
+    result: list[dict] = []
     for p in all_providers:
         status = get_provider_auth_status(p["id"])
         if status["configured"]:
             result.append({
                 "id": p["id"], "name": p["name"],
                 "source": status["source"], "hint": status["hint"],
+                "kind": "builtin",
             })
-    pi_ai_ids = {p["id"] for p in all_providers}
-    for pid in sorted(extra_ids - pi_ai_ids):
+    for pid in sorted(models_providers.keys()):
+        if pid in pi_ai_ids:
+            continue
         status = get_provider_auth_status(pid)
         if status["configured"]:
-            display = read_pi_models().get("providers", {}).get(pid, {})
+            pdata = models_providers[pid]
             result.append({
                 "id": pid,
-                "name": display.get("name", pid),
+                "name": pdata.get("name", pid),
                 "source": status["source"],
                 "hint": status["hint"],
+                "kind": "custom",
             })
     return result

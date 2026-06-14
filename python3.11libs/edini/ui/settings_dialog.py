@@ -9,7 +9,7 @@ Stores configuration in pi's native config files:
   ~/.pi/agent/models.json  — custom provider/model definitions
   ~/.pi/agent/settings.json — default provider/model/thinking
 """
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from edini.config import (
     get_settings, save_settings,
@@ -24,6 +24,7 @@ from edini.ui.theme import THEMES, get_theme, set_theme, set_font_scale, fs
 from edini.ui.knowledge_store import rules_count, entries_count, load_rules
 from edini.ui.provider_list_dialog import ProviderListDialog
 from edini.ui.api_key_dialog import ApiKeyDialog
+from edini.ui.custom_models_dialog import CustomModelsDialog
 
 
 class SettingsDialog(QtWidgets.QDialog):
@@ -185,9 +186,9 @@ class SettingsDialog(QtWidgets.QDialog):
         login_btn.clicked.connect(self._on_login_provider)
         btn_row.addWidget(login_btn)
 
-        custom_btn = QtWidgets.QPushButton("+ Custom Provider")
+        custom_btn = QtWidgets.QPushButton("Manage Custom Models")
         custom_btn.setStyleSheet(_btn_style("#1e1e2c", "#a1a1aa"))
-        custom_btn.clicked.connect(self._on_add_custom_provider)
+        custom_btn.clicked.connect(self._on_manage_custom_models)
         btn_row.addWidget(custom_btn)
         btn_row.addStretch()
         layout.addLayout(btn_row)
@@ -268,14 +269,45 @@ class SettingsDialog(QtWidgets.QDialog):
         return w
 
     def _populate_configured_providers(self) -> None:
-        """Fill the configured providers table."""
+        """Fill the configured providers table.
+
+        Built-in pi-ai providers are listed first, then a divider row,
+        then user-defined custom providers with a subtle background tint.
+        """
         self._auth_table.setRowCount(0)
+        self._auth_table.clearSpans()
         providers = get_configured_providers()
+
+        custom_bg = QtGui.QBrush(QtGui.QColor("#15151f"))
+        section_fg = QtGui.QColor("#71717a")
+        section_font = QtGui.QFont()
+        section_font.setBold(True)
+
+        last_kind: str | None = None
         for p in providers:
+            kind = p.get("kind", "builtin")
+            if kind != last_kind and last_kind is not None:
+                self._insert_section_divider(
+                    "Custom Providers" if kind == "custom"
+                    else "Built-in Providers",
+                    custom_bg if kind == "custom" else None,
+                    section_fg, section_font,
+                )
+            last_kind = kind
+
             row = self._auth_table.rowCount()
             self._auth_table.insertRow(row)
-            self._auth_table.setItem(
-                row, 0, QtWidgets.QTableWidgetItem(p["name"]))
+
+            name_item = QtWidgets.QTableWidgetItem(p["name"])
+            name_item.setFlags(
+                name_item.flags() & ~QtCore.Qt.ItemIsEditable)
+            if kind == "custom":
+                name_item.setBackground(custom_bg)
+                f = name_item.font()
+                f.setItalic(True)
+                name_item.setFont(f)
+            self._auth_table.setItem(row, 0, name_item)
+
             source_text = p.get("source", "")
             hint = p.get("hint", "")
             display = source_text
@@ -283,13 +315,38 @@ class SettingsDialog(QtWidgets.QDialog):
                 display = f"{source_text}: {hint}"
             elif hint and source_text == "env":
                 display = f"env: {hint}"
-            self._auth_table.setItem(
-                row, 1, QtWidgets.QTableWidgetItem(display))
+            source_item = QtWidgets.QTableWidgetItem(display)
+            source_item.setFlags(
+                source_item.flags() & ~QtCore.Qt.ItemIsEditable)
+            if kind == "custom":
+                source_item.setBackground(custom_bg)
+            self._auth_table.setItem(row, 1, source_item)
+
             btn = QtWidgets.QPushButton("Logout")
             btn.setStyleSheet("color:#ef4444;border:none;font-size:10px;")
             btn.clicked.connect(
                 lambda *a, pid=p["id"]: self._on_logout_provider(pid))
             self._auth_table.setCellWidget(row, 2, btn)
+
+    def _insert_section_divider(
+        self,
+        label: str,
+        bg: QtGui.QBrush | None,
+        fg: QtGui.QColor,
+        font: QtGui.QFont,
+    ) -> None:
+        """Insert a non-interactive section header row spanning all columns."""
+        row = self._auth_table.rowCount()
+        self._auth_table.insertRow(row)
+        item = QtWidgets.QTableWidgetItem(f"── {label} ──")
+        item.setFlags(QtCore.Qt.NoItemFlags)
+        item.setForeground(fg)
+        item.setFont(font)
+        item.setTextAlignment(QtCore.Qt.AlignCenter)
+        if bg is not None:
+            item.setBackground(bg)
+        self._auth_table.setItem(row, 0, item)
+        self._auth_table.setSpan(row, 0, 1, self._auth_table.columnCount())
 
     def _populate_chat_and_vision(self) -> None:
         """Initialize chat model and vision model dropdowns."""
@@ -500,26 +557,12 @@ class SettingsDialog(QtWidgets.QDialog):
             self._populate_configured_providers()
             self._populate_chat_and_vision()
 
-    def _on_add_custom_provider(self) -> None:
-        """Add a custom provider (Ollama, LM Studio, etc.)."""
-        dlg = _AddProviderDialog(self)
+    def _on_manage_custom_models(self) -> None:
+        """Open the Custom Models Manager dialog."""
+        dlg = CustomModelsDialog(self)
         if dlg.exec() == QtWidgets.QDialog.Accepted:
-            data = dlg.get_provider_data()
-            models = read_pi_models()
-            providers = models.setdefault("providers", {})
-            providers[data["name"]] = {
-                "baseUrl": data["baseUrl"],
-                "api": data["api"],
-                "models": [
-                    {"id": m.strip()}
-                    for m in data["models"].split(",") if m.strip()
-                ],
-            }
-            api_key = data.get("apiKey", "")
-            if api_key:
-                providers[data["name"]]["apiKey"] = api_key
-            write_pi_models(models)
-            self._needs_restart = True
+            if dlg.needs_restart:
+                self._needs_restart = True
             self._populate_configured_providers()
             self._populate_chat_and_vision()
 
@@ -864,7 +907,7 @@ class SettingsDialog(QtWidgets.QDialog):
                 self._needs_restart = False
                 try:
                     rpc.status_changed.disconnect(self._on_restart_done)
-                except TypeError:
+                except (TypeError, RuntimeError):
                     pass
                 rpc.status_changed.connect(self._on_restart_done)
                 rpc.restart()
@@ -894,98 +937,6 @@ class SettingsDialog(QtWidgets.QDialog):
 # ═══════════════════════════════════════════════════════════════════════
 # Add Provider Dialog (custom providers like Ollama)
 # ═══════════════════════════════════════════════════════════════════════
-
-class _AddProviderDialog(QtWidgets.QDialog):
-    """Simple dialog for adding a custom provider to models.json."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Add Custom Provider")
-        self.setMinimumWidth(400)
-        self.setStyleSheet("""
-            QDialog { background-color: #0c0c14; }
-            QLabel { color: #c8ccd4; font-size:12px; background:transparent; }
-            QLineEdit {
-                background-color: #10101a;
-                color: #c8ccd4;
-                border: 1px solid #1e1e2c;
-                border-radius: 4px;
-                padding: 6px 10px;
-                font-size:12px;
-            }
-            QLineEdit:focus { border-color: #06b6d4; }
-            QComboBox {
-                background-color: #10101a;
-                color: #c8ccd4;
-                border: 1px solid #1e1e2c;
-                border-radius: 4px;
-                padding: 6px 10px;
-                font-size:12px;
-            }
-            QComboBox::drop-down { border:none; width:20px; }
-            QComboBox QAbstractItemView {
-                background-color: #101018;
-                border: 1px solid #1e1e2c;
-                color: #c8ccd4;
-                selection-background-color: #1a1a2a;
-            }
-        """)
-
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.setSpacing(8)
-        form = QtWidgets.QFormLayout()
-
-        self._name = QtWidgets.QLineEdit()
-        self._name.setPlaceholderText("e.g. ollama")
-        form.addRow("Name:", self._name)
-
-        self._base_url = QtWidgets.QLineEdit()
-        self._base_url.setPlaceholderText(
-            "e.g. http://localhost:11434/v1")
-        form.addRow("Base URL:", self._base_url)
-
-        self._api_type = QtWidgets.QComboBox()
-        self._api_type.addItems([
-            "openai-completions",
-            "anthropic-messages",
-            "google-generative-ai",
-            "openai-responses",
-        ])
-        form.addRow("API Type:", self._api_type)
-
-        self._models = QtWidgets.QLineEdit()
-        self._models.setPlaceholderText(
-            "e.g. llama3.1:8b, qwen2.5-coder:7b")
-        form.addRow("Models (comma-separated):", self._models)
-
-        self._api_key = QtWidgets.QLineEdit()
-        self._api_key.setEchoMode(QtWidgets.QLineEdit.Password)
-        self._api_key.setPlaceholderText("Optional — leave empty for local models")
-        form.addRow("API Key:", self._api_key)
-
-        layout.addLayout(form)
-
-        buttons = QtWidgets.QDialogButtonBox(
-            QtWidgets.QDialogButtonBox.Ok
-            | QtWidgets.QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self._validate_and_accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-    def _validate_and_accept(self):
-        if not self._name.text().strip() or not self._base_url.text().strip():
-            return
-        self.accept()
-
-    def get_provider_data(self) -> dict:
-        return {
-            "name": self._name.text().strip(),
-            "baseUrl": self._base_url.text().strip(),
-            "api": self._api_type.currentText(),
-            "models": self._models.text().strip(),
-            "apiKey": self._api_key.text().strip(),
-        }
-
 
 # ═══════════════════════════════════════════════════════════════════════
 # Helper Functions

@@ -17,7 +17,9 @@ from edini.node_utils import (
     run_python, run_vex, create_hda, get_hda_info,
     capture_review, capture_network,
     get_selection, check_errors, set_display_flag,
+    verify_orientation,
 )
+from edini import screenshots
 from edini.harness import (
     collect_diagnostics,
     run_python_sandbox,
@@ -110,16 +112,21 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     ),
     "houdini_get_hda_info": lambda **kw: get_hda_info(kw["hda_name"]),
     "houdini_capture_review": lambda **kw: capture_review(
-        kw["filepath"],
+        screenshots.relocate_filepath(
+            kw["filepath"], screenshots.current_session(), default_prefix="review"
+        ),
         target_path=kw.get("target_path"),
         views=kw.get("views"),
         frames=kw.get("frames"),
         columns=kw.get("columns", 0),
         shading_mode=kw.get("shading_mode", "smooth"),
         home_target=kw.get("home_target", True),
+        resolution=kw.get("resolution"),
     ),
     "houdini_capture_network": lambda **kw: capture_network(
-        kw["filepath"],
+        screenshots.relocate_filepath(
+            kw["filepath"], screenshots.current_session(), default_prefix="network"
+        ),
         parent_path=kw.get("parent_path", "/obj"),
     ),
     "houdini_get_selection": lambda **kw: get_selection(),
@@ -127,6 +134,10 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
         node_path=kw.get("node_path"),
     ),
     "houdini_set_display_flag": lambda **kw: set_display_flag(kw["node_path"]),
+    "houdini_verify_orientation": lambda **kw: verify_orientation(
+        kw["node_path"],
+        kw.get("checks", []),
+    ),
     "houdini_collect_diagnostics": lambda **kw: collect_diagnostics(
         kw["node_path"],
         include_geometry=kw.get("include_geometry", True),
@@ -146,6 +157,8 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
         kw["sandbox_root_path"],
         kw["final_name"],
         replace_existing=kw.get("replace_existing", False),
+        orientation_checks=kw.get("orientation_checks"),
+        skip_orientation=kw.get("skip_orientation", False),
     ),
     "houdini_discard_sandbox": lambda **kw: discard_sandbox(
         kw["sandbox_root_path"],

@@ -10,6 +10,7 @@ from PySide6 import QtCore, QtWidgets
 
 from edini.rpc_client import RpcClient
 from edini.tool_executor import ToolExecutor
+from edini import screenshots
 from edini.ui.chat_runtime import ChatRuntime
 from edini.ui.theme import apply_theme, accent_color
 from edini.ui.agent_panel import AgentPanel
@@ -871,6 +872,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
     def _on_pi_session_switched(self, session_path: str):
         """Called when pi confirms a session switch (new or resumed)."""
         self._current_session_path = session_path
+        screenshots.set_current_session(session_path)
 
         # Flush any pending image cache writes
         self._flush_pending_image_cache()

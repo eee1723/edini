@@ -251,6 +251,72 @@ class TestLegacyMigration(unittest.TestCase):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# TestGetConfiguredProviders
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestGetConfiguredProviders(unittest.TestCase):
+    """Tests for get_configured_providers() — kind tagging & orphan filter."""
+
+    def _patch_world(self, builtins, auth, models):
+        """Patch the data sources get_configured_providers depends on."""
+        pi_ai = [{"id": i, "name": i.title()} for i in builtins]
+
+        def fake_status(pid):
+            if pid in auth:
+                return {"configured": True, "source": "auth.json", "hint": None}
+            mp = models.get("providers", {}).get(pid, {})
+            if mp.get("apiKey"):
+                return {"configured": True, "source": "models.json", "hint": None}
+            return {"configured": False, "source": None, "hint": None}
+
+        return (
+            patch.object(cfg, "get_pi_ai_providers", return_value=pi_ai),
+            patch.object(cfg, "read_pi_auth", return_value=auth),
+            patch.object(cfg, "read_pi_models", return_value=models),
+            patch.object(cfg, "get_provider_auth_status", side_effect=fake_status),
+        )
+
+    def test_orphan_auth_entry_is_filtered(self):
+        """Stale auth.json keys not in pi-ai or models.json are dropped."""
+        builtins = ["deepseek"]
+        auth = {"deepseek": {"type": "api_key", "key": "k"},
+                "ali": {"type": "api_key", "key": "k"}}  # orphan
+        models = {"providers": {"aliyun": {"apiKey": "k", "name": "Aliyun"}}}
+        patches = self._patch_world(builtins, auth, models)
+        with patches[0], patches[1], patches[2], patches[3]:
+            result = cfg.get_configured_providers()
+        ids = [p["id"] for p in result]
+        self.assertNotIn("ali", ids)
+        self.assertIn("aliyun", ids)
+        self.assertIn("deepseek", ids)
+
+    def test_kind_tagging(self):
+        """Each result is tagged builtin or custom."""
+        builtins = ["deepseek"]
+        auth = {"deepseek": {"type": "api_key", "key": "k"},
+                "aliyun": {"type": "api_key", "key": "k"}}
+        models = {"providers": {"aliyun": {"apiKey": "k", "name": "Aliyun"}}}
+        patches = self._patch_world(builtins, auth, models)
+        with patches[0], patches[1], patches[2], patches[3]:
+            result = cfg.get_configured_providers()
+        kinds = {p["id"]: p["kind"] for p in result}
+        self.assertEqual(kinds["deepseek"], "builtin")
+        self.assertEqual(kinds["aliyun"], "custom")
+
+    def test_builtin_with_models_json_override_stays_builtin(self):
+        """A pi-ai built-in id that also appears in models.json is builtin."""
+        builtins = ["deepseek"]
+        auth = {"deepseek": {"type": "api_key", "key": "k"}}
+        models = {"providers": {"deepseek": {"apiKey": "k"}}}
+        patches = self._patch_world(builtins, auth, models)
+        with patches[0], patches[1], patches[2], patches[3]:
+            result = cfg.get_configured_providers()
+        ids = [p["id"] for p in result]
+        self.assertEqual(ids.count("deepseek"), 1)
+        self.assertEqual(result[0]["kind"], "builtin")
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # TestGetPiCommand
 # ═══════════════════════════════════════════════════════════════════════
 

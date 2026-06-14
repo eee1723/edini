@@ -1,13 +1,13 @@
 """Image cache for Edini sessions.
 
-Stores user-uploaded images alongside Pi session JSONL files so they
-can be displayed in the timeline during both live sessions and history browsing.
+Stores user-uploaded images under $HIP/Edini_screenshots/<task_name>/ so they
+sit alongside tool-captured screenshots and viewport snapshots.
 
 Cache layout:
-    ~/.pi/agent/sessions/<cwd_dir>/edini_images/<session_id>/
+    $HIP/Edini_screenshots/<task_name>/
         manifest.json    # [{index, hash, mime_type, filename, size_bytes, cache_path}]
-        0_a1b2c3d4.jpg
-        1_e5f6g7h8.png
+        upload_001_a1b2c3d4.jpg
+        upload_002_e5f6g7h8.png
         ...
 """
 
@@ -18,22 +18,18 @@ import os
 from pathlib import Path
 from typing import Optional
 
-
-def _pi_sessions_root() -> Path:
-    home = os.environ.get("USERPROFILE") or os.environ.get("HOME") or "~"
-    return Path(home) / ".pi" / "agent" / "sessions"
+from edini.screenshots import get_screenshot_dir
 
 
 def get_image_cache_dir(session_path: str) -> Path:
     """Get the image cache directory for a given session JSONL path.
 
-    Example:
-        session: ~/.pi/agent/sessions/--F--zz-Edini--/2026-..._uuid.jsonl
-        cache:   ~/.pi/agent/sessions/--F--zz-Edini--/edini_images/2026-..._uuid/
+    Resolves to $HIP/Edini_screenshots/<task_name>/ where task_name is derived
+    from the first user message in the session JSONL.
     """
-    p = Path(session_path)
-    session_id = p.stem  # filename without .jsonl
-    return p.parent / "edini_images" / session_id
+    if not session_path:
+        return Path.cwd() / "Edini_screenshots" / "untitled"
+    return get_screenshot_dir(session_path)
 
 
 def save_images(session_path: str, images: list[dict]) -> list[dict]:
@@ -50,6 +46,12 @@ def save_images(session_path: str, images: list[dict]) -> list[dict]:
     cache_dir = get_image_cache_dir(session_path)
     cache_dir.mkdir(parents=True, exist_ok=True)
 
+    # Find next available seq considering existing uploads in dir
+    existing = {f.name for f in cache_dir.iterdir() if f.is_file()}
+    seq = 1
+    while any(name.startswith(f"upload_{seq:03d}") for name in existing):
+        seq += 1
+
     meta_list: list[dict] = []
     mime_to_ext = {
         "image/jpeg": ".jpg", "image/jpg": ".jpg",
@@ -59,23 +61,23 @@ def save_images(session_path: str, images: list[dict]) -> list[dict]:
 
     for i, img in enumerate(images):
         b64_data = img.get("data", "")
-        b64_len = len(b64_data) if b64_data else 0
         if not b64_data:
             continue
         try:
             raw = base64.b64decode(b64_data)
-        except Exception as e:
+        except Exception:
             continue
 
         mime = img.get("mimeType", "image/png")
         ext = mime_to_ext.get(mime, ".jpg")
         content_hash = hashlib.sha256(raw).hexdigest()[:12]
-        filename = f"{i}_{content_hash}{ext}"
+        filename = f"upload_{seq:03d}_{content_hash}{ext}"
         filepath = cache_dir / filename
+        seq += 1
 
         try:
             filepath.write_bytes(raw)
-        except OSError as e:
+        except OSError:
             continue
 
         meta = {
@@ -88,11 +90,19 @@ def save_images(session_path: str, images: list[dict]) -> list[dict]:
         }
         meta_list.append(meta)
 
-    # Write manifest.json for history loading
+    # Merge into manifest.json (multiple uploads per session accumulate)
     manifest_path = cache_dir / "manifest.json"
+    prior: list[dict] = []
+    if manifest_path.exists():
+        try:
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                prior = [m for m in data if isinstance(m, dict)]
+        except (json.JSONDecodeError, OSError):
+            pass
     try:
         manifest_path.write_text(
-            json.dumps(meta_list, ensure_ascii=False, indent=2),
+            json.dumps(prior + meta_list, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
     except OSError:
@@ -172,23 +182,9 @@ def load_descriptions(session_path: str) -> Optional[list[dict]]:
 
 
 def prune_orphan_caches(session_dir: str) -> int:
-    """Remove image cache dirs whose session JSONL no longer exists. Returns count removed."""
-    import shutil
-    sessions_root = Path(session_dir)
-    images_root = sessions_root / "edini_images"
-    if not images_root.exists():
-        return 0
+    """No-op under the new $HIP/Edini_screenshots layout.
 
-    removed = 0
-    for cache_dir in images_root.iterdir():
-        if not cache_dir.is_dir():
-            continue
-        session_id = cache_dir.name
-        jsonl_path = sessions_root / f"{session_id}.jsonl"
-        if not jsonl_path.exists():
-            try:
-                shutil.rmtree(cache_dir)
-                removed += 1
-            except OSError:
-                pass
-    return removed
+    Folders are now named by task, not session_id, and a single task folder
+    may be shared across multiple sessions. Manual cleanup is left to the user.
+    """
+    return 0

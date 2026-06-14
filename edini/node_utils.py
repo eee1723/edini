@@ -695,8 +695,40 @@ def _get_view_type(view_name: str) -> Any:
     return _VIEW_TYPE_MAP.get(view_name.lower())
 
 
-def _concat_images_grid(image_paths: list[str], output_path: str, columns: int) -> bool:
+def _trim_white_border(img: Any, threshold: int = 240) -> Any:
+    """Auto-crop white/light borders from a PIL image."""
+    import numpy as np
+    try:
+        arr = np.array(img.convert("RGB"))
+        # Mask: pixels where all channels are below threshold (not white)
+        mask = np.any(arr < threshold, axis=2)
+        rows = np.any(mask, axis=1)
+        cols = np.any(mask, axis=0)
+        if not rows.any() or not cols.any():
+            return img  # entirely white — skip
+        rmin, rmax = np.where(rows)[0][[0, -1]]
+        cmin, cmax = np.where(cols)[0][[0, -1]]
+        cropped = img.crop((cmin, rmin, cmax + 1, rmax + 1))
+        if cropped.width > 0 and cropped.height > 0:
+            return cropped
+    except ImportError:
+        pass
+    except Exception:
+        pass
+    return img
+
+
+def _concat_images_grid(
+    image_paths: list[str],
+    output_path: str,
+    columns: int,
+    cell_size: tuple[int, int] | None = None,
+) -> bool:
     """Concatenate multiple images into a grid using Pillow.
+
+    If cell_size is provided, all images are resized to that exact
+    size before pasting — prevents cropping and ensures uniform cells.
+    Otherwise uses the largest image dimensions as cell size (legacy).
 
     Returns True on success, False if Pillow not available or any error.
     """
@@ -709,22 +741,35 @@ def _concat_images_grid(image_paths: list[str], output_path: str, columns: int) 
         imgs: list[Image.Image] = []
         for p in image_paths:
             if os.path.exists(p):
-                imgs.append(Image.open(p))
+                raw = Image.open(p)
+                imgs.append(_trim_white_border(raw))
         if not imgs:
             return False
 
         cols = max(1, min(columns, len(imgs)))
         rows = (len(imgs) + cols - 1) // cols
 
-        # Use the largest width/height across all images
-        cell_w = max(img.width for img in imgs)
-        cell_h = max(img.height for img in imgs)
+        # Determine cell dimensions
+        if cell_size is not None:
+            cell_w, cell_h = cell_size
+            # Resize all images to cell size
+            resized: list[Image.Image] = []
+            for img in imgs:
+                if img.width != cell_w or img.height != cell_h:
+                    resized.append(img.resize((cell_w, cell_h), Image.LANCZOS))
+                    img.close()
+                else:
+                    resized.append(img)
+            imgs = resized
+        else:
+            cell_w = max(img.width for img in imgs)
+            cell_h = max(img.height for img in imgs)
 
         canvas = Image.new("RGB", (cell_w * cols, cell_h * rows), (30, 30, 30))
         for i, img in enumerate(imgs):
             r, c = i // cols, i % cols
             x, y = c * cell_w, r * cell_h
-            # Center the image in its cell if smaller
+            # Center in cell (no-op if already resized to cell_w × cell_h)
             ox = (cell_w - img.width) // 2
             oy = (cell_h - img.height) // 2
             canvas.paste(img, (x + ox, y + oy))
@@ -742,6 +787,7 @@ def _capture_single_view(
     viewport: Any,
     filepath: str,
     frame: int,
+    resolution: tuple[int, int] | None = None,
 ) -> tuple[bool, str]:
     """Capture a single viewport frame via flipbook. Returns (success, error_detail)."""
     try:
@@ -750,6 +796,11 @@ def _capture_single_view(
         settings.output(filepath)
         settings.outputToMPlay(False)
         settings.frameRange((frame, frame))
+        if resolution is not None:
+            try:
+                settings.resolution(resolution)
+            except Exception:
+                pass
         viewer.flipbook(viewport, settings)
         if os.path.exists(filepath):
             return True, ""
@@ -767,6 +818,7 @@ def capture_review(
     columns: int = 0,
     shading_mode: str = "smooth",
     home_target: bool = True,
+    resolution: tuple[int, int] | None = None,
 ) -> dict[str, Any]:
     """Capture a review contact sheet — multi-view, multi-frame snapshots.
 
@@ -784,6 +836,8 @@ def capture_review(
         columns: Grid columns. 0 = auto (√n rounded up). Default: 0.
         shading_mode: "smooth", "wire", "flat", etc. Default: "smooth".
         home_target: Frame the target before each view capture. Default: True.
+        resolution: (width, height) for each cell. None = viewport native.
+                    Set to e.g. (960, 540) for consistent quad-view cells.
 
     Returns:
         {success, path, size_kb, grid: {rows, cols, cells},
@@ -792,6 +846,8 @@ def capture_review(
     import os
     import uuid
     import tempfile
+
+    filepath = os.path.abspath(filepath)  # resolve relative to Houdini process cwd
 
     method = "review_capture"
     stage = "initialize"
@@ -818,7 +874,9 @@ def capture_review(
     _restore_hidden: list[str] = []
     _restore_shading: Any = None
     _restore_view_type: Any = None
-    _restore_grid: bool | None = None
+    _restore_guides: dict[Any, bool] = {}
+    _restore_reference_plane: bool | None = None
+    _restore_color_scheme: Any = None
 
     try:
         stage = "get_viewer"
@@ -846,11 +904,45 @@ def capture_review(
         except Exception:
             pass
 
-        # ── Grid: hide for clean capture ──
+        # ── Color scheme: switch to Dark (black bg) to prevent white alpha fringing ──
         try:
-            grid_set = vp_settings.displaySet(hou.displaySetType.Grid)
-            _restore_grid = not grid_set.isHidden()
-            grid_set.setHidden(True)
+            _restore_color_scheme = vp_settings.colorScheme()
+            vp_settings.setColorScheme(hou.viewportColorScheme.Dark)
+        except Exception:
+            pass
+
+        # ── Guides: hide grid planes, rulers, gnomon for clean capture ──
+        VIEWPORT_GUIDES_TO_HIDE = [
+            hou.viewportGuide.XYPlane,
+            hou.viewportGuide.XZPlane,
+            hou.viewportGuide.YZPlane,
+            hou.viewportGuide.OriginGnomon,
+            hou.viewportGuide.FloatingGnomon,
+            hou.viewportGuide.NodeHandles,
+            hou.viewportGuide.ObjectNames,
+            hou.viewportGuide.ObjectPaths,
+            hou.viewportGuide.SafeArea,
+            hou.viewportGuide.CameraMask,
+        ]
+        for guide in VIEWPORT_GUIDES_TO_HIDE:
+            try:
+                was_enabled = vp_settings.guideEnabled(guide)
+                _restore_guides[guide] = was_enabled
+                vp_settings.enableGuide(guide, False)
+            except Exception:
+                pass
+        # Hide grid ruler numbers (distance labels along grid axis)
+        try:
+            _restore_guides["_ortho_ruler"] = vp_settings.orthoRuler()
+            vp_settings.setOrthoRuler(hou.viewportGridRuler.Hide)
+        except Exception:
+            pass
+
+        # ── Reference Plane: hide (keep ConstructionPlane for visual reference) ──
+        try:
+            rplane = viewer.referencePlane()
+            _restore_reference_plane = rplane.isVisible()
+            rplane.setIsVisible(False)
         except Exception:
             pass
 
@@ -924,19 +1016,16 @@ def capture_review(
                     except Exception:
                         pass
 
-                # Frame target: perspective uses frameSelected, ortho uses homeAll for padding
+                # Frame target: HomeAll (Shift+A) for all views to show the model completely
                 if home_target and target_node is not None:
                     try:
-                        if view_name == "perspective":
-                            viewport.frameSelected()
-                        else:
-                            viewport.homeAll()
+                        viewport.homeAll()
                         viewport.draw(True, True)
                     except Exception:
                         pass
 
                 # Capture
-                ok, err_detail = _capture_single_view(viewer, viewport, tmp_path, frame)
+                ok, err_detail = _capture_single_view(viewer, viewport, tmp_path, frame, resolution)
                 if ok:
                     captured.append(tmp_path)
                 else:
@@ -952,7 +1041,7 @@ def capture_review(
                 "stage": stage,
             }
 
-        concat_ok = _concat_images_grid(captured, filepath, columns)
+        concat_ok = _concat_images_grid(captured, filepath, columns, resolution)
 
         # Clean up temp files
         for tmp_path in captured:
@@ -1001,10 +1090,25 @@ def capture_review(
     finally:
         # ── Restore state ──
         try:
-            if _restore_grid is not None:
-                vp_settings = viewport.settings()
-                grid_set = vp_settings.displaySet(hou.displaySetType.Grid)
-                grid_set.setHidden(not _restore_grid)
+            if _restore_color_scheme is not None:
+                vp_settings.setColorScheme(_restore_color_scheme)
+        except Exception:
+            pass
+        try:
+            for guide, was_enabled in _restore_guides.items():
+                if isinstance(guide, str):  # _ortho_ruler marker
+                    continue
+                vp_settings.enableGuide(guide, was_enabled)
+        except Exception:
+            pass
+        try:
+            if "_ortho_ruler" in _restore_guides:
+                vp_settings.setOrthoRuler(_restore_guides["_ortho_ruler"])
+        except Exception:
+            pass
+        try:
+            if _restore_reference_plane is not None:
+                viewer.referencePlane().setIsVisible(_restore_reference_plane)
         except Exception:
             pass
         try:
@@ -1123,3 +1227,193 @@ def set_display_flag(node_path: str) -> dict[str, Any]:
         return {"success": True, "path": node_path}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+
+# ---------------------------------------------------------------------------
+# Orientation Verification (PCA-based) — math lives in edini.orientation_math
+# ---------------------------------------------------------------------------
+
+from edini.orientation_math import (
+    AXIS_VECTORS as _AXIS_VECTORS,
+    KIND_EIGEN_RANK as _KIND_EIGEN_RANK,
+    compute_covariance as _compute_covariance,
+    jacobi_eigen_3x3 as _jacobi_eigen_3x3,
+    axis_angle_between as _axis_angle_between,
+    dominant_axis_name as _dominant_axis_name,
+    flip_to_hemisphere as _flip_to_hemisphere,
+)
+
+
+def verify_orientation(
+    node_path: str,
+    checks: list[dict],
+) -> dict[str, Any]:
+    """Verify component orientations via PCA on point positions.
+
+    Each check dict:
+        {
+            "component_id": "wheel_front",
+            "kind": "radial" | "elongated" | "planar",
+            "expected_axis": "X" | "Y" | "Z" | "-X" | "-Y" | "-Z",
+            "tolerance_deg": 15,
+            "signed": false
+        }
+
+    For each component:
+      - Gather points where prim attribute `component_id` == check's component_id
+      - Compute 3x3 position covariance + centroid
+      - Jacobi eigendecomposition -> 3 eigenvectors (ascending eigenvalues)
+      - Pick eigenvector by kind:
+          radial / planar -> smallest eigenvalue's vector (symmetry axis / normal)
+          elongated       -> largest eigenvalue's vector (long axis)
+      - Compare to expected axis; emit pass/fail + fix quaternion
+
+    Returns:
+        {success, passed, failed, total, checks: [...]}
+    """
+    try:
+        node = hou.node(node_path)
+        if node is None:
+            return {"success": False, "error": f"Node not found: {node_path}"}
+        geo = node.geometry()
+        if geo is None:
+            return {"success": False, "error": f"No geometry on {node_path}"}
+
+        comp_attr = geo.findPrimAttrib("component_id")
+        if comp_attr is None:
+            return {
+                "success": False,
+                "error": (
+                    "Primitive attribute `component_id` not found. "
+                    "Assign @component_id per component in the generator "
+                    "(geo.addAttrib(hou.attribType.Prim, 'component_id', '') "
+                    "before creating geometry)."
+                ),
+            }
+
+        results: list[dict] = []
+        passed = failed = 0
+
+        for chk in checks:
+            cid = chk.get("component_id")
+            kind = chk.get("kind", "radial").lower()
+            expected_axis = chk.get("expected_axis", "Y").upper()
+            tol_deg = float(chk.get("tolerance_deg", 15.0))
+            signed_kind = bool(chk.get("signed", False))
+
+            entry: dict[str, Any] = {
+                "component_id": cid,
+                "kind": kind,
+                "expected_axis": expected_axis,
+                "tolerance_deg": tol_deg,
+                "signed": signed_kind,
+                "passed": False,
+            }
+
+            if kind not in _KIND_EIGEN_RANK:
+                entry["error"] = f"Unknown kind: {kind}"
+                results.append(entry); failed += 1; continue
+            if expected_axis not in _AXIS_VECTORS:
+                entry["error"] = f"Invalid expected_axis: {expected_axis}"
+                results.append(entry); failed += 1; continue
+
+            comp_prims = [
+                p for p in geo.prims()
+                if str(p.stringAttribValue("component_id")) == cid
+            ]
+            if not comp_prims:
+                entry["error"] = (
+                    f"No prims with component_id={cid!r}. "
+                    f"Available: {sorted(set(str(p.stringAttribValue('component_id')) for p in geo.prims() if p.stringAttribValue('component_id')))[:10]}"
+                )
+                results.append(entry); failed += 1; continue
+
+            seen_pts = set()
+            pts: list[tuple[float, float, float]] = []
+            for prim in comp_prims:
+                for vtx in prim.vertices():
+                    pt = vtx.point()
+                    pid = pt.number()
+                    if pid in seen_pts:
+                        continue
+                    seen_pts.add(pid)
+                    pos = pt.position()
+                    pts.append((float(pos[0]), float(pos[1]), float(pos[2])))
+
+            if len(pts) < 4:
+                entry["error"] = (
+                    f"Only {len(pts)} unique points - need >= 4 for PCA. "
+                    "Subdivide or add more samples."
+                )
+                results.append(entry); failed += 1; continue
+
+            cov, centroid = _compute_covariance(pts)
+            eigs, vecs = _jacobi_eigen_3x3(cov)
+
+            rank = _KIND_EIGEN_RANK[kind]
+            detected_vec = vecs[rank]
+            expected_vec = _AXIS_VECTORS[expected_axis]
+            if not signed_kind:
+                detected_vec = _flip_to_hemisphere(detected_vec, expected_vec)
+            detected_axis = _dominant_axis_name(detected_vec)
+
+            angle_deg, fix_q = _axis_angle_between(
+                detected_vec, expected_vec, signed=signed_kind
+            )
+            passed_check = angle_deg <= tol_deg
+
+            eig_total = sum(abs(e) for e in eigs) + 1e-12
+            ratios = [abs(e) / eig_total for e in eigs]
+
+            entry.update({
+                "point_count": len(pts),
+                "centroid": [round(c, 4) for c in centroid],
+                "eigenvalues": [round(e, 6) for e in eigs],
+                "eigenvalue_ratios": [round(r, 4) for r in ratios],
+                "eigenvectors": [
+                    [round(c, 4) for c in vecs[0]],
+                    [round(c, 4) for c in vecs[1]],
+                    [round(c, 4) for c in vecs[2]],
+                ],
+                "detected_axis": detected_axis,
+                "detected_vector": [round(c, 4) for c in detected_vec],
+                "angle_error_deg": round(angle_deg, 2),
+                "passed": passed_check,
+            })
+
+            if not passed_check:
+                kind_hint = {
+                    "radial": "rotational symmetry axis (axle)",
+                    "planar": "surface normal",
+                    "elongated": "long axis",
+                }[kind]
+                entry["hint"] = (
+                    f"{cid} {kind_hint} currently along {detected_axis} "
+                    f"({[round(c,2) for c in detected_vec]}). "
+                    f"Expected {expected_axis}. Apply quaternion "
+                    f"(x,y,z,w)={[round(c,4) for c in fix_q]} to the component's "
+                    f"geometry, or pre-multiply the generating transform: "
+                    f"hou.Quaternion({round(fix_q[3],4)}, "
+                    f"hou.Vector3({round(fix_q[0],4)}, {round(fix_q[1],4)}, {round(fix_q[2],4)}))."
+                )
+
+            results.append(entry)
+            if passed_check:
+                passed += 1
+            else:
+                failed += 1
+
+        return {
+            "success": True,
+            "node_path": node_path,
+            "passed": passed,
+            "failed": failed,
+            "total": len(checks),
+            "checks": results,
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"{e}\n{traceback.format_exc()}",
+        }

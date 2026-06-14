@@ -33,11 +33,11 @@ RECIPE: [Asset Name]
 TYPE: mechanical | organic | architectural | natural
 BACKEND: python_sop | vex_wrangle | hybrid (python_sop + vex post-process)
 
-COMPONENTS:
-  - component_name: description (generation method)
-    SWAPPABLE: yes/no
-  - component_name: description (generation method)
-    SWAPPABLE: yes/no
+COMPONENTS (each gets a @component_id — required for orientation verification):
+  - component_id="wheel_fl": front-left wheel (radial, swappable)
+  - component_id="handlebar": handlebar tube (elongated, swappable)
+  - component_id="saddle": saddle plate (planar)
+  - ...
 
 PARAMETERS (minimum 5):
   - param_name: type [min, max] = default — description
@@ -46,6 +46,15 @@ PARAMETERS (minimum 5):
 MODULAR ANCHORS (for Copy-to-Points):
   - anchor_name: count, purpose (e.g., "wheel_mount: 4, wheel placement positions")
 
+ORIENTATION ASSERTS (consumed by houdini_verify_orientation — MANDATORY):
+  - wheel_fl:        kind=radial,     expected_axis=X  (axle horizontal across bike)
+  - wheel_fr:        kind=radial,     expected_axis=X
+  - wheel_rl:        kind=radial,     expected_axis=X
+  - wheel_rr:        kind=radial,     expected_axis=X
+  - handlebar:       kind=elongated,  expected_axis=Z  (long axis across front)
+  - frame_downtube:  kind=elongated,  expected_axis=Z  (or whatever the design calls for)
+  - saddle:          kind=planar,     expected_axis=Y, signed=true  (must point UP)
+
 DETAIL PLAN:
   - Post-processing: [bevel, subdivide, noise, normal]
   - Surface detail: [panel lines / seams / rivets / texture variation]
@@ -53,26 +62,56 @@ DETAIL PLAN:
 VERIFICATION:
   - min_points: N
   - expected_components: [list]
-  - orientation_checks: ["wheels vertical", "roof on top", etc.]
   - detail_level: 3-4 (never accept 1-2)
+  - orientation: ALL orientation_asserts must pass before commit
 ```
 
-## Modular Components — Copy-to-Points Pattern
+### The @component_id Attribute (MANDATORY)
 
-For any repeated or user-swappable element, use the Copy-to-Points / Instance pattern:
+Every distinct geometric part of the asset MUST carry a `component_id` primitive
+attribute. This is how `houdini_verify_orientation` knows which polygons belong
+to each component for PCA.
+
+In your Python SOP generator:
+```python
+geo.addAttrib(hou.attribType.Prim, "component_id", "")  # before any geometry
+
+# When building each component's polygons:
+poly = geo.createPolygon()
+poly.addVertex(...)
+poly.setAttribValue("component_id", "wheel_fl")  # unique per component
+```
+
+**Why this matters:** without `component_id`, the orientation gate cannot run
+and `houdini_commit_sandbox` will refuse to commit.
+
+## Modular Components — Copy-to-Points Pattern (MANDATORY)
+
+**Single-Python-SOP monoliths are NOT acceptable.** If an asset has more
+than ~3 distinct geometric components, or any repeated/swappable part, you
+MUST decompose it into a Copy-to-Points / Instance structure.
+
+A generator that builds the entire asset in one Python SOP > 200 lines is
+a failure mode — even if the geometry renders correctly. Why:
+- `houdini_verify_orientation` needs separate `@component_id` groups to PCA
+- Users cannot swap a wheel without rebuilding everything
+- Repairing one broken component requires regenerating the whole asset
+- No isolated verification of sub-components
 
 ```
-Main structure → generates anchor points (with @orient, @pscale, @component_id attributes)
+Main structure (Python SOP) → outputs anchor points
+  with @component_id, @orient, @pscale attributes
                          ↓
-              Copy-to-Points ← Sub-component geometry (separate input)
+              Copy-to-Points ← Sub-component geometry (separate Python SOP)
 ```
 
 ### Rules:
 1. **Identify swappable parts in the recipe** — wheels, keys, handles, windows, decorative elements
 2. **Main body outputs anchor points** — not the sub-component geometry itself
 3. **Sub-components are separate geometry streams** — connected via Copy-to-Points or ForEach
-4. **Anchor points carry full transform** — `@orient` (quaternion), `@pscale`, `@N`, `@up`
+4. **Anchor points carry full transform** — `@orient` (quaternion), `@pscale`, `@N`, `@up`, `@component_id`
 5. **User can swap sub-component input** without touching the main structure
+6. **Each sub-component carries its own `@component_id`** on its polygons
 
 ### Example (Vehicle):
 ```python
@@ -108,31 +147,52 @@ copy.setInput(0, wheel_sop)   # geometry to copy
 copy.setInput(1, body_sop)    # points to copy onto (filtered by group)
 ```
 
-## Parameter Exposure
+## Parameter Exposure (in the sandbox — not after commit)
 
-Every procedural asset MUST expose user-controllable parameters. Hardcoded Python variables are NOT acceptable.
+Every procedural asset MUST expose user-controllable parameters. Hardcoded
+Python variables are NOT acceptable. Parameters must be installed on the
+Python SOP **during the sandbox cook**, so they exist when the user opens
+the node — not bolted on as a separate post-commit step.
 
 ### Method 1: Spare Parameters on Python SOP (preferred)
+
 ```python
 node = hou.pwd()
 geo = node.geometry()
 
-# Read from spare parameters (user-editable in Houdini UI)
-radius = node.evalParm("radius") if node.parm("radius") else 0.35
-count = node.evalParm("count") if node.parm("count") else 8
-height = node.evalParm("height") if node.parm("height") else 2.0
+# Declare the parameters with defaults and ranges
+PARM_SPECS = [
+    ("radius", hou.FloatParmTemplate("radius", "Radius", 1,
+        default_value=((0.35,),), min=0.05, max=2.0,
+        naming_scheme=hou.parmNamingScheme.Base1)),
+    ("count",  hou.IntParmTemplate("count", "Count", 1,
+        default_value=((8,),), min=3, max=64,
+        naming_scheme=hou.parmNamingScheme.Base1)),
+    ("height", hou.FloatParmTemplate("height", "Height", 1,
+        default_value=((2.0,),), min=0.1, max=10.0,
+        naming_scheme=hou.parmNamingScheme.Base1)),
+]
+
+# Install idempotently — only adds what's missing
+ptg = node.parmTemplateGroup()
+missing = [tmpl for name, tmpl in PARM_SPECS if ptg.find(name) is None]
+for tmpl in missing:
+    ptg.append(tmpl)
+if missing:
+    node.setParmTemplateGroup(ptg)  # triggers a recook; this cook continues with defaults
+
+# Read (now guaranteed to exist)
+radius = node.evalParm("radius")
+count  = node.evalParm("count")
+height = node.evalParm("height")
+
+# ... generate geometry using radius, count, height ...
 ```
 
-After sandbox success, add spare parameters:
-```python
-# In a follow-up houdini_run_python call after commit:
-node = hou.node("/obj/asset_name/edini_generate")
-ptg = node.parmTemplateGroup()
-ptg.append(hou.FloatParmTemplate("radius", "Radius", 1, default_value=(0.35,), min=0.05, max=2.0))
-ptg.append(hou.IntParmTemplate("count", "Count", 1, default_value=(8,), min=3, max=64))
-ptg.append(hou.FloatParmTemplate("height", "Height", 1, default_value=(2.0,), min=0.1, max=10.0))
-node.setParmTemplateGroup(ptg)
-```
+On the first cook, the parameters don't exist yet — `missing` is non-empty,
+we install the templates (which triggers a recook), then the current cook
+continues using the `default_value`s. On every subsequent cook the
+parameters exist and the user's edited values are read directly.
 
 ### Method 2: VEX Channel References
 ```vex
@@ -413,66 +473,124 @@ When embedding string literals in Python code that will pass through JSON → pa
 - Use `houdini_verify_asset` to run structural checks (point count, bounds, attribute presence) before visual verification.
 - Use `houdini_discard_sandbox` to cleanly abort a failed attempt when diagnostics show the approach is fundamentally wrong.
 - **NEVER use `commit_on_success=true` on first sandbox execution.** Always capture and verify visually before committing.
+- **MANDATORY orientation gate**: Run `houdini_verify_orientation` with checks derived from the recipe's ORIENTATION ASSERTS before `houdini_commit_sandbox`. The gate is also enforced inside `commit_sandbox` — if `@component_id` exists and any check fails, commit is refused. Use `skip_orientation=true` ONLY with a documented reason (e.g. abstract art).
+- **No monolithic Python SOPs**: A single `python` node > 200 lines for the whole asset is a failure. Decompose into Copy-to-Points structure with separate sub-component generators.
+- **Tag every component**: Every distinct geometric part must carry `@component_id`. Without it, `houdini_verify_orientation` cannot run and `commit_sandbox` will refuse to commit.
 
 ## Workflow
 
-1. **Create a recipe** — Use the Recipe Template format above. List all components, parameters, anchors, and verification criteria.
+1. **Create a recipe** — Include COMPONENTS with `@component_id`, ORIENTATION ASSERTS (mandatory), PARAMETERS list, MODULAR ANCHORS, DETAIL PLAN, and VERIFICATION criteria.
 2. **Probe unknown nodes** — If the recipe uses node types you haven't probed this session, probe them first.
 3. **Choose backend** — `python_sop` for algorithmic mesh generation, `vex_wrangle` for per-element math, `hybrid` for both.
-4. **Generate with sandbox** — Use `houdini_run_python_sandbox` with `commit_on_success=false`.
+4. **Generate with sandbox** — Use `houdini_run_python_sandbox` with `commit_on_success=false`. The sandbox code MUST: (a) call `geo.addAttrib(hou.attribType.Prim, "component_id", "")` before any geometry, then `poly.setAttribValue("component_id", "<id>")` on every component's polygons; (b) install spare parameters idempotently on the cooking node; (c) use Copy-to-Points for any repeated/swappable part.
 5. **Trust sandbox diagnostics** — The result includes `diagnostics` and `structural_checks`. No need for separate inspect calls.
-6. **Add structural detail** — Panel lines, seams, secondary components, varied cross-sections. Then finishing: Normal SOP, optional bevel on render-visible hard edges.
-7. **Expose parameters** — Add spare parms to the Python SOP for all recipe parameters.
-8. **Capture and verify** — Use `houdini_capture_review` with 4-view quad, then `describe_image` with the 3D verification prompt.
-9. **Repair loop** — If verification finds defects, fix the SPECIFIC issue and re-verify. See Visual Verification Protocol.
-10. **Commit only after verification passes** — Use `houdini_commit_sandbox` only when structural AND visual checks pass.
+6. **Add structural detail** — Panel lines, seams, secondary components, varied cross-sections. Then finishing: Normal SOP, optional bevel on render-visible hard edges. Preserve `@component_id` tags.
+7. **Run `houdini_verify_orientation`** — Pass the recipe's ORIENTATION ASSERTS as `checks`. This is the authoritative gate. If any check fails, apply the hint quaternion to the SOURCE code (don't try to rotate post-hoc on geometry) and re-run the sandbox BEFORE moving to visual verification.
+8. **Capture and verify (visual layer)** — `houdini_capture_review` with 4-view quad, then `describe_image` with the 3D verification prompt. Visual catches missing components, intersections, proportion defects — NOT orientation.
+9. **Repair loop** — Fix SPECIFIC defects (orientation: use the hint quaternion in source; visual: address the named defect). Re-verify. Up to 3 cycles, then ask the user.
+10. **Commit only when both layers pass** — `houdini_commit_sandbox` re-runs the orientation gate as a final check. If `@component_id` exists and checks fail, commit is refused — you cannot override this except with `skip_orientation=true` and a documented reason.
 
 ## Visual Verification Protocol
 
-### The 3D Verification Prompt
-When calling `describe_image` on a procedural asset capture, ALWAYS pass this custom prompt:
+### Two-Layer Verification
+
+Procedural assets require BOTH layers of verification. Vision models cannot
+reliably detect orientation defects (they hallucinate "wheels vertical ✅"
+for wheels lying flat). Geometry-based checks are authoritative for orientation.
+
+| Layer | Tool | What it catches | Authority |
+|---|---|---|---|
+| **Programmatic** | `houdini_verify_orientation` | Wrong axle direction, flipped components, misaligned axes | **AUTHORITATIVE — gate** |
+| **Visual** | `houdini_capture_review` + `describe_image` | Missing components, weird proportions, intersection | Advisory |
+
+### Mandatory Pre-Commit Sequence
+
+```
+1. houdini_verify_orientation on the sandbox display node
+   - Pass all checks from the recipe's ORIENTATION ASSERTS section
+   - If any check fails, apply the hint quaternion and re-run sandbox
+2. houdini_capture_review (4-view quad) for visual sanity
+3. describe_image with the 3D prompt — flag missing/intersecting parts
+4. Repair loop: fix specific defect → re-verify → repeat up to 3 times
+5. houdini_commit_sandbox — runs orientation gate as final check
+```
+
+### The 3D Verification Prompt (for describe_image)
+
+Use this prompt for visual checks. Note: it CANNOT detect orientation —
+rely on `houdini_verify_orientation` for that.
 
 ```
 Verify this procedural 3D asset. Check:
-1. ORIENTATION: All components oriented correctly? (wheels vertical, roof on top, handles horizontal)
-2. PROPORTIONS: Parts at reasonable proportions relative to each other?
-3. SYMMETRY: If object should be symmetric, is it?
-4. COMPLETENESS: All expected sub-components present?
-5. INTERSECTION: Parts overlapping incorrectly?
-6. SCALE: Sub-parts correct scale relative to whole?
-7. DETAIL: Is geometry overly simplistic (just boxes/cylinders)?
+1. PROPORTIONS: Parts at reasonable proportions relative to each other?
+2. SYMMETRY: If object should be symmetric, is it?
+3. COMPLETENESS: All expected sub-components present (compare to recipe)?
+4. INTERSECTION: Parts overlapping incorrectly?
+5. SCALE: Sub-parts correct scale relative to whole?
+6. DETAIL: Is geometry overly simplistic (just boxes/cylinders)?
 
-Report: defects (critical/major/minor), detail_level (1-4), orientation_issues, missing_components.
+DO NOT report on orientation — that is verified programmatically.
+Report: missing_components, intersection_issues, proportion_defects, detail_level (1-4).
 Format: structured list, not prose.
 ```
 
-### Mandatory Repair Loop
-```
-1. Capture (4-view quad)
-2. describe_image with 3D verification prompt
-3. IF critical or major defects found:
-   a. Fix the SPECIFIC defect (do NOT regenerate from scratch)
-   b. Re-capture
-   c. Re-describe
-   d. Repeat up to 3 times
-4. IF 3 repair attempts fail:
-   a. Report exact remaining defects to user
-   b. Ask user whether to accept, adjust recipe, or try different approach
-5. IF no critical/major defects AND detail_level >= 3:
-   → Commit
+### Orientation Check Examples
+
+```python
+# Wheel: axle should be horizontal (along X for a bike facing +Z)
+houdini_verify_orientation(
+    node_path="/obj/edini_sandbox_.../edini_generate",
+    checks=[
+        {"component_id": "wheel_fl", "kind": "radial", "expected_axis": "X"},
+        {"component_id": "wheel_fr", "kind": "radial", "expected_axis": "X"},
+        {"component_id": "wheel_rl", "kind": "radial", "expected_axis": "X"},
+        {"component_id": "wheel_rr", "kind": "radial", "expected_axis": "X"},
+        # Handlebar long axis transverse (Z direction for a bike facing +Z)
+        {"component_id": "handlebar", "kind": "elongated", "expected_axis": "Z"},
+        # Saddle normal must point up (signed=true)
+        {"component_id": "saddle", "kind": "planar", "expected_axis": "Y", "signed": True},
+    ]
+)
 ```
 
-### What counts as defects:
-- **Critical**: Wrong orientation (wheels lying flat), missing major component, geometry not visible
-- **Major**: Obvious proportion error, intersecting parts, no surface detail (level 1-2)
-- **Minor**: Slight asymmetry, imperfect edge flow, cosmetic issues
+### Repair Loop for Orientation Failures
+
+When `houdini_verify_orientation` returns a failure, each failed check
+includes a `hint` field with the exact quaternion to apply:
+
+```python
+# Example failed check output:
+{
+    "component_id": "wheel_fl",
+    "kind": "radial",
+    "expected_axis": "X",
+    "detected_axis": "Y",           # wheel lying flat!
+    "angle_error_deg": 89.7,
+    "passed": False,
+    "hint": "wheel_fl rotational symmetry axis (axle) currently along Y
+             (...). Expected X. Apply quaternion (x,y,z,w)=(0,0,-0.7,0.7)
+             to the component's geometry, or pre-multiply the generating
+             transform: hou.Quaternion(0.7, hou.Vector3(0, 0, -0.7))."
+}
+```
+
+Fix by applying the hint inside the generator code (don't try to rotate
+post-hoc on the geometry — fix the source).
+
+### What counts as defects (visual layer):
+- **Critical**: missing major component, geometry not visible
+- **Major**: obvious proportion error, intersecting parts, no surface detail (level 1-2)
+- **Minor**: slight asymmetry, imperfect edge flow, cosmetic issues
+
+(Note: "wrong orientation" is no longer in this list — it's caught by the
+programmatic gate, not the visual layer.)
 
 ### Capture (Screenshots)
 
 **Use `houdini_capture_review`** for all visual verification:
 ```
 houdini_capture_review(
-  filepath="screenshots/asset_review.png",
+  filepath="review.png",  # auto-routed to $HIP/Edini_screenshots/<task>/
   target_path="/obj/asset_name/OUT",
   views=["perspective", "top", "front", "right"],
   shading_mode="smooth"
@@ -480,9 +598,9 @@ houdini_capture_review(
 ```
 
 - **Always pass `target_path`** — frames and isolates the generated asset.
+- Filepath is auto-routed to the session's screenshot folder; AI-supplied
+  basenames are preserved with sequence numbering (`review_001.png`, etc.).
 - If capture returns an error, do not retry or explore alternative capture methods.
-- `describe_image` with the 3D prompt is authoritative for structural verification.
-- Geometry stats (point/prim counts, bounds) are authoritative for topology verification.
 
 ## Common VEX Pitfalls
 

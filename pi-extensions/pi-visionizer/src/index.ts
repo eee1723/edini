@@ -219,19 +219,25 @@ export default function (pi: ExtensionAPI) {
       const input = model.input ?? [];
       if (input.includes("image")) return;
 
+      // Check for image content in messages first — if no images, nothing to do
+      if (!hasImages(event.messages)) return;
+
       // Resolve config (must be explicitly configured)
       const cfg = resolveConfig(ctx);
-      if (!cfg) return;
+      if (!cfg) {
+        return { messages: replaceImagesWithError(event.messages, "[Image attached but vision model not configured. Please set up a vision model in Edini Settings before I can analyze this image.]") };
+      }
       // Find the vision model in pi's registry
       const visionModel = ctx.modelRegistry.find(cfg.provider, cfg.modelId);
-      if (!visionModel) return;
-
-      // Check for image content in messages
-      if (!hasImages(event.messages)) return;
+      if (!visionModel) {
+        return { messages: replaceImagesWithError(event.messages, `[Image attached but vision model ${cfg.provider}/${cfg.modelId} not found in model registry. Check models.json configuration.]`) };
+      }
 
       // Resolve vision model auth
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(visionModel);
-      if (!auth.ok || !auth.apiKey) return;
+      if (!auth.ok || !auth.apiKey) {
+        return { messages: replaceImagesWithError(event.messages, `[Image attached but vision model API key not available for ${cfg.provider}/${cfg.modelId}. Check auth.json or models.json apiKey field.]`) };
+      }
 
       const prompt = cfg.prompt || DEFAULT_PROMPT;
       const requireHttps = cfg.requireHttps !== false; // default true
@@ -285,8 +291,10 @@ export default function (pi: ExtensionAPI) {
 
       return { messages: processed };
     } catch (err) {
-      // Log but never block the conversation
       console.error(`[pi-visionizer] context hook error: ${err instanceof Error ? err.message : String(err)}`);
+      if (hasImages(event.messages)) {
+        return { messages: replaceImagesWithError(event.messages, `[Image attached but vision processing failed: ${err instanceof Error ? err.message : String(err)}. Please check vision model configuration.]`) };
+      }
       return;
     }
   });
@@ -312,6 +320,22 @@ function hasImages(messages: readonly ContextMessage[]): boolean {
     }
   }
   return false;
+}
+
+/**
+ * Replace image blocks with an error message so the LLM knows images were
+ * present but could not be processed (instead of silently ignoring them).
+ */
+function replaceImagesWithError(messages: readonly ContextMessage[], errorText: string): ContextMessage[] {
+  return messages.map((msg) => {
+    if (!Array.isArray(msg.content)) return msg;
+    const hasImg = msg.content.some((b) => isImageBlock(b));
+    if (!hasImg) return msg;
+    const newContent = msg.content.map((block) =>
+      isImageBlock(block) ? { type: "text", text: errorText } : block,
+    );
+    return { ...msg, content: newContent };
+  });
 }
 
 /**

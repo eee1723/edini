@@ -13,6 +13,7 @@ from edini.media_manager import (
 )
 from edini.ui.image_attachment import ImageAttachmentWidget
 from edini.ui.vision_overlay import VisionDescriptionBubble
+from edini import screenshots
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -396,9 +397,15 @@ class _TimelineView(QtWidgets.QScrollArea):
     - When pinned to bottom, new content auto-scrolls to keep the latest visible.
     - When user scrolls up to read history, auto-scroll pauses.
     - User can re-pin by scrolling all the way to the bottom.
+    - Drag-selecting text inside a bubble auto-scrolls the viewport when the
+      cursor approaches the top/bottom edge, so the selection can extend into
+      content that was originally off-screen.
     """
 
     PIN_THRESHOLD = 12  # px from bottom to consider "at bottom"
+    AUTO_SCROLL_MARGIN = 30  # px from viewport edge that triggers auto-scroll
+    AUTO_SCROLL_INTERVAL = 30  # ms between auto-scroll ticks
+    AUTO_SCROLL_MAX_SPEED = 18  # max px per tick when cursor is far past edge
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -431,6 +438,117 @@ class _TimelineView(QtWidgets.QScrollArea):
         sb = self.verticalScrollBar()
         sb.rangeChanged.connect(self._on_range_changed)
         sb.valueChanged.connect(self._on_value_changed)
+
+        # Auto-scroll-during-text-selection
+        self._auto_scroll_timer = QtCore.QTimer(self)
+        self._auto_scroll_timer.setInterval(self.AUTO_SCROLL_INTERVAL)
+        self._auto_scroll_timer.timeout.connect(self._auto_scroll_tick)
+        self._drag_source_label: QtWidgets.QLabel | None = None
+        app = QtWidgets.QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
+
+    # ── Auto-scroll during text drag selection ──
+
+    def eventFilter(self, watched, event):
+        """Start the auto-scroll timer when the user mouse-presses on a
+        text-selectable label inside this timeline, stop it on release.
+        The timer ticks handle the actual scroll.
+        """
+        if event is not None:
+            et = event.type()
+            if et == QtCore.QEvent.MouseButtonPress and \
+                    event.button() == QtCore.Qt.LeftButton:
+                if (isinstance(watched, QtWidgets.QLabel)
+                        and self._is_descendant(watched)
+                        and self._scroll_range_available()):
+                    self._drag_source_label = watched
+                    self._auto_scroll_timer.start()
+            elif et == QtCore.QEvent.MouseButtonRelease and \
+                    event.button() == QtCore.Qt.LeftButton:
+                self._drag_source_label = None
+                self._auto_scroll_timer.stop()
+        return super().eventFilter(watched, event)
+
+    def _scroll_range_available(self) -> bool:
+        sb = self.verticalScrollBar()
+        return sb.maximum() > sb.minimum()
+
+    def _auto_scroll_tick(self):
+        """Scroll toward the cursor when it is in the margin zone; then
+        synthesize a MouseMove on the label that received the press so its
+        text-selection logic extends into the newly visible content."""
+        if not (QtGui.QGuiApplication.mouseButtons()
+                & QtCore.Qt.LeftButton):
+            self._drag_source_label = None
+            self._auto_scroll_timer.stop()
+            return
+        sb = self.verticalScrollBar()
+        if sb.maximum() <= sb.minimum():
+            self._auto_scroll_timer.stop()
+            return
+
+        cursor_global = QtGui.QCursor.pos()
+        tl = self.viewport().mapToGlobal(QtCore.QPoint(0, 0))
+        local_y = cursor_global.y() - tl.y()
+        viewport_h = self.viewport().height()
+        margin = self.AUTO_SCROLL_MARGIN
+
+        old_value = sb.value()
+        new_value = old_value
+
+        if local_y < margin:
+            distance = margin - max(local_y, 0)
+            delta = max(1, min(self.AUTO_SCROLL_MAX_SPEED,
+                               int(distance * 0.4) + 1))
+            new_value = max(sb.minimum(), old_value - delta)
+        elif local_y > viewport_h - margin:
+            distance = min(local_y, viewport_h) - (viewport_h - margin)
+            delta = max(1, min(self.AUTO_SCROLL_MAX_SPEED,
+                               int(distance * 0.4) + 1))
+            new_value = min(sb.maximum(), old_value + delta)
+
+        if new_value == old_value:
+            return
+
+        self._programmatic_scroll = True
+        sb.setValue(new_value)
+        self._programmatic_scroll = False
+
+        # Tell the label that received the press that the cursor "moved"
+        # relative to its widget coords (which it did, because the widget
+        # scrolled under a stationary cursor). This makes the text selection
+        # extend into the content that just scrolled into view.
+        label = self._drag_source_label
+        if label is None:
+            return
+        try:
+            from shiboken6 import isValid
+            if not isValid(label):
+                self._drag_source_label = None
+                return
+        except ImportError:
+            pass
+        if not self._is_descendant(label):
+            return
+        local = label.mapFromGlobal(cursor_global)
+        evt = QtGui.QMouseEvent(
+            QtCore.QEvent.MouseMove,
+            QtCore.QPointF(local),
+            QtCore.QPointF(cursor_global),
+            QtCore.Qt.LeftButton,
+            QtCore.Qt.LeftButton,
+            QtCore.Qt.NoModifier,
+        )
+        QtWidgets.QApplication.postEvent(label, evt)
+
+    def _is_descendant(self, widget: QtWidgets.QWidget) -> bool:
+        p = widget
+        while p is not None:
+            if p is self:
+                return True
+            p = p.parentWidget()
+        return False
 
     # ── Smart scroll ──
 
@@ -936,10 +1054,25 @@ class AgentPanel(QtWidgets.QWidget):
         if self._attachment_bar.is_full():
             self.add_error(f"最多 {MAX_ATTACHMENTS} 张图片，请先移除一些")
             return
+        self._save_viewshot_to_disk(item)
         ok = self._attachment_bar.add(item)
         if ok:
             self._screenshot_btn.setText("📸 ✓")
             QtCore.QTimer.singleShot(1500, lambda: self._screenshot_btn.setText("📷 截图"))
+
+    def _save_viewshot_to_disk(self, item: MediaItem):
+        """Also persist viewport screenshots under $HIP/Edini_screenshots/<task>/."""
+        import base64 as _b64
+        session_path = getattr(self, "_current_session_path", "") or screenshots.current_session()
+        if not session_path or not item.base64:
+            return
+        ext = ".jpg" if "jpeg" in item.mime_type or "jpg" in item.mime_type else ".png"
+        try:
+            target = screenshots.next_filename(session_path, "viewport", ext)
+            raw = _b64.b64decode(item.base64)
+            target.write_bytes(raw)
+        except Exception:
+            pass
 
     def _on_pick_files(self):
         """Open file dialog to select image files."""

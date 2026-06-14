@@ -106,6 +106,7 @@ class MockPoint:
     def __init__(self):
         self._pos = (0.0, 0.0, 0.0)
         self._attribs: dict[str, Any] = {}
+        self._number = 0
 
     def setPosition(self, pos):
         self._pos = (float(pos[0]), float(pos[1]), float(pos[2]))
@@ -119,6 +120,23 @@ class MockPoint:
     def attribValue(self, name: str) -> Any:
         return self._attribs.get(name)
 
+    def number(self) -> int:
+        return self._number
+
+    def stringAttribValue(self, name: str) -> str:
+        v = self._attribs.get(name, "")
+        return str(v) if v is not None else ""
+
+
+class MockVertex:
+    """Mock Houdini vertex — wraps a point reference."""
+
+    def __init__(self, point: "MockPoint"):
+        self._point = point
+
+    def point(self) -> "MockPoint":
+        return self._point
+
 
 class MockPrim:
     """Mock Houdini primitive for builder-mode geometry."""
@@ -127,10 +145,14 @@ class MockPrim:
         self._vertices: list[MockPoint] = []
         self._attribs: dict[str, Any] = {}
 
-    def addVertex(self, pt: MockPoint) -> None:
-        self._vertices.append(pt)
+    def addVertex(self, pt) -> None:
+        # Accept either a MockPoint (legacy) or wrap automatically
+        if isinstance(pt, MockVertex):
+            self._vertices.append(pt)
+        else:
+            self._vertices.append(MockVertex(pt))
 
-    def vertices(self) -> list[MockPoint]:
+    def vertices(self):
         return list(self._vertices)
 
     def setAttribValue(self, name: str, value: Any) -> None:
@@ -138,6 +160,10 @@ class MockPrim:
 
     def attribValue(self, name: str) -> Any:
         return self._attribs.get(name)
+
+    def stringAttribValue(self, name: str) -> str:
+        v = self._attribs.get(name, "")
+        return str(v) if v is not None else ""
 
 
 class MockBoundingBox:
@@ -191,6 +217,7 @@ class MockGeometry:
         """Create a point in builder mode."""
         self._builder_mode = True
         pt = MockPoint()
+        pt._number = len(self._points)
         self._points.append(pt)
         self._point_count = len(self._points)
         return pt
@@ -236,13 +263,18 @@ class MockGeometry:
         return [MockAttrib("P")]
 
     def primAttribs(self):
-        return []
+        return [MockAttrib(n) for n in self._builder_attribs.keys()]
 
     def vertexAttribs(self):
         return []
 
     def globalAttribs(self):
         return []
+
+    def findPrimAttrib(self, name: str):
+        if name in self._builder_attribs:
+            return MockAttrib(name)
+        return None
 
 
 class MockNode:

@@ -54,6 +54,7 @@ class TestHarnessToolHandlers(unittest.TestCase):
             "houdini_collect_diagnostics",
             "houdini_run_python_sandbox",
             "houdini_verify_asset",
+            "houdini_verify_orientation",
             "houdini_commit_sandbox",
             "houdini_discard_sandbox",
             "houdini_capture_review",
@@ -75,6 +76,48 @@ class TestHarnessToolHandlers(unittest.TestCase):
 
         self.assertFalse(r["success"])
         self.assertEqual(r["node_path"], "/obj")
+
+    def test_commit_sandbox_forwards_orientation_params(self):
+        """Verify orientation_checks and skip_orientation reach commit_sandbox."""
+        captured = {}
+
+        import edini.tool_executor as te_mod
+        original = te_mod.commit_sandbox
+
+        def spy(
+            sandbox_root_path,
+            final_name,
+            replace_existing=False,
+            orientation_checks=None,
+            skip_orientation=False,
+        ):
+            captured.update(
+                sandbox_root_path=sandbox_root_path,
+                final_name=final_name,
+                replace_existing=replace_existing,
+                orientation_checks=orientation_checks,
+                skip_orientation=skip_orientation,
+            )
+            return {"success": True, "committed": True}
+
+        te_mod.commit_sandbox = spy
+        try:
+            checks = [{"component_id": "wheel", "kind": "radial", "expected_axis": "X"}]
+            self.tool_handlers["houdini_commit_sandbox"](
+                sandbox_root_path="/obj/sandbox",
+                final_name="bike",
+                replace_existing=True,
+                orientation_checks=checks,
+                skip_orientation=True,
+            )
+        finally:
+            te_mod.commit_sandbox = original
+
+        self.assertEqual(captured["sandbox_root_path"], "/obj/sandbox")
+        self.assertEqual(captured["final_name"], "bike")
+        self.assertTrue(captured["replace_existing"])
+        self.assertEqual(captured["orientation_checks"], checks)
+        self.assertTrue(captured["skip_orientation"])
 
 
 if __name__ == "__main__":
