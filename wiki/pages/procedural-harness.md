@@ -1,6 +1,6 @@
 # 🧪 Procedural Harness
 
-> 最后更新：2026-06-15 ｜ 状态：模块化门 + 朝向门 + network_mode + 声明式 Builder 已落地（feat/network-mode-and-builder 分支）｜ 目标：让程序化建模先进入可诊断、可验证、可回滚的沙盒流程，并从"约束执行"转向"能力放大"。
+> 最后更新：2026-06-15 ｜ 状态：模块化门 + 朝向门 + network_mode + 声明式 Builder + 构造轴（B 站）已落地 ｜ 目标：让程序化建模先进入可诊断、可验证、可回滚的沙盒流程，并从"约束执行"转向"能力放大"。
 
 ## 这批解决了什么
 
@@ -18,7 +18,8 @@ Procedural Harness 是 Edini 给 Houdini 程序化建模加上的一层执行护
 | network_mode | `network_mode=true` 让代码跑在 geo 容器，可直接 createNode 子 SOP | 多组件资产不再触发 cook 内 createNode 无限递归 |
 | **声明式 Builder** | `houdini_build_procedural_asset(recipe)` 确定性建网，agent 只写纯几何代码 | agent 不再写 createNode/wiring/blockpath；recipe 驱动组件+anchor+Copy-to-Points+OUT |
 | 模块化硬门 | `_check_modular_structure` 拒绝单体资产（≥3 cid 全来自单个 Python SOP） | commit 前结构门先跑，拒绝单体 |
-| 朝向门 | `houdini_verify_orientation` PCA 按组件检测轴方向，commit 硬关卡 | failed check 带 hint 四元数 |
+| 朝向门 | `houdini_verify_orientation` 按 construction_axis 确定性读取 edini_world_axis（无 PCA）；缺该属性时回退 PCA | failed check 带 hint |
+| 构造轴（B 站） | `orientation_asserts.construction_axis` 声明组件局部构造轴，builder 用 anchor @orient 代数推导世界轴并烘焙 edini_world_axis；build 时一致性预检拒绝自洽矛盾 | 朝向从估计变 ground truth，build 时挡住自洽错误 |
 | 三层验证 | geometry health → orientation → inventory/data → visual | health 是 MANDATORY layer-1 |
 | Diagnostics | `houdini_collect_diagnostics` 收集节点错误、警告、参数、几何统计 | 失败后先看诊断，不立即删节点 |
 | Inventory | `houdini_geometry_inventory` 列每个 component_id 的 prim 数 + 相对大小 | 确认组件存在，标 SMALL 需特写 |
@@ -94,17 +95,25 @@ Procedural Harness 是 Edini 给 Houdini 程序化建模加上的一层执行护
 
 - sandbox 仍运行在 live Houdini 进程内，不能提供 OS 级 crash isolation。
 - `commit_on_success` 当前只记录请求状态，不自动 commit；正式提交仍应显式调用 `houdini_commit_sandbox`。
-- 朝向门用 PCA 估计组件轴——对点分布不均的件不稳，且是"自洽校验"（agent 既生成几何又写 expected_axis）。B 站将用构造轴替代。
+- 朝向门对**声明了 construction_axis 的组件**是确定性检查（读 edini_world_axis，零估计）。对未声明该字段的组件回退 PCA——PCA 是点分布估计，对不均匀分布不稳；新资产建议优先用 construction_axis（B 站）。
 - builder 的 idfix 用 prim 等分定位实例边界——已验证 Copy-to-Points 连续排列下成立，但极端拓扑（交错排列）理论上可能错位。
 - builder 不内嵌 capture/commit（单一职责；commit 是显式后续调用）。
 
 ## 验证状态
 
-最近 A 站交付后的验证结果：
+最近 A/B 站交付后的验证结果：
 
 ```text
-python -m pytest（忽略 manual_* hou 导入测试）
-316 passed
+python -m pytest（harness 子集，忽略 manual_* 与 PySide6 依赖测试）
+197 passed（A 站 177 + B 站新增 20）
+
+B 站 mock 验证：
+- 纯数学 rotate_vector_by_quaternion：identity/90°/180°/长度保持 6 用例
+- build 一致性预检：构造轴/expected_axis 矛盾时拒绝且不泄漏 sandbox
+- build 烘焙：direct/stamped 组件 construction_axis 一致时构造 construction_axis_summary
+- verify_orientation 构造路径：edini_world_axis 覆盖 PCA（method=construction）
+- PCA crosscheck：构造轴与 PCA 估计分歧时只告警不 fail
+- 向后兼容：无 construction_axis 的老 recipe 仍走 PCA
 
 真实 Houdini 双阶段实测（docs/BUILDER_FIRST_TEST.md / BUILDER_SECOND_TEST.md）：
 - 第一阶段（单组件）：builder 基础设施全过（sandbox/cook/component_id/structure gate）
@@ -117,7 +126,7 @@ python -m pytest（忽略 manual_* hou 导入测试）
 | 站 | 内容 | 状态 | 依赖 |
 |---|---|---|---|
 | A | 声明式 Recipe Builder | ✅ 完成 | — |
-| B | 构造轴替代 PCA（orientation_asserts 加 construction_axis） | 🔜 下一站 | A |
+| B | 构造轴替代 PCA（construction_axis + edini_world_axis 烘焙 + build 时一致性预检） | ✅ 完成 | A |
 | C | 节点参数 DB（houdini_node_parms 查询工具） | ⬜ | 独立 |
 | D | 黄金范例检索（recipe 格式的验证过资产模板） | ⬜ | A |
 | E | 数值代理（轮廓圆度/对称性/silhouette IoU） | ⬜ | 独立 |

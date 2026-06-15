@@ -190,3 +190,55 @@ def flip_to_hemisphere(
     if dot < 0:
         return (-vec[0], -vec[1], -vec[2])
     return vec
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Construction-axis algebra (B-station)
+#
+# Unlike the PCA helpers above (which ESTIMATE an axis from point positions),
+# construction-axis math is deterministic: a component declares which local
+# axis is its symmetry/long/normal axis, and the anchor's @orient quaternion
+# rotates that local axis into world space. Zero estimation, zero point-
+# sampling noise. This is the ground-truth replacement for PCA.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Local-space axis vectors (what a component declares as its construction axis).
+LOCAL_AXIS_VECTORS: dict[str, Vec3] = {
+    "X": (1.0, 0.0, 0.0),
+    "Y": (0.0, 1.0, 0.0),
+    "Z": (0.0, 0.0, 1.0),
+    "-X": (-1.0, 0.0, 0.0),
+    "-Y": (0.0, -1.0, 0.0),
+    "-Z": (0.0, 0.0, -1.0),
+}
+
+
+def rotate_vector_by_quaternion(
+    vec: Vec3,
+    q: Quaternion,
+) -> Vec3:
+    """Rotate a 3-vector by a quaternion (x, y, z, w).
+
+    Uses the standard v' = q * v * q^-1 formula expanded for unit quaternions
+    (no normalization is forced — if the caller passes a non-unit quaternion,
+    the rotation is still applied faithfully; Houdini @orient is unit by
+    convention). Returns the rotated vector as a tuple.
+
+    This is the deterministic core of construction-axis verification: given a
+    component's declared local construction axis and the anchor @orient, this
+    yields the world-space axis directly — no PCA, no point sampling.
+    """
+    vx, vy, vz = float(vec[0]), float(vec[1]), float(vec[2])
+    qx, qy, qz, qw = float(q[0]), float(q[1]), float(q[2]), float(q[3])
+
+    # t = 2 * cross(q.xyz, v)
+    tx = 2.0 * (qy * vz - qz * vy)
+    ty = 2.0 * (qz * vx - qx * vz)
+    tz = 2.0 * (qx * vy - qy * vx)
+
+    # v' = v + qw * t + cross(q.xyz, t)
+    rx = vx + qw * tx + (qy * tz - qz * ty)
+    ry = vy + qw * ty + (qz * tx - qx * tz)
+    rz = vz + qw * tz + (qx * ty - qy * tx)
+
+    return (rx, ry, rz)

@@ -325,8 +325,10 @@ errors that dominate failed procedural runs.
     {"type": "normal", "params": {"cangle": 30}}
   ],
   "orientation_asserts": [                        // flows to commit_sandbox's orientation gate
-    {"component_id": "wheel_fl", "kind": "radial", "expected_axis": "X"},
-    {"component_id": "frame", "kind": "elongated", "expected_axis": "Z"}
+    {"component_id": "wheel_fl", "kind": "radial", "expected_axis": "X",
+     "construction_axis": "Y"},                    // B-station: local axis the wheel is generated around
+    {"component_id": "frame", "kind": "elongated", "expected_axis": "Z",
+     "construction_axis": "Z"}
   ],
   "expected": {"min_points": 100}                 // optional, for verify_asset
 }
@@ -387,7 +389,40 @@ houdini_commit_sandbox(
 The existing structure gate + orientation gate run on the built OUT
 automatically — no gate changes were needed for the builder.
 
-## Parameter Exposure (in the sandbox — not after commit)
+### Construction axis (B-station — PREFERRED over leaving orientation to PCA)
+
+`orientation_asserts` gain an optional `construction_axis` field. Set it
+whenever you can — it makes orientation a **deterministic** check instead of a
+PCA estimate:
+
+- `construction_axis`: the **local-space** axis the component is generated
+  around. A wheel built as a ring in the XZ plane has `construction_axis:"Y"`
+  (its axle / symmetry axis). A frame tube drawn along Z has
+  `construction_axis:"Z"`.
+- The builder derives the world axis by rotating `construction_axis` through
+  the anchor's `@orient` quaternion — pure algebra, no point sampling, no PCA.
+  It bakes that world axis onto each instance as the `edini_world_axis` prim
+  attribute. `verify_orientation` reads it directly (`method:"construction"`).
+- Without `construction_axis`, the check falls back to PCA on point positions
+  (`method:"pca"`). PCA is an *estimate* and is noisy on uneven point
+  distributions — prefer the deterministic path.
+
+**The builder also catches self-consistent errors at build time.** If your
+`construction_axis` + anchor `@orient` + `expected_axis` contradict each other
+(e.g. you declare `construction_axis:"Y"` but the anchor orient rotates Y to
+world Z while `expected_axis` says X), the build **refuses** before any cook,
+telling you exactly which field to fix. This is the key value: a wrong mental
+model can no longer produce a self-consistent-but-incorrect asset that PCA
+would happily confirm.
+
+Read the build result's `construction_axis_summary` to confirm which components
+got deterministic axes (`method:"construction"`) and their derived world axes.
+
+For a component with **no anchors** (direct-merge), the world frame is
+identity, so `construction_axis` and `expected_axis` are usually the same
+value.
+
+### Parameter Exposure (in the sandbox — not after commit)
 
 Every procedural asset MUST expose user-controllable parameters. Hardcoded
 Python variables are NOT acceptable. Parameters must be installed on the
