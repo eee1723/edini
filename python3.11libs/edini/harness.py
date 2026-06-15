@@ -1269,6 +1269,37 @@ def _validate_recipe(recipe: Any) -> list[str]:
         errors.append("recipe.components must be a non-empty list")
         return errors
 
+    # ▬ Asset-level shared parameters (A2-station, optional) ▬
+    # params: {name: {default, min?, max?, label?}}. When present, the builder
+    # installs them as spare parms on the sandbox root so a change to any one
+    # propagates to every component that reads it (true asset linkage).
+    param_names: set[str] = set()
+    params = recipe.get("params")
+    if params is not None:
+        if not isinstance(params, dict) or not params:
+            errors.append("recipe.params must be a non-empty object if present")
+        else:
+            for pname, pspec in params.items():
+                if not isinstance(pname, str) or not pname.strip():
+                    errors.append(f"recipe.params key {pname!r} must be a non-empty string")
+                    continue
+                if pname in param_names:
+                    errors.append(f"recipe.params key {pname!r} duplicates")
+                    continue
+                param_names.add(pname)
+                if not isinstance(pspec, dict):
+                    errors.append(f"recipe.params[{pname!r}] must be an object")
+                    continue
+                if "default" not in pspec or not isinstance(pspec["default"], (int, float)) \
+                        or isinstance(pspec["default"], bool):
+                    errors.append(
+                        f"recipe.params[{pname!r}].default must be a number")
+                for bound in ("min", "max"):
+                    if bound in pspec and (not isinstance(pspec[bound], (int, float))
+                                           or isinstance(pspec[bound], bool)):
+                        errors.append(
+                            f"recipe.params[{pname!r}].{bound} must be a number if present")
+
     seen_ids: set[str] = set()
     for i, comp in enumerate(components):
         if not isinstance(comp, dict):
@@ -1284,6 +1315,25 @@ def _validate_recipe(recipe: Any) -> list[str]:
         if not isinstance(comp.get("code"), str) or not comp["code"].strip():
             errors.append(f"components[{i}].code must be a non-empty string")
 
+        # reads: optional list of param names this component references
+        # (via hou.ch in its code). Validated against declared params so a typo
+        # is caught at build, not when the channel reference silently returns 0.
+        reads = comp.get("reads")
+        if reads is not None:
+            if not isinstance(reads, list):
+                errors.append(f"components[{i}].reads must be a list if present")
+            else:
+                for r in reads:
+                    if not isinstance(r, str):
+                        errors.append(
+                            f"components[{i}].reads entries must be strings")
+                        break
+                    if r not in param_names:
+                        errors.append(
+                            f"components[{i}].reads references unknown param {r!r}"
+                            + (f" (declared params: {sorted(param_names)})"
+                               if param_names else " (no params declared)"))
+
         anchors = comp.get("anchors", [])
         if anchors is None:
             anchors = []
@@ -1294,10 +1344,44 @@ def _validate_recipe(recipe: Any) -> list[str]:
                 if not isinstance(anc, dict):
                     errors.append(f"components[{i}].anchors[{j}] must be an object")
                     continue
-                pos = anc.get("position")
-                if not (isinstance(pos, (list, tuple)) and len(pos) == 3):
+                # position: either static [x,y,z] numbers OR position_expr
+                # [str/num, str/num, str/num]. The expr form is evaluated at
+                # build time against asset params (A2-station).
+                has_pos = "position" in anc
+                has_pos_expr = "position_expr" in anc
+                if has_pos and has_pos_expr:
                     errors.append(
-                        f"components[{i}].anchors[{j}].position must be [x,y,z]")
+                        f"components[{i}].anchors[{j}]: specify position OR "
+                        f"position_expr, not both")
+                elif not has_pos and not has_pos_expr:
+                    errors.append(
+                        f"components[{i}].anchors[{j}] needs position [x,y,z] "
+                        f"or position_expr [3 values]")
+                elif has_pos:
+                    pos = anc.get("position")
+                    if not (isinstance(pos, (list, tuple)) and len(pos) == 3):
+                        errors.append(
+                            f"components[{i}].anchors[{j}].position must be [x,y,z]")
+                else:  # has_pos_expr
+                    pe = anc.get("position_expr")
+                    if not (isinstance(pe, (list, tuple)) and len(pe) == 3):
+                        errors.append(
+                            f"components[{i}].anchors[{j}].position_expr must be "
+                            f"a list of 3 values (numbers or expression strings)")
+                # orient_expr / pscale_expr are optional; validated for shape
+                # only (eval at build time).
+                if "orient_expr" in anc:
+                    oe = anc.get("orient_expr")
+                    if not (isinstance(oe, (list, tuple)) and len(oe) == 4):
+                        errors.append(
+                            f"components[{i}].anchors[{j}].orient_expr must be "
+                            f"a list of 4 values (quaternion)")
+                if "pscale_expr" in anc:
+                    pse = anc.get("pscale_expr")
+                    if not isinstance(pse, (str, int, float)) or isinstance(pse, bool):
+                        errors.append(
+                            f"components[{i}].anchors[{j}].pscale_expr must be "
+                            f"a number or expression string")
                 if not isinstance(anc.get("component_id"), str):
                     errors.append(
                         f"components[{i}].anchors[{j}].component_id must be a string")
@@ -1406,6 +1490,131 @@ def _component_id_overwrite_snippet(anchor_component_ids: list[str]) -> str:
     )
 
 
+def _install_spare_params(
+    root: Any,
+    params_spec: dict[str, dict],
+) -> dict[str, dict[str, Any]]:
+    """Install asset-level spare parms on the sandbox root (A2-station).
+
+    Each entry in params_spec is {name: {default, min?, max?, label?}}. The
+    parms land on the sandbox root (the /obj/<sandbox> geo container), so a
+    component python SOP reads them via hou.ch("../../<name>") — and changing
+    any one parm re-cooks every dependent component (true linkage).
+
+    Returns {name: {"value", "channel_path", "label?"}} for the response.
+    Best-effort: if spare-parm installation fails on this Houdini build (e.g.
+    the mock has no setSpareParms), returns the resolved default values anyway
+    so expression evaluation still works; a warning is recorded by the caller.
+    """
+    import hou as _hou
+    result: dict[str, dict[str, Any]] = {}
+    if not params_spec:
+        return result
+    templates: list[Any] = []
+    for name, spec in params_spec.items():
+        default = float(spec.get("default", 0.0))
+        mn = spec.get("min")
+        mx = spec.get("max")
+        label = spec.get("label", name)
+        min_v = float(mn) if mn is not None else 0.0
+        max_v = float(mx) if mx is not None else 10.0
+        # Houdini FloatParmTemplate signature varies across versions; try the
+        # minimal (name, label, num_components, default_tuple, min, max) form
+        # which is stable across H18-H21.
+        tmpl = None
+        for ctor in (
+            lambda: _hou.FloatParmTemplate(name, label, 1, (default,), min_v, max_v),
+            lambda: _hou.FloatParmTemplate(name, label, 1, [default]),
+            lambda: _hou.FloatParmTemplate(name, label, 1),
+        ):
+            try:
+                tmpl = ctor()
+                break
+            except Exception:
+                continue
+        if tmpl is not None:
+            templates.append(tmpl)
+        result[name] = {
+            "value": default,
+            "channel_path": f"{root.path()}/{name}",
+            "label": label if label != name else None,
+        }
+    if templates:
+        try:
+            group = _hou.ParmTemplateGroup()
+            for t in templates:
+                group.append(t)
+            root.setSpareParmGroup(group)
+        except Exception:
+            # Mock or unsupported build — defaults still usable for expr eval
+            pass
+    return result
+
+
+def _resolve_anchor_exprs(
+    anchors: list[dict],
+    params: dict[str, float],
+    default_cid: str,
+) -> tuple[list[dict], list[str]]:
+    """Evaluate position_expr/orient_expr/pscale_expr against asset params.
+
+    Returns (resolved_anchors, errors). Each resolved anchor has numeric
+    position/orient/pscale/component_id — the shape _anchor_generator_code
+    already expects — so expression handling is transparent downstream.
+
+    position_expr is evaluated at BUILD time (deterministic). Static numeric
+    position passes through unchanged. orient_expr/pscale_expr default to
+    identity / 1.0 when absent (same as the existing static defaults).
+    """
+    from edini.exprs import ExprError, evaluate_tuple, evaluate
+
+    resolved: list[dict] = []
+    errors: list[str] = []
+    for i, anc in enumerate(anchors):
+        out: dict[str, Any] = {}
+        cid = anc.get("component_id", default_cid)
+        out["component_id"] = cid
+
+        # position: static or expr
+        if "position_expr" in anc:
+            try:
+                pos = evaluate_tuple(
+                    anc["position_expr"], params, length=3, what="position_expr")
+            except ExprError as e:
+                errors.append(f"anchor[{i}] ({cid}) position_expr: {e}")
+                continue
+            out["position"] = list(pos)
+        else:
+            pos = anc.get("position", [0.0, 0.0, 0.0])
+            out["position"] = [float(p) for p in pos]
+
+        # orient: static or expr (default identity)
+        if "orient_expr" in anc:
+            try:
+                orient = evaluate_tuple(
+                    anc["orient_expr"], params, length=4, what="orient_expr")
+            except ExprError as e:
+                errors.append(f"anchor[{i}] ({cid}) orient_expr: {e}")
+                continue
+            out["orient"] = list(orient)
+        else:
+            orient = anc.get("orient", [0.0, 0.0, 0.0, 1.0])
+            out["orient"] = [float(v) for v in orient]
+
+        # pscale: static, expr, or default 1.0
+        if "pscale_expr" in anc:
+            try:
+                out["pscale"] = float(evaluate(anc["pscale_expr"], params))
+            except ExprError as e:
+                errors.append(f"anchor[{i}] ({cid}) pscale_expr: {e}")
+                continue
+        else:
+            out["pscale"] = float(anc.get("pscale", 1.0))
+
+        resolved.append(out)
+    return resolved, errors
+
+
 def _safe_create_node(parent_path: str, node_type: str, name: str) -> Any:
     """Create a node, returning the node object (or raising on failure).
 
@@ -1499,6 +1708,7 @@ def build_procedural_asset(
     components = recipe.get("components", [])
     postprocess = recipe.get("postprocess") or []
     orientation_asserts = recipe.get("orientation_asserts") or []
+    params_spec = recipe.get("params") or {}
 
     warnings: list[str] = []
     errors_runtime: list[str] = []
@@ -1510,6 +1720,22 @@ def build_procedural_asset(
         root = hou.node(root_path)
         if root is None:
             raise RuntimeError(f"Sandbox root not found after creation: {root_path}")
+        # A2-station: install asset-level shared params on the sandbox root.
+        # Components read them via hou.ch("../../<name>") so a change to any
+        # one parm re-cooks every dependent component (true linkage). The
+        # resolved default values also feed anchor expression evaluation.
+        param_install: dict[str, dict[str, Any]] = {}
+        param_values: dict[str, float] = {}
+        if params_spec:
+            try:
+                param_install = _install_spare_params(root, params_spec)
+                param_values = {n: v["value"] for n, v in param_install.items()}
+            except Exception as e:
+                warnings.append(f"spare-param install failed ({e}); "
+                                "component channel refs may not bind")
+                param_values = {n: float(spec.get("default", 0.0))
+                                for n, spec in params_spec.items()}
+
 
         # ── 1. Build one python SOP per component ──
         comp_nodes: list[Any] = []  # nodes whose output goes into the merge
@@ -1544,13 +1770,21 @@ def build_procedural_asset(
 
             if anchors:
                 # ── stamp pattern: anchor generator + copytopoints + id-overwrite ──
-                anchor_ids = [a.get("component_id", cid) for a in anchors]
-                anchors_built[cid] = len(anchors)
+                # A2-station: resolve position_expr/orient_expr/pscale_expr
+                # against the asset params at BUILD time (deterministic).
+                resolved_anchors, anc_expr_errors = _resolve_anchor_exprs(
+                    anchors, param_values, cid)
+                for ae in anc_expr_errors:
+                    errors_runtime.append(ae)
+                if anc_expr_errors:
+                    continue  # anchors broken; skip stamping
+                anchor_ids = [a["component_id"] for a in resolved_anchors]
+                anchors_built[cid] = len(resolved_anchors)
 
-                # anchor generator python SOP
+                # anchor generator python SOP (fed numeric, resolved anchors)
                 anc_name = f"{cid}_anchors"
                 anc_sop = _safe_create_node(root_path, "python", anc_name)
-                _set_parm_safe(anc_sop, "python", _anchor_generator_code(anchors, cid))
+                _set_parm_safe(anc_sop, "python", _anchor_generator_code(resolved_anchors, cid))
                 anc_sop.cook(force=True)
                 anc_errs = list(anc_sop.errors() or [])
                 if anc_errs:

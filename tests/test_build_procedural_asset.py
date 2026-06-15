@@ -342,5 +342,168 @@ class TestBuildResultShape(unittest.TestCase):
         self.assertEqual(committed["final_path"], "/obj/committed_bike")
 
 
+# ---------------------------------------------------------------------------
+# A2-station: asset-level shared parameters + expression-driven anchors
+# ---------------------------------------------------------------------------
+
+class TestRecipeParamsValidation(unittest.TestCase):
+    def test_params_with_non_number_default_rejected(self):
+        r = harness.build_procedural_asset({
+            "components": [{"id": "a", "code": "x"}],
+            "params": {"wheelbase": {"default": "oops"}},
+        })
+        self.assertFalse(r["success"])
+        self.assertIn("default must be a number", r["error"])
+
+    def test_reads_unknown_param_rejected(self):
+        r = harness.build_procedural_asset({
+            "components": [{"id": "a", "code": "x", "reads": ["bogus"]}],
+            "params": {"wheelbase": {"default": 1.0}},
+        })
+        self.assertFalse(r["success"])
+        self.assertIn("unknown param", r["error"])
+
+    def test_position_and_position_expr_both_rejected(self):
+        r = harness.build_procedural_asset({
+            "components": [{"id": "a", "code": "x", "anchors": [
+                {"component_id": "a1", "position": [1, 2, 3],
+                 "position_expr": ["1", "2", "3"]},
+            ]}],
+        })
+        self.assertFalse(r["success"])
+        self.assertIn("not both", r["error"])
+
+    def test_position_expr_wrong_length_rejected(self):
+        r = harness.build_procedural_asset({
+            "components": [{"id": "a", "code": "x", "anchors": [
+                {"component_id": "a1", "position_expr": ["1", "2"]},
+            ]}],
+        })
+        self.assertFalse(r["success"])
+        self.assertIn("position_expr", r["error"])
+
+
+class TestResolveAnchorExprs(unittest.TestCase):
+    """The anchor expression resolver is pure + deterministic — test directly."""
+
+    def test_position_expr_evaluated(self):
+        anchors = [{"component_id": "w1",
+                    "position_expr": ["wheelbase/2", "wheel_r", "0"]}]
+        resolved, errs = harness._resolve_anchor_exprs(
+            anchors, {"wheelbase": 1.0, "wheel_r": 0.35}, "wheel")
+        self.assertEqual(errs, [])
+        self.assertEqual(len(resolved), 1)
+        self.assertAlmostEqual(resolved[0]["position"][0], 0.5)
+        self.assertAlmostEqual(resolved[0]["position"][1], 0.35)
+        self.assertEqual(resolved[0]["component_id"], "w1")
+        self.assertEqual(resolved[0]["orient"], [0.0, 0.0, 0.0, 1.0])
+        self.assertEqual(resolved[0]["pscale"], 1.0)
+
+    def test_static_position_passes_through(self):
+        anchors = [{"component_id": "w1", "position": [1.0, 2.0, 3.0]}]
+        resolved, errs = harness._resolve_anchor_exprs(anchors, {}, "wheel")
+        self.assertEqual(errs, [])
+        self.assertEqual(resolved[0]["position"], [1.0, 2.0, 3.0])
+
+    def test_pscale_expr_evaluated(self):
+        anchors = [{"component_id": "w1", "position": [0, 0, 0],
+                    "pscale_expr": "wheel_r * 2"}]
+        resolved, errs = harness._resolve_anchor_exprs(
+            anchors, {"wheel_r": 0.4}, "wheel")
+        self.assertEqual(errs, [])
+        self.assertAlmostEqual(resolved[0]["pscale"], 0.8)
+
+    def test_orient_expr_evaluated(self):
+        anchors = [{"component_id": "w1", "position": [0, 0, 0],
+                    "orient_expr": ["0", "0", "0", "1"]}]
+        resolved, errs = harness._resolve_anchor_exprs(anchors, {}, "wheel")
+        self.assertEqual(errs, [])
+        self.assertEqual(resolved[0]["orient"], [0.0, 0.0, 0.0, 1.0])
+
+    def test_bad_expression_reports_error(self):
+        anchors = [{"component_id": "w1",
+                    "position_expr": ["wheelbase / 0", "0", "0"]}]
+        resolved, errs = harness._resolve_anchor_exprs(
+            anchors, {"wheelbase": 1.0}, "wheel")
+        self.assertEqual(resolved, [])
+        self.assertEqual(len(errs), 1)
+        self.assertIn("w1", errs[0])
+
+    def test_unknown_param_in_expr_reports_error(self):
+        anchors = [{"component_id": "w1",
+                    "position_expr": ["bogus + 1", "0", "0"]}]
+        resolved, errs = harness._resolve_anchor_exprs(anchors, {}, "wheel")
+        self.assertEqual(resolved, [])
+        self.assertEqual(len(errs), 1)
+
+
+class TestBuildWithParams(unittest.TestCase):
+    """End-to-end build with params + expression anchors (mock)."""
+
+    def test_build_with_params_succeeds(self):
+        recipe = {
+            "asset_name": "parametric",
+            "params": {
+                "wheelbase": {"default": 1.0, "min": 0.5, "max": 2.0},
+                "wheel_r": {"default": 0.35},
+            },
+            "components": [
+                {"id": "frame", "code": _geo_code("frame"), "anchors": [],
+                 "reads": ["wheelbase", "wheel_r"]},
+                {"id": "wheel", "code": _geo_code("wheel"), "anchors": [
+                    {"component_id": "wheel_fl",
+                     "position_expr": ["wheelbase/2", "wheel_r", "0"],
+                     "pscale_expr": "wheel_r * 2"},
+                    {"component_id": "wheel_rr",
+                     "position_expr": ["-wheelbase/2", "wheel_r", "0"],
+                     "pscale_expr": "wheel_r * 2"},
+                ]},
+            ],
+        }
+        r = harness.build_procedural_asset(recipe)
+        self.assertTrue(r["success"], msg=r.get("error"))
+        self.assertEqual(r["anchors_built"], {"wheel": 2})
+        anc = _mock_hou.node(f"{r['root_path']}/wheel_anchors")
+        self.assertIsNotNone(anc)
+        pts = anc.geometry().points()
+        self.assertEqual(len(pts), 2)
+        self.assertAlmostEqual(pts[0].position()[0], 0.5)
+        self.assertAlmostEqual(pts[0].position()[1], 0.35)
+        self.assertAlmostEqual(pts[1].position()[0], -0.5)
+
+    def test_build_without_params_backward_compatible(self):
+        recipe = {
+            "asset_name": "legacy",
+            "components": [
+                {"id": "frame", "code": _geo_code("frame"), "anchors": []},
+                {"id": "wheel", "code": _geo_code("wheel"), "anchors": [
+                    {"position": [1, 0, 0], "component_id": "w1"},
+                ]},
+            ],
+        }
+        r = harness.build_procedural_asset(recipe)
+        self.assertTrue(r["success"], msg=r.get("error"))
+        anc = _mock_hou.node(f"{r['root_path']}/wheel_anchors")
+        pts = anc.geometry().points()
+        self.assertEqual(len(pts), 1)
+        self.assertAlmostEqual(pts[0].position()[0], 1.0)
+
+    def test_build_bad_anchor_expr_surfaces_error(self):
+        recipe = {
+            "asset_name": "badexpr",
+            "params": {"wheelbase": {"default": 1.0}},
+            "components": [
+                {"id": "frame", "code": _geo_code("frame"), "anchors": []},
+                {"id": "wheel", "code": _geo_code("wheel"), "anchors": [
+                    {"component_id": "w1",
+                     "position_expr": ["bogus", "0", "0"]},
+                ]},
+            ],
+        }
+        r = harness.build_procedural_asset(recipe)
+        self.assertFalse(r["success"])
+        self.assertIn("bogus", r["error"])
+
+
 if __name__ == "__main__":
     unittest.main()
