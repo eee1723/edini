@@ -58,6 +58,7 @@ class TestHarnessToolHandlers(unittest.TestCase):
             "houdini_commit_sandbox",
             "houdini_discard_sandbox",
             "houdini_capture_review",
+            "houdini_build_procedural_asset",
         }
 
         self.assertTrue(expected.issubset(set(self.tool_handlers)))
@@ -120,6 +121,120 @@ class TestHarnessToolHandlers(unittest.TestCase):
         self.assertTrue(captured["replace_existing"])
         self.assertEqual(captured["orientation_checks"], checks)
         self.assertTrue(captured["skip_orientation"])
+
+    def test_run_python_sandbox_forwards_network_mode(self):
+        """network_mode + output_node_name must reach run_python_sandbox."""
+        captured = {}
+
+        import edini.tool_executor as te_mod
+        original = te_mod.run_python_sandbox
+
+        def spy(code, sandbox_name="procedural", commit_on_success=False,
+                delete_on_failure=False, network_mode=False,
+                output_node_name=None):
+            captured.update(
+                code=code,
+                sandbox_name=sandbox_name,
+                commit_on_success=commit_on_success,
+                delete_on_failure=delete_on_failure,
+                network_mode=network_mode,
+                output_node_name=output_node_name,
+            )
+            return {"success": True, "sandbox_mode": "network"}
+
+        te_mod.run_python_sandbox = spy
+        try:
+            self.tool_handlers["houdini_run_python_sandbox"](
+                code="container = hou.node(sandbox_root_path)",
+                sandbox_name="bike",
+                network_mode=True,
+                output_node_name="OUT",
+                commit_on_success=False,
+            )
+        finally:
+            te_mod.run_python_sandbox = original
+
+        self.assertEqual(captured["sandbox_name"], "bike")
+        self.assertTrue(captured["network_mode"])
+        self.assertEqual(captured["output_node_name"], "OUT")
+
+    def test_run_python_sandbox_defaults_network_mode_false(self):
+        """Omitting network_mode must default to False (single-SOP)."""
+        captured = {}
+
+        import edini.tool_executor as te_mod
+        original = te_mod.run_python_sandbox
+
+        def spy(code, sandbox_name="procedural", commit_on_success=False,
+                delete_on_failure=False, network_mode=False,
+                output_node_name=None):
+            captured["network_mode"] = network_mode
+            captured["output_node_name"] = output_node_name
+            return {"success": True}
+
+        te_mod.run_python_sandbox = spy
+        try:
+            self.tool_handlers["houdini_run_python_sandbox"](
+                code="node = hou.pwd()",
+            )
+        finally:
+            te_mod.run_python_sandbox = original
+
+        self.assertFalse(captured["network_mode"])
+        self.assertIsNone(captured["output_node_name"])
+
+    def test_build_procedural_asset_forwards_params(self):
+        """recipe / sandbox_name / delete_on_failure must reach build_procedural_asset."""
+        captured = {}
+
+        import edini.tool_executor as te_mod
+        original = te_mod.build_procedural_asset
+
+        def spy(recipe, sandbox_name=None, delete_on_failure=False):
+            captured.update(
+                recipe=recipe,
+                sandbox_name=sandbox_name,
+                delete_on_failure=delete_on_failure,
+            )
+            return {"success": True, "build_mode": "recipe"}
+
+        te_mod.build_procedural_asset = spy
+        try:
+            recipe = {"components": [{"id": "x", "code": "pass"}]}
+            self.tool_handlers["houdini_build_procedural_asset"](
+                recipe=recipe,
+                sandbox_name="bike",
+                delete_on_failure=True,
+            )
+        finally:
+            te_mod.build_procedural_asset = original
+
+        self.assertEqual(captured["recipe"], recipe)
+        self.assertEqual(captured["sandbox_name"], "bike")
+        self.assertTrue(captured["delete_on_failure"])
+
+    def test_build_procedural_asset_defaults(self):
+        """Omitting optional params must pass sandbox_name=None, delete_on_failure=False."""
+        captured = {}
+
+        import edini.tool_executor as te_mod
+        original = te_mod.build_procedural_asset
+
+        def spy(recipe, sandbox_name=None, delete_on_failure=False):
+            captured["sandbox_name"] = sandbox_name
+            captured["delete_on_failure"] = delete_on_failure
+            return {"success": True}
+
+        te_mod.build_procedural_asset = spy
+        try:
+            self.tool_handlers["houdini_build_procedural_asset"](
+                recipe={"components": [{"id": "x", "code": "pass"}]},
+            )
+        finally:
+            te_mod.build_procedural_asset = original
+
+        self.assertIsNone(captured["sandbox_name"])
+        self.assertFalse(captured["delete_on_failure"])
 
 
 if __name__ == "__main__":

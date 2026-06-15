@@ -848,16 +848,272 @@ def _safe_getvalue(stream) -> str:
         return f"<capture unavailable: {e}>"
 
 
+def _bounds_nonzero(geo_stats: dict[str, Any]) -> bool:
+    """True if the geometry's bounding box has a non-zero size.
+
+    Defensive against `bounds` being None / missing (e.g. empty geometry),
+    which the bare `.get("bounds", {}).get("size")` expression chokes on when
+    the key exists but maps to None.
+    """
+    bounds = geo_stats.get("bounds") or {}
+    size = bounds.get("size")
+    return isinstance(size, list) and any(abs(c) > 1e-6 for c in size)
+
+
+def _resolve_output_node(sandbox_root, prefer_names=("OUT", "out")) -> Any:
+    """Pick the cooked output node for a network-mode sandbox.
+
+    Priority:
+      1. A node named OUT/out (the conventional merge target).
+      2. The node carrying the @component_id prim attribute with the most prims
+         (the real merged asset output).
+      3. The sandbox_root itself.
+    """
+    try:
+        children = [c for c in sandbox_root.allSubChildren() if hasattr(c, "geometry")]
+    except Exception:
+        children = []
+
+    for pref in prefer_names:
+        for sub in children:
+            if sub.name() == pref:
+                return sub
+
+    best = None
+    best_score = -1
+    for sub in children:
+        try:
+            geo = sub.geometry()
+            if geo is None:
+                continue
+        except Exception:
+            continue
+        try:
+            prim_count = geo.intrinsicValue("primitivecount") or 0
+        except Exception:
+            prim_count = 0
+        try:
+            has_cid = geo.findPrimAttrib("component_id") is not None
+        except Exception:
+            has_cid = False
+        score = prim_count + (1000000 if has_cid else 0)
+        if score > best_score:
+            best, best_score = sub, score
+    return best if best is not None else sandbox_root
+
+
 def run_python_sandbox(
     code: str,
     sandbox_name: str = "procedural",
     commit_on_success: bool = False,
     delete_on_failure: bool = False,
+    network_mode: bool = False,
+    output_node_name: str | None = None,
 ) -> dict[str, Any]:
+    """Run Python in a procedural sandbox and return diagnostics + structure.
+
+    Two execution modes:
+
+    - **Single-SOP mode (default, ``network_mode=False``):** the code runs as
+      the cook body of a single ``edini_generate`` Python SOP. The code body
+      can only call ``geo.createPoint()`` / ``geo.createPolygon()`` on the
+      cooking node's own geometry — it MUST NOT create child SOPs, because
+      cooking a node that creates network nodes triggers Houdini's
+      "Infinite recursion in evaluation" guard. Use this for single-piece
+      generators (one fractal, one parametric surface) or short scripts.
+
+    - **Network mode (``network_mode=True``):** the code runs directly in the
+      sandbox geo container (``hou.node(root_path)``) — NOT inside a Python
+      SOP cook. This lets the code build a multi-node modular network
+      (``container.createNode("python", "body_generate")``,
+      ``container.createNode("copytopoints", ...)``) and wire them up exactly
+      as the modular pattern requires. After the build runs, the harness
+      locates the OUT node (an explicit ``output_node_name``, else a node
+      named ``OUT``/``out``, else the largest component_id-bearing node) and
+      cooks it. This is the mode that lets modular assets go through the
+      sandbox → commit structure/orientation gates.
+
+    In network mode, ``hou.pwd()`` returns the sandbox root geo, and the
+    helper variable ``sandbox_root`` is the geo container node.
+    """
     job_id, root_path = _create_sandbox_root(sandbox_name)
 
-    # Create Python SOP inside sandbox
     sandbox_root = hou.node(root_path)
+
+    if network_mode:
+        # Build a multi-node network by running the code in the container
+        # context. The code is expected to create children of sandbox_root
+        # (e.g. body_generate, wheel_component, copytopoints, merge, OUT)
+        # and return control. We then find + cook the OUT node.
+        output_node_path = ""
+        stdout_capture = io.StringIO()
+        stderr_capture = io.StringIO()
+        old_stdout = sys.stdout
+        old_stderr = sys.stderr
+        sys.stdout = stdout_capture
+        sys.stderr = stderr_capture
+
+        try:
+            namespace: dict[str, Any] = {
+                "hou": hou,
+                "sandbox_root": sandbox_root,
+                "sandbox_root_path": root_path,
+                "job_id": job_id,
+                "result": {},  # convenience capture dict (parity with single-SOP mock)
+            }
+            # Set hou.pwd() so existing recipes that use hou.pwd() land in the
+            # sandbox container rather than the top-level hou.node("/obj").
+            try:
+                old_pwd = hou.pwd()
+            except Exception:
+                old_pwd = None
+            try:
+                if hasattr(hou, "_set_pwd"):
+                    hou._set_pwd(sandbox_root)
+                else:
+                    hou._pwd_path = root_path  # type: ignore[attr-defined]
+            except Exception:
+                pass
+
+            try:
+                exec(code, namespace)
+            finally:
+                # Restore pwd
+                try:
+                    if hasattr(hou, "_set_pwd"):
+                        hou._set_pwd(old_pwd)
+                    else:
+                        if old_pwd is None:
+                            hou._pwd_path = ""  # type: ignore[attr-defined]
+                        else:
+                            hou._pwd_path = old_pwd.path()  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+
+            # Locate the output node to cook + diagnose.
+            if output_node_name:
+                target = hou.node(f"{root_path}/{output_node_name}")
+                if target is None:
+                    # Fall back to a subchild search by name.
+                    target = hou.node(output_node_name) if output_node_name.startswith("/") else None
+            else:
+                target = None
+            if target is None:
+                target = _resolve_output_node(sandbox_root)
+            output_node_path = target.path()
+
+            # Cook the output node so geometry/structure gates see real data.
+            target.cook(force=True)
+            cook_errors = list(target.errors() or [])
+            cook_warnings = list(target.warnings() or [])
+            if cook_errors:
+                raise RuntimeError("; ".join(cook_errors))
+
+            # Layout the built network so it's readable in the network editor.
+            try:
+                sandbox_root.layoutChildren()
+            except Exception:
+                pass
+
+            diag = _safe_collect_diagnostics(
+                output_node_path,
+                include_geometry=True,
+                include_parms=False,
+            )
+            geo_stats = diag.get("geometry") or {}
+            structural_checks = {
+                "has_geometry": geo_stats.get("point_count", 0) > 0,
+                "point_count": geo_stats.get("point_count", 0),
+                "prim_count": geo_stats.get("prim_count", 0),
+                "bounds_nonzero": _bounds_nonzero(geo_stats),
+            }
+
+            response = {
+                "success": True,
+                "job_id": job_id,
+                "execution_mode": EXECUTION_MODE_LIVE,
+                "sandbox_mode": "network",
+                "root_path": root_path,
+                "output_node": output_node_path,
+                "output": _safe_getvalue(stdout_capture) or "(no output)",
+                "stderr": _safe_getvalue(stderr_capture),
+                "diagnostics": diag,
+                "structural_checks": structural_checks,
+                "commit_requested": bool(commit_on_success),
+                "committed": False,
+            }
+
+            try:
+                struct_check = _run_structure_gate(root_path)
+                if struct_check is not None:
+                    response["structure_advisory"] = struct_check
+            except Exception:
+                pass
+
+            if commit_on_success:
+                commit_result = commit_sandbox(root_path, sandbox_name)
+                response["committed"] = commit_result.get("committed", False)
+                if commit_result.get("success"):
+                    response["final_path"] = commit_result.get("final_path", "")
+                else:
+                    response["commit_error"] = commit_result.get("error", "")
+
+            return response
+
+        except Exception as e:
+            execution_traceback = traceback.format_exc()
+            diagnostics = _safe_collect_diagnostics(
+                output_node_path or root_path,
+                include_geometry=True,
+                include_parms=False,
+            )
+            geo_stats = diagnostics.get("geometry") or {}
+            structural_checks = {
+                "has_geometry": geo_stats.get("point_count", 0) > 0,
+                "point_count": geo_stats.get("point_count", 0),
+                "prim_count": geo_stats.get("prim_count", 0),
+                "bounds_nonzero": False,
+            }
+
+            deleted = False
+            delete_error = None
+            delete_traceback = None
+            if delete_on_failure:
+                try:
+                    _destroy_node(root_path)
+                    deleted = True
+                except Exception as cleanup_exc:
+                    delete_error = str(cleanup_exc)
+                    delete_traceback = traceback.format_exc()
+
+            response = {
+                "success": False,
+                "job_id": job_id,
+                "execution_mode": EXECUTION_MODE_LIVE,
+                "sandbox_mode": "network",
+                "root_path": root_path,
+                "output_node": output_node_path,
+                "error": str(e),
+                "output": _safe_getvalue(stdout_capture),
+                "stderr": _safe_getvalue(stderr_capture),
+                "traceback": execution_traceback,
+                "diagnostics": diagnostics,
+                "structural_checks": structural_checks,
+                "preserved": not deleted,
+                "deleted": deleted,
+                "commit_requested": bool(commit_on_success),
+                "committed": False,
+            }
+            if delete_error is not None:
+                response["delete_error"] = delete_error
+                response["delete_traceback"] = delete_traceback
+            return response
+        finally:
+            sys.stdout = old_stdout
+            sys.stderr = old_stderr
+
+    # ── Default: single-SOP mode ──
+    # Create Python SOP inside sandbox
     py_sop = sandbox_root.createNode("python", "edini_generate")
     py_sop.parm("python").set(code)
     output_node_path = py_sop.path()
@@ -891,17 +1147,14 @@ def run_python_sandbox(
             "has_geometry": geo_stats.get("point_count", 0) > 0,
             "point_count": geo_stats.get("point_count", 0),
             "prim_count": geo_stats.get("prim_count", 0),
-            "bounds_nonzero": (
-                isinstance(geo_stats.get("bounds", {}).get("size"), list)
-                and any(abs(c) > 1e-6 for c in geo_stats["bounds"]["size"])
-                if geo_stats.get("bounds", {}).get("size") else False
-            ),
+            "bounds_nonzero": _bounds_nonzero(geo_stats),
         }
 
         response = {
             "success": True,
             "job_id": job_id,
             "execution_mode": EXECUTION_MODE_LIVE,
+            "sandbox_mode": "single_sop",
             "root_path": root_path,
             "output_node": output_node_path,
             "output": _safe_getvalue(stdout_capture) or "(no output)",
@@ -960,6 +1213,7 @@ def run_python_sandbox(
             "success": False,
             "job_id": job_id,
             "execution_mode": EXECUTION_MODE_LIVE,
+            "sandbox_mode": "single_sop",
             "root_path": root_path,
             "output_node": output_node_path,
             "error": str(e),
@@ -980,3 +1234,536 @@ def run_python_sandbox(
     finally:
         sys.stdout = old_stdout
         sys.stderr = old_stderr
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Declarative recipe builder (A-station)
+#
+# The builder turns a JSON recipe (component list + anchor list + per-component
+# pure-geometry python code) into a deterministic multi-node modular network.
+# The agent never writes createNode / setInput / wiring / blockpath — it only
+# authors the geometry-generating code for each component. This removes the
+# whole class of imperative-Houdini-API errors (infinite recursion in cook,
+# foreach blockpath mis-wires, parm-name guesses) that dominated the bicycle
+# run log.
+#
+# The built network reuses the existing sandbox lifecycle + gates unchanged:
+#   - OUT is downstream of the merge → _select_gate_target auto-finds it
+#   - every component prim carries component_id (Prim) → verify_orientation
+#     + _check_modular_structure run on commit without any gate changes
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _validate_recipe(recipe: Any) -> list[str]:
+    """Return a list of human-readable errors for an invalid recipe (empty = OK).
+
+    Validates structure only — not geometry (that is checked post-cook by the
+    component_id presence check).
+    """
+    errors: list[str] = []
+    if not isinstance(recipe, dict):
+        return ["recipe must be a JSON object"]
+
+    components = recipe.get("components")
+    if not isinstance(components, list) or not components:
+        errors.append("recipe.components must be a non-empty list")
+        return errors
+
+    seen_ids: set[str] = set()
+    for i, comp in enumerate(components):
+        if not isinstance(comp, dict):
+            errors.append(f"components[{i}] must be an object")
+            continue
+        cid = comp.get("id")
+        if not isinstance(cid, str) or not cid.strip():
+            errors.append(f"components[{i}].id must be a non-empty string")
+        elif cid in seen_ids:
+            errors.append(f"components[{i}].id {cid!r} duplicates an earlier component")
+        else:
+            seen_ids.add(cid)
+        if not isinstance(comp.get("code"), str) or not comp["code"].strip():
+            errors.append(f"components[{i}].code must be a non-empty string")
+
+        anchors = comp.get("anchors", [])
+        if anchors is None:
+            anchors = []
+        if not isinstance(anchors, list):
+            errors.append(f"components[{i}].anchors must be a list if present")
+        else:
+            for j, anc in enumerate(anchors):
+                if not isinstance(anc, dict):
+                    errors.append(f"components[{i}].anchors[{j}] must be an object")
+                    continue
+                pos = anc.get("position")
+                if not (isinstance(pos, (list, tuple)) and len(pos) == 3):
+                    errors.append(
+                        f"components[{i}].anchors[{j}].position must be [x,y,z]")
+                if not isinstance(anc.get("component_id"), str):
+                    errors.append(
+                        f"components[{i}].anchors[{j}].component_id must be a string")
+
+    # orientation_asserts (optional, but if present must be well-formed)
+    asserts = recipe.get("orientation_asserts", [])
+    if asserts is None:
+        asserts = []
+    if not isinstance(asserts, list):
+        errors.append("recipe.orientation_asserts must be a list if present")
+    else:
+        valid_kinds = {"radial", "elongated", "planar"}
+        valid_axes = {"X", "Y", "Z", "-X", "-Y", "-Z"}
+        for i, a in enumerate(asserts):
+            if not isinstance(a, dict):
+                errors.append(f"orientation_asserts[{i}] must be an object")
+                continue
+            if not isinstance(a.get("component_id"), str):
+                errors.append(f"orientation_asserts[{i}].component_id must be a string")
+            if a.get("kind", "radial") not in valid_kinds:
+                errors.append(
+                    f"orientation_asserts[{i}].kind must be radial|elongated|planar")
+            ax = a.get("expected_axis", "Y")
+            if isinstance(ax, str):
+                ax = ax.upper()
+            if ax not in valid_axes:
+                errors.append(
+                    f"orientation_asserts[{i}].expected_axis must be one of {sorted(valid_axes)}")
+
+    post = recipe.get("postprocess", [])
+    if post is None:
+        post = []
+    if not isinstance(post, list):
+        errors.append("recipe.postprocess must be a list if present")
+    else:
+        for i, pp in enumerate(post):
+            if not isinstance(pp, dict):
+                errors.append(f"postprocess[{i}] must be an object")
+                continue
+            if not isinstance(pp.get("type"), str) or not pp["type"].strip():
+                errors.append(f"postprocess[{i}].type must be a non-empty string")
+            if "params" in pp and not isinstance(pp["params"], dict):
+                errors.append(f"postprocess[{i}].params must be an object if present")
+
+    return errors
+
+
+def _anchor_generator_code(anchors: list[dict], component_id: str) -> str:
+    """Generate a single-SOP python cook body that emits the given anchor points.
+
+    Each emitted point carries @P, @orient (quaternion), @pscale, and a
+    point-level @component_id (the per-instance id, e.g. 'wheel_fl'). This is
+    the second input to Copy-to-Points; the prim-level component_id on the
+    stamped instances is overwritten downstream by _component_id_overwrite_vex.
+    """
+    lines = [
+        "node = hou.pwd()",
+        "geo = node.geometry()",
+        "geo.clear()",
+        "geo.addAttrib(hou.attribType.Point, 'orient', (0.0, 0.0, 0.0, 1.0))",
+        "geo.addAttrib(hou.attribType.Point, 'pscale', 1.0)",
+        "geo.addAttrib(hou.attribType.Point, 'component_id', '')",
+    ]
+    for anc in anchors:
+        pos = anc.get("position", [0.0, 0.0, 0.0])
+        orient = anc.get("orient", [0.0, 0.0, 0.0, 1.0])
+        pscale = anc.get("pscale", 1.0)
+        cid = anc.get("component_id", component_id)
+        # Emit as explicit tuple literals to survive JSON->parm->exec.
+        pos_t = "(" + ", ".join(repr(float(p)) for p in pos) + ")"
+        orient_t = "(" + ", ".join(repr(float(v)) for v in orient) + ")"
+        lines.append(
+            f"_pt = geo.createPoint(); _pt.setPosition({pos_t}); "
+            f"_pt.setAttribValue('orient', {orient_t}); "
+            f"_pt.setAttribValue('pscale', {float(pscale)!r}); "
+            f"_pt.setAttribValue('component_id', {str(cid)!r})"
+        )
+    return "\n".join(lines)
+
+
+def _component_id_overwrite_snippet(anchor_component_ids: list[str]) -> str:
+    """Generate a single-SOP python cook body that overwrites the prim-level
+    component_id on stamped instances, so each instance carries its anchor's
+    per-instance id (e.g. wheel_fl) instead of the template id (wheel).
+
+    Copy-to-Points produces `n_anchors` consecutive copies of the source
+    geometry; the i-th copy's prims get component_id = anchor_component_ids[i].
+    We detect copy boundaries by counting prims per copy (source prim count).
+    Runs on the copytopoints output.
+    """
+    # Emit a python list literal of the anchor ids.
+    ids_repr = "[" + ", ".join(repr(c) for c in anchor_component_ids) + "]"
+    return (
+        "node = hou.pwd()\n"
+        "geo = node.geometry()\n"
+        "anchor_ids = " + ids_repr + "\n"
+        "n_anchors = len(anchor_ids)\n"
+        "prims = geo.prims()\n"
+        "total = len(prims)\n"
+        "if n_anchors > 0 and total > 0:\n"
+        "    per_copy = total // n_anchors\n"
+        "    if per_copy > 0:\n"
+        "        for i, prim in enumerate(prims):\n"
+        "            copy_index = min(i // per_copy, n_anchors - 1)\n"
+        "            prim.setAttribValue('component_id', anchor_ids[copy_index])\n"
+    )
+
+
+def _safe_create_node(parent_path: str, node_type: str, name: str) -> Any:
+    """Create a node, returning the node object (or raising on failure).
+
+    Uses hou.node(parent).createNode directly (the sandbox already lives under
+    /obj/<sandbox>, so we want raw creation, not the /obj-defaulting wrapper).
+    """
+    parent = hou.node(parent_path)
+    if parent is None:
+        raise RuntimeError(f"Parent node not found: {parent_path}")
+    # Try bare name first, then namespace variants — mirrors create_node() in
+    # node_utils but returns the node object for in-process use.
+    try:
+        return parent.createNode(node_type, name)
+    except Exception:
+        # Walk namespace variants for e.g. "copytopoints" -> "copytopoints::2.0"
+        try:
+            cats = [
+                hou.sopNodeTypeCategory(), hou.objNodeTypeCategory(),
+            ]
+        except Exception:
+            cats = []
+        for cat in cats:
+            try:
+                nt = hou.nodeType(cat, node_type)
+            except Exception:
+                nt = None
+            if nt is None:
+                continue
+            try:
+                for variant in nt.namespaceOrder():
+                    try:
+                        return parent.createNode(variant, name)
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+        raise
+
+
+def _set_parm_safe(node, parm_name: str, value: Any) -> None:
+    """Set a parm, raising a clear error if the parm is missing."""
+    parm = node.parm(parm_name)
+    if parm is None:
+        raise RuntimeError(
+            f"Parm '{parm_name}' not found on {node.path()} ({node.type().name()})")
+    parm.set(value)
+
+
+def build_procedural_asset(
+    recipe: dict,
+    *,
+    sandbox_name: str | None = None,
+    delete_on_failure: bool = False,
+) -> dict[str, Any]:
+    """Build a modular procedural asset from a declarative recipe.
+
+    The recipe describes components (each with pure-geometry python code),
+    per-component anchor points (for Copy-to-Points stamping), optional
+    post-processing SOPs, and orientation assertions. The builder deterministically
+    assembles a sandbox network (component SOPs → anchor generators →
+    Copy-to-Points → merge → postprocess → OUT), cooks it, and returns
+    diagnostics + gate previews WITHOUT committing.
+
+    The agent's component code must only emit geometry on its own node
+    (``node = hou.pwd(); geo = node.geometry()``) and tag every prim with
+    ``component_id``. It must NEVER call createNode.
+
+    Commit is a separate explicit step: ``houdini_commit_sandbox(root_path,
+    name, orientation_checks=recipe['orientation_asserts'])`` — the existing
+    structure + orientation gates then run on the built OUT automatically.
+
+    Returns a dict shaped like run_python_sandbox plus builder-specific fields
+    (components_built, anchors_built, component_id_check).
+    """
+    # ── Validate recipe ──
+    errors = _validate_recipe(recipe)
+    if errors:
+        return {
+            "success": False,
+            "execution_mode": EXECUTION_MODE_LIVE,
+            "build_mode": "recipe",
+            "error": "Invalid recipe: " + "; ".join(errors),
+            "validation_errors": errors,
+            "preserved": False,
+            "deleted": False,
+        }
+
+    asset_name = recipe.get("asset_name") or "asset"
+    name = sandbox_name or asset_name
+    job_id, root_path = _create_sandbox_root(name)
+    components = recipe.get("components", [])
+    postprocess = recipe.get("postprocess") or []
+    orientation_asserts = recipe.get("orientation_asserts") or []
+
+    warnings: list[str] = []
+    errors_runtime: list[str] = []
+    components_built: list[str] = []
+    anchors_built: dict[str, int] = {}
+    out_path = ""
+
+    try:
+        root = hou.node(root_path)
+        if root is None:
+            raise RuntimeError(f"Sandbox root not found after creation: {root_path}")
+
+        # ── 1. Build one python SOP per component ──
+        comp_nodes: list[Any] = []  # nodes whose output goes into the merge
+        # Track stamped components: {component_id: (copy_node, anchor_ids)}
+        stamped: list[tuple[str, Any, list[str]]] = []
+
+        for comp in components:
+            cid = comp["id"]
+            code = comp["code"]
+            anchors = comp.get("anchors") or []
+
+            py_name = f"{cid}_python"
+            try:
+                py_sop = _safe_create_node(root_path, "python", py_name)
+            except Exception as e:
+                errors_runtime.append(
+                    f"component '{cid}': failed to create python SOP: {e}")
+                continue
+            _set_parm_safe(py_sop, "python", code)
+            # Cook the component immediately so a per-component error surfaces
+            # with a clear attribution (and geometry exists for wiring in the
+            # mock; real Houdini would lazy-cook, but explicit is safer).
+            try:
+                py_sop.cook(force=True)
+                py_errs = list(py_sop.errors() or [])
+                if py_errs:
+                    raise RuntimeError("; ".join(py_errs))
+            except Exception as e:
+                errors_runtime.append(f"component '{cid}' cook failed: {e}")
+                continue
+            components_built.append(cid)
+
+            if anchors:
+                # ── stamp pattern: anchor generator + copytopoints + id-overwrite ──
+                anchor_ids = [a.get("component_id", cid) for a in anchors]
+                anchors_built[cid] = len(anchors)
+
+                # anchor generator python SOP
+                anc_name = f"{cid}_anchors"
+                anc_sop = _safe_create_node(root_path, "python", anc_name)
+                _set_parm_safe(anc_sop, "python", _anchor_generator_code(anchors, cid))
+                anc_sop.cook(force=True)
+                anc_errs = list(anc_sop.errors() or [])
+                if anc_errs:
+                    warnings.append(f"component '{cid}' anchors: {anc_errs}")
+
+                # copytopoints: in0 = component geometry, in1 = anchor points
+                copy_name = f"copy_{cid}"
+                copy_node = _safe_create_node(root_path, "copytopoints", copy_name)
+                copy_node.setInput(0, py_sop)
+                copy_node.setInput(1, anc_sop)
+
+                # id-overwrite python SOP: gives each instance its anchor component_id
+                ow_name = f"{cid}_idfix"
+                ow_sop = _safe_create_node(root_path, "python", ow_name)
+                _set_parm_safe(
+                    ow_sop, "python", _component_id_overwrite_snippet(anchor_ids))
+                ow_sop.setInput(0, copy_node)
+                # Cook the idfix so the per-instance component_id lands on geometry.
+                # (Real Houdini lazy-cooks on OUT; explicit is safer and works in tests.)
+                ow_sop.cook(force=True)
+                ow_errs = list(ow_sop.errors() or [])
+                if ow_errs:
+                    warnings.append(f"component '{cid}' idfix: {ow_errs}")
+
+                comp_nodes.append(ow_sop)
+                stamped.append((cid, ow_sop, anchor_ids))
+            else:
+                # ── direct: component geometry straight into merge ──
+                comp_nodes.append(py_sop)
+
+        if not comp_nodes:
+            errors_runtime.append("no component output nodes were built")
+
+        # ── 2. Merge all component streams ──
+        merge_node = None
+        last_node = None
+        if comp_nodes and not errors_runtime:
+            merge_node = _safe_create_node(root_path, "merge", "merge_all")
+            for idx, node in enumerate(comp_nodes):
+                merge_node.setInput(idx, node)
+            last_node = merge_node
+
+        # ── 3. Post-processing chain ──
+        if last_node is not None:
+            for i, pp in enumerate(postprocess):
+                pp_type = pp["type"]
+                pp_params = pp.get("params") or {}
+                pp_name = f"post_{i}_{pp_type}"
+                try:
+                    pp_node = _safe_create_node(root_path, pp_type, pp_name)
+                except Exception as e:
+                    warnings.append(
+                        f"postprocess[{i}] '{pp_type}' could not be created: {e}; skipped")
+                    continue
+                pp_node.setInput(0, last_node)
+                for pname, pval in pp_params.items():
+                    try:
+                        _set_parm_safe(pp_node, pname, pval)
+                    except Exception as e:
+                        warnings.append(
+                            f"postprocess[{i}] '{pp_type}' parm '{pname}': {e}")
+                last_node = pp_node
+
+        # ── 4. OUT null ──
+        if last_node is not None:
+            out_node = _safe_create_node(root_path, "null", "OUT")
+            out_node.setInput(0, last_node)
+            out_node.setDisplayFlag(True)
+            out_path = out_node.path()
+            try:
+                root.layoutChildren()
+            except Exception:
+                pass
+
+        if errors_runtime:
+            raise RuntimeError("; ".join(errors_runtime))
+
+        if not out_path:
+            raise RuntimeError("builder produced no OUT node")
+
+        # ── 5. Cook OUT + collect errors ──
+        out_node = hou.node(out_path)
+        cook_errors: list[str] = []
+        try:
+            out_node.cook(force=True)
+            cook_errors = list(out_node.errors() or [])
+            # Also surface errors from component SOPs (a component can fail
+            # without OUT reporting it on the display node).
+            for sub in root.allSubChildren():
+                try:
+                    sub_errs = list(sub.errors() or [])
+                except Exception:
+                    sub_errs = []
+                for e in sub_errs:
+                    tag = f"[{sub.name()}] {e}"
+                    if tag not in cook_errors:
+                        cook_errors.append(tag)
+        except Exception as e:
+            cook_errors.append(f"OUT cook raised: {e}")
+
+        if cook_errors:
+            raise RuntimeError("; ".join(cook_errors))
+
+        # ── 6. component_id presence check ──
+        # Read from the gate target (largest component_id-bearing node), which
+        # is the merge/OUT in real Houdini. This is more robust than relying on
+        # OUT.geometry() (which stays empty for a null until cooked downstream).
+        component_id_check = {"missing": [], "ok": []}
+        try:
+            gate_target = _select_gate_target(root)
+            gate_geo = gate_target.geometry() if gate_target is not None else None
+            declared_cids = {c["id"] for c in components}
+            # For stamped components, the per-instance ids replace the template id
+            for cid, _ow, anchor_ids in stamped:
+                declared_cids.discard(cid)
+                declared_cids.update(anchor_ids)
+            found_cids = _geometry_component_ids(gate_geo) if gate_geo else set()
+            for cid in sorted(declared_cids):
+                (component_id_check["ok"] if cid in found_cids
+                 else component_id_check["missing"]).append(cid)
+        except Exception as e:
+            warnings.append(f"component_id check failed: {e}")
+
+        # ── 7. Diagnostics + structural checks + gate previews ──
+        diag = _safe_collect_diagnostics(out_path, include_geometry=True)
+        geo_stats = diag.get("geometry") or {}
+        structural_checks = {
+            "has_geometry": geo_stats.get("point_count", 0) > 0,
+            "point_count": geo_stats.get("point_count", 0),
+            "prim_count": geo_stats.get("prim_count", 0),
+            "bounds_nonzero": _bounds_nonzero(geo_stats),
+        }
+
+        response: dict[str, Any] = {
+            "success": True,
+            "execution_mode": EXECUTION_MODE_LIVE,
+            "build_mode": "recipe",
+            "job_id": job_id,
+            "root_path": root_path,
+            "output_node": out_path,
+            "components_built": components_built,
+            "anchors_built": anchors_built,
+            "component_id_check": component_id_check,
+            "diagnostics": diag,
+            "structural_checks": structural_checks,
+            "warnings": warnings,
+            "preserved": True,
+            "deleted": False,
+        }
+
+        # structure advisory (reuses the same gate commit_sandbox enforces)
+        try:
+            struct_check = _run_structure_gate(root_path)
+            if struct_check is not None:
+                response["structure_advisory"] = struct_check
+        except Exception as e:
+            response["structure_advisory_error"] = str(e)
+
+        # orientation preview (advisory only — commit enforces it as a hard gate).
+        # Run against the gate target (the component_id-bearing node), not the
+        # bare OUT null, so verify_orientation actually finds the component_id
+        # prim attribute. In real Houdini OUT carries the merged geo; the gate
+        # target selection matches what commit_sandbox's gate will inspect.
+        if orientation_asserts:
+            try:
+                from edini.node_utils import verify_orientation
+                gate_target = _select_gate_target(root)
+                ori = verify_orientation(gate_target.path(), orientation_asserts)
+                response["orientation_check"] = {
+                    "passed": ori.get("passed", 0),
+                    "failed": ori.get("failed", 0),
+                    "total": ori.get("total", 0),
+                    "checks": ori.get("checks", []),
+                }
+                if not ori.get("success"):
+                    response["orientation_check_error"] = ori.get("error", "")
+            except Exception as e:
+                response["orientation_check_error"] = str(e)
+
+        if component_id_check["missing"]:
+            response["warnings"].append(
+                "component_id missing on OUT for: "
+                + ", ".join(component_id_check["missing"])
+                + " — these components' orientation checks will fail at commit.")
+
+        return response
+
+    except Exception as e:
+        execution_traceback = traceback.format_exc()
+        diag = _safe_collect_diagnostics(
+            out_path or root_path, include_geometry=True)
+
+        deleted = False
+        if delete_on_failure:
+            try:
+                _destroy_node(root_path)
+                deleted = True
+            except Exception:
+                pass
+
+        return {
+            "success": False,
+            "execution_mode": EXECUTION_MODE_LIVE,
+            "build_mode": "recipe",
+            "job_id": job_id,
+            "root_path": root_path,
+            "output_node": out_path,
+            "components_built": components_built,
+            "anchors_built": anchors_built,
+            "error": str(e),
+            "traceback": execution_traceback,
+            "diagnostics": diag,
+            "warnings": warnings,
+            "preserved": not deleted,
+            "deleted": deleted,
+        }
