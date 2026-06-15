@@ -179,6 +179,7 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
         replace_existing=kw.get("replace_existing", False),
         orientation_checks=kw.get("orientation_checks"),
         skip_orientation=kw.get("skip_orientation", False),
+        skip_structure_check=kw.get("skip_structure_check", False),
     ),
     "houdini_discard_sandbox": lambda **kw: discard_sandbox(
         kw["sandbox_root_path"],

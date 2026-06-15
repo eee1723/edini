@@ -614,5 +614,133 @@ class TestOrientationGateNodeSelection(unittest.TestCase):
                          f"got: {err}")
 
 
+class TestModularStructureGate(unittest.TestCase):
+    """Tests for _check_modular_structure — the hard gate against monolithic
+    procedural assets (single Python SOP emitting all multi-component geometry
+    with no Copy-to-Points/Sweep/foreach).
+
+    Regression for the bicycle run where the agent built the entire bike in
+    one ~400-line Python SOP with no modular decomposition.
+    """
+
+    def _build_sandbox(self, name):
+        run = harness.run_python_sandbox(
+            "node = hou.pwd()\nnode.geometry().clear()",
+            sandbox_name=name,
+        )
+        root = _mock_hou.node(run["root_path"])
+        return run, root
+
+    def _make_python_sop_with_components(self, parent, name, cids, code_lines=250):
+        """Create a python SOP whose geometry carries the given component_ids."""
+        node = parent.createNode("python", name)
+        _mock_hou.add_node(node)
+        geo = _mock_hou.MockGeometry(point_count=100, prim_count=50,
+                                     vertex_count=200,
+                                     bounds=(0.0, 1.0, 0.0, 1.0, 0.0, 1.0))
+        geo.addAttrib(None, "component_id", "")
+        # Attach prims with component_id values
+        for cid in cids:
+            prim = _mock_hou.MockGeometry()  # throwaway for the prim
+        # Simpler: set the prims directly on geo by adding builder prims
+        geo2 = _mock_hou.MockGeometry()
+        geo2.clear()
+        geo2.addAttrib(None, "component_id", "")
+        from tests.mock_hou import MockPoint
+        for cid in cids:
+            for _ in range(3):
+                pt = MockPoint(); pt.setPosition((0, 0, 0))
+                geo2._points.append(pt); pt._number = len(geo2._points) - 1
+                geo2._point_count = len(geo2._points)
+            poly = geo2.createPolygon()
+            for v in geo2._points[-3:]:
+                poly.addVertex(v)
+            poly.setAttribValue("component_id", cid)
+        node._geometry = geo2
+        # Set the python parm to a long dummy code so line count > 200
+        long_code = "\n".join(f"# line {i}" for i in range(code_lines))
+        node._parms["python"] = MockParm("python", long_code)
+        return node
+
+    def test_modular_structure_passes_when_no_components(self):
+        """A simple asset with no component_id is not monolithic."""
+        run, root = self._build_sandbox("struct_simple")
+        # edini_generate exists with trivial geometry, no component_id
+        check = harness._check_modular_structure(root)
+        self.assertFalse(check["is_monolithic"])
+
+    def test_modular_structure_passes_with_copytopoints(self):
+        """Properly modular structure (component streams + copytopoints) passes."""
+        run, root = self._build_sandbox("struct_modular")
+        # body_generate python SOP with anchors
+        body = self._make_python_sop_with_components(root, "body_generate",
+                                                     ["frame"], code_lines=80)
+        # wheel_component python SOP
+        wheel = self._make_python_sop_with_components(root, "wheel_component",
+                                                      ["wheel"], code_lines=60)
+        # copytopoints node (modular assembly)
+        copy = root.createNode("copytopoints::2.0", "copy_wheels")
+        _mock_hou.add_node(copy)
+        check = harness._check_modular_structure(root)
+        self.assertFalse(check["is_monolithic"],
+                         f"should pass: {check.get('reason')}")
+        self.assertGreaterEqual(check["details"]["modular_node_count"], 1)
+
+    def test_modular_structure_detects_monolithic(self):
+        """Single big Python SOP with >=3 components and no modular nodes
+        is detected as monolithic."""
+        run, root = self._build_sandbox("struct_monolithic")
+        big = self._make_python_sop_with_components(
+            root, "edini_generate",
+            ["frame", "wheel", "handlebar", "saddle", "crankset"],
+            code_lines=400)
+        # No copytopoints/sweep/foreach anywhere
+        check = harness._check_modular_structure(root)
+        self.assertTrue(check["is_monolithic"],
+                        f"should be monolithic: {check}")
+        self.assertIn("component_id", check["reason"].lower() + check["reason"])
+        self.assertIn("Copy-to-Points", check["suggestion"])
+        self.assertGreaterEqual(check["details"]["distinct_component_ids"], 3)
+
+    def test_commit_refuses_monolithic_structure(self):
+        """commit_sandbox must refuse to commit a monolithic asset."""
+        run, root = self._build_sandbox("struct_commit_refuse")
+        big = self._make_python_sop_with_components(
+            root, "monolith",
+            ["a", "b", "c", "d"], code_lines=300)
+        result = harness.commit_sandbox(run["root_path"], "should_fail",
+                                        replace_existing=False)
+        self.assertFalse(result["success"])
+        self.assertFalse(result["committed"])
+        self.assertIn("monolithic", result["error"].lower())
+        self.assertIn("structure", result)
+
+    def test_commit_allows_monolithic_with_skip_flag(self):
+        """skip_structure_check=true bypasses the modular gate (escape hatch)."""
+        run, root = self._build_sandbox("struct_skip")
+        big = self._make_python_sop_with_components(
+            root, "monolith2",
+            ["a", "b", "c"], code_lines=300)
+        result = harness.commit_sandbox(
+            run["root_path"], "skipped_struct",
+            replace_existing=False, skip_structure_check=True)
+        self.assertTrue(result["success"])
+        self.assertTrue(result["committed"])
+
+    def test_structure_advisory_in_sandbox_result(self):
+        """run_python_sandbox returns structure_advisory so the agent sees the
+        problem before attempting commit."""
+        run, root = self._build_sandbox("struct_advisory")
+        big = self._make_python_sop_with_components(
+            root, "edini_generate",
+            ["a", "b", "c", "e"], code_lines=350)
+        # Re-run sandbox to get the advisory (the helper built nodes after)
+        # Instead, call _run_structure_gate directly
+        advisory = harness._run_structure_gate(run["root_path"])
+        self.assertIsNotNone(advisory)
+        self.assertFalse(advisory["passed"])
+        self.assertTrue(advisory["is_monolithic"])
+
+
 if __name__ == "__main__":
     unittest.main()

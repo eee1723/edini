@@ -90,6 +90,7 @@ class TestHarnessToolHandlers(unittest.TestCase):
             replace_existing=False,
             orientation_checks=None,
             skip_orientation=False,
+            skip_structure_check=False,
         ):
             captured.update(
                 sandbox_root_path=sandbox_root_path,
@@ -97,6 +98,7 @@ class TestHarnessToolHandlers(unittest.TestCase):
                 replace_existing=replace_existing,
                 orientation_checks=orientation_checks,
                 skip_orientation=skip_orientation,
+                skip_structure_check=skip_structure_check,
             )
             return {"success": True, "committed": True}
 
