@@ -1,6 +1,6 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-15 &nbsp;|&nbsp; 第二十八阶段：声明式 Recipe Builder（A 站）✅ &nbsp;|&nbsp; 规划：B 站构造轴 → C 站节点参数 DB → D 站黄金范例 → E 站数值代理
+> 最后更新：2026-06-15 &nbsp;|&nbsp; 第二十九阶段：构造轴替代 PCA（B 站）✅ &nbsp;|&nbsp; 规划：C 站节点参数 DB → D 站黄金范例 → E 站数值代理
 
 ## 总览看板
 
@@ -80,7 +80,7 @@
 
 # 🚀 开发进度
 
-> 最后更新：2026-06-15 &nbsp;|&nbsp; 第二十八阶段：声明式 Recipe Builder（A 站）✅ &nbsp;|&nbsp; 规划：B 站构造轴 → C 站节点参数 DB → D 站黄金范例 → E 站数值代理
+> 最后更新：2026-06-15 &nbsp;|&nbsp; 第二十九阶段：构造轴替代 PCA（B 站）✅ &nbsp;|&nbsp; 规划：C 站节点参数 DB → D 站黄金范例 → E 站数值代理
 
 ## 总览看板
 
@@ -138,6 +138,20 @@
 - **验证工具补全**：`houdini_geometry_inventory` / `houdini_inspect_geometry_health` / `houdini_capture_component_detail` 之前只在 Python 注册、未暴露 TS schema（实测 agent 被迫退回 raw python），现已补全。
 - **测试隔离修复**：`test_error_surfacing` 无条件覆盖 `sys.modules["hou"]` orphan 了其它文件的 `edini.harness.hou`，改为幂等安装。
 - 316 测试通过。
+
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-15</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第二十九阶段：构造轴替代 PCA（B 站）— 朝向从估计变 ground truth</span>
+      <span class="status-tag status-done">完成</span>
+    </div>
+    <div class="timeline-summary">① 问题诊断：A 站朝向门用 PCA 估计组件轴向有两个根本缺陷——点分布不均时估计漂移（不稳），且 agent 既生成几何又写 expected_axis（自洽校验，错误是相关的：误解"X 轴水平"会同时生成躺平轮子 + 写 expected_axis:Y，PCA 愉快确认）。② B 站核心：把启发式变成 ground truth——agent 在 recipe 的 orientation_asserts 声明 construction_axis（局部空间构造轴，如轮子绕 Y 生成），builder 用 anchor @orient 四元数代数推导世界轴（rotate_vector_by_quaternion，零估计零采样），烘焙成 prim 属性 edini_world_axis，verify_orientation 直接读它跳过 PCA（method=construction）。③ build 时一致性预检：construction_axis + anchor @orient + expected_axis 三者矛盾时（如 orient 把局部 Y 旋到世界 Z 但 expected_axis 写 X）build 在 cook 前拒绝整个 recipe 且不泄漏 sandbox——这是关键价值，挡住自洽错误。④ PCA 降级为可选 crosscheck（告警非硬门）：构造路径下若点数充足仍跑一次 PCA，偏差 > 2×容差时加 pca_crosscheck.warning 捕获"声明与代码不符"。⑤ 向后兼容：无 construction_axis 的老 recipe 继续走 PCA（method=pca），gate/commit 流程零改动。⑥ 寄生在 A 的 orientation_asserts schema 上：新增可选字段 construction_axis，不改 components/anchor schema。⑦ 197 测试通过（A 站 177 + B 站新增 20：纯数学 rotate 6 + verify 构造路径 4 + builder 预检/烘焙/向后兼容 10）。⑧ 全部用现有 mock_hou 可测，无需真实 Houdini。</div>
+    <div class="timeline-tags">
+      <span>构造轴</span><span>construction_axis</span><span>edini_world_axis</span><span>四元数代数</span><span>确定性推导</span><span>build时预检</span><span>自洽错误</span><span>PCA crosscheck</span><span>向后兼容</span><span>B站</span><span>197测试</span>
+    </div>
+  </div>
+</div>
 
 <div class="timeline-item timeline-done">
   <div class="timeline-date">2026-06-15</div>
@@ -535,8 +549,8 @@
 | 优先级 | 任务 | 说明 | 状态 |
 |------|------|------|------|
 | **P0** | **A. 声明式 Recipe Builder** | agent 只写每组件纯几何代码 + recipe，harness 确定性建网。消灭 createNode/wiring/blockpath 整类错误。真实 Houdini 验证通过。 | ✅ 完成 |
-| **P0** | **B. 构造轴替代 PCA** | 组件在 recipe 里声明自己的构造轴（轮子绕哪根轴旋转生成），验证直接读构造参数而非事后 PCA 估计。把启发式变成 ground truth。寄生在 A 的 orientation_asserts schema 上。 | 🔜 下一站 |
-| **P1** | **C. 节点参数 DB** | 一次性跑全 H21 nodeTypeCategories，缓存每个 SOP 的 parm 名/菜单值/类型为 manifest，挂 `houdini_node_parms("attribpromote")` 工具。agent 按需查、永远准、不占 prompt token。独立增量。 | ⬜ 待做 |
+| **P0** | **B. 构造轴替代 PCA** | 组件在 recipe 里声明自己的构造轴，builder 用 anchor @orient 代数推导世界轴并烘焙 edini_world_axis；verify 直接读构造参数而非事后 PCA 估计。build 时一致性预检拒绝自洽矛盾。把启发式变成 ground truth。寄生在 A 的 orientation_asserts schema 上，向后兼容。 | ✅ 完成 |
+| **P1** | **C. 节点参数 DB** | 一次性跑全 H21 nodeTypeCategories，缓存每个 SOP 的 parm 名/菜单值/类型为 manifest，挂 `houdini_node_parms("attribpromote")` 工具。agent 按需查、永远准、不占 prompt token。独立增量。 | 🔜 下一站 |
 | **P1** | **D. 黄金范例检索** | 为每个资产类准备验证过的模块化黄金网络（recipe 格式），agent 接任务时按类检索范例作模板模仿。提升质量天花板。依赖 A 的 recipe 格式。 | ⬜ 待做 |
 | **P2** | **E. 数值代理** | 加不依赖 vision 的感知级反馈：轮廓圆度、对称性分数、截面剖面采样、参考 silhouette IoU。cheap numerical proxy for "看起来对不对"。独立增量。 | ⬜ 待做 |
 
@@ -628,4 +642,5 @@
 - ✅ geometry_inventory / inspect_geometry_health / capture_component_detail 三个验证工具（组件清单 / 几何健康 / 小组件特写）
 - ✅ network_mode sandbox（`run_python_sandbox(network_mode=True)`）：代码跑在 geo 容器，可直接 createNode 子 SOP 建多节点网络
 - ✅ 声明式 Recipe Builder（`houdini_build_procedural_asset`）：agent 提交 recipe，harness 确定性建网，agent 永不写 createNode/wiring/blockpath
+- ✅ 构造轴（B 站，`orientation_asserts.construction_axis`）：声明组件局部构造轴 → builder 用 anchor @orient 四元数代数推导世界轴 → 烘焙 `edini_world_axis` prim 属性 → verify 直接读跳过 PCA（method=construction）。build 时一致性预检拒绝 construction_axis/expected_axis/anchor 矛盾（挡自洽错误）。无该字段老 recipe 仍走 PCA。PCA crosscheck 仅告警。
 - ✅ Forbidden Patterns + Network Mode + H21 参数速查表（SKILL.md：Attrib Promote / Blast / ForEach / Sweep / Copy-to-Points 等关键参数）
