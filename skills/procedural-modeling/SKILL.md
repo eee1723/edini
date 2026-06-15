@@ -85,11 +85,21 @@ poly.setAttribValue("component_id", "wheel_fl")  # unique per component
 **Why this matters:** without `component_id`, the orientation gate cannot run
 and `houdini_commit_sandbox` will refuse to commit.
 
-## Modular Components — Copy-to-Points Pattern (MANDATORY)
+## Modular Components — Copy-to-Points Pattern (MANDATORY + HARD GATE)
 
 **Single-Python-SOP monoliths are NOT acceptable.** If an asset has more
 than ~3 distinct geometric components, or any repeated/swappable part, you
 MUST decompose it into a Copy-to-Points / Instance structure.
+
+**This is now a HARD GATE, not just prose.** `houdini_commit_sandbox` runs
+`_check_modular_structure` and REFUSES to commit an asset that has:
+- ≥3 distinct `component_id` values, ALL originating from a single Python SOP,
+  with NO modular assembly nodes (copytopoints/sweep/foreach/boolean).
+
+The gate returns the exact reason + a decomposition suggestion. To bypass it
+you must pass `skip_structure_check=true` with a documented reason (e.g. a
+genuinely simple single-piece asset like one fractal or one parametric surface).
+Do NOT use the bypass for multi-component assets.
 
 A generator that builds the entire asset in one Python SOP > 200 lines is
 a failure mode — even if the geometry renders correctly. Why:
@@ -104,6 +114,30 @@ Main structure (Python SOP) → outputs anchor points
                          ↓
               Copy-to-Points ← Sub-component geometry (separate Python SOP)
 ```
+
+### Anti-pattern → Correct pattern (bicycle example)
+
+**❌ MONOLITHIC (gate will reject this):**
+```
+edini_generate (python, 400 lines)
+  ↓ builds frame + wheels + handlebar + saddle + crankset ALL inline
+  ↓ tags each with component_id but everything comes from THIS one node
+OUT (null)
+```
+The `structure_advisory` in the sandbox result will flag this. The commit
+gate will refuse it.
+
+**✅ MODULAR (gate accepts this):**
+```
+body_generate (python) → frame tubes + anchor points (@component_id, @orient, @pscale)
+wheel_component (python) → single wheel geometry
+saddle_component (python) → saddle geometry
+handlebar_component (python) → handlebar geometry
+copytopoints ×3 ← instance each component onto its anchors
+merge → normal → OUT
+```
+Each sub-component is a separate geometry stream the user can swap. Frame
+tubes should use Sweep 2.0 with profile curves, not hand-built faces.
 
 ### Rules:
 1. **Identify swappable parts in the recipe** — wheels, keys, handles, windows, decorative elements
@@ -483,11 +517,12 @@ When embedding string literals in Python code that will pass through JSON → pa
 2. **Probe unknown nodes** — If the recipe uses node types you haven't probed this session, probe them first.
 3. **Choose backend** — `python_sop` for algorithmic mesh generation, `vex_wrangle` for per-element math, `hybrid` for both.
 4. **Generate with sandbox** — Use `houdini_run_python_sandbox` with `commit_on_success=false`. The sandbox code MUST: (a) call `geo.addAttrib(hou.attribType.Prim, "component_id", "")` before any geometry, then `poly.setAttribValue("component_id", "<id>")` on every component's polygons; (b) install spare parameters idempotently on the cooking node; (c) use Copy-to-Points for any repeated/swappable part.
-5. **Trust sandbox diagnostics** — The result includes `diagnostics` and `structural_checks`. No need for separate inspect calls.
-6. **Add structural detail** — Panel lines, seams, secondary components, varied cross-sections. Then finishing: Normal SOP, optional bevel on render-visible hard edges. Preserve `@component_id` tags.
-7. **Run THREE-LAYER verification** (see below) — geometry health → orientation → data → visual. Do NOT skip layers; each catches defects the others can't.
-8. **Repair loop with TARGETED fixes** — Each repair round must address a SPECIFIC component_id or a SPECIFIC health-check finding. Never rebuild the whole asset without a named defect (see Debug Discipline below).
-9. **Commit only when all layers pass** — `houdini_commit_sandbox` re-runs the orientation gate as a final check on the REAL output node (it now correctly picks the highest-prim component_id node, not an empty dispatcher). If checks fail, commit is refused — fix in source and re-run, don't bypass with `skip_orientation=true` unless you have a documented reason.
+5. **Check `structure_advisory` IMMEDIATELY** — The sandbox result now includes a `structure_advisory` field. If it reports `is_monolithic: true`, you MUST `houdini_discard_sandbox` and rebuild with a modular decomposition (separate component generators + Copy-to-Points/Sweep). Do NOT proceed to verification on a monolithic asset — the commit gate will refuse it anyway, so fixing it now saves a wasted verify cycle.
+6. **Trust sandbox diagnostics** — The result includes `diagnostics` and `structural_checks`. No need for separate inspect calls.
+7. **Add structural detail** — Panel lines, seams, secondary components, varied cross-sections. Then finishing: Normal SOP, optional bevel on render-visible hard edges. Preserve `@component_id` tags.
+8. **Run THREE-LAYER verification** (see below) — geometry health → orientation → data → visual. Do NOT skip layers; each catches defects the others can't. **Layer 1 (health check) is MANDATORY** — skipping it lets non-manifold edges / degenerate faces / orphan points flow into Boolean/Sweep and silently corrupt the result.
+9. **Repair loop with TARGETED fixes** — Each repair round must address a SPECIFIC component_id or a SPECIFIC health-check finding. Never rebuild the whole asset without a named defect (see Debug Discipline below).
+10. **Commit only when all layers pass** — `houdini_commit_sandbox` runs TWO hard gates: the modular-structure gate (refuses monolithic assets) then the orientation gate (refuses wrong axes) on the REAL output node. If either fails, commit is refused — fix in source and re-run. Don't bypass with `skip_orientation=true` or `skip_structure_check=true` unless you have a documented reason.
 
 ## Three-Layer Verification Protocol
 
@@ -511,7 +546,10 @@ vision when the cheap layers can't resolve a question.
 ### Mandatory Pre-Commit Sequence
 
 ```
-1. houdini_inspect_geometry_health on the OUT node
+0. CHECK structure_advisory (returned by run_python_sandbox) — if is_monolithic,
+   discard and rebuild modular. Do this BEFORE any verification.
+
+1. houdini_inspect_geometry_health on the OUT node — MANDATORY, not optional.
    - Fix orphan points (Fuse), stray open curves (Blast), degenerate faces
      (Clean), non-manifold edges before anything else. These silently break
      Boolean/Sweep/subdivision downstream.
@@ -534,18 +572,22 @@ vision when the cheap layers can't resolve a question.
      clipped ortho views). It also returns a `geometry_inventory` text block.
    - Pass the PROCEDURAL_VERIFY_PROMPT to describe_image, AND include the
      inventory text in your message so the vision model cross-validates.
+   - The vision model CANNOT assess orientation — ignore any orientation
+     claims it makes. Only act on PROPORTIONS, SYMMETRY, INTERSECTION
+     (perspective-confirmed only), STRUCTURAL_DETAIL.
 
-5. IF vision flags a component as missing/unclear:
+5. IF vision flags a component as missing/unclear, OR the inventory marks it SMALL:
    5a. Check the inventory: if the component_id has prim_count > 0, it EXISTS
        — vision just couldn't see it. Do NOT rebuild it.
    5b. Run houdini_capture_component_detail on that component_id to get a
        close-up, then re-judge. This resolves the "exists but too small"
-       ambiguity definitively.
+       ambiguity definitively. Use this tool, NOT a single-view capture_review.
 
 6. Repair loop: fix the SPECIFIC defect → re-verify the SPECIFIC layer →
    repeat. Up to 3 rounds, then ask the user (see Debug Discipline).
 
-7. houdini_commit_sandbox — runs the orientation gate as a final check.
+7. houdini_commit_sandbox — runs the modular-structure gate then the
+   orientation gate as final checks.
 ```
 
 ### Debug Discipline (anti-flail rules)
