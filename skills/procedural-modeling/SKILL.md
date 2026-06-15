@@ -181,6 +181,212 @@ copy.setInput(0, wheel_sop)   # geometry to copy
 copy.setInput(1, body_sop)    # points to copy onto (filtered by group)
 ```
 
+> **The snippet above MUST run in `network_mode=true`.** See [Forbidden
+> Patterns](#forbidden-patterns) and [Network Mode](#network-mode-for-modular-assets).
+> A Python SOP's cook body cannot `createNode` on siblings — Houdini raises
+> "Infinite recursion in evaluation".
+
+## Forbidden Patterns
+
+Patterns that reliably break the sandbox or waste 10+ iterations. Memorize them.
+
+### 1. `createNode` inside a Python SOP cook body → Infinite recursion
+A Python SOP's `cook()` evaluates its `python` parm. If that code calls
+`hou.node(...).createNode(...)` (creating network nodes), Houdini re-enters
+cook evaluation to validate the new network → infinite recursion:
+```
+Error: Infinite recursion in evaluation
+```
+**Rule:** the cook body may ONLY emit geometry via `node.geometry().createPoint()`
+/ `createPolygon()` / `addAttrib()` on its OWN geometry. To BUILD a network,
+use **`network_mode=true`** (the code runs in the container, not inside a cook).
+
+| You want to… | Wrong | Right |
+|---|---|---|
+| Emit one piece of geometry | single-SOP cook (`geo.createPoint`) | single-SOP cook ✅ |
+| Build body_generate + copytopoints + OUT | `createNode` inside cook ❌ | `network_mode=true` ✅ |
+| Add a Sweep on a curve | create sweep in cook ❌ | `network_mode=true` ✅ |
+
+### 2. Using raw `houdini_run_python` for asset generation
+Raw `houdini_run_python` builds nodes directly on the LIVE scene
+(`/obj/bicycle_builder`), bypassing the sandbox entirely — so the modular
+structure gate, orientation gate, and health check never run on the asset, and
+a failed cook leaves half-built nodes in the scene. The "not sandboxed" warning
+is not cosmetic.
+**Rule:** Always go through `houdini_run_python_sandbox`. If single-SOP mode
+rejects your `createNode`, switch to `network_mode=true`, not to raw python.
+
+### 3. ForEach with a mis-wired block_begin blockpath
+`foreach_begin(method=piece)` needs `blockpath` pointing at the matching
+`block_end`. If it's blank or wrong: `Invalid sop specified`. The block_end
+owns the `class` / `method` / `iterations` parms, NOT the block_begin.
+**Rule:** prefer **Sweep 2.0 + Copy-to-Points** over hand-wired ForEach for
+tube/frame generation — it's one node with no blockpath bookkeeping. See the
+parameter cheat-sheet below.
+
+### 4. Guessing Houdini 21 parameter names
+H21 renamed several parms (e.g. `attribpromote` uses `inname`/`inclass`/`outclass`,
+not `original`). Guessing burns a get_node_info round per parm. **Either use the
+cheat-sheet below, or probe once** — never guess.
+
+## Network Mode (for modular assets)
+
+`houdini_run_python_sandbox` has a **`network_mode`** flag. Use it for ANY
+multi-component asset (anything that needs `createNode` on more than one SOP).
+
+- **`network_mode=false` (default):** code is the cook body of ONE
+  `edini_generate` Python SOP. Geometry via `hou.pwd().geometry()`. Cannot
+  `createNode`. Use for single-piece generators.
+- **`network_mode=true`:** code runs in the sandbox geo **container**. It can
+  `createNode` child SOPs, wire them, and build a full modular network. The
+  harness then finds your `OUT` node (or the largest `@component_id`-bearing
+  node), cooks it, and runs diagnostics + the structure gate on the result —
+  exactly as the commit gate would. This is how modular assets reach the
+  sandbox → gate pipeline instead of leaking onto the live scene.
+
+### Network-mode recipe skeleton
+```python
+# Runs in network_mode=true. `sandbox_root` is the injected geo container.
+container = sandbox_root            # or hou.node(sandbox_root_path)
+
+# 1. Body: emits anchor points with @component_id/@orient/@pscale
+body = container.createNode("python", "body_generate")
+body.parm("python").set(BODY_CODE)   # BODY_CODE builds frame + anchor points
+
+# 2. One sub-component generator (a single wheel, modeled at unit radius)
+wheel = container.createNode("python", "wheel_component")
+wheel.parm("python").set(WHEEL_CODE)
+
+# 3. Sweep the tube profile along a curve (no ForEach bookkeeping)
+#    profile = container.createNode("circle", "tube_profile")
+#    spine   = container.createNode("curve", ...)   # or driven by body
+#    sweep   = container.createNode("sweep::2.0", "frame_sweep")
+#    sweep.setInput(0, spine); sweep.setInput(1, profile)
+
+# 4. Copy-to-Points: instance wheel onto the body's anchor points
+copy = container.createNode("copytopoints::2.0", "copy_wheels")
+copy.setInput(0, wheel)   # geometry to stamp
+copy.setInput(1, body)    # points to stamp onto
+
+# 5. Merge everything + OUT (the harness auto-finds this node)
+merge = container.createNode("merge", "merge_all")
+merge.setInput(0, copy)
+# merge.setInput(1, sweep) ...
+out = container.createNode("null", "OUT")
+out.setInput(0, merge)
+out.setDisplayFlag(True)
+```
+Each generator's code (BODY_CODE, WHEEL_CODE) is a *single-SOP-style* script:
+`node = hou.pwd(); geo = node.geometry(); geo.clear(); ...` — it runs when that
+child Python SOP cooks, which is fine because it only emits its OWN geometry.
+The `createNode` calls live in the **network-mode body**, not in a cook.
+
+## Declarative Recipe Builder (PREFERRED for multi-component assets)
+
+`houdini_build_procedural_asset` is the **preferred path** for any
+multi-component asset (vehicles, furniture, anything with swappable/repeated
+parts). You submit a JSON **recipe** and the harness **deterministically**
+assembles the modular network — you never write `createNode`/`setInput`/
+`blockpath`/wiring. This eliminates the whole class of imperative-Houdini-API
+errors that dominate failed procedural runs.
+
+**When to use which build path:**
+
+| Situation | Tool |
+|---|---|
+| Multi-component asset (body + wheels/handles/legs via Copy-to-Points) | **`houdini_build_procedural_asset`** (this section) — PREFERRED |
+| Non-standard topology you can't express as a recipe | `houdini_run_python_sandbox(network_mode=true)` (hand-write the network) |
+| Genuinely single-piece generator (one fractal, one surface) | `houdini_run_python_sandbox` (default single-SOP mode) |
+
+### The recipe schema
+
+```jsonc
+{
+  "asset_name": "bicycle",
+  "units": "meters",
+  "components": [
+    {
+      "id": "frame",                              // -> component_id prim attr value
+      "code": "<single-SOP python: emit geometry, tag component_id='frame'>",
+      "anchors": []                               // empty -> goes straight into merge
+    },
+    {
+      "id": "wheel",                              // template id (unit-radius wheel)
+      "code": "<emit a unit-radius wheel; tag prims component_id='wheel'>",
+      "anchors": [                                // non-empty -> Copy-to-Points stamps here
+        {"position": [0.35, 0.35, -0.55], "orient": [0,0,0,1], "pscale": 1.0, "component_id": "wheel_fl"},
+        {"position": [0.35, 0.35,  0.55], "orient": [0,0,0,1], "pscale": 1.0, "component_id": "wheel_fr"},
+        {"position": [-0.35, 0.35, -0.55], "orient": [0,0,0,1], "pscale": 1.0, "component_id": "wheel_rl"},
+        {"position": [-0.35, 0.35,  0.55], "orient": [0,0,0,1], "pscale": 1.0, "component_id": "wheel_rr"}
+      ]
+    }
+  ],
+  "postprocess": [                                // optional SOP chain after merge
+    {"type": "normal", "params": {"cangle": 30}}
+  ],
+  "orientation_asserts": [                        // flows to commit_sandbox's orientation gate
+    {"component_id": "wheel_fl", "kind": "radial", "expected_axis": "X"},
+    {"component_id": "frame", "kind": "elongated", "expected_axis": "Z"}
+  ],
+  "expected": {"min_points": 100}                 // optional, for verify_asset
+}
+```
+
+### Component code rules (CRITICAL)
+Each component's `code` is a **single Python SOP cook body**. It MUST:
+1. Read its own geometry: `node = hou.pwd(); geo = node.geometry()`.
+2. Declare the attribute **before** geometry:
+   `geo.addAttrib(hou.attribType.Prim, "component_id", "")`.
+3. Tag every prim: `poly.setAttribValue("component_id", "<id>")`.
+4. **NEVER call `createNode`** — the builder owns the network. Only emit
+   geometry on the cooking node. Violating this triggers infinite recursion.
+
+The builder **post-checks** `component_id` presence on the cooked OUT and
+reports any missing ids in `component_id_check.missing`.
+
+### Anchor semantics
+- `position`: world-space `[x, y, z]` where the stamp lands.
+- `orient`: quaternion `[x, y, z, w]` (NOT Euler). Identity = `[0,0,0,1]`.
+- `pscale`: `1.0` = source geometry at original size. Model stamped components
+  at **unit scale** and set `pscale` to real size (cleanest), or model at real
+  scale and use `1.0`.
+- `component_id` (per anchor): the **per-instance** id (e.g. `wheel_fl`). The
+  builder overwrites each stamped instance's prim `component_id` with this, so
+  `houdini_verify_orientation` can PCA each instance separately.
+
+### What the builder assembles (deterministic — you don't write this)
+```
+<id>_python     (your code)        ─┐
+<id>_anchors    (builder: points)  ─┤-> copy_<id> (copytopoints) -> <id>_idfix (overwrite component_id) -> merge
+                                     │                                                              │
+(no-anchor components go straight to merge) ───────────────────────────────────────────────────────────────┤
+                                                                                                           v
+                                                              merge_all -> postprocess... -> OUT (null, display)
+```
+
+### Build result (read these before committing)
+The `houdini_build_procedural_asset` result includes:
+- `components_built`, `anchors_built` — what actually got built.
+- `component_id_check` — `{missing: [...], ok: [...]}`. **Fix any `missing`
+  before committing** (orientation checks will fail for missing ids).
+- `structure_advisory` — should be `passed: true` (the builder's Copy-to-Points
+  network is inherently modular, so the monolithic gate never trips).
+- `orientation_check` — a PREVIEW of `verify_orientation` (advisory; the hard
+  gate runs at commit). Apply any failed-check `hint` quaternion **in the
+  component code** (fix the source, don't rotate post-hoc).
+- `diagnostics` / `structural_checks` — point/prim counts, bounds.
+
+### Commit (separate step)
+```python
+houdini_commit_sandbox(
+    sandbox_root_path="<root_path from build result>",
+    final_name="bicycle",
+    orientation_checks=<recipe.orientation_asserts>,
+)
+```
+The existing structure gate + orientation gate run on the built OUT
+automatically — no gate changes were needed for the builder.
+
 ## Parameter Exposure (in the sandbox — not after commit)
 
 Every procedural asset MUST expose user-controllable parameters. Hardcoded
@@ -458,10 +664,18 @@ pt.setAttribValue("component_id", "wheel")
 
 ## Python SOP Guidelines
 
-When using `houdini_run_python_sandbox`, the sandbox creates a Python SOP node (`edini_generate`) for you. Your code runs inside a Python SOP cooking context:
+`houdini_run_python_sandbox` has two modes. Pick by whether your code needs
+`createNode` on child SOPs:
+
+- **Single-SOP mode (default):** the sandbox creates one `edini_generate`
+  Python SOP; your code IS its cook body. Use `hou.pwd()` / `node.geometry()`.
+  NEVER `createNode` here (infinite recursion — see Forbidden Patterns).
+- **Network mode (`network_mode=true`):** your code runs in the sandbox geo
+  container. Use it to BUILD a multi-node modular network. Each child Python
+  SOP's own cook body is still single-SOP-style (only emits its own geo).
 
 ```python
-# Inside houdini_run_python_sandbox — this IS a Python SOP context
+# Inside single-SOP mode (or inside a child python SOP's cook in network mode)
 node = hou.pwd()
 geo = node.geometry()
 geo.clear()
@@ -480,15 +694,19 @@ poly.addVertex(pt)
 poly.setAttribValue("group_id", 0)
 ```
 
-For node network generation inside a sandbox, create child nodes under `hou.pwd().parent()`:
+For node network generation, ALWAYS use `network_mode=true` and create child
+nodes under the injected `sandbox_root` container (see [Network Mode](#network-mode-for-modular-assets)):
 
 ```python
-node = hou.pwd()
-container = node.parent()  # the sandbox geo container
+# network_mode=true — runs in the sandbox geo container
+container = sandbox_root            # injected; == hou.node(sandbox_root_path)
 box = container.createNode("box", "my_box")
 box.parm("sizex").set(1)
 box.parm("sizey").set(1)
 box.parm("sizez").set(1)
+out = container.createNode("null", "OUT")
+out.setInput(0, box)
+out.setDisplayFlag(True)   # OUT is auto-found, cooked, and diagnosed
 ```
 
 ### String Safety
@@ -501,6 +719,8 @@ When embedding string literals in Python code that will pass through JSON → pa
 ## Harness Rules
 
 - Do not use raw `houdini_run_python` for initial procedural asset generation when `houdini_run_python_sandbox` is available.
+- **Multi-component assets: prefer `houdini_build_procedural_asset` (declarative recipe).** It assembles the modular network deterministically — you only write per-component geometry code, never createNode/wiring. Fall back to `network_mode=true` only for topologies the recipe can't express.
+- **Use `network_mode=true` for any multi-component asset** built via `houdini_run_python_sandbox`. Single-SOP mode (default) cannot `createNode` on child SOPs (infinite recursion). If your code needs more than one SOP, it MUST run in network mode — do NOT fall back to raw `houdini_run_python` to dodge the sandbox.
 - Do not delete a failed procedural node before `houdini_collect_diagnostics`.
 - Do not explore Qt widgets, main windows, viewport internals, or unsupported HOM APIs to capture images. Use `houdini_capture_review` and report clean failure if capture is unavailable.
 - If a generated Python SOP, VEX wrangle, or node-network attempt fails, diagnose that attempt first. Diagnose before switching strategy — switch to Python SOP only if diagnostics confirm the current backend is unsuitable.
@@ -515,8 +735,8 @@ When embedding string literals in Python code that will pass through JSON → pa
 
 1. **Create a recipe** — Include COMPONENTS with `@component_id`, ORIENTATION ASSERTS (mandatory), PARAMETERS list, MODULAR ANCHORS, DETAIL PLAN, and VERIFICATION criteria.
 2. **Probe unknown nodes** — If the recipe uses node types you haven't probed this session, probe them first.
-3. **Choose backend** — `python_sop` for algorithmic mesh generation, `vex_wrangle` for per-element math, `hybrid` for both.
-4. **Generate with sandbox** — Use `houdini_run_python_sandbox` with `commit_on_success=false`. The sandbox code MUST: (a) call `geo.addAttrib(hou.attribType.Prim, "component_id", "")` before any geometry, then `poly.setAttribValue("component_id", "<id>")` on every component's polygons; (b) install spare parameters idempotently on the cooking node; (c) use Copy-to-Points for any repeated/swappable part.
+3. **Choose backend + mode** — `python_sop` for algorithmic mesh generation, `vex_wrangle` for per-element math, `hybrid` for both. Then choose the BUILD path: if the asset has ≥2 components or any repeated/swappable part, **use `houdini_build_procedural_asset` (declarative recipe)** — it assembles the modular network deterministically and you only write per-component geometry code. Fall back to `houdini_run_python_sandbox(network_mode=true)` only for non-standard topologies you can't express as a recipe. Single-SOP mode only for genuinely single-piece generators.
+4. **Generate with sandbox/builder** — Use `houdini_build_procedural_asset` (preferred for multi-component) or `houdini_run_python_sandbox` with `commit_on_success=false`. The component code MUST: (a) call `geo.addAttrib(hou.attribType.Prim, "component_id", "")` before any geometry, then `poly.setAttribValue("component_id", "<id>")` on every component's polygons; (b) install spare parameters idempotently on the cooking node (or, in network mode / builder, on each generator SOP); (c) use Copy-to-Points (via builder anchors or manual network_mode) for any repeated/swappable part; (d) in builder mode, the network terminates in a builder-created OUT automatically; in network mode, terminate with a null named `OUT` (or pass `output_node_name`).
 5. **Check `structure_advisory` IMMEDIATELY** — The sandbox result now includes a `structure_advisory` field. If it reports `is_monolithic: true`, you MUST `houdini_discard_sandbox` and rebuild with a modular decomposition (separate component generators + Copy-to-Points/Sweep). Do NOT proceed to verification on a monolithic asset — the commit gate will refuse it anyway, so fixing it now saves a wasted verify cycle.
 6. **Trust sandbox diagnostics** — The result includes `diagnostics` and `structural_checks`. No need for separate inspect calls.
 7. **Add structural detail** — Panel lines, seams, secondary components, varied cross-sections. Then finishing: Normal SOP, optional bevel on render-visible hard edges. Preserve `@component_id` tags.
@@ -830,6 +1050,72 @@ Node parameter names differ from older versions. Always use these exact names:
 |---------|-----------|
 | Distance | `dist` |
 | Output front | `outputfront` (1=front faces only) |
+
+### Attrib Promote SOP (high-misguess node)
+Older tutorials say `original`/`newname`. H21 uses these:
+| Purpose | Parm name | Type / menu |
+|---------|-----------|------|
+| Source attrib name | `inname` | string (NOT `original`) |
+| Output attrib name | `outname` | string |
+| Source class | `inclass` | menu: `point`/`prim`/`vertex`/`detail` |
+| Output class | `outclass` | menu: `point`/`prim`/`vertex`/`detail` |
+| Promotion mode | `method` | menu: `min`/`max`/`sum`/`average`/`mode` |
+
+### Blast SOP
+| Purpose | Parm name | Type / menu |
+|---------|-----------|------|
+| Group to act on | `group` | string |
+| Group type | `grouptype` | menu: `guess`/`prims`/`points`/`edges`/`breakpoints` (NOT a bool/int — use the menu word, e.g. `prims`) |
+| Delete non-selected | `negate` | bool (1 = keep group, delete rest) |
+| Delete entities | `dodelete`/`delpts` etc. | use defaults unless changing behaviour |
+
+### ForEach (Begin/End) — prefer Sweep+Copy-to-Points when possible
+The block_end owns the structural parms; the block_begin only reads them via
+`blockpath`:
+| Purpose | Parm name | Which node | Type / menu |
+|---------|-----------|------------|------|
+| Method | `method` | **block_end** (the begin reads it) | menu: `count`/`foreachpiece`/`forloopwithmetadata` |
+| Iterations | `iterations` | block_end | int |
+| Piece attribute | `pieceattrib` | block_end | string (e.g. `component_id`) |
+| Block path | `blockpath` | **block_begin** | must point at the block_end node (auto-wired when created together; if "Invalid sop specified", it's unwired) |
+| Class | `class` | block_end | menu (NOT block_begin) |
+
+Gotcha: if you create block_begin and block_end separately, `blockpath` is empty
+→ "Invalid sop specified". Either let Houdini create the pair (create the
+`foreach` HDA, which wires them), or set `begin.parm("blockpath").set(end.path())`.
+**For tube/frame generation, prefer Sweep 2.0 — no blockpath bookkeeping.**
+
+### Sweep SOP (2.0 — preferred for tubes/frames)
+| Purpose | Parm name | Type / menu |
+|---------|-----------|------|
+| Curve to sweep along (spine) | input 0 | — |
+| Cross-section (profile) | input 1 | — |
+| Surface shape | `surface` | menu: `raildim`/`ribbon`/`tube` (use `tube` for round tubes) |
+| Scale along curve | `scale` | float |
+| Roll | `roll` | float (degrees) |
+| Output polygon | `outputpoly` | bool |
+
+### Copy-to-Points (2.0)
+| Purpose | Parm name | Type / menu |
+|---------|-----------|------|
+| Source group | `sourcegrp` | string |
+| Target group (points) | `targetgrp` | string or attr expr `@component_id==wheel` |
+| Pack geometry | `pack` | bool (1 = packed primitives) |
+| Use @orient/@pscale/@N+@up | (automatic) | these point attrs drive transform, no parm needed |
+
+### Merge SOP
+No parms. Just `merge.setInput(0, a); merge.setInput(1, b); ...` (up to ~50 inputs).
+
+### Normal SOP
+| Purpose | Parm name | Type / menu |
+|---------|-----------|------|
+| Cusp angle | `cangle` | float (degrees) |
+| Add normals to | `type` | menu: `point`/`vertex`/`primitive` |
+
+### Boolean SOP (2.0)
+| Purpose | Parm name | Type / menu |
+|---------|-----------|------|
+| Operation (subtract/union/intersect) | `subtract`/`union`/`intersect` | bool flags (set the one you want to 1) |
 
 ### Discovery
 If unsure about a node's parm names, create a throwaway probe:

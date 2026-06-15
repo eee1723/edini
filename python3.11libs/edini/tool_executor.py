@@ -26,6 +26,7 @@ from edini.harness import (
     verify_asset,
     commit_sandbox,
     discard_sandbox,
+    build_procedural_asset,
 )
 
 # Knowledge and eval handlers (available only in Houdini runtime)
@@ -168,6 +169,8 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
         sandbox_name=kw.get("sandbox_name", "procedural"),
         commit_on_success=kw.get("commit_on_success", False),
         delete_on_failure=kw.get("delete_on_failure", False),
+        network_mode=kw.get("network_mode", False),
+        output_node_name=kw.get("output_node_name"),
     ),
     "houdini_verify_asset": lambda **kw: verify_asset(
         kw["node_path"],
@@ -183,6 +186,11 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     ),
     "houdini_discard_sandbox": lambda **kw: discard_sandbox(
         kw["sandbox_root_path"],
+    ),
+    "houdini_build_procedural_asset": lambda **kw: build_procedural_asset(
+        kw["recipe"],
+        sandbox_name=kw.get("sandbox_name"),
+        delete_on_failure=kw.get("delete_on_failure", False),
     ),
     "edini_search_knowledge": lambda **kw: search_entries(
         query=kw.get("query", ""),

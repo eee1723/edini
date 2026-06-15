@@ -605,6 +605,16 @@ class MockUI:
         self.desktop.scene_viewer = viewer
 
 
+class MockAttribType:
+    """Minimal stand-in for hou.attribType (mock ignores the value but real
+    component code references hou.attribType.Prim etc.)."""
+
+    Prim = "Prim"
+    Point = "Point"
+    Vertex = "Vertex"
+    Global = "Global"
+
+
 class MockHou:
     """Complete mock of the hou module for testing."""
 
@@ -626,6 +636,7 @@ class MockHou:
         self._home_dir = "/home/test"
         self.shelves = MockShelves()
         self.ui = MockUI()
+        self.attribType = MockAttribType
 
         root = MockNode("/", "")
         self._nodes["/"] = root

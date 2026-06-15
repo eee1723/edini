@@ -320,6 +320,125 @@ raise RuntimeError("cleanup")
         self.assertIn("cleanup failure", r["delete_error"])
 
 
+class TestNetworkMode(unittest.TestCase):
+    """Tests for run_python_sandbox(network_mode=True) — the multi-node
+    modular-network sandbox. Regression for the bicycle run where the agent
+    tried to createNode() inside a Python SOP cook (infinite recursion) and
+    was forced onto raw houdini_run_python, bypassing the structure gate.
+    """
+
+    def test_network_mode_runs_code_in_container_and_finds_out(self):
+        """network_mode=true lets the code createNode children under the
+        sandbox root and the harness auto-finds OUT."""
+        code = (
+            "container = hou.node(sandbox_root_path)\n"
+            "out = container.createNode('null', 'OUT')\n"
+            "out.setDisplayFlag(True)\n"
+            "result['created'] = out.path()\n"
+        )
+        r = harness.run_python_sandbox(code, sandbox_name="net_basic",
+                                       network_mode=True)
+
+        self.assertTrue(r["success"])
+        self.assertEqual(r["sandbox_mode"], "network")
+        # output_node should resolve to the OUT null we created
+        self.assertTrue(r["output_node"].endswith("/OUT"))
+        self.assertEqual(r["output_node"], r["root_path"] + "/OUT")
+        # The OUT node must still exist (not auto-deleted)
+        self.assertIsNotNone(_mock_hou.node(r["output_node"]))
+
+    def test_network_mode_resolves_out_via_output_node_name(self):
+        """Explicit output_node_name takes precedence over auto-discovery."""
+        code = (
+            "container = hou.node(sandbox_root_path)\n"
+            "merge = container.createNode('merge', 'FINAL')\n"
+            "out = container.createNode('null', 'OUT')\n"
+            "result['ok'] = True\n"
+        )
+        r = harness.run_python_sandbox(
+            code, sandbox_name="net_named_out",
+            network_mode=True, output_node_name="FINAL",
+        )
+        self.assertTrue(r["success"])
+        self.assertTrue(r["output_node"].endswith("/FINAL"))
+
+    def test_network_mode_returns_failure_on_code_error(self):
+        code = (
+            "container = hou.node(sandbox_root_path)\n"
+            "container.createNode('null', 'partial')\n"
+            "raise RuntimeError('build broke')\n"
+        )
+        r = harness.run_python_sandbox(code, sandbox_name="net_fail",
+                                       network_mode=True)
+        self.assertFalse(r["success"])
+        self.assertEqual(r["sandbox_mode"], "network")
+        self.assertIn("build broke", r["error"])
+        self.assertIn("RuntimeError", r["traceback"])
+        # sandbox preserved by default so diagnostics are inspectable
+        self.assertTrue(r["preserved"])
+
+    def test_network_mode_delete_on_failure_removes_sandbox(self):
+        code = "raise RuntimeError('boom net')\n"
+        r = harness.run_python_sandbox(code, sandbox_name="net_delete",
+                                       network_mode=True, delete_on_failure=True)
+        self.assertFalse(r["success"])
+        self.assertTrue(r["deleted"])
+        self.assertIsNone(_mock_hou.node(r["root_path"]))
+
+    def test_network_mode_injects_sandbox_root_helper(self):
+        """The injected `sandbox_root` variable equals the geo container."""
+        code = (
+            "result['same'] = (sandbox_root.path() == sandbox_root_path)\n"
+            "result['is_geo'] = (sandbox_root.type().name() == 'geo')\n"
+        )
+        r = harness.run_python_sandbox(code, sandbox_name="net_helpers",
+                                       network_mode=True)
+        self.assertTrue(r["success"])
+
+    def test_network_mode_modular_network_passes_structure_gate(self):
+        """A body_generate + wheel_component + copytopoints + OUT network
+        built in network_mode is NOT flagged monolithic — the gate sees the
+        modular assembly nodes and lets the agent proceed through the sandbox
+        → commit pipeline (the core fix)."""
+        code = (
+            "container = hou.node(sandbox_root_path)\n"
+            "body = container.createNode('python', 'body_generate')\n"
+            "wheel = container.createNode('python', 'wheel_component')\n"
+            "copy = container.createNode('copytopoints::2.0', 'copy_wheels')\n"
+            "out = container.createNode('null', 'OUT')\n"
+            "out.setInput(0, copy)\n"
+            "out.setDisplayFlag(True)\n"
+        )
+        r = harness.run_python_sandbox(code, sandbox_name="net_modular",
+                                       network_mode=True)
+        self.assertTrue(r["success"])
+        # structure_advisory should be present and report a non-monolithic build
+        advisory = r.get("structure_advisory")
+        self.assertIsNotNone(advisory, "network_mode should run the structure gate")
+        self.assertTrue(advisory["passed"])
+        self.assertFalse(advisory["is_monolithic"])
+
+    def test_network_mode_result_is_json_serializable(self):
+        code = (
+            "container = hou.node(sandbox_root_path)\n"
+            "out = container.createNode('null', 'OUT')\n"
+            "result['ok'] = True\n"
+        )
+        r = harness.run_python_sandbox(code, sandbox_name="net_json",
+                                       network_mode=True)
+        json.dumps(r)  # must not raise
+        self.assertTrue(r["success"])
+
+    def test_single_sop_mode_reports_correct_mode(self):
+        """Backward-compat: default mode reports single_sop, not network."""
+        r = harness.run_python_sandbox(
+            "node = hou.pwd()\nnode.geometry().clear()",
+            sandbox_name="sop_mode_label",
+        )
+        self.assertTrue(r["success"])
+        self.assertEqual(r["sandbox_mode"], "single_sop")
+
+
 class TestSandboxLifecycle(unittest.TestCase):
     def test_discard_sandbox_deletes_root(self):
         r = harness.run_python_sandbox("result['ok'] = True", sandbox_name="discard_case")

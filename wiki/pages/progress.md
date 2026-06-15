@@ -1,6 +1,6 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-11 &nbsp;|&nbsp; 第二十五阶段：程序化建模 Skill + LogParser 修复 ✅ &nbsp;|&nbsp; 规划：Skill 效果追踪 → Copernicus
+> 最后更新：2026-06-15 &nbsp;|&nbsp; 第二十八阶段：声明式 Recipe Builder（A 站）✅ &nbsp;|&nbsp; 规划：B 站构造轴 → C 站节点参数 DB → D 站黄金范例 → E 站数值代理
 
 ## 总览看板
 
@@ -80,7 +80,7 @@
 
 # 🚀 开发进度
 
-> 最后更新：2026-06-11 &nbsp;|&nbsp; 第二十五阶段：程序化建模 Skill + LogParser 修复 ✅ &nbsp;|&nbsp; 规划：Skill 效果追踪 → Copernicus
+> 最后更新：2026-06-15 &nbsp;|&nbsp; 第二十八阶段：声明式 Recipe Builder（A 站）✅ &nbsp;|&nbsp; 规划：B 站构造轴 → C 站节点参数 DB → D 站黄金范例 → E 站数值代理
 
 ## 总览看板
 
@@ -127,6 +127,59 @@
 </div>
 
 <div class="timeline">
+
+### Procedural Harness Phase C-D: 模块化门 + Network Mode + 声明式 Builder
+
+- **模块化结构硬门**（`_check_modular_structure`）：commit_sandbox 拒绝单体资产（≥3 个 component_id 全来自单个 Python SOP、无 copytopoints/sweep/foreach）。`_select_gate_target` 修正：不再被空的 dispatcher Python SOP 误导，优先选 component_id-bearing、prim 数最多的节点。
+- **朝向门**（`verify_orientation`）：PCA 按组件检测轮轴/长轴/法线方向，commit 时硬关卡。vision 不再评朝向。
+- **三层验证协议**：geometry health → orientation → inventory/data → visual。每层各自抓不同缺陷。
+- **network_mode sandbox**（`run_python_sandbox(network_mode=True)`）：代码跑在 sandbox geo 容器里，可直接 `createNode` 子 SOP 建多节点模块化网络，不再触发 cook 内 createNode 的无限递归。`_resolve_output_node` 自动发现 OUT。
+- **声明式 Recipe Builder**（`build_procedural_asset`）：agent 提交 JSON recipe（组件清单 + anchor + 每组件纯几何 python 代码），harness 确定性建网（组件 SOP → anchor 生成器 → Copy-to-Points → idfix → merge → postprocess → OUT）→ cook → 跑 structure/orientation 门 → 返回诊断。agent 永不写 createNode/wiring/blockpath。真实 Houdini 验证：Copy-to-Points stamping + idfix 逐实例 component_id 覆盖正确。
+- **验证工具补全**：`houdini_geometry_inventory` / `houdini_inspect_geometry_health` / `houdini_capture_component_detail` 之前只在 Python 注册、未暴露 TS schema（实测 agent 被迫退回 raw python），现已补全。
+- **测试隔离修复**：`test_error_surfacing` 无条件覆盖 `sys.modules["hou"]` orphan 了其它文件的 `edini.harness.hou`，改为幂等安装。
+- 316 测试通过。
+
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-15</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第二十八阶段：声明式 Recipe Builder（A 站）— 程序化建模架构升级</span>
+      <span class="status-tag status-done">完成</span>
+    </div>
+    <div class="timeline-summary">① 架构诊断：审视日志发现 agent 的核心瓶颈是 Houdini API 命令式编程能力不足（createNode-in-cook 无限递归、foreach blockpath 误连、H21 参数名盲区），gate 只能挡"做错的"挡不住"不会做的"。提出 5 站构想（A 声明式 builder / B 构造轴 / C 节点参数 DB / D 黄金范例 / E 数值代理），按杠杆排序分站交付。② A 站 `build_procedural_asset(recipe)`：agent 只写每组件的纯几何代码 + 一份声明式 recipe，harness 确定性建网。复用现有 sandbox 生命周期 + structure/orientation gate，gate 代码零改动。③ recipe schema：components[{id, code, anchors}] + postprocess + orientation_asserts。stamping 组件自动建 anchor 生成器 + copytopoints + idfix（逐实例覆盖 component_id 供 PCA）。④ 真实 Houdini 双阶段验证：单组件（基础设施全过）→ 二组件 + Copy-to-Points（idfix 逐实例 component_id 覆盖正确，40 点 8 prim，inventory 实扫 frame/wheel_fl/wheel_rr）。⑤ 顺手补 3 个验证工具的 TS schema（geometry_inventory/inspect_geometry_health/capture_component_detail 之前漏暴露）。⑥ 修复 test_error_surfacing 的 mock 孤儿化测试隔离 bug。⑦ 316 测试通过。commit 拆为代码（7bd740b）+ 文档（bce9d73）两个，分支 feat/network-mode-and-builder。</div>
+    <div class="timeline-tags">
+      <span>声明式Builder</span><span>recipe</span><span>确定性建网</span><span>Copy-to-Points</span><span>idfix</span><span>component_id</span><span>真实Houdini验证</span><span>A站</span><span>测试隔离修复</span><span>316测试</span>
+    </div>
+  </div>
+</div>
+
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-15</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第二十七阶段：network_mode sandbox + Forbidden Patterns + H21 参数速查表</span>
+      <span class="status-tag status-done">完成</span>
+    </div>
+    <div class="timeline-summary">① network_mode：`run_python_sandbox(network_mode=True)` 让代码跑在 sandbox geo 容器（非 Python SOP cook 内），可直接 createNode 子 SOP 建多节点网络，消除 cook 内 createNode 的"Infinite recursion in evaluation"。② Forbidden Patterns 章节：createNode-in-cook、raw houdini_run_python 绕过 sandbox、ForEach blockpath 误连、H21 参数名猜测——4 个反复出现的失败模式。③ Network Mode 章节 + recipe skeleton。④ Houdini 21 SOP 参数速查表：Attrib Promote(inname/inclass/outclass)、Blast(grouptype menu)、ForEach(blockpath 在 block_end 上)、Sweep 2.0、Copy-to-Points 2.0、Merge、Normal、Boolean——避免 agent 每次 get_node_info 探测浪费轮次。⑤ _bounds_nonzero 防 None 崩溃。⑥ 316 测试通过。</div>
+    <div class="timeline-tags">
+      <span>network_mode</span><span>Forbidden Patterns</span><span>H21参数速查</span><span>infinite recursion</span><span>_resolve_output_node</span><span>ForEach blockpath</span>
+    </div>
+  </div>
+</div>
+
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-12</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第二十六阶段：模块化结构硬门 + 朝向门 + 三层验证协议</span>
+      <span class="status-tag status-done">完成</span>
+    </div>
+    <div class="timeline-summary">① 模块化结构硬门（`_check_modular_structure`）：commit_sandbox 拒绝单体资产（≥3 component_id 全来自单个 Python SOP + 无 copytopoints/sweep/foreach）。agent 被迫分解成 body_generate + 子组件生成器 + Copy-to-Points。② `_select_gate_target` 修正：不再被空的 dispatcher Python SOP 误导（之前它会 shadow 真正的 OUT 导致 gate 误报 component_id not found）。③ 朝向门（`verify_orientation`）：PCA 按组件检测 radial/elongated/planar 轴方向，failed check 带 hint 四元数。commit 时硬关卡。④ 三层验证协议：geometry health（orphan/degenerate/non-manifold）→ orientation → inventory/data → visual。health 是 MANDATORY layer-1。⑤ 取景修复：4 视图 capture 自动框到 target bounding box，不再裁切。⑥ vision 不再评朝向（移除 orientation 维度，加 projection immunity）。⑦ SKILL.md enforce health-first workflow。</div>
+    <div class="timeline-tags">
+      <span>模块化硬门</span><span>朝向门</span><span>PCA</span><span>三层验证</span><span>component_id</span><span>health-first</span><span>取景修复</span><span>_select_gate_target</span>
+    </div>
+  </div>
+</div>
 
 ### Procedural Harness Phase B
 
@@ -475,15 +528,28 @@
 
 ## 下一步计划
 
+### 程序化建模架构升级（ABCDE 五站，A 已完成）
+
+基于日志诊断发现的架构瓶颈：gate 只能挡"做错的"，挡不住"不会做的"。agent 的核心问题是 Houdini API 命令式编程能力不足。五站按杠杆排序分站交付，每站独立可验证。
+
+| 优先级 | 任务 | 说明 | 状态 |
+|------|------|------|------|
+| **P0** | **A. 声明式 Recipe Builder** | agent 只写每组件纯几何代码 + recipe，harness 确定性建网。消灭 createNode/wiring/blockpath 整类错误。真实 Houdini 验证通过。 | ✅ 完成 |
+| **P0** | **B. 构造轴替代 PCA** | 组件在 recipe 里声明自己的构造轴（轮子绕哪根轴旋转生成），验证直接读构造参数而非事后 PCA 估计。把启发式变成 ground truth。寄生在 A 的 orientation_asserts schema 上。 | 🔜 下一站 |
+| **P1** | **C. 节点参数 DB** | 一次性跑全 H21 nodeTypeCategories，缓存每个 SOP 的 parm 名/菜单值/类型为 manifest，挂 `houdini_node_parms("attribpromote")` 工具。agent 按需查、永远准、不占 prompt token。独立增量。 | ⬜ 待做 |
+| **P1** | **D. 黄金范例检索** | 为每个资产类准备验证过的模块化黄金网络（recipe 格式），agent 接任务时按类检索范例作模板模仿。提升质量天花板。依赖 A 的 recipe 格式。 | ⬜ 待做 |
+| **P2** | **E. 数值代理** | 加不依赖 vision 的感知级反馈：轮廓圆度、对称性分数、截面剖面采样、参考 silhouette IoU。cheap numerical proxy for "看起来对不对"。独立增量。 | ⬜ 待做 |
+
+### 其它规划
+
 | 优先级 | 任务 | 说明 |
 |------|------|------|
-| **P0** | **优化 ReflectWorker 提取质量** | 现有系统已在工作，先让 knowledge 质量上去 |
-| **P1** | **Skill 使用效果追踪** | 基于 LogParser 修复后的参数数据，追踪 procedural-modeling Skill 对 VEX/Python 成功率的影响 |
+| **P1** | **Skill 使用效果追踪** | 基于 LogParser 参数数据，追踪 procedural-modeling Skill 对 VEX/Python 成功率的影响 |
 | **P1** | **Copernicus 程序化贴图 Skill** | 在 procedural-modeling Skill 基础上扩展 COPs 专用指导 |
+| **P2** | **多 Agent 组件级并行生成** | B 站之后：主 agent 定 recipe + 契约 → N 个子 agent 各产一个组件代码 → 确定性 builder 组装 → 主 agent 验证。先证明单 agent + builder 跑稳再上。 |
 | **P2** | **跨 Agent 共享（Hivemind）** | 把 knowledge/skills 推到共享存储（Git repo / S3） |
-| **P2** | **增加 Skill 自动提取** | 在 reflection prompt 中加 skill 模板，自动写入 `skills/` 目录 |
-| P2 | Judge模型优化 | 接入 Anthropic Claude 做 Judge（结构化输出更强）、V4 Pro reasoning_tokens 兼容 |
-| P3 | 效率基线优化 | 基于任务类型百分位计算效率评分，而非固定启发式 |
+| P2 | Judge模型优化 | 接入 Anthropic Claude 做 Judge、V4 Pro reasoning_tokens 兼容 |
+| P3 | 效率基线优化 | 基于任务类型百分位计算效率评分 |
 | P3 | Python 面板 | 支持嵌入 Houdini Pane Tab |
 
 ## 已实现功能清单
@@ -555,3 +621,11 @@
 - ✅ procedural-modeling Skill（程序化建模指导：语言选择策略、VEX run-over class、分而治之、模板模式、失败切换、Copernicus 流程）
 - ✅ Skill 目录自动发现（--no-skills + --skill 逐目录加载，支持 SKILL.md 子目录和根级 .md）
 - ✅ LogParser toolCall 参数提取（两阶段匹配：assistant toolCall.arguments → toolResult 回填，98% 参数覆盖率）
+- ✅ Procedural Harness：live sandbox（`houdini_run_python_sandbox`）→ diagnostics → structural verify → safe capture → commit/discard 全流程护栏
+- ✅ 模块化结构硬门（`_check_modular_structure`）：commit_sandbox 拒绝单体资产，强制 Copy-to-Points/Sweep/foreach 分解
+- ✅ 朝向门（`houdini_verify_orientation`）：PCA 按组件检测轮轴/长轴/法线方向，failed check 带 hint 四元数，commit 时硬关卡
+- ✅ 三层验证协议：geometry health → orientation → inventory/data → visual（health 是 MANDATORY layer-1）
+- ✅ geometry_inventory / inspect_geometry_health / capture_component_detail 三个验证工具（组件清单 / 几何健康 / 小组件特写）
+- ✅ network_mode sandbox（`run_python_sandbox(network_mode=True)`）：代码跑在 geo 容器，可直接 createNode 子 SOP 建多节点网络
+- ✅ 声明式 Recipe Builder（`houdini_build_procedural_asset`）：agent 提交 recipe，harness 确定性建网，agent 永不写 createNode/wiring/blockpath
+- ✅ Forbidden Patterns + Network Mode + H21 参数速查表（SKILL.md：Attrib Promote / Blast / ForEach / Sweep / Copy-to-Points 等关键参数）

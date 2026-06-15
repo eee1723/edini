@@ -19,7 +19,13 @@ from tests.mock_hou import create_mock_hou  # noqa: E402
 from unittest.mock import MagicMock  # noqa: E402
 
 # Inject a mock hou so importing edini.ui.main_window doesn't require Houdini.
-sys.modules["hou"] = create_mock_hou()
+# Idempotent: if another test module already installed a create_mock_hou() (the
+# shared singleton used across the suite), reuse it instead of replacing it.
+# Replacing sys.modules["hou"] here would orphan edini modules that already
+# bound `hou` at their import time, breaking later sandbox/harness tests.
+from tests.mock_hou import MockHou as _MockHou  # noqa: E402
+if not isinstance(sys.modules.get("hou"), _MockHou):
+    sys.modules["hou"] = create_mock_hou()
 
 
 def test_dispatch_message_end_error_emits_error_occurred():

@@ -1,23 +1,32 @@
 # 🧪 Procedural Harness
 
-> 最后更新：2026-06-12 ｜ 状态：Phase B 已合入 `master` ｜ 目标：让程序化建模先进入可诊断、可验证、可回滚的沙盒流程。
+> 最后更新：2026-06-15 ｜ 状态：模块化门 + 朝向门 + network_mode + 声明式 Builder 已落地（feat/network-mode-and-builder 分支）｜ 目标：让程序化建模先进入可诊断、可验证、可回滚的沙盒流程，并从"约束执行"转向"能力放大"。
 
 ## 这批解决了什么
 
 Procedural Harness 是 Edini 给 Houdini 程序化建模加上的一层执行护栏。它不再让 AI 一上来就用 `houdini_run_python` 在用户的 live scene 里直接试错，而是要求先创建 `/obj/edini_sandbox_*` 沙盒节点，把生成结果、诊断、结构验证和最终提交拆成清晰步骤。
 
-这批主要落地了：
+随着日志诊断深入，护栏演进为三条互补路线：
+
+1. **约束执行（gates）**：模块化硬门 + 朝向门 + 三层验证——挡住"做错的"。
+2. **能力放大（builder/abstractions）**：network_mode + 声明式 Recipe Builder——让 agent 不需要会命令式 Houdini API 也能产出模块化资产。这是核心转向：gate 加到一定密度后边际收益为负，builder 直接消灭整类错误。
+3. **工具补全**：把验证工具（inventory/health/component-detail）真正暴露给 agent。
 
 | 能力 | 内容 | 观察点 |
 |------|------|--------|
 | Live sandbox | `houdini_run_python_sandbox` 创建唯一 job id 和沙盒根节点 | 新资产应先出现在 `/obj/edini_sandbox_*` 下 |
-| JSON-safe result | Houdini 节点对象、集合、递归对象会转成安全 JSON | tool result 不应因为对象不可序列化而崩掉 |
-| Diagnostics | `houdini_collect_diagnostics` 收集节点错误、警告、参数、几何统计、bounds | 失败后应先看到诊断，而不是马上删除节点 |
-| Structural verify | `houdini_verify_asset` 检查 `min_points`、`min_prims`、`bounds_nonzero`、node errors | commit 前应有结构证据 |
-| Lifecycle | `houdini_commit_sandbox` / `houdini_discard_sandbox` 管理沙盒去留 | 通过后改名提交，废弃时显式删除 |
-| Safe capture | `houdini_capture_review` 支持多视角接触表截取 | 截图失败时应干净报告，不探索 Qt 私有接口 |
-| Skill guidance | `procedural-modeling` 明确要求 harness-first | 生成程序化资产时不应优先 raw run |
-| Pi tools | Pi extension 暴露 harness tool schema | Agent 可直接选择 sandbox/verify/commit/diagnostics 工具 |
+| network_mode | `network_mode=true` 让代码跑在 geo 容器，可直接 createNode 子 SOP | 多组件资产不再触发 cook 内 createNode 无限递归 |
+| **声明式 Builder** | `houdini_build_procedural_asset(recipe)` 确定性建网，agent 只写纯几何代码 | agent 不再写 createNode/wiring/blockpath；recipe 驱动组件+anchor+Copy-to-Points+OUT |
+| 模块化硬门 | `_check_modular_structure` 拒绝单体资产（≥3 cid 全来自单个 Python SOP） | commit 前结构门先跑，拒绝单体 |
+| 朝向门 | `houdini_verify_orientation` PCA 按组件检测轴方向，commit 硬关卡 | failed check 带 hint 四元数 |
+| 三层验证 | geometry health → orientation → inventory/data → visual | health 是 MANDATORY layer-1 |
+| Diagnostics | `houdini_collect_diagnostics` 收集节点错误、警告、参数、几何统计 | 失败后先看诊断，不立即删节点 |
+| Inventory | `houdini_geometry_inventory` 列每个 component_id 的 prim 数 + 相对大小 | 确认组件存在，标 SMALL 需特写 |
+| Health | `houdini_inspect_geometry_health` 查 orphan/degenerate/non-manifold | Boolean/Sweep 前必修 |
+| Component detail | `houdini_capture_component_detail` 小组件逐个框取特写 | 解决"存在但太小看不见" |
+| Lifecycle | `houdini_commit_sandbox` / `houdini_discard_sandbox` | 通过后改名提交，废弃显式删除 |
+| Safe capture | `houdini_capture_review` 多视角接触表，自动框到 target bbox | 截图失败干净报告 |
+| Skill guidance | `procedural-modeling` 含 Forbidden Patterns + Network Mode + Recipe Builder + H21 参数速查 | 生成程序化资产时不应优先 raw run |
 
 ## 标准测试流程
 
@@ -62,31 +71,53 @@ Procedural Harness 是 Edini 给 Houdini 程序化建模加上的一层执行护
 
 | 区域 | 文件 |
 |------|------|
-| Harness 实现 | `edini/harness.py`、`python3.11libs/edini/harness.py` |
-| Tool executor 注册 | `edini/tool_executor.py`、`python3.11libs/edini/tool_executor.py` |
-| Pi tool schema | `pi-extensions/edini-tools/tools/harness.ts` |
+| Harness 实现（sandbox/gates/builder） | `python3.11libs/edini/harness.py` |
+| Tool executor 注册 | `python3.11libs/edini/tool_executor.py` |
+| 节点/几何工具 | `python3.11libs/edini/node_utils.py` |
+| 朝向数学 | `python3.11libs/edini/orientation_math.py` |
+| Pi tool schema（harness） | `pi-extensions/edini-tools/tools/harness.ts` |
+| Pi tool schema（query/inventory/health） | `pi-extensions/edini-tools/tools/query.ts` |
 | Pi tool index | `pi-extensions/edini-tools/index.ts` |
 | Skill 指南 | `skills/procedural-modeling/SKILL.md` |
-| Skill 预览 | `skills/procedural-modeling/preview.html` |
-| Ladder 回归说明 | `docs/harness_ladder_regression.md` |
-| 互动清单 | `docs/procedural_harness_test_guide.html` |
-| 单测 | `tests/test_procedural_harness.py`、`tests/test_tool_executor_harness.py`、`tests/test_pi_harness_tools.py` |
+| Builder 实测文档 | `docs/BUILDER_FIRST_TEST.md`、`docs/BUILDER_SECOND_TEST.md` |
+| 单测 | `tests/test_procedural_harness.py`、`tests/test_build_procedural_asset.py`、`tests/test_tool_executor_harness.py`、`tests/test_pi_harness_tools.py`、`tests/test_verify_orientation.py` |
+
+## 三条 build 路径（SKILL.md 的统一矩阵）
+
+| 场景 | 工具 | agent 写什么 |
+|---|---|---|
+| 多组件资产（车/家具/任何有可替换件） | **`houdini_build_procedural_asset`**（声明式 recipe，PREFERRED） | 每组件纯几何代码 + recipe（绝不 createNode） |
+| 非标准拓扑（recipe 表达不了的） | `houdini_run_python_sandbox(network_mode=true)` | 手写建网代码（容器内 createNode 合法） |
+| 真正的单体生成器（一个分形/一个曲面） | `houdini_run_python_sandbox`（默认 single-SOP） | 单 SOP cook 代码 |
 
 ## 当前限制
 
-- Phase B 仍运行在 live Houdini 进程内，不能提供 OS 级 crash isolation。
+- sandbox 仍运行在 live Houdini 进程内，不能提供 OS 级 crash isolation。
 - `commit_on_success` 当前只记录请求状态，不自动 commit；正式提交仍应显式调用 `houdini_commit_sandbox`。
-- 结构验证是通用的 point/primitive/bounds 检查，不理解每一种资产的语义完整性。
-- Phase C 才会把高风险程序化 job 移到外部 worker。
+- 朝向门用 PCA 估计组件轴——对点分布不均的件不稳，且是"自洽校验"（agent 既生成几何又写 expected_axis）。B 站将用构造轴替代。
+- builder 的 idfix 用 prim 等分定位实例边界——已验证 Copy-to-Points 连续排列下成立，但极端拓扑（交错排列）理论上可能错位。
+- builder 不内嵌 capture/commit（单一职责；commit 是显式后续调用）。
 
 ## 验证状态
 
-最近主线合并后的验证结果：
+最近 A 站交付后的验证结果：
 
 ```text
-python -m pytest
-216 passed, 5043 warnings
+python -m pytest（忽略 manual_* hou 导入测试）
+316 passed
 
-python -m compileall -q python3.11libs/edini edini
-passed
+真实 Houdini 双阶段实测（docs/BUILDER_FIRST_TEST.md / BUILDER_SECOND_TEST.md）：
+- 第一阶段（单组件）：builder 基础设施全过（sandbox/cook/component_id/structure gate）
+- 第二阶段（二组件 + Copy-to-Points）：idfix 逐实例 component_id 覆盖正确
+  inventory 实扫 OUT：frame:6, wheel_fl:1, wheel_rr:1，40 点 8 prim
 ```
+
+## 后续规划（ABCDE 五站）
+
+| 站 | 内容 | 状态 | 依赖 |
+|---|---|---|---|
+| A | 声明式 Recipe Builder | ✅ 完成 | — |
+| B | 构造轴替代 PCA（orientation_asserts 加 construction_axis） | 🔜 下一站 | A |
+| C | 节点参数 DB（houdini_node_parms 查询工具） | ⬜ | 独立 |
+| D | 黄金范例检索（recipe 格式的验证过资产模板） | ⬜ | A |
+| E | 数值代理（轮廓圆度/对称性/silhouette IoU） | ⬜ | 独立 |
