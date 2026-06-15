@@ -203,6 +203,48 @@ class TestCaptureReview(unittest.TestCase):
         self.assertIn("grid", expected)
         self.assertEqual(expected["grid"]["cells"], 4)
 
+    def test_frame_to_bounds_uses_bounding_box_not_homeAll(self):
+        """Regression: _frame_to_bounds must prefer setViewToBoundingBox.
+
+        The bug: capture_review used viewport.homeAll() which frames the whole
+        viewport and inherits ortho-camera pan/zoom state, so top/front/right
+        views frequently clipped the model. The fix (_frame_to_bounds) prefers
+        setViewToBoundingBox(bbox, padding). We test the helper directly
+        because the full capture_review flow needs many viewport-setting mocks
+        that are out of scope for this fix.
+        """
+        obj = self.mock_hou.node("/obj")
+        target = obj.createNode("geo", "frame_target")
+        target._geometry = self.mock_hou.MockGeometry(
+            point_count=8, prim_count=6, vertex_count=24,
+            bounds=(-1.0, 2.0, 0.0, 1.5, -0.5, 0.5),
+        )
+        vp = self.viewer.viewport  # records setViewToBoundingBox / homeAll
+
+        ok = self.node_utils._frame_to_bounds(vp, target, padding=1.15)
+
+        self.assertTrue(ok, "_frame_to_bounds should succeed with a valid bbox")
+        self.assertTrue(
+            vp.set_view_to_bbox_called,
+            "_frame_to_bounds must frame via setViewToBoundingBox, not homeAll")
+
+    def test_frame_to_bounds_falls_back_to_homeAll_without_bounds(self):
+        """When geometry has no usable bounds, _frame_to_bounds falls back
+        to homeAll (the legacy behaviour) and still returns True."""
+        obj = self.mock_hou.node("/obj")
+        target = obj.createNode("geo", "frame_nobounds")
+        target._geometry = self.mock_hou.MockGeometry(
+            point_count=0, prim_count=0, vertex_count=0, bounds=None)
+        vp = self.viewer.viewport
+        vp.set_view_to_bbox_called = False
+        vp.home_all_called = False
+
+        ok = self.node_utils._frame_to_bounds(vp, target, padding=1.15)
+        self.assertTrue(ok)
+        self.assertTrue(vp.home_all_called,
+                        "must fall back to homeAll when bounds unavailable")
+        self.assertFalse(vp.set_view_to_bbox_called)
+
 
 # ---------------------------------------------------------------------------
 # Test: file path handling edge cases

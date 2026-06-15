@@ -450,6 +450,58 @@ def commit_sandbox(
     return result
 
 
+def _select_gate_target(root) -> Any:
+    """Pick the SOP node to run orientation checks against.
+
+    The previous implementation took the FIRST child with a non-None geometry
+    out of ("edini_generate", "OUT", "out"). That is wrong when
+    `edini_generate` is a dispatcher Python SOP that produces empty geometry
+    (it builds the network but emits no prims itself) — it satisfies
+    `geo is not None` and shadows the real `OUT` output. The gate then fails
+    with "component_id not found" even though the verified asset is fine, and
+    the agent is forced to pass `skip_orientation=true`.
+
+    Correct selection: among all candidate SOPs under the sandbox root,
+    prefer (in order):
+      1. a node whose geometry carries the `component_id` prim attribute,
+         breaking ties by largest prim count (the real asset output);
+      2. else the explicitly-displayed child;
+      3. else the child named OUT/out;
+      4. else the root itself.
+    """
+    candidates: list[tuple[int, bool, Any]] = []  # (prim_count, has_cid, node)
+    try:
+        children = [c for c in root.allSubChildren() if hasattr(c, "geometry")]
+    except Exception:
+        children = []
+
+    for sub in children:
+        try:
+            geo = sub.geometry()
+            if geo is None:
+                continue
+        except Exception:
+            continue
+        try:
+            prim_count = geo.intrinsicValue("primitivecount")
+        except Exception:
+            prim_count = 0
+        has_cid = geo.findPrimAttrib("component_id") is not None
+        candidates.append((prim_count or 0, bool(has_cid), sub))
+
+    if candidates:
+        # Prefer component_id-bearing nodes; within that group take the most
+        # prims (the final merged OUT). Fall back to the highest-prim node.
+        with_cid = [c for c in candidates if c[1]]
+        pool = with_cid if with_cid else candidates
+        # max() on (prim_count,) — has_cid already filtered, so it's a tiebreak only
+        pool_sorted = sorted(pool, key=lambda c: c[0], reverse=True)
+        return pool_sorted[0][2]
+
+    # No geometry anywhere — return root (caller handles None geo).
+    return root
+
+
 def _run_orientation_gate(
     sandbox_root_path: str,
     orientation_checks: list[dict] | None,
@@ -468,30 +520,7 @@ def _run_orientation_gate(
     if root is None:
         return None
 
-    target = root
-    # Walk down to a displayed SOP if available
-    for child_name in ("edini_generate", "OUT", "out"):
-        child = root.node(child_name) if hasattr(root, "node") else None
-        if child is not None:
-            try:
-                geo = child.geometry()
-                if geo is not None:
-                    target = child
-                    break
-            except Exception:
-                continue
-    # Fall back to recursing for any displayed child
-    if target is root:
-        try:
-            for sub in [c for c in root.allSubChildren() if hasattr(c, "geometry")]:
-                try:
-                    if sub.geometry() is not None and sub.isDisplayFlag():
-                        target = sub
-                        break
-                except Exception:
-                    continue
-        except Exception:
-            pass
+    target = _select_gate_target(root)
 
     try:
         geo = target.geometry()
