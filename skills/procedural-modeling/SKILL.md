@@ -304,21 +304,26 @@ errors that dominate failed procedural runs.
 {
   "asset_name": "bicycle",
   "units": "meters",
+  "params": {                                    // A2-station: asset-level shared params (optional)
+    "wheelbase": {"default": 1.0, "min": 0.5, "max": 2.0, "label": "Wheelbase"},
+    "wheel_r":   {"default": 0.35, "label": "Wheel Radius"}
+  },
   "components": [
     {
       "id": "frame",                              // -> component_id prim attr value
       "code": "<single-SOP python: emit geometry, tag component_id='frame'>",
+      "reads": ["wheelbase", "wheel_r"],          // A2: params this component reads (via hou.ch)
       "anchors": []                               // empty -> goes straight into merge
     },
     {
       "id": "wheel",                              // template id (unit-radius wheel)
       "code": "<emit a unit-radius wheel; tag prims component_id='wheel'>",
-      "anchors": [                                // non-empty -> Copy-to-Points stamps here
-        {"position": [0.35, 0.35, -0.55], "orient": [0,0,0,1], "pscale": 1.0, "component_id": "wheel_fl"},
-        {"position": [0.35, 0.35,  0.55], "orient": [0,0,0,1], "pscale": 1.0, "component_id": "wheel_fr"},
-        {"position": [-0.35, 0.35, -0.55], "orient": [0,0,0,1], "pscale": 1.0, "component_id": "wheel_rl"},
-        {"position": [-0.35, 0.35,  0.55], "orient": [0,0,0,1], "pscale": 1.0, "component_id": "wheel_rr"}
-      ]
+      "anchors": [                                // A2: position_expr strings reference params -> linked
+        {"position_expr": ["wheelbase/2", "wheel_r", "-0.55"], "orient": [0,0,0,1], "pscale": 1.0, "component_id": "wheel_fl"},
+        {"position_expr": ["wheelbase/2", "wheel_r",  "0.55"], "orient": [0,0,0,1], "pscale": 1.0, "component_id": "wheel_fr"},
+        {"position_expr": ["-wheelbase/2", "wheel_r", "-0.55"], "orient": [0,0,0,1], "pscale": 1.0, "component_id": "wheel_rl"},
+        {"position_expr": ["-wheelbase/2", "wheel_r",  "0.55"], "orient": [0,0,0,1], "pscale": 1.0, "component_id": "wheel_rr"}
+      ]                                            // (static "position": [x,y,z] numbers are also valid)
     }
   ],
   "postprocess": [                                // optional SOP chain after merge
@@ -422,7 +427,66 @@ For a component with **no anchors** (direct-merge), the world frame is
 identity, so `construction_axis` and `expected_axis` are usually the same
 value.
 
-### Parameter Exposure (in the sandbox — not after commit)
+## Asset-level parameters & linkage (A2-station)
+
+By default each component's `code` is independent — a hardcoded
+`wheelbase = 1.0` in the frame does nothing to the wheel anchors. To make a
+**real parametric asset** (change one value, every dependent part updates),
+use asset-level `params` + expression-driven anchors.
+
+### Declaring shared params
+Top-level `params` installs spare parms on the sandbox root. After commit
+they live on the final asset, so the user tunes them in the Houdini
+parameter panel and sees the whole asset update:
+```jsonc
+"params": {
+  "wheelbase": {"default": 1.0, "min": 0.5, "max": 2.0},
+  "wheel_r":   {"default": 0.35}
+}
+```
+
+### Reading params in component code
+A component is a child of the sandbox root, so reference a param via a
+relative channel reference. List the params you read in `reads` so a typo is
+caught at build (not silently returned as 0):
+```python
+node = hou.pwd(); geo = node.geometry()
+wheelbase = hou.ch('../../wheelbase')   # two levels up = sandbox root
+wheel_r   = hou.ch('../../wheel_r')
+...
+```
+```jsonc
+{"id": "frame", "code": "...", "reads": ["wheelbase", "wheel_r"]}
+```
+Changing the parm re-cooks the component automatically (channel dependency).
+
+### Linking anchor positions to params
+Anchors accept `position_expr` / `orient_expr` / `pscale_expr` — expression
+strings (or plain numbers) evaluated against the asset params **at build
+time**. This is how the wheel follows the frame's wheelbase:
+```jsonc
+{"position_expr": ["wheelbase/2", "wheel_r", "0"], "component_id": "wheel_fl"}
+```
+- Expression grammar: parameter names, arithmetic (`+ - * / % **`), unary
+  `-`, and a whitelist of `math` functions (`sin cos sqrt abs min max ...`)
+  plus constants `pi`/`e`/`tau`. Anything else (imports, attributes, calls to
+  non-whitelisted functions) is **rejected** — the engine is a security
+  sandbox, not a Python `eval`.
+- A bad expression (unknown param, syntax error, div-by-zero) fails the
+  build with a precise error naming the anchor and the reason.
+- `position` (static numbers) and `position_expr` are mutually exclusive;
+  static is the backward-compatible default.
+
+### Design note
+Anchor positions are resolved at BUILD time (deterministic) and baked as
+coordinates — they are assembly-time, not cook-time. Component *shapes*
+driven by params (e.g. wheel radius) ARE cook-time dynamic via `hou.ch`.
+This split is intentional: the layout is fixed by the recipe; the parts
+themselves stay live.
+
+## Parameter Exposure (in the sandbox — not after commit)
+
+## Parameter Exposure (in the sandbox — not after commit)
 
 Every procedural asset MUST expose user-controllable parameters. Hardcoded
 Python variables are NOT acceptable. Parameters must be installed on the

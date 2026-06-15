@@ -343,7 +343,7 @@ class TestBuildResultShape(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# B-station: construction-axis tests
+# Construction-axis (B-station) + asset params (A2-station) tests
 # ---------------------------------------------------------------------------
 
 class TestConstructionAxisValidation(unittest.TestCase):
@@ -537,6 +537,216 @@ class TestConstructionAxisBuildBake(unittest.TestCase):
         self.assertEqual(len(errs), 1)
         self.assertIn("w1", errs[0])
 
+
+class TestRecipeParamsValidation(unittest.TestCase):
+    def test_params_with_non_number_default_rejected(self):
+        r = harness.build_procedural_asset({
+            "components": [{"id": "a", "code": "x"}],
+            "params": {"wheelbase": {"default": "oops"}},
+        })
+        self.assertFalse(r["success"])
+        self.assertIn("default must be a number", r["error"])
+
+    def test_reads_unknown_param_rejected(self):
+        r = harness.build_procedural_asset({
+            "components": [{"id": "a", "code": "x", "reads": ["bogus"]}],
+            "params": {"wheelbase": {"default": 1.0}},
+        })
+        self.assertFalse(r["success"])
+        self.assertIn("unknown param", r["error"])
+
+    def test_position_and_position_expr_both_rejected(self):
+        r = harness.build_procedural_asset({
+            "components": [{"id": "a", "code": "x", "anchors": [
+                {"component_id": "a1", "position": [1, 2, 3],
+                 "position_expr": ["1", "2", "3"]},
+            ]}],
+        })
+        self.assertFalse(r["success"])
+        self.assertIn("not both", r["error"])
+
+    def test_position_expr_wrong_length_rejected(self):
+        r = harness.build_procedural_asset({
+            "components": [{"id": "a", "code": "x", "anchors": [
+                {"component_id": "a1", "position_expr": ["1", "2"]},
+            ]}],
+        })
+        self.assertFalse(r["success"])
+        self.assertIn("position_expr", r["error"])
+
+
+class TestResolveAnchorExprs(unittest.TestCase):
+    """The anchor expression resolver is pure + deterministic — test directly."""
+
+    def test_position_expr_evaluated(self):
+        anchors = [{"component_id": "w1",
+                    "position_expr": ["wheelbase/2", "wheel_r", "0"]}]
+        resolved, errs = harness._resolve_anchor_exprs(
+            anchors, {"wheelbase": 1.0, "wheel_r": 0.35}, "wheel")
+        self.assertEqual(errs, [])
+        self.assertEqual(len(resolved), 1)
+        self.assertAlmostEqual(resolved[0]["position"][0], 0.5)
+        self.assertAlmostEqual(resolved[0]["position"][1], 0.35)
+        self.assertEqual(resolved[0]["component_id"], "w1")
+        self.assertEqual(resolved[0]["orient"], [0.0, 0.0, 0.0, 1.0])
+        self.assertEqual(resolved[0]["pscale"], 1.0)
+
+    def test_static_position_passes_through(self):
+        anchors = [{"component_id": "w1", "position": [1.0, 2.0, 3.0]}]
+        resolved, errs = harness._resolve_anchor_exprs(anchors, {}, "wheel")
+        self.assertEqual(errs, [])
+        self.assertEqual(resolved[0]["position"], [1.0, 2.0, 3.0])
+
+    def test_pscale_expr_evaluated(self):
+        anchors = [{"component_id": "w1", "position": [0, 0, 0],
+                    "pscale_expr": "wheel_r * 2"}]
+        resolved, errs = harness._resolve_anchor_exprs(
+            anchors, {"wheel_r": 0.4}, "wheel")
+        self.assertEqual(errs, [])
+        self.assertAlmostEqual(resolved[0]["pscale"], 0.8)
+
+    def test_orient_expr_evaluated(self):
+        anchors = [{"component_id": "w1", "position": [0, 0, 0],
+                    "orient_expr": ["0", "0", "0", "1"]}]
+        resolved, errs = harness._resolve_anchor_exprs(anchors, {}, "wheel")
+        self.assertEqual(errs, [])
+        self.assertEqual(resolved[0]["orient"], [0.0, 0.0, 0.0, 1.0])
+
+    def test_bad_expression_reports_error(self):
+        anchors = [{"component_id": "w1",
+                    "position_expr": ["wheelbase / 0", "0", "0"]}]
+        resolved, errs = harness._resolve_anchor_exprs(
+            anchors, {"wheelbase": 1.0}, "wheel")
+        self.assertEqual(resolved, [])
+        self.assertEqual(len(errs), 1)
+        self.assertIn("w1", errs[0])
+
+    def test_unknown_param_in_expr_reports_error(self):
+        anchors = [{"component_id": "w1",
+                    "position_expr": ["bogus + 1", "0", "0"]}]
+        resolved, errs = harness._resolve_anchor_exprs(anchors, {}, "wheel")
+        self.assertEqual(resolved, [])
+        self.assertEqual(len(errs), 1)
+
+
+class TestBuildWithParams(unittest.TestCase):
+    """End-to-end build with params + expression anchors (mock)."""
+
+    def test_build_with_params_succeeds(self):
+        recipe = {
+            "asset_name": "parametric",
+            "params": {
+                "wheelbase": {"default": 1.0, "min": 0.5, "max": 2.0},
+                "wheel_r": {"default": 0.35},
+            },
+            "components": [
+                {"id": "frame", "code": _geo_code("frame"), "anchors": [],
+                 "reads": ["wheelbase", "wheel_r"]},
+                {"id": "wheel", "code": _geo_code("wheel"), "anchors": [
+                    {"component_id": "wheel_fl",
+                     "position_expr": ["wheelbase/2", "wheel_r", "0"],
+                     "pscale_expr": "wheel_r * 2"},
+                    {"component_id": "wheel_rr",
+                     "position_expr": ["-wheelbase/2", "wheel_r", "0"],
+                     "pscale_expr": "wheel_r * 2"},
+                ]},
+            ],
+        }
+        r = harness.build_procedural_asset(recipe)
+        self.assertTrue(r["success"], msg=r.get("error"))
+        self.assertEqual(r["anchors_built"], {"wheel": 2})
+        # A2: params_summary is exposed with channel paths + values.
+        self.assertIn("params_summary", r)
+        self.assertIn("wheelbase", r["params_summary"])
+        self.assertAlmostEqual(r["params_summary"]["wheelbase"]["value"], 1.0)
+        # The mock lacks FloatParmTemplate -> installed=False, and a
+        # warning lists the not-installed parms (actionable signal).
+        self.assertFalse(r["params_summary"]["wheelbase"]["installed"])
+        joined = " ".join(r.get("warnings", []))
+        self.assertIn("not installed", joined)
+        anc = _mock_hou.node(f"{r['root_path']}/wheel_anchors")
+        self.assertIsNotNone(anc)
+        pts = anc.geometry().points()
+        self.assertEqual(len(pts), 2)
+        self.assertAlmostEqual(pts[0].position()[0], 0.5)
+        self.assertAlmostEqual(pts[0].position()[1], 0.35)
+        self.assertAlmostEqual(pts[1].position()[0], -0.5)
+
+    def test_build_without_params_backward_compatible(self):
+        recipe = {
+            "asset_name": "legacy",
+            "components": [
+                {"id": "frame", "code": _geo_code("frame"), "anchors": []},
+                {"id": "wheel", "code": _geo_code("wheel"), "anchors": [
+                    {"position": [1, 0, 0], "component_id": "w1"},
+                ]},
+            ],
+        }
+        r = harness.build_procedural_asset(recipe)
+        self.assertTrue(r["success"], msg=r.get("error"))
+        anc = _mock_hou.node(f"{r['root_path']}/wheel_anchors")
+        pts = anc.geometry().points()
+        self.assertEqual(len(pts), 1)
+        self.assertAlmostEqual(pts[0].position()[0], 1.0)
+
+    def test_build_bad_anchor_expr_surfaces_error(self):
+        recipe = {
+            "asset_name": "badexpr",
+            "params": {"wheelbase": {"default": 1.0}},
+            "components": [
+                {"id": "frame", "code": _geo_code("frame"), "anchors": []},
+                {"id": "wheel", "code": _geo_code("wheel"), "anchors": [
+                    {"component_id": "w1",
+                     "position_expr": ["bogus", "0", "0"]},
+                ]},
+            ],
+        }
+        r = harness.build_procedural_asset(recipe)
+        self.assertFalse(r["success"])
+        self.assertIn("bogus", r["error"])
+
+
+class TestInstallSpareParams(unittest.TestCase):
+    """_install_spare_params must return resolved defaults even when the
+    Houdini build lacks FloatParmTemplate/ParmTemplateGroup (mock / stripped
+    runtime). The H21-safe ctor candidate chain should not raise out of the
+    function — it records installed=False and lets expression eval proceed."""
+
+    def test_returns_defaults_when_parm_api_unavailable(self):
+        from tests.mock_hou import create_mock_hou, MockNode
+        from tests.test_node_utils import _mock_hou  # shared mock
+        # Build a throwaway node on the shared mock.
+        root = _mock_hou.node("/obj").createNode("geo", "tmp_root")
+        result = harness._install_spare_params(root, {
+            "wheelbase": {"default": 1.0, "min": 0.5, "max": 2.0},
+            "wheel_r": {"default": 0.35, "label": "Wheel Radius"},
+        })
+        # Every param recorded with its resolved default.
+        self.assertAlmostEqual(result["wheelbase"]["value"], 1.0)
+        self.assertAlmostEqual(result["wheel_r"]["value"], 0.35)
+        # channel_path points at the sandbox root.
+        self.assertTrue(result["wheelbase"]["channel_path"].endswith("/wheelbase"))
+        # label surfaces only when it differs from the name.
+        self.assertIsNone(result["wheelbase"]["label"])
+        self.assertEqual(result["wheel_r"]["label"], "Wheel Radius")
+        # Mock has no FloatParmTemplate -> not installed.
+        self.assertFalse(result["wheelbase"]["installed"])
+        root.destroy()
+
+    def test_empty_spec_returns_empty(self):
+        from tests.test_node_utils import _mock_hou
+        root = _mock_hou.node("/obj").createNode("geo", "tmp_empty")
+        self.assertEqual(harness._install_spare_params(root, {}), {})
+        root.destroy()
+
+    def test_build_float_parm_template_candidate_chain_is_safe(self):
+        """The ctor candidate chain must not raise unhandled — it raises a
+        clear RuntimeError only when ALL candidates fail (mock: all fail)."""
+        from tests.mock_hou import MockHou
+        with self.assertRaises(RuntimeError) as cm:
+            harness._build_float_parm_template(
+                MockHou(), "wb", "WB", 1.0, 0.0, 10.0)
+        self.assertIn("FloatParmTemplate", str(cm.exception))
 
 if __name__ == "__main__":
     unittest.main()

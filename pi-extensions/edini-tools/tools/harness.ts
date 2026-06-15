@@ -302,7 +302,7 @@ export const houdiniBuildProceduralAsset = {
   parameters: Type.Object({
     recipe: Type.Record(Type.String(), Type.Unknown(), {
       description:
-        "Declarative recipe object. Keys: asset_name (str), units (str, doc only), components (list of {id, code, anchors?}), postprocess? (list of {type, params?}), orientation_asserts? (list of {component_id, kind, expected_axis, tolerance_deg?, signed?, construction_axis?}), expected? (dict). construction_axis (B-station) declares the local construction axis for deterministic world-axis derivation. See the Declarative Recipe Builder section of the procedural-modeling skill for the full schema.",
+        "Declarative recipe object. Keys: asset_name (str), units (str, doc only), params? (asset-level shared params {name: {default, min?, max?, label?}} that the builder installs as spare parms on the sandbox root for true cross-component linkage), components (list of {id, code, reads?, anchors?}) where reads lists param names the component references via hou.ch and anchors support position_expr/orient_expr/pscale_expr strings (evaluated against params at build time) OR static position/orient/pscale numbers, postprocess? (list of {type, params?}), orientation_asserts? (list of {component_id, kind, expected_axis, tolerance_deg?, signed?, construction_axis?}) where construction_axis (B-station) declares the local construction axis for deterministic world-axis derivation, expected? (dict). See the Declarative Recipe Builder section of the procedural-modeling skill for the full schema.",
     }),
     sandbox_name: Type.Optional(
       Type.String({ description: "Optional name for the sandbox root (defaults to asset_name)" })
