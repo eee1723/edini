@@ -485,54 +485,106 @@ When embedding string literals in Python code that will pass through JSON → pa
 4. **Generate with sandbox** — Use `houdini_run_python_sandbox` with `commit_on_success=false`. The sandbox code MUST: (a) call `geo.addAttrib(hou.attribType.Prim, "component_id", "")` before any geometry, then `poly.setAttribValue("component_id", "<id>")` on every component's polygons; (b) install spare parameters idempotently on the cooking node; (c) use Copy-to-Points for any repeated/swappable part.
 5. **Trust sandbox diagnostics** — The result includes `diagnostics` and `structural_checks`. No need for separate inspect calls.
 6. **Add structural detail** — Panel lines, seams, secondary components, varied cross-sections. Then finishing: Normal SOP, optional bevel on render-visible hard edges. Preserve `@component_id` tags.
-7. **Run `houdini_verify_orientation`** — Pass the recipe's ORIENTATION ASSERTS as `checks`. This is the authoritative gate. If any check fails, apply the hint quaternion to the SOURCE code (don't try to rotate post-hoc on geometry) and re-run the sandbox BEFORE moving to visual verification.
-8. **Capture and verify (visual layer)** — `houdini_capture_review` with 4-view quad, then `describe_image` with the 3D verification prompt. Visual catches missing components, intersections, proportion defects — NOT orientation.
-9. **Repair loop** — Fix SPECIFIC defects (orientation: use the hint quaternion in source; visual: address the named defect). Re-verify. Up to 3 cycles, then ask the user.
-10. **Commit only when both layers pass** — `houdini_commit_sandbox` re-runs the orientation gate as a final check. If `@component_id` exists and checks fail, commit is refused — you cannot override this except with `skip_orientation=true` and a documented reason.
+7. **Run THREE-LAYER verification** (see below) — geometry health → orientation → data → visual. Do NOT skip layers; each catches defects the others can't.
+8. **Repair loop with TARGETED fixes** — Each repair round must address a SPECIFIC component_id or a SPECIFIC health-check finding. Never rebuild the whole asset without a named defect (see Debug Discipline below).
+9. **Commit only when all layers pass** — `houdini_commit_sandbox` re-runs the orientation gate as a final check on the REAL output node (it now correctly picks the highest-prim component_id node, not an empty dispatcher). If checks fail, commit is refused — fix in source and re-run, don't bypass with `skip_orientation=true` unless you have a documented reason.
 
-## Visual Verification Protocol
+## Three-Layer Verification Protocol
 
-### Two-Layer Verification
+**Why three layers, not two:** A recurring failure mode was relying on
+screenshots alone. Vision models cannot reliably see small/thin components
+(chains, spokes, bolts) at viewport resolution, so they report them as
+"missing" even when they exist — and the agent wastes iterations rebuilding
+with no real change. Geometry health checks and per-component inventory data
+catch what screenshots cannot.
 
-Procedural assets require BOTH layers of verification. Vision models cannot
-reliably detect orientation defects (they hallucinate "wheels vertical ✅"
-for wheels lying flat). Geometry-based checks are authoritative for orientation.
+| Layer | Tool | What it catches | Authority | Cost |
+|---|---|---|---|---|
+| **1. Geometry health** | `houdini_inspect_geometry_health` | Orphan points, open/stray curves, degenerate faces, non-manifold edges, holes, coincident points | AUTHORITATIVE — must pass | cheap (no render) |
+| **2a. Orientation** | `houdini_verify_orientation` | Wrong axle direction, flipped components, misaligned axes | AUTHORITATIVE — gate | cheap |
+| **2b. Inventory data** | `houdini_geometry_inventory` / the `geometry_inventory` field returned by `capture_review` | Which component_ids exist, their prim counts + relative sizes | AUTHORITATIVE for "is it present?" | cheap |
+| **3. Visual** | `houdini_capture_review` + `describe_image` (+ `houdini_capture_component_detail` for small parts) | Proportions, symmetry, intersection, construction logic | Advisory | expensive (render + vision) |
 
-| Layer | Tool | What it catches | Authority |
-|---|---|---|---|
-| **Programmatic** | `houdini_verify_orientation` | Wrong axle direction, flipped components, misaligned axes | **AUTHORITATIVE — gate** |
-| **Visual** | `houdini_capture_review` + `describe_image` | Missing components, weird proportions, intersection | Advisory |
+**Run layers in order.** Cheap authoritative layers first; only escalate to
+vision when the cheap layers can't resolve a question.
 
 ### Mandatory Pre-Commit Sequence
 
 ```
-1. houdini_verify_orientation on the sandbox display node
+1. houdini_inspect_geometry_health on the OUT node
+   - Fix orphan points (Fuse), stray open curves (Blast), degenerate faces
+     (Clean), non-manifold edges before anything else. These silently break
+     Boolean/Sweep/subdivision downstream.
+   - NOTE: open_boundary_edges is EXPECTED for open surfaces (terrain, a
+     single panel). Only treat it as a defect for assets that should be closed.
+
+2. houdini_verify_orientation on the OUT node
    - Pass all checks from the recipe's ORIENTATION ASSERTS section
-   - If any check fails, apply the hint quaternion and re-run sandbox
-2. houdini_capture_review (4-view quad) for visual sanity
-3. describe_image with the 3D prompt — flag missing/intersecting parts
-4. Repair loop: fix specific defect → re-verify → repeat up to 3 times
-5. houdini_commit_sandbox — runs orientation gate as final check
+   - If any check fails, apply the hint quaternion to the SOURCE code and
+     re-run the sandbox. Do NOT rotate post-hoc on geometry.
+
+3. houdini_geometry_inventory on the OUT node (or read geometry_inventory
+   from the capture_review result)
+   - Confirm every expected component_id is present with prim_count > 0.
+   - Note any component with size_fraction < 0.08 — it is present but SMALL.
+     These will need a component close-up (step 5b) before vision can judge them.
+
+4. houdini_capture_review (4-view: perspective/top/front/right) → describe_image
+   - The capture now frames each view to the target's bounding box (no more
+     clipped ortho views). It also returns a `geometry_inventory` text block.
+   - Pass the PROCEDURAL_VERIFY_PROMPT to describe_image, AND include the
+     inventory text in your message so the vision model cross-validates.
+
+5. IF vision flags a component as missing/unclear:
+   5a. Check the inventory: if the component_id has prim_count > 0, it EXISTS
+       — vision just couldn't see it. Do NOT rebuild it.
+   5b. Run houdini_capture_component_detail on that component_id to get a
+       close-up, then re-judge. This resolves the "exists but too small"
+       ambiguity definitively.
+
+6. Repair loop: fix the SPECIFIC defect → re-verify the SPECIFIC layer →
+   repeat. Up to 3 rounds, then ask the user (see Debug Discipline).
+
+7. houdini_commit_sandbox — runs the orientation gate as a final check.
 ```
 
-### The 3D Verification Prompt (for describe_image)
+### Debug Discipline (anti-flail rules)
 
-Use this prompt for visual checks. Note: it CANNOT detect orientation —
-rely on `houdini_verify_orientation` for that.
+The single biggest waste in procedural generation is the **blind rebuild
+loop**: vision reports a vague defect, the agent regenerates the whole asset
+hoping it improves, the geometry is essentially unchanged, repeat 4×. These
+rules prevent it:
 
-```
-Verify this procedural 3D asset. Check:
-1. PROPORTIONS: Parts at reasonable proportions relative to each other?
-2. SYMMETRY: If object should be symmetric, is it?
-3. COMPLETENESS: All expected sub-components present (compare to recipe)?
-4. INTERSECTION: Parts overlapping incorrectly?
-5. SCALE: Sub-parts correct scale relative to whole?
-6. DETAIL: Is geometry overly simplistic (just boxes/cylinders)?
+1. **Name the defect before fixing.** State exactly which component_id or
+   which health-check field you are fixing. "The chain is missing" is NOT a
+   valid defect statement until you've confirmed via `geometry_inventory`
+   that chain has prim_count == 0. If it has prim_count > 0, the defect is
+   "chain is too small to see" → fix is a close-up capture, not a rebuild.
+2. **One defect per round.** Fix one named thing, re-verify that one thing.
+   Don't bundle 5 changes into one rebuild — you won't know which worked.
+3. **Diff the inventory.** Before and after a repair, compare
+   `geometry_inventory` output. If the component's prim_count/bounds didn't
+   change, your edit didn't take effect — don't re-capture and hope.
+4. **Escalate, don't loop.** If the same defect survives 2 targeted fixes,
+   the approach is wrong — switch backend (VEX↔Python SOP), ask the user,
+   or capture a component detail. Do NOT do a 3rd identical rebuild.
+5. **Rebuild = last resort.** `houdini_discard_sandbox` + full regenerate is
+   only justified when the health check shows fundamental topology breakage
+   (non-manifold, many orphan points) OR orientation is structurally wrong
+   across multiple components.
 
-DO NOT report on orientation — that is verified programmatically.
-Report: missing_components, intersection_issues, proportion_defects, detail_level (1-4).
-Format: structured list, not prose.
-```
+### The Verification Prompt (for describe_image)
+
+Use the canonical `PROCEDURAL_VERIFY_PROMPT` (single source of truth in
+`pi-visionizer/src/config.ts`). It instructs the vision model to:
+- cross-reference a `GEOMETRY_INVENTORY` block you provide alongside the image,
+- NOT report small components as "missing" if they appear in the inventory,
+- emit a structured `VERDICT: accept | fix:<list> | closer_capture:<list> | uncertain`.
+
+When you call `describe_image`, paste the `geometry_inventory` text (returned
+by `capture_review`) into the same message so the vision model can
+cross-validate. Note: vision CANNOT detect orientation — rely on
+`houdini_verify_orientation` for that.
 
 ### Orientation Check Examples
 
@@ -598,9 +650,93 @@ houdini_capture_review(
 ```
 
 - **Always pass `target_path`** — frames and isolates the generated asset.
+  Each view (including orthographic top/front/right) is framed to the
+  target's bounding box via `setViewToBoundingBox`, so the COMPLETE model is
+  always visible — no more clipped ortho views.
+- The result includes a `geometry_inventory` text block listing every
+  `component_id` with its prim count and relative size. **Paste this into
+  your describe_image message** so the vision model can cross-validate
+  presence/absence rather than guessing from pixels.
 - Filepath is auto-routed to the session's screenshot folder; AI-supplied
   basenames are preserved with sequence numbering (`review_001.png`, etc.).
 - If capture returns an error, do not retry or explore alternative capture methods.
+
+**Use `houdini_capture_component_detail`** when a component is present (per
+inventory) but too small to judge in the whole-asset capture:
+```
+houdini_capture_component_detail(
+  filepath="chain_detail.png",
+  node_path="/obj/asset_name/OUT",
+  component_ids=["chain_top", "chainring", "pedal"],
+  views=["perspective"]   # keep cells large; add "top" for a 2-view sheet
+)
+```
+Each component is framed to its OWN bounding box and captured as a separate
+cell — this is how you resolve the "exists but too small to see" ambiguity.
+
+### New Verification Tools (cheat-sheet)
+
+| Tool | When to use |
+|---|---|
+| `houdini_inspect_geometry_health` | After sandbox build, before orientation. Catches orphan points, stray open curves, degenerate faces, non-manifold edges, holes, coincident points. Returns `overall_ok` + per-check `fix` recommendations. |
+| `houdini_geometry_inventory` | Confirm every expected `component_id` exists with prim_count > 0. Flag small components (size_fraction < 0.08) that need a close-up. |
+| `houdini_capture_component_detail` | Close-up capture of specific component_ids when they're too small to see in the whole-asset 4-view. |
+
+## Methodology — Houdini Procedural Modeling (researched)
+
+Distilled from production practice (Horikawa, Entagma, Knipping, SideFX,
+CGWiki). Encode these as defaults, not aspirations.
+
+### Units & scale contract
+- **1 Houdini unit = 1 meter.** Many SOP/sim defaults assume this. Always emit
+  geometry at real-world meter scale. A bicycle wheel is ~0.35m radius, not 35.
+
+### VEX constraints
+- **VEX has NO recursion.** AI-generated recursive VEX functions always fail.
+  Use iteration (`for`/`foreach` inside one wrangle), a SOP Solver for feedback
+  loops, or ForEach subnetworks.
+- **Always `normalize()` after `cross()`.** Cross-product magnitude = product
+  of input lengths × sin(angle), which is not unit-length in general.
+
+### Copy-to-Points attribute contract
+- The target points must carry `@orient` (quaternion, preferred) OR `@N`+`@up`
+  (fallback), plus `@pscale` (uniform) or `@scale` (vector), plus `@piece`/
+  `@name` for variant selection.
+- `@pscale = 1.0` = original source size (no scaling). To scale a component,
+  set `@pscale = desired_size / source_geo_size`.
+- **Copy Stamp was REMOVED in H19.5.** Never reference it. Use ForEach +
+  Metadata node for per-piece variation (read iteration values from the
+  Metadata node's detail attributes, not stale upstream values).
+
+### Boolean hygiene
+- **Clean before Boolean.** Non-manifold edges and degenerate faces on either
+  input produce garbage output. Run `houdini_inspect_geometry_health` and fix
+  before any Boolean/Sweep that cuts the body.
+- **Subdivide AFTER Boolean produces artifacts.** If you need clean topology,
+  VDB-remesh instead, or order PolyExtrude/Bevel before the boolean.
+
+### Orientation VEX recipe (canonical)
+```
+tangent = normalize(next_P - P);           // along the spine/axis
+side    = normalize(cross(tangent, up));   // perpendicular, in-plane
+@N      = cross(side, tangent);            // true surface normal
+p@orient = quaternion(maketransform(side, @N, tangent));
+```
+
+### Standard decomposition by asset type
+| Asset | Decomposition |
+|---|---|
+| Vehicle | Profile curves + Sweep for frame tubes → mirror → Copy-to-Points wheels/handles → Boolean panel cutouts |
+| Furniture | Spine + cross-section profiles → Sweep/Skin → Copy-to-Points legs/rungs |
+| Architecture | Footprint curve → extrude → Copy-to-Points window/door kits via `@piece` → Boolean openings |
+| Organic | L-system or SOP-solver growth → VDB smooth/remesh → attribute scatter for detail |
+
+### Further reading (when stuck on a pattern)
+- Junichiro Horikawa — *VEX for Algorithmic Design* (loop/conditional/trig patterns)
+- Entagma — *SOP Solver in 5 min* (feedback loops)
+- Steven Knipping — *Applied Houdini* (Boolean hard-surface)
+- CGWiki (tokeru.com/cgwiki) — *Joy of Vex*, *Copy Stamp ramble* (attribute flow gotchas)
+- SideFX — Procedural Modeling Learning Path
 
 ## Common VEX Pitfalls
 
