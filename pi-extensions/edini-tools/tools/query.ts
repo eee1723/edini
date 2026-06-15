@@ -77,9 +77,72 @@ export const houdiniInspectGeo = {
   },
 };
 
+export const houdiniGeometryInventory = {
+  name: "houdini_geometry_inventory",
+  label: "Geometry Component Inventory",
+  description:
+    "List every distinct @component_id on a node's geometry with its prim/point counts, bounds, and relative size (size_fraction). " +
+    "The authoritative way to confirm which components exist and flag small ones (size_fraction < 0.08 need a close-up capture).",
+  promptSnippet: "List per-component_id geometry inventory",
+  promptGuidelines: [
+    "Authoritative for 'is component X present?': a component_id with prim_count > 0 EXISTS — do not rebuild it even if a screenshot looks empty.",
+    "Flag components with size_fraction < 0.08 as SMALL — they exist but need houdini_capture_component_detail before vision can judge them.",
+    "Returns an inventory_text block suitable for pasting into a describe_image message so vision cross-validates presence/absence.",
+  ],
+  parameters: Type.Object({
+    node_path: Type.String({
+      description: "SOP node whose geometry contains the @component_id prims",
+    }),
+    max_components: Type.Optional(
+      Type.Number({ description: "Cap on components returned. Default 60." })
+    ),
+  }),
+  async execute(
+    _toolCallId: string,
+    params: { node_path: string; max_components?: number }
+  ) {
+    return forwardTool("houdini_geometry_inventory", params);
+  },
+};
+
+export const houdiniInspectGeometryHealth = {
+  name: "houdini_inspect_geometry_health",
+  label: "Inspect Geometry Health",
+  description:
+    "Check a SOP node's geometry for orphan points, open/stray curves, degenerate faces, non-manifold edges, open boundary edges, and coincident points. " +
+    "Returns overall_ok plus per-check fix recommendations. MANDATORY layer-1 verification before orientation/visual checks.",
+  promptSnippet: "Check geometry health (orphan/degenerate/non-manifold)",
+  promptGuidelines: [
+    "MANDATORY before orientation/visual verification. Skipping it lets non-manifold edges / degenerate faces flow into Boolean/Sweep and silently corrupt results.",
+    "overall_ok must be true before proceeding. Each failed check comes with a concrete fix recommendation.",
+    "open_boundary_edges is EXPECTED for open surfaces (terrain, a single panel) — only a defect for assets that should be closed.",
+  ],
+  parameters: Type.Object({
+    node_path: Type.String({ description: "SOP node whose geometry to health-check" }),
+    degenerate_area_eps: Type.Optional(
+      Type.Number({ description: "Min face area to be non-degenerate. Default 1e-7." })
+    ),
+    coincident_eps: Type.Optional(
+      Type.Number({ description: "Min distance between distinct points. Default 1e-6." })
+    ),
+  }),
+  async execute(
+    _toolCallId: string,
+    params: {
+      node_path: string;
+      degenerate_area_eps?: number;
+      coincident_eps?: number;
+    }
+  ) {
+    return forwardTool("houdini_inspect_geometry_health", params);
+  },
+};
+
 export const queryTools = [
   houdiniSearchNodes,
   houdiniGetHelp,
   houdiniGetNodeInfo,
   houdiniInspectGeo,
+  houdiniGeometryInventory,
+  houdiniInspectGeometryHealth,
 ];

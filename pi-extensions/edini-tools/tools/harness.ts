@@ -54,11 +54,14 @@ export const houdiniRunPythonSandbox = {
   name: "houdini_run_python_sandbox",
   label: "Run Houdini Python Sandbox",
   description:
-    "Execute Houdini Python code inside a procedural sandbox before committing changes to the live scene.",
+    "Execute Houdini Python code inside a procedural sandbox before committing changes to the live scene. " +
+    "Two modes: single-SOP (default) for code that emits geometry from one Python SOP, and network_mode for building a multi-node modular network (body_generate + copytopoints + merge + OUT).",
   promptSnippet: "Run Python code in a Houdini procedural sandbox",
   promptGuidelines: [
     "ALWAYS use houdini_run_python_sandbox for initial procedural asset generation instead of raw houdini_run_python.",
-    "The sandbox provides a Python SOP context — use hou.pwd() and node.geometry() directly in your code.",
+    "Single-SOP mode (network_mode=false, default): the code runs as the cook body of ONE edini_generate Python SOP. It MUST NOT call createNode() on child SOPs — doing so triggers Houdini's 'Infinite recursion in evaluation' guard. Only emit geometry via node.geometry().createPoint()/createPolygon() on the cooking node.",
+    "Network mode (network_mode=true): use this for ANY multi-component modular asset (bicycle, vehicle, furniture with swappable parts). The code runs in the sandbox geo CONTAINER, so it can build a multi-node network: container.createNode('python','body_generate'), container.createNode('copytopoints',...), container.createNode('merge'), container.createNode('null','OUT'). This is the ONLY mode that lets modular assets pass the commit structure/orientation gates through the sandbox instead of raw houdini_run_python.",
+    "In network mode, use the injected `sandbox_root` variable (the geo container) or hou.node(sandbox_root_path) to create children, and end with a null/merge node named 'OUT' (or pass output_node_name). The harness auto-finds OUT, cooks it, and runs diagnostics on it.",
     "The sandbox result includes diagnostics and structural_checks (has_geometry, point_count, bounds_nonzero) — no need for separate inspect_geo or check_errors calls.",
     "Do not delete a failed sandbox before reviewing the diagnostics in the result.",
     "NEVER set commit_on_success=true on the first sandbox execution. Always capture (4-view quad) and verify with describe_image using the 3D verification prompt BEFORE committing.",
@@ -76,6 +79,18 @@ export const houdiniRunPythonSandbox = {
     delete_on_failure: Type.Optional(
       Type.Boolean({ description: "Delete the sandbox automatically when execution fails" })
     ),
+    network_mode: Type.Optional(
+      Type.Boolean({
+        description:
+          "Run the code in the sandbox geo CONTAINER so it can build a multi-node modular network (createNode on child SOPs, wire, OUT). REQUIRED for any multi-component modular asset. Default false (single Python SOP cook). NOTE: in single-SOP mode, createNode() inside the cook causes infinite-recursion errors — use network_mode=true whenever you need child nodes.",
+      })
+    ),
+    output_node_name: Type.Optional(
+      Type.String({
+        description:
+          "Name of the child node to cook + diagnose in network_mode (e.g. 'OUT'). If omitted, the harness finds a node named OUT/out, else the largest component_id-bearing node.",
+      })
+    ),
   }),
   async execute(
     _toolCallId: string,
@@ -84,6 +99,8 @@ export const houdiniRunPythonSandbox = {
       sandbox_name?: string;
       commit_on_success?: boolean;
       delete_on_failure?: boolean;
+      network_mode?: boolean;
+      output_node_name?: string;
     }
   ) {
     return forwardTool("houdini_run_python_sandbox", params);
@@ -249,6 +266,46 @@ export const houdiniDiscardSandbox = {
   },
 };
 
+export const houdiniBuildProceduralAsset = {
+  name: "houdini_build_procedural_asset",
+  label: "Build Procedural Asset (Declarative Recipe)",
+  description:
+    "Build a modular procedural asset from a declarative JSON recipe. The harness deterministically assembles the multi-node network (component python SOPs -> anchor generators -> Copy-to-Points -> merge -> postprocess -> OUT), cooks it, and runs the structure/orientation gate previews. The agent authors only per-component geometry code — never createNode/wiring/blockpath. This is the PREFERRED path for any multi-component asset.",
+  promptSnippet: "Build a modular asset from a declarative recipe",
+  promptGuidelines: [
+    "PREFERRED for multi-component assets. Use this instead of network_mode hand-writing when the asset fits the body + Copy-to-Points decomposition (vehicles, furniture, any asset with swappable/repeated parts).",
+    "You only write PER-COMPONENT geometry code: a single Python SOP cook body that emits geometry on its own node (node = hou.pwd(); geo = node.geometry()) and tags every prim with component_id. NEVER call createNode inside component code.",
+    "Every component code MUST: geo.addAttrib(hou.attribType.Prim, 'component_id', '') before geometry, then poly.setAttribValue('component_id', '<id>') on each prim. The builder checks component_id presence post-cook and reports missing ids.",
+    "Components with anchors get Copy-to-Points automatically: provide anchors=[{position:[x,y,z], orient:[x,y,z,w], pscale:1.0, component_id:'wheel_fl'}, ...]. Components with empty/omitted anchors go straight into the merge.",
+    "pscale semantics: 1.0 = original source size. Model each stamped component at UNIT scale and set pscale to the real size, OR model at real scale and use pscale=1.0.",
+    "The builder does NOT commit. After build, inspect the returned diagnostics/structure_advisory/orientation_check/component_id_check, then call houdini_commit_sandbox(root_path, name, orientation_checks=recipe.orientation_asserts) to run the hard gates and commit.",
+    "If a component's cook fails, the builder reports which component and preserves the sandbox for diagnostics — do NOT discard before reading the error.",
+    "orientation_asserts in the recipe flow to commit_sandbox's orientation gate automatically. Each needs component_id (matching a prim attr value), kind (radial|elongated|planar), expected_axis (X/Y/Z/-X/-Y/-Z).",
+  ],
+  parameters: Type.Object({
+    recipe: Type.Record(Type.String(), Type.Unknown(), {
+      description:
+        "Declarative recipe object. Keys: asset_name (str), units (str, doc only), components (list of {id, code, anchors?}), postprocess? (list of {type, params?}), orientation_asserts? (list of {component_id, kind, expected_axis, tolerance_deg?, signed?}), expected? (dict). See the Declarative Recipe Builder section of the procedural-modeling skill for the full schema.",
+    }),
+    sandbox_name: Type.Optional(
+      Type.String({ description: "Optional name for the sandbox root (defaults to asset_name)" })
+    ),
+    delete_on_failure: Type.Optional(
+      Type.Boolean({ description: "Delete the sandbox automatically when the build fails" })
+    ),
+  }),
+  async execute(
+    _toolCallId: string,
+    params: {
+      recipe: Record<string, unknown>;
+      sandbox_name?: string;
+      delete_on_failure?: boolean;
+    }
+  ) {
+    return forwardTool("houdini_build_procedural_asset", params);
+  },
+};
+
 export const houdiniCaptureReview = {
   name: "houdini_capture_review",
   label: "Capture Procedural Review",
@@ -315,6 +372,57 @@ export const houdiniCaptureReview = {
   },
 };
 
+export const houdiniCaptureComponentDetail = {
+  name: "houdini_capture_component_detail",
+  label: "Capture Component Detail",
+  description:
+    "Capture close-up cells of specific @component_id values when they are present (per inventory) but too small to judge in the whole-asset 4-view. " +
+    "Each component is framed to its OWN bounding box — this resolves the 'exists but too small to see' ambiguity definitively.",
+  promptSnippet: "Close-up capture of specific component_ids",
+  promptGuidelines: [
+    "Use this (NOT another capture_review) when geometry_inventory shows a component with prim_count > 0 but size_fraction < 0.08, OR when vision flagged a component as missing/unclear that inventory says exists.",
+    "Each component_id is framed to its own bounding box and captured as a separate cell — vision can then judge details (spokes, bolts, chains) it couldn't see in the whole-asset view.",
+    "Keep views minimal (['perspective'] or ['perspective','top']) so cells stay large.",
+  ],
+  parameters: Type.Object({
+    filepath: Type.String({
+      description: "Output file path for the contact sheet PNG (auto-routed to the session screenshot folder)",
+    }),
+    node_path: Type.String({
+      description: "SOP node whose geometry contains the @component_id prims",
+    }),
+    component_ids: Type.Array(Type.String(), {
+      description: "component_id values to capture as individual close-up cells",
+    }),
+    views: Type.Optional(
+      Type.Array(Type.String(), {
+        description: "View angles per cell. Default ['perspective']. Add 'top' for a 2-view sheet.",
+      })
+    ),
+    shading_mode: Type.Optional(
+      Type.String({ description: "Viewport shading: 'smooth', 'wire', 'flat'. Default 'smooth'." })
+    ),
+    resolution: Type.Optional(
+      Type.Tuple([Type.Number(), Type.Number()], {
+        description: "Capture resolution (width, height) per cell.",
+      })
+    ),
+  }),
+  async execute(
+    _toolCallId: string,
+    params: {
+      filepath: string;
+      node_path: string;
+      component_ids: string[];
+      views?: string[];
+      shading_mode?: string;
+      resolution?: [number, number];
+    }
+  ) {
+    return forwardTool("houdini_capture_component_detail", params);
+  },
+};
+
 export const harnessTools = [
   houdiniCollectDiagnostics,
   houdiniRunPythonSandbox,
@@ -322,5 +430,7 @@ export const harnessTools = [
   houdiniVerifyOrientation,
   houdiniCommitSandbox,
   houdiniDiscardSandbox,
+  houdiniBuildProceduralAsset,
   houdiniCaptureReview,
+  houdiniCaptureComponentDetail,
 ];
