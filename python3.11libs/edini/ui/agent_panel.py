@@ -1377,6 +1377,12 @@ class AgentPanel(QtWidgets.QWidget):
             bubble = _AiBubble()
             bubble.set_stored_content(content)
             self.timeline_view.add_widget(bubble)
+        # A failed model turn is persisted with stopReason="error" and an
+        # empty content array. Surface the errorMessage so the user can see
+        # why a turn produced no output (e.g. insufficient quota, bad params)
+        # instead of an empty timeline.
+        if msg.get("stopReason") == "error" and msg.get("errorMessage"):
+            self.add_error(msg["errorMessage"])
         self.timeline_view.add_widget(_Separator("──"))
 
     def add_error(self, message: str):
