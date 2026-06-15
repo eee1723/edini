@@ -144,6 +144,9 @@ class MockPrim:
     def __init__(self):
         self._vertices: list[MockPoint] = []
         self._attribs: dict[str, Any] = {}
+        self._number = 0
+        self._type_name = "Poly"
+        self._closed = True
 
     def addVertex(self, pt) -> None:
         # Accept either a MockPoint (legacy) or wrap automatically
@@ -160,6 +163,27 @@ class MockPrim:
 
     def attribValue(self, name: str) -> Any:
         return self._attribs.get(name)
+
+    def stringAttribValue(self, name: str) -> str:
+        v = self._attribs.get(name, "")
+        return str(v) if v is not None else ""
+
+    def number(self) -> int:
+        return self._number
+
+    def type(self):
+        return MockPrimType(self._type_name)
+
+    def isClosed(self) -> bool:
+        return self._closed
+
+
+class MockPrimType:
+    def __init__(self, name: str):
+        self._name = name
+
+    def name(self) -> str:
+        return self._name
 
     def stringAttribValue(self, name: str) -> str:
         v = self._attribs.get(name, "")
@@ -226,6 +250,7 @@ class MockGeometry:
         """Create a polygon in builder mode."""
         self._builder_mode = True
         prim = MockPrim()
+        prim._number = len(self._prims)
         self._prims.append(prim)
         self._prim_count = len(self._prims)
         return prim
@@ -482,9 +507,29 @@ class MockShelves:
 class MockViewport:
     def __init__(self):
         self.home_all_called = False
+        self.set_view_to_bbox_called = False
+        self.last_bbox = None
+        self._type = None
 
     def homeAll(self) -> None:
         self.home_all_called = True
+
+    def setViewToBoundingBox(self, bbox, frame_time=0.0, padding=1.0) -> None:
+        """Record bounding-box framing (the preferred framing method)."""
+        self.set_view_to_bbox_called = True
+        self.last_bbox = bbox
+
+    def type(self):
+        return self._type
+
+    def setType(self, view_type) -> None:
+        self._type = view_type
+
+    def changeType(self, view_type) -> None:
+        self._type = view_type
+
+    def draw(self, update=False, force_update=False) -> None:
+        pass
 
 
 class MockFlipbookSettings:

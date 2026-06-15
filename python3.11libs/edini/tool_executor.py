@@ -15,9 +15,9 @@ from edini.node_utils import (
     set_param, set_params_batch, get_param, list_nodes, get_node_info, layout_nodes,
     search_nodes, get_help, inspect_geometry,
     run_python, run_vex, create_hda, get_hda_info,
-    capture_review, capture_network,
+    capture_review, capture_network, capture_component_detail,
     get_selection, check_errors, set_display_flag,
-    verify_orientation,
+    verify_orientation, inspect_geometry_health, geometry_inventory,
 )
 from edini import screenshots
 from edini.harness import (
@@ -137,6 +137,26 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     "houdini_verify_orientation": lambda **kw: verify_orientation(
         kw["node_path"],
         kw.get("checks", []),
+    ),
+    "houdini_inspect_geometry_health": lambda **kw: inspect_geometry_health(
+        kw["node_path"],
+        degenerate_area_eps=kw.get("degenerate_area_eps", 1e-7),
+        coincident_eps=kw.get("coincident_eps", 1e-6),
+    ),
+    "houdini_geometry_inventory": lambda **kw: geometry_inventory(
+        kw["node_path"],
+        max_components=kw.get("max_components", 60),
+    ),
+    "houdini_capture_component_detail": lambda **kw: capture_component_detail(
+        screenshots.relocate_filepath(
+            kw["filepath"], screenshots.current_session(),
+            default_prefix="component_detail",
+        ),
+        node_path=kw["node_path"],
+        component_ids=kw["component_ids"],
+        views=kw.get("views"),
+        shading_mode=kw.get("shading_mode", "smooth"),
+        resolution=kw.get("resolution"),
     ),
     "houdini_collect_diagnostics": lambda **kw: collect_diagnostics(
         kw["node_path"],

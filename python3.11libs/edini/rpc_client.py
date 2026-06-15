@@ -315,6 +315,18 @@ class _RpcWorker(QObject):
             elif delta_type == "thinking_delta":
                 self.thinking_delta.emit(delta.get("delta", ""))
 
+        elif event_type == "message_end":
+            # Pi emits this when the model turn finishes (or fails). When the
+            # model returned an error (400 bad params, insufficient quota, 429,
+            # etc.), stopReason is "error" and errorMessage carries the detail.
+            # Without this, provider/model errors are silently swallowed — the
+            # UI shows nothing and the user has no idea why the turn produced
+            # no output.
+            msg = event.get("message", {}) or {}
+            if isinstance(msg, dict) and msg.get("stopReason") == "error":
+                err = msg.get("errorMessage") or "Model call failed (no message)"
+                self.error_occurred.emit(err)
+
         elif event_type == "tool_execution_start":
             self.tool_call.emit(
                 event.get("toolName", ""),

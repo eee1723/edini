@@ -897,18 +897,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         messages = messages
         self.agent_panel.clear_timeline()
         for m in messages:
-            _type = m.get("_type", m.get("role", ""))
-            content = m.get("content", "")
-            if _type == "user":
-                self.agent_panel._append_user_message(content, m.get("images"))
-            elif _type == "vision_description":
-                self._render_vision_description(m)
-            elif _type == "assistant":
-                thinking = m.get("thinking", [])
-                for t in thinking:
-                    self.agent_panel._append_thinking_text(t)
-                if content:
-                    self.agent_panel._append_assistant_message(content)
+            self._render_history_message(m)
 
     def _merge_consecutive_assistants(self, messages: list) -> list:
         """Merge consecutive assistant messages into single entries.
@@ -949,11 +938,22 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
                         thinkings.append(t.strip())
                 j += 1
 
-            merged.append({
+            merged_entry: dict = {
                 "role": "assistant",
                 "content": "\n\n".join(texts),
                 "thinking": thinkings,
-            })
+            }
+            # Preserve a failed turn's error reason/message so the UI can show
+            # why the assistant produced no output (e.g. insufficient quota,
+            # bad request params). A single error entry is enough to flag the
+            # merged turn; we surface the first one found.
+            for src in messages[i:j]:
+                if src.get("stopReason") == "error":
+                    merged_entry["stopReason"] = "error"
+                    if src.get("errorMessage"):
+                        merged_entry["errorMessage"] = src["errorMessage"]
+                    break
+            merged.append(merged_entry)
             i = j
         return merged
 
@@ -963,6 +963,29 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self._undo_stack.clear()
         self._undo_pointer = -1
         self._round_counter = 0
+
+    def _render_history_message(self, m: dict) -> None:
+        """Render a single message dict (user/assistant/vision) into the panel.
+
+        Shared by all history-loading paths (RPC messages, session select,
+        back-to-current) so error handling stays consistent: a failed model
+        turn (stopReason="error") is surfaced instead of silently producing
+        an empty bubble.
+        """
+        _type = m.get("_type", m.get("role", ""))
+        content = m.get("content", "")
+        if _type == "user":
+            self.agent_panel._append_user_message(content, m.get("images"))
+        elif _type == "vision_description":
+            self._render_vision_description(m)
+        elif _type == "assistant":
+            thinking = m.get("thinking", [])
+            for t in thinking:
+                self.agent_panel._append_thinking_text(t)
+            if content:
+                self.agent_panel._append_assistant_message(content)
+            if m.get("stopReason") == "error" and m.get("errorMessage"):
+                self.agent_panel.add_error(m["errorMessage"])
 
     def _refresh_current_stats(self, delay_ms: int = 300):
         """Request stats from Pi after a delay (to let session switch settle)."""
@@ -1005,18 +1028,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         messages = self._merge_consecutive_assistants(messages)
         messages = messages
         for m in messages:
-            _type = m.get("_type", m.get("role", ""))
-            content = m.get("content", "")
-            if _type == "user":
-                self.agent_panel._append_user_message(content, m.get("images"))
-            elif _type == "vision_description":
-                self._render_vision_description(m)
-            elif _type == "assistant":
-                thinking = m.get("thinking", [])
-                for t in thinking:
-                    self.agent_panel._append_thinking_text(t)
-                if content:
-                    self.agent_panel._append_assistant_message(content)
+            self._render_history_message(m)
 
         # Tell pi to switch session (async, updates stats)
         self._rpc_client.send_switch_session(session_path)
@@ -1038,18 +1050,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
             messages = self._merge_consecutive_assistants(messages)
             messages = messages
             for m in messages:
-                _type = m.get("_type", m.get("role", ""))
-                content = m.get("content", "")
-                if _type == "user":
-                    self.agent_panel._append_user_message(content, m.get("images"))
-                elif _type == "vision_description":
-                    self._render_vision_description(m)
-                elif _type == "assistant":
-                    thinking = m.get("thinking", [])
-                    for t in thinking:
-                        self.agent_panel._append_thinking_text(t)
-                    if content:
-                        self.agent_panel._append_assistant_message(content)
+                self._render_history_message(m)
 
             self._rpc_client.send_switch_session(target)
             self._refresh_current_stats(500)  # fallback if session_switched callback fails

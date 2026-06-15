@@ -600,5 +600,223 @@ class TestSetParamsBatch(unittest.TestCase):
         self.assertIn("not found", result["error"])
 
 
+# ===================================================================
+# TestInspectGeometryHealth
+# ===================================================================
+
+class TestInspectGeometryHealth(unittest.TestCase):
+    """Tests for inspect_geometry_health() — structural geometry checks."""
+
+    def _make_node_with_geo(self, name):
+        cr = create_node("null", name=name)
+        _register_created_node(cr)
+        node = _mock_hou.node(cr["path"])
+        geo = _mock_hou.MockGeometry()
+        geo.clear()
+        node._geometry = geo
+        return node, geo
+
+    def _add_triangle(self, geo, pts, cid=None, _point_cache=None):
+        """Add a triangle polygon from three (x,y,z) positions.
+
+        _point_cache: an optional dict mapping a rounded position tuple to an
+        existing MockPoint, so coincident corners reuse the SAME point number
+        (mirroring real Houdini topology where vertices share points). When
+        provided, edge-valence checks behave realistically.
+        """
+        from tests.mock_hou import MockPoint
+        cache = _point_cache if _point_cache is not None else {}
+        verts = []
+        for p in pts:
+            key = (round(p[0], 6), round(p[1], 6), round(p[2], 6))
+            if key in cache:
+                verts.append(cache[key])
+            else:
+                pt = MockPoint()
+                pt.setPosition(p)
+                geo._points.append(pt)
+                pt._number = len(geo._points) - 1
+                geo._point_count = len(geo._points)
+                cache[key] = pt
+                verts.append(pt)
+        poly = geo.createPolygon()
+        for v in verts:
+            poly.addVertex(v)
+        if cid is not None:
+            poly.setAttribValue("component_id", cid)
+        return poly
+
+    def test_missing_node(self):
+        from edini.node_utils import inspect_geometry_health
+        r = inspect_geometry_health("/obj/ghost")
+        self.assertFalse(r["success"])
+
+    def test_clean_geometry_passes_all_checks(self):
+        from edini.node_utils import inspect_geometry_health
+        node, geo = self._make_node_with_geo("health_clean")
+        # A closed tetrahedron: 4 triangles, all edges shared by exactly 2
+        # prims (manifold, no boundary edges), no degenerate faces, all points
+        # referenced. This is the "healthy closed solid" case.
+        cache = {}
+        v = [(0, 0, 0), (1, 0, 0), (0.5, 1, 0), (0.5, 0.4, 0.9)]
+        tris = [
+            (v[0], v[1], v[2]),  # base
+            (v[0], v[1], v[3]),
+            (v[1], v[2], v[3]),
+            (v[2], v[0], v[3]),
+        ]
+        for t in tris:
+            self._add_triangle(geo, list(t), _point_cache=cache)
+
+        r = inspect_geometry_health(node.path())
+        self.assertTrue(r["success"])
+        self.assertTrue(r["overall_ok"], f"should be healthy: {r['summary']}")
+        for name, check in r["checks"].items():
+            self.assertTrue(check["passed"], f"{name} should pass: {check}")
+
+    def test_orphan_points_detected(self):
+        from edini.node_utils import inspect_geometry_health
+        node, geo = self._make_node_with_geo("health_orphan")
+        self._add_triangle(geo, [(0, 0, 0), (1, 0, 0), (0, 1, 0)])
+        # Add an orphan point referenced by no prim
+        from tests.mock_hou import MockPoint
+        orphan = MockPoint()
+        orphan.setPosition((5, 5, 5))
+        geo._points.append(orphan)
+        orphan._number = len(geo._points) - 1
+        geo._point_count = len(geo._points)
+
+        r = inspect_geometry_health(node.path())
+        self.assertTrue(r["success"])
+        self.assertFalse(r["overall_ok"])
+        self.assertFalse(r["checks"]["orphan_points"]["passed"])
+        self.assertEqual(r["checks"]["orphan_points"]["count"], 1)
+        self.assertIn("Fuse", r["checks"]["orphan_points"]["fix"])
+
+    def test_degenerate_prims_detected(self):
+        from edini.node_utils import inspect_geometry_health
+        node, geo = self._make_node_with_geo("health_degenerate")
+        # Degenerate: three colinear points → zero area
+        self._add_triangle(geo, [(0, 0, 0), (1, 0, 0), (2, 0, 0)])
+        r = inspect_geometry_health(node.path())
+        self.assertFalse(r["checks"]["degenerate_prims"]["passed"])
+        self.assertEqual(r["checks"]["degenerate_prims"]["count"], 1)
+
+    def test_nonmanifold_edges_detected(self):
+        from edini.node_utils import inspect_geometry_health
+        node, geo = self._make_node_with_geo("health_nonmanifold")
+        # Three triangles all sharing edge (0)-(1) → non-manifold (count=3).
+        # Use a shared point cache so the two corner points are reused
+        # (real topology), giving the edge a valence of 3.
+        cache = {}
+        p_shared = [(0, 0, 0), (1, 0, 0)]
+        self._add_triangle(geo, [p_shared[0], p_shared[1], (0, 1, 0)], _point_cache=cache)
+        self._add_triangle(geo, [p_shared[0], p_shared[1], (0, -1, 0)], _point_cache=cache)
+        self._add_triangle(geo, [p_shared[0], p_shared[1], (0, 0, 1)], _point_cache=cache)
+        r = inspect_geometry_health(node.path())
+        self.assertFalse(r["checks"]["nonmanifold_edges"]["passed"])
+        self.assertGreaterEqual(r["checks"]["nonmanifold_edges"]["count"], 1)
+
+    def test_open_boundary_edges_detected(self):
+        from edini.node_utils import inspect_geometry_health
+        node, geo = self._make_node_with_geo("health_open_boundary")
+        # A single triangle has 3 boundary edges (each shared by 1 prim)
+        self._add_triangle(geo, [(0, 0, 0), (1, 0, 0), (0, 1, 0)])
+        r = inspect_geometry_health(node.path())
+        self.assertFalse(r["checks"]["open_boundary_edges"]["passed"])
+        self.assertEqual(r["checks"]["open_boundary_edges"]["count"], 3)
+
+    def test_summary_lists_all_check_names(self):
+        from edini.node_utils import inspect_geometry_health
+        node, geo = self._make_node_with_geo("health_summary")
+        self._add_triangle(geo, [(0, 0, 0), (1, 0, 0), (0, 1, 0)])
+        r = inspect_geometry_health(node.path())
+        expected = {"orphan_points", "open_curves", "degenerate_prims",
+                    "nonmanifold_edges", "open_boundary_edges",
+                    "coincident_points"}
+        self.assertEqual(set(r["summary"].keys()), expected)
+
+
+# ===================================================================
+# TestGeometryInventory
+# ===================================================================
+
+class TestGeometryInventory(unittest.TestCase):
+    """Tests for geometry_inventory() — per-component breakdown."""
+
+    def _make_node_with_components(self, name, components):
+        """components: dict of cid -> list of triangle point-tuples."""
+        cr = create_node("null", name=name)
+        _register_created_node(cr)
+        node = _mock_hou.node(cr["path"])
+        geo = _mock_hou.MockGeometry()
+        geo.clear()
+        node._geometry = geo
+        geo.addAttrib(None, "component_id", "")
+        for cid, tris in components.items():
+            for tri in tris:
+                from tests.mock_hou import MockPoint
+                verts = []
+                for p in tri:
+                    pt = MockPoint()
+                    pt.setPosition(p)
+                    geo._points.append(pt)
+                    pt._number = len(geo._points) - 1
+                    geo._point_count = len(geo._points)
+                    verts.append(pt)
+                poly = geo.createPolygon()
+                for v in verts:
+                    poly.addVertex(v)
+                poly.setAttribValue("component_id", cid)
+        return node
+
+    def test_no_component_id_attribute(self):
+        from edini.node_utils import geometry_inventory
+        cr = create_node("null", name="inv_no_cid")
+        _register_created_node(cr)
+        node = _mock_hou.node(cr["path"])
+        node._geometry = _mock_hou.MockGeometry(point_count=4, prim_count=1)
+
+        r = geometry_inventory(node.path())
+        self.assertTrue(r["success"])
+        self.assertFalse(r["has_component_id"])
+        self.assertEqual(r["total_components"], 0)
+
+    def test_inventory_lists_each_component(self):
+        from edini.node_utils import geometry_inventory
+        node = self._make_node_with_components("inv_multi", {
+            "frame": [[(0, 0, 0), (2, 0, 0), (0, 2, 0)]],   # big
+            "bolt": [[(5, 5, 5), (5.01, 5, 0), (5, 5.01, 0)]],  # tiny
+        })
+        r = geometry_inventory(node.path())
+        self.assertTrue(r["success"])
+        self.assertTrue(r["has_component_id"])
+        self.assertEqual(r["total_components"], 2)
+        ids = {c["component_id"] for c in r["components"]}
+        self.assertEqual(ids, {"frame", "bolt"})
+
+    def test_inventory_flags_small_components(self):
+        from edini.node_utils import geometry_inventory
+        node = self._make_node_with_components("inv_small", {
+            "frame": [[(0, 0, 0), (3, 0, 0), (0, 3, 0)]],
+            "tiny_chain": [[(0, 0, 0.01), (0.001, 0, 0.01), (0, 0.001, 0.01)]],
+        })
+        r = geometry_inventory(node.path())
+        by_id = {c["component_id"]: c for c in r["components"]}
+        # The tiny component's size_fraction should be well under the whole
+        self.assertLess(by_id["tiny_chain"]["size_fraction"],
+                        by_id["frame"]["size_fraction"])
+        self.assertLess(by_id["tiny_chain"]["size_fraction"], 0.1)
+
+    def test_inventory_text_is_present(self):
+        from edini.node_utils import geometry_inventory
+        node = self._make_node_with_components("inv_text", {
+            "wheel": [[(0, 0, 0), (1, 0, 0), (0, 1, 0)]],
+        })
+        r = geometry_inventory(node.path())
+        self.assertIn("GEOMETRY_INVENTORY", r["inventory_text"])
+        self.assertIn("wheel", r["inventory_text"])
+
+
 if __name__ == "__main__":
     unittest.main()

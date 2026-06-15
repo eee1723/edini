@@ -479,6 +479,343 @@ def inspect_geometry(node_path: str) -> dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
+def _component_bounds(geo, prim_subset) -> dict[str, Any] | None:
+    """Compute bounds + centroid for a subset of prims of a geometry."""
+    xs: list[float] = []
+    ys: list[float] = []
+    zs: list[float] = []
+    for prim in prim_subset:
+        for vtx in prim.vertices():
+            p = vtx.point().position()
+            xs.append(float(p[0])); ys.append(float(p[1])); zs.append(float(p[2]))
+    if not xs:
+        return None
+    mn = (min(xs), min(ys), min(zs))
+    mx = (max(xs), max(ys), max(zs))
+    centroid = (sum(xs) / len(xs), sum(ys) / len(ys), sum(zs) / len(zs))
+    return {
+        "bounds": {"min": list(mn), "max": list(mx),
+                   "size": [mx[i] - mn[i] for i in range(3)]},
+        "centroid": [round(c, 4) for c in centroid],
+    }
+
+
+def geometry_inventory(node_path: str, max_components: int = 60) -> dict[str, Any]:
+    """Build a per-component_id inventory of the geometry on a node.
+
+    For each distinct `component_id` prim-attribute value, report:
+      - prim_count, point_count (unique vertices)
+      - bounds (min/max/size) and centroid
+      - size relative to the whole-asset diagonal (fraction), so the caller can
+        spot components that are present but tiny (the recurring "chain/pedals
+        exist but vision reports them missing" failure).
+
+    Returns {success, node_path, total_components, components: [...],
+             whole_bounds, inventory_text}.
+    `inventory_text` is a compact human-readable block meant to be fed to a
+    vision model alongside a screenshot for cross-validation.
+    """
+    try:
+        node = hou.node(node_path)
+        if node is None:
+            return {"success": False, "error": f"Node not found: {node_path}"}
+        geo = node.geometry()
+        if geo is None:
+            return {"success": False, "error": f"No geometry on {node_path}"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+    comp_attr = geo.findPrimAttrib("component_id")
+    if comp_attr is None:
+        # No component_id — fall back to a single whole-geometry entry
+        bounds = _geometry_bounds(geo)
+        return {
+            "success": True,
+            "node_path": node_path,
+            "total_components": 0,
+            "has_component_id": False,
+            "whole_bounds": bounds,
+            "inventory_text": (
+                "(no @component_id attribute on this geometry; cannot break "
+                "down per-component. Whole geometry bounds shown above.)"
+            ),
+        }
+
+    # Bucket prims by component_id value
+    buckets: dict[str, list] = {}
+    for prim in geo.prims():
+        try:
+            cid = str(prim.stringAttribValue("component_id"))
+        except Exception:
+            cid = ""
+        if not cid:
+            cid = "(unlabeled)"
+        buckets.setdefault(cid, []).append(prim)
+
+    # Whole-asset diagonal for relative-size computation
+    whole = _geometry_bounds(geo)
+    whole_diag = 1.0
+    if whole and whole.get("size"):
+        s = whole["size"]
+        whole_diag = max(1e-6, (s[0] ** 2 + s[1] ** 2 + s[2] ** 2) ** 0.5)
+
+    components: list[dict[str, Any]] = []
+    for cid in sorted(buckets.keys()):
+        prims = buckets[cid]
+        info = _component_bounds(geo, prims) or {
+            "bounds": None, "centroid": [0, 0, 0]}
+        seen_pts: set[int] = set()
+        for prim in prims:
+            for vtx in prim.vertices():
+                seen_pts.add(vtx.point().number())
+        size = info["bounds"]["size"] if info.get("bounds") else [0, 0, 0]
+        diag = (size[0] ** 2 + size[1] ** 2 + size[2] ** 2) ** 0.5
+        components.append({
+            "component_id": cid,
+            "prim_count": len(prims),
+            "point_count": len(seen_pts),
+            "bounds": info["bounds"],
+            "centroid": info["centroid"],
+            "size_fraction": round(diag / whole_diag, 4),
+        })
+        if len(components) >= max_components:
+            break
+
+    # Compact text for vision cross-validation
+    lines = ["GEOMETRY_INVENTORY (component_id -> prim_count, size_fraction of whole):"]
+    for c in components:
+        flag = "  <-- SMALL" if c["size_fraction"] < 0.08 else ""
+        lines.append(
+            f"  {c['component_id']}: {c['prim_count']} prims, "
+            f"{c['point_count']} pts, size={c['size_fraction']}{flag}"
+        )
+    inventory_text = "\n".join(lines)
+
+    return {
+        "success": True,
+        "node_path": node_path,
+        "has_component_id": True,
+        "total_components": len(buckets),
+        "components": components,
+        "whole_bounds": whole,
+        "inventory_text": inventory_text,
+    }
+
+
+def _edge_key(a: int, b: int) -> tuple[int, int]:
+    """Canonical undirected edge key from two point numbers."""
+    return (a, b) if a <= b else (b, a)
+
+
+def inspect_geometry_health(
+    node_path: str,
+    degenerate_area_eps: float = 1e-7,
+    coincident_eps: float = 1e-6,
+    max_coincident_report: int = 20,
+) -> dict[str, Any]:
+    """Run structural health checks on a node's cooked geometry.
+
+    Detects problems that viewport screenshots CANNOT reveal but that silently
+    break procedural assets (and downstream sims/booleans/renders):
+
+      - orphan_points:   points not referenced by any primitive
+      - open_curves:     open (non-closed) curve primitives — usually stray
+                         construction curves that should have been deleted
+      - degenerate_prims: polygons/faces with ~zero area (slivers, colinear)
+      - nonmanifold_edges: edges shared by 3+ polygons (bad topology)
+      - open_boundary_edges: edges shared by exactly 1 polygon (holes in what
+                         should be a closed surface)
+      - coincident_points: distinct points within `coincident_eps` of each other
+                         (duplicates that Fuse would merge)
+
+    Each finding includes a `fix` recommendation naming the SOP to use.
+
+    Returns {success, node_path, summary, checks: {...}, overall_ok}.
+    `overall_ok` is True only if every check passes.
+    """
+    try:
+        node = hou.node(node_path)
+        if node is None:
+            return {"success": False, "error": f"Node not found: {node_path}"}
+        geo = node.geometry()
+        if geo is None:
+            return {"success": False, "error": f"No geometry on {node_path}"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+    points = geo.points()
+    prims = geo.prims()
+    n_points = len(points)
+    n_prims = len(prims)
+
+    # ── Orphan points: points referenced by no prim ──
+    referenced_pts: set[int] = set()
+    for prim in prims:
+        # Use prim.vertices() which works for polygons; curve prims also have
+        # vertices. Guard per-prim to avoid one bad prim aborting the scan.
+        try:
+            for vtx in prim.vertices():
+                referenced_pts.add(vtx.point().number())
+        except Exception:
+            continue
+    orphan_pt_nums = [p.number() for p in points if p.number() not in referenced_pts]
+    orphan_points = {
+        "count": len(orphan_pt_nums),
+        "sample": orphan_pt_nums[: max(0, max_coincident_report)],
+        "passed": len(orphan_pt_nums) == 0,
+        "fix": ("Delete orphans with a Blast/Delete SOP targeting unreferenced "
+                "points, or add a Fuse SOP (Consolidate Points) to merge them."),
+    }
+
+    # ── Open curves: curve primitives that are not closed ──
+    open_curve_prims: list[int] = []
+    for prim in prims:
+        try:
+            # Prim type name: 'Poly', 'PolyLine'/'Mesh', 'NURBSCurve',
+            # 'BezierCurve', etc. Anything curve-like that isn't closed is a
+            # stray construction curve in a procedural asset.
+            type_name = prim.type().name().lower()
+            is_curve = ("curve" in type_name) or (type_name == "polyline")
+            if is_curve and hasattr(prim, "isClosed") and not prim.isClosed():
+                open_curve_prims.append(prim.number())
+        except Exception:
+            continue
+    open_curves = {
+        "count": len(open_curve_prims),
+        "sample": open_curve_prims[:max_coincident_report],
+        "passed": len(open_curve_prims) == 0,
+        "fix": ("Open curves are usually leftover construction geometry. "
+                "Blast them, or convert to closed polygons. They cause "
+                "errors in Boolean/Sweep and pollute renders."),
+    }
+
+    # ── Degenerate prims: zero-area polygons ──
+    degenerate_prims: list[int] = []
+    for prim in prims:
+        try:
+            type_name = prim.type().name().lower()
+            if "poly" not in type_name:
+                continue  # only polygonal area is meaningful here
+            verts = prim.vertices()
+            if len(verts) < 3:
+                degenerate_prims.append(prim.number())
+                continue
+            # Shoelace via the first three vertices' positions in world space —
+            # a triangle area proxy. For >3 verts this still flags colinear/
+            # zero-area faces reliably.
+            p0 = verts[0].point().position()
+            p1 = verts[1].point().position()
+            p2 = verts[2].point().position()
+            e01 = (p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2])
+            e02 = (p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2])
+            cross = (
+                e01[1] * e02[2] - e01[2] * e02[1],
+                e01[2] * e02[0] - e01[0] * e02[2],
+                e01[0] * e02[1] - e01[1] * e02[0],
+            )
+            tri_area2 = 0.5 * (
+                cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]
+            )
+            if tri_area2 < degenerate_area_eps:
+                degenerate_prims.append(prim.number())
+        except Exception:
+            continue
+    degenerate = {
+        "count": len(degenerate_prims),
+        "sample": degenerate_prims[:max_coincident_report],
+        "passed": len(degenerate_prims) == 0,
+        "fix": ("Use a Clean SOP (Remove Degenerate Faces) or Delete SOP by "
+                "the listed primitive numbers. Degenerate faces break normals "
+                "and subdivision."),
+    }
+
+    # ── Edge valence: open boundary (1) and non-manifold (3+) edges ──
+    edge_counts: dict[tuple[int, int], int] = {}
+    for prim in prims:
+        try:
+            verts = prim.vertices()
+            n = len(verts)
+            if n < 2:
+                continue
+            for i in range(n):
+                a = verts[i].point().number()
+                b = verts[(i + 1) % n].point().number()
+                if a == b:
+                    continue
+                key = _edge_key(a, b)
+                edge_counts[key] = edge_counts.get(key, 0) + 1
+        except Exception:
+            continue
+    open_boundary = [list(k) for k, c in edge_counts.items() if c == 1]
+    nonmanifold = [list(k) for k, c in edge_counts.items() if c >= 3]
+    open_boundary_edges = {
+        "count": len(open_boundary),
+        "sample": open_boundary[:max_coincident_report],
+        "passed": len(open_boundary) == 0,
+        "note": ("An open boundary edge belongs to exactly one polygon. This "
+                 "is EXPECTED for open surfaces (terrain, cloth, a single "
+                 "panel) but flags holes in what should be a closed solid."),
+        "fix": ("If the asset should be closed: cap holes with a PolyFill or "
+                "Cap SOP. If it's intentionally open, ignore."),
+    }
+    nonmanifold_edges = {
+        "count": len(nonmanifold),
+        "sample": nonmanifold[:max_coincident_report],
+        "passed": len(nonmanifold) == 0,
+        "fix": ("Non-manifold edges (shared by 3+ polygons) are always bad. "
+                "Find and remove the extra polygons; a Clean SOP helps. These "
+                "break Boolean operations and simulations."),
+    }
+
+    # ── Coincident points (O(n^2) — skip for very large point counts) ──
+    coincident_pairs: list[list[int]] = []
+    if n_points <= 4000:
+        positions = [(p.number(), p.position()) for p in points]
+        eps2 = coincident_eps * coincident_eps
+        for i in range(len(positions)):
+            na, pa = positions[i]
+            for j in range(i + 1, len(positions)):
+                nb, pb = positions[j]
+                dx = pa[0] - pb[0]; dy = pa[1] - pb[1]; dz = pa[2] - pb[2]
+                if dx * dx + dy * dy + dz * dz < eps2:
+                    coincident_pairs.append([na, nb])
+                    if len(coincident_pairs) >= max_coincident_report:
+                        break
+            if len(coincident_pairs) >= max_coincident_report:
+                break
+    coincident = {
+        "count": len(coincident_pairs),
+        "sample": coincident_pairs[:max_coincident_report],
+        "skipped_large_pointcount": n_points > 4000,
+        "passed": len(coincident_pairs) == 0,
+        "fix": ("Run a Fuse SOP (Consolidate Points) to merge coincident "
+                "points. Unmerged duplicates break Copy-to-Points, shading, "
+                "and attribute interpolation."),
+    }
+
+    checks = {
+        "orphan_points": orphan_points,
+        "open_curves": open_curves,
+        "degenerate_prims": degenerate,
+        "nonmanifold_edges": nonmanifold_edges,
+        "open_boundary_edges": open_boundary_edges,
+        "coincident_points": coincident,
+    }
+    overall_ok = all(c["passed"] for c in checks.values())
+
+    return {
+        "success": True,
+        "node_path": node_path,
+        "point_count": n_points,
+        "prim_count": n_prims,
+        "overall_ok": overall_ok,
+        "summary": {
+            name: c["count"] for name, c in checks.items()
+        },
+        "checks": checks,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Script / HDA Operations
 # ---------------------------------------------------------------------------
@@ -782,6 +1119,91 @@ def _concat_images_grid(
         return False
 
 
+def _target_bounds(target_node: Any) -> Any:
+    """Compute a hou.BoundingBox around the target node's cooked geometry.
+
+    Returns None if the bounds cannot be determined. The bounds come from the
+    node's own cooked geometry (not the whole viewport), which is what we want
+    for tight per-asset framing.
+    """
+    try:
+        geo = target_node.geometry()
+        if geo is None:
+            return None
+    except Exception:
+        return None
+    # Prefer the geometry's bounding box (a hou.BoundingBox object) so we can
+    # hand it to viewport.setViewToBoundingBox directly.
+    try:
+        bbox = geo.boundingBox()
+        # A degenerate/empty bbox (min > max) means no real geometry
+        if bbox is not None:
+            mn = bbox.minvec()
+            mx = bbox.maxvec()
+            try:
+                if (float(mx[0]) < float(mn[0])
+                        or float(mx[1]) < float(mn[1])
+                        or float(mx[2]) < float(mn[2])):
+                    return None
+            except Exception:
+                return None
+            # Expand by a small epsilon so zero-thickness planes still frame
+            for axis in range(3):
+                if float(mx[axis]) - float(mn[axis]) < 1e-6:
+                    mn_list = list(mn)
+                    mx_list = list(mx)
+                    mn_list[axis] -= 0.05
+                    mx_list[axis] += 0.05
+                    # hou.Vector3 is read-only; rebuild via hou.BoundingBox
+                    try:
+                        import hou as _hou
+                        return _hou.BoundingBox(
+                            tuple(mn_list), tuple(mx_list))
+                    except Exception:
+                        return bbox
+        return bbox
+    except Exception:
+        return None
+
+
+def _frame_to_bounds(
+    viewport: Any,
+    target_node: Any,
+    padding: float = 1.15,
+) -> bool:
+    """Frame the viewport tightly around the target node's geometry.
+
+    This is the correct way to ensure orthographic (top/front/right) views
+    show the COMPLETE model. The old code called `viewport.homeAll()`, which
+    frames the entire viewport contents and is affected by the persistent
+    pan/zoom state of orthographic cameras — so switching to a Top view after
+    a zoomed-in Perspective session would often cut off the model.
+
+    `viewport.setViewToBoundingBox(bbox)` resets the view to fit a specific
+    bounding box, which is exactly what we need. We expand the box by
+    `padding` (default 1.15× — a little breathing room) so edges aren't
+    clipped against the frame.
+
+    Returns True if bounding-box framing succeeded, False if it fell back to
+    homeAll() (or that also failed).
+    """
+    bbox = _target_bounds(target_node)
+    if bbox is not None:
+        try:
+            viewport.setViewToBoundingBox(bbox, 0.0, padding)
+            viewport.draw(True, True)
+            return True
+        except Exception:
+            pass
+    # Fallback: home everything (less precise but always available)
+    try:
+        viewport.homeAll()
+        viewport.draw(True, True)
+        return True
+    except Exception:
+        return False
+
+
 def _capture_single_view(
     viewer: Any,
     viewport: Any,
@@ -1016,13 +1438,15 @@ def capture_review(
                     except Exception:
                         pass
 
-                # Frame target: HomeAll (Shift+A) for all views to show the model completely
+                # Frame target: use bounding-box framing so each view (esp.
+                # orthographic top/front/right) shows the COMPLETE model.
+                # homeAll() alone is unreliable for ortho views — it inherits
+                # the previous pan/zoom state and frequently clips the model.
                 if home_target and target_node is not None:
-                    try:
-                        viewport.homeAll()
-                        viewport.draw(True, True)
-                    except Exception:
-                        pass
+                    # Orthographic views benefit from slightly more padding so
+                    # thin extents (e.g. a bike's X-width) aren't edge-clipped.
+                    ortho_padding = 1.3 if view_name != "perspective" else 1.15
+                    _frame_to_bounds(viewport, target_node, padding=ortho_padding)
 
                 # Capture
                 ok, err_detail = _capture_single_view(viewer, viewport, tmp_path, frame, resolution)
@@ -1061,7 +1485,7 @@ def capture_review(
             size_kb = round(os.path.getsize(filepath) / 1024, 1)
             actual_cols = min(columns, len(captured))
             actual_rows = (len(captured) + actual_cols - 1) // actual_cols
-            return {
+            result = {
                 "success": True,
                 "path": filepath,
                 "size_kb": size_kb,
@@ -1072,6 +1496,20 @@ def capture_review(
                 "views": views,
                 "frames": frames,
             }
+            # Attach a per-component geometry inventory so the agent (and the
+            # vision model) can cross-check "is this component present but
+            # small?" against hard geometry data rather than relying on the
+            # screenshot alone. This defeats the recurring failure where vision
+            # reports small components (chains, pedals, bolts) as "missing".
+            if target_node is not None:
+                try:
+                    inv = geometry_inventory(target_node.path())
+                    if inv.get("success"):
+                        result["geometry_inventory"] = inv.get("inventory_text")
+                        result["inventory_components"] = inv.get("total_components")
+                except Exception:
+                    pass
+            return result
         return {
             "success": False,
             "error": f"Output file not created: {filepath}",
@@ -1129,6 +1567,233 @@ def capture_review(
                 vp_settings = viewport.settings()
                 display_set = vp_settings.displaySet(hou.displaySetType.DisplayModel)
                 display_set.setShadedMode(_restore_shading)
+        except Exception:
+            pass
+
+
+def capture_component_detail(
+    filepath: str,
+    node_path: str,
+    component_ids: list[str],
+    views: list[str] | None = None,
+    shading_mode: str = "smooth",
+    resolution: tuple[int, int] | None = None,
+) -> dict[str, Any]:
+    """Capture close-up screenshots of specific components, one cell per id.
+
+    This solves the recurring "component exists but is too small to see at
+    whole-asset viewport resolution" failure (chains, pedals, bolts, small
+    trim). For each component_id in `component_ids`, the viewport is framed
+    tightly around THAT component's own bounding box and captured, so the
+    vision model can actually see it.
+
+    Args:
+        filepath: Output grid image path.
+        node_path: SOP node carrying the geometry with @component_id.
+        component_ids: e.g. ["chain_top", "pedal", "chainring"].
+        views: Per-cell view(s). Default ["perspective"]. A single view keeps
+            cells large; pass ["perspective","top"] for a 2-view-per-component
+            contact sheet.
+        shading_mode: Passed through to the viewport display set.
+        resolution: Per-cell pixel size.
+
+    Returns: same shape as capture_review (success/path/grid/captured).
+    """
+    import os as _os
+    import uuid as _uuid
+
+    filepath = _os.path.abspath(filepath)
+    if views is None:
+        views = ["perspective"]
+    valid_views = {"perspective", "top", "front", "right", "bottom", "back", "left"}
+    views = [v.lower() for v in views if v.lower() in valid_views] or ["perspective"]
+
+    # Resolve per-component bounding boxes from the geometry inventory
+    inv = geometry_inventory(node_path)
+    if not inv.get("success"):
+        return {"success": False, "error": inv.get("error", "inventory failed"),
+                "method": "component_detail"}
+    if not inv.get("has_component_id"):
+        return {"success": False,
+                "error": "Geometry has no @component_id attribute — cannot "
+                         "isolate components for close-up capture.",
+                "method": "component_detail"}
+
+    by_id = {c["component_id"]: c for c in inv["components"]}
+    missing = [cid for cid in component_ids if cid not in by_id]
+    present = [cid for cid in component_ids if cid in by_id]
+    if missing:
+        return {
+            "success": False,
+            "error": (f"component_ids not found in geometry: {missing}. "
+                      f"Available: {sorted(by_id)[:20]}"),
+            "method": "component_detail",
+            "available": sorted(by_id)[:40],
+        }
+    if not present:
+        return {"success": False, "error": "No matching component_ids.",
+                "method": "component_detail"}
+
+    _restore_hidden: list[str] = []
+    _restore_shading = None
+    _restore_view_type = None
+    stage = "initialize"
+
+    try:
+        stage = "get_viewer"
+        desktop = hou.ui.curDesktop()
+        viewer = desktop.paneTabOfType(hou.paneTabType.SceneViewer)
+        if viewer is None:
+            return {"success": False, "error": "No Scene Viewer pane found",
+                    "method": "component_detail"}
+        viewport = viewer.curViewport()
+        _restore_view_type = viewport.type() if hasattr(viewport, "type") else None
+
+        # Shading
+        vp_settings = viewport.settings()
+        try:
+            shading_map = {
+                "smooth": hou.glShadingType.Smooth,
+                "smooth_wire": hou.glShadingType.SmoothWire,
+                "wire": hou.glShadingType.Wire,
+                "flat": hou.glShadingType.Flat,
+            }
+            if shading_mode in shading_map:
+                display_set = vp_settings.displaySet(hou.displaySetType.DisplayModel)
+                _restore_shading = display_set.shadedMode()
+                display_set.setShadedMode(shading_map[shading_mode])
+        except Exception:
+            pass
+
+        # Make the target visible + current, hide other /obj siblings
+        target_node = hou.node(node_path)
+        if target_node is None:
+            return {"success": False, "error": f"Node not found: {node_path}",
+                    "method": "component_detail"}
+        try:
+            target_node.setDisplayFlag(True)
+            target_node.setCurrent(True, clear_all_selected=True)
+        except Exception:
+            pass
+        try:
+            obj = hou.node("/obj")
+            tp = target_node.path()
+            for child in obj.children() if obj else []:
+                cp = child.path()
+                if cp == tp or tp.startswith(cp + "/"):
+                    continue
+                try:
+                    if child.isDisplayFlagSet():
+                        child.setDisplayFlag(False)
+                        _restore_hidden.append(cp)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        _os.makedirs(_os.path.dirname(filepath) or ".", exist_ok=True)
+        tmp_dir = _os.path.dirname(filepath)
+        captured: list[str] = []
+        cell_errors: list[str] = []
+
+        for cid in present:
+            comp = by_id[cid]
+            bnds = comp.get("bounds")
+            if not bnds:
+                cell_errors.append(f"{cid}: no bounds")
+                continue
+
+            # Build a hou.BoundingBox for this component and frame to it
+            try:
+                bbox = hou.BoundingBox(
+                    hou.Vector3(bnds["min"]),
+                    hou.Vector3(bnds["max"]),
+                )
+            except Exception:
+                cell_errors.append(f"{cid}: bbox build failed")
+                continue
+
+            for view_name in views:
+                tmp_path = _os.path.join(
+                    tmp_dir, f"_edini_detail_{_uuid.uuid4().hex[:8]}.png")
+                view_type = _get_view_type(view_name)
+                if view_type is not None:
+                    try:
+                        viewport.changeType(view_type)
+                    except Exception:
+                        pass
+                # Frame tightly around THIS component with extra padding so the
+                # whole part is centered and clearly visible.
+                try:
+                    viewport.setViewToBoundingBox(bbox, 0.0, 1.4)
+                    viewport.draw(True, True)
+                except Exception:
+                    try:
+                        viewport.homeAll()
+                    except Exception:
+                        pass
+                ok, err = _capture_single_view(
+                    viewer, viewport, tmp_path, 1, resolution)
+                if ok:
+                    captured.append(tmp_path)
+                else:
+                    cell_errors.append(f"{cid}@{view_name}: {err[:100]}")
+
+        if not captured:
+            return {"success": False,
+                    "error": f"All captures failed: {cell_errors[:5]}",
+                    "method": "component_detail"}
+
+        columns = len(views)
+        concat_ok = _concat_images_grid(captured, filepath, columns, resolution)
+        for tmp in captured:
+            try:
+                if _os.path.exists(tmp) and tmp != filepath:
+                    _os.remove(tmp)
+            except Exception:
+                pass
+        if not concat_ok and captured and _os.path.exists(captured[0]):
+            import shutil
+            shutil.copy(captured[0], filepath)
+
+        if not _os.path.exists(filepath):
+            return {"success": False, "error": f"Output not created: {filepath}",
+                    "method": "component_detail"}
+
+        size_kb = round(_os.path.getsize(filepath) / 1024, 1)
+        actual_cols = min(columns, len(captured))
+        actual_rows = (len(captured) + actual_cols - 1) // actual_cols
+        return {
+            "success": True,
+            "path": filepath,
+            "size_kb": size_kb,
+            "method": "component_detail",
+            "grid": {"rows": actual_rows, "cols": actual_cols, "cells": len(captured)},
+            "captured": captured[:10],
+            "errors": cell_errors[:10] if cell_errors else [],
+            "components": present,
+            "views": views,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e), "method": "component_detail",
+                "stage": stage, "traceback": traceback.format_exc()}
+    finally:
+        try:
+            if _restore_view_type is not None:
+                viewport.changeType(_restore_view_type)
+        except Exception:
+            pass
+        try:
+            for p in _restore_hidden:
+                n = hou.node(p)
+                if n is not None:
+                    n.setDisplayFlag(True)
+        except Exception:
+            pass
+        try:
+            if _restore_shading is not None:
+                ds = viewport.settings().displaySet(hou.displaySetType.DisplayModel)
+                ds.setShadedMode(_restore_shading)
         except Exception:
             pass
 

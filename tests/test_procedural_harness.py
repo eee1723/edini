@@ -520,5 +520,99 @@ poly.addVertex(pt3)
                 harness.discard_sandbox(run["root_path"])
 
 
+class TestOrientationGateNodeSelection(unittest.TestCase):
+    """Regression: commit-gate must pick the real asset output (OUT), not the
+    empty dispatcher `edini_generate`.
+
+    In the bicycle run log, `edini_generate` is a Python SOP that builds a
+    node network but emits no geometry itself. The old gate took the FIRST
+    child with non-None geometry out of ("edini_generate","OUT","out"), which
+    was the empty dispatcher, so it reported "component_id not found" and the
+    agent had to bypass the gate with skip_orientation=true.
+    """
+
+    def _build_sandbox_with_dispatcher_and_out(self, sandbox_name):
+        """Build a sandbox where edini_generate is empty and OUT has the asset."""
+        run = harness.run_python_sandbox(
+            "node = hou.pwd()\nnode.geometry().clear()",
+            sandbox_name=sandbox_name,
+        )
+        root = _mock_hou.node(run["root_path"])
+        return run, root
+
+    def _make_geo_with_component_id(self, points, prims, verts):
+        """Build a MockGeometry whose findPrimAttrib('component_id') hits."""
+        geo = _mock_hou.MockGeometry(point_count=points, prim_count=prims,
+                                     vertex_count=verts,
+                                     bounds=(0.0, 1.0, 0.0, 1.0, 0.0, 1.0))
+        # addAttrib(attrib_type, name, default) — mock ignores attrib_type,
+        # findPrimAttrib only checks the name key.
+        geo.addAttrib(None, "component_id", "")
+        return geo
+
+    def test_select_gate_target_prefers_component_id_node_over_empty_dispatcher(self):
+        run, root = self._build_sandbox_with_dispatcher_and_out("gate_pick_out")
+        # edini_generate is empty (created by sandbox). Add an OUT child with
+        # real geometry + component_id attribute + many prims.
+        out = root.createNode("null", "OUT")
+        _mock_hou.add_node(out)
+        out._geometry = self._make_geo_with_component_id(100, 50, 200)
+
+        # Also leave edini_generate with empty geometry (default)
+        edini_generate = _mock_hou.node(f"{run['root_path']}/edini_generate")
+        edini_generate._geometry = _mock_hou.MockGeometry(
+            point_count=0, prim_count=0, vertex_count=0, bounds=None)
+
+        target = harness._select_gate_target(root)
+        self.assertIs(target, out,
+                      "Gate must select OUT (has component_id + prims), not the "
+                      "empty edini_generate dispatcher")
+
+    def test_select_gate_target_picks_most_prims_when_multiple_have_component_id(self):
+        run, root = self._build_sandbox_with_dispatcher_and_out("gate_most_prims")
+        # Two nodes both carry component_id; the merge/OUT has more prims.
+        small = root.createNode("null", "mid")
+        _mock_hou.add_node(small)
+        small._geometry = self._make_geo_with_component_id(10, 5, 20)
+
+        big = root.createNode("null", "OUT")
+        _mock_hou.add_node(big)
+        big._geometry = self._make_geo_with_component_id(100, 50, 200)
+
+        target = harness._select_gate_target(root)
+        self.assertIs(target, big,
+                      "Gate must pick the highest-prim component_id node (the final OUT)")
+
+    def test_commit_sandbox_orientation_gate_no_longer_false_fails_on_dispatcher(self):
+        """End-to-end: commit with orientation_checks should run against OUT.
+
+        With the buggy node selection, commit would return passed_all=False
+        with "component_id not found". After the fix, since the mock verify
+        returns no component_id prims it reports an error — but the KEY point
+        is the gate now evaluates OUT (which has component_id), not the empty
+        dispatcher (which would report 'not found'). We assert the error path
+        differs from the dispatcher's 'attribute not found' message.
+        """
+        run, root = self._build_sandbox_with_dispatcher_and_out("gate_e2e")
+        out = root.createNode("null", "OUT")
+        _mock_hou.add_node(out)
+        out._geometry = self._make_geo_with_component_id(100, 50, 200)
+
+        result = harness._run_orientation_gate(run["root_path"], [
+            {"component_id": "wheel", "kind": "radial", "expected_axis": "X"},
+        ])
+        # The gate ran (not None). With the fix it inspects OUT which HAS
+        # component_id, so it should NOT return the "attribute not found"
+        # dispatcher error. The mock has no prims with the value 'wheel', so
+        # verify_orientation reports "No prims with component_id" — a DIFFERENT
+        # error than "attribute component_id not found".
+        self.assertIsNotNone(result)
+        self.assertFalse(result.get("passed_all"))
+        err = result.get("error", "")
+        self.assertNotIn("not found", err.lower(),
+                         "Must not report the dispatcher's 'attribute not found' error; "
+                         f"got: {err}")
+
+
 if __name__ == "__main__":
     unittest.main()
