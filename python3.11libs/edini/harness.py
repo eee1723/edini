@@ -1490,6 +1490,68 @@ def _component_id_overwrite_snippet(anchor_component_ids: list[str]) -> str:
     )
 
 
+def _build_float_parm_template(
+    hou_module,
+    name: str,
+    label: str,
+    default: float,
+    min_v: float,
+    max_v: float,
+) -> Any:
+    """Construct a hou.FloatParmTemplate across H18-H21 signature variance.
+
+    The default_value argument is the pain point: it is typed as
+    ``std::vector<double>`` in SWIG, and H21 rejects a single-element tuple
+    ``(d,)`` with a confusing "argument 4 of type std::vector" error. The
+    reliable forms are a flat ``vector<double>`` (a Python list ``[d]``) for
+    the positional default, or the keyword ``default_value`` form. We try the
+    documented keyword signature first (most stable), then positional forms
+    known to work on each major version, then set min/max after construction.
+    """
+    # Candidate constructors, most-documented first. Each returns a template
+    # or raises; the caller picks the first that succeeds.
+    candidates = (
+        # H20/H21 documented keyword form (default_value expects vector<double>).
+        lambda: hou_module.FloatParmTemplate(
+            name, label, 1,
+            default_value=[default],
+            min=min_v, max=max_v,
+            min_str=str(min_v), max_str=str(max_v),
+            naming_scheme=hou_module.parmNamingScheme.Base1,
+            look=hou_module.parmLook.Regular,
+            naming=hou_module.parmNaming.Base1),
+        # positional vector default (H19/H20/H21 all accept a list).
+        lambda: hou_module.FloatParmTemplate(name, label, 1, [default], min_v, max_v),
+        # positional with default only (set bounds after).
+        lambda: hou_module.FloatParmTemplate(name, label, 1, [default]),
+        # bare name/label/components (oldest form).
+        lambda: hou_module.FloatParmTemplate(name, label, 1),
+    )
+    tmpl = None
+    last_exc = None
+    for ctor in candidates:
+        try:
+            tmpl = ctor()
+            break
+        except Exception as e:
+            last_exc = e
+            continue
+    if tmpl is None:
+        raise RuntimeError(
+            f"FloatParmTemplate({name!r}) could not be constructed on this "
+            f"Houdini build; last error: {last_exc}")
+    # Ensure bounds regardless of which ctor path won (some forms ignore
+    # min/max on construction and need explicit setters).
+    try:
+        tmpl.setMin(min_v)
+        tmpl.setMax(max_v)
+        tmpl.setMinValueStr(str(min_v))
+        tmpl.setMaxValueStr(str(max_v))
+    except Exception:
+        pass
+    return tmpl
+
+
 def _install_spare_params(
     root: Any,
     params_spec: dict[str, dict],
@@ -1501,10 +1563,11 @@ def _install_spare_params(
     component python SOP reads them via hou.ch("../../<name>") — and changing
     any one parm re-cooks every dependent component (true linkage).
 
-    Returns {name: {"value", "channel_path", "label?"}} for the response.
-    Best-effort: if spare-parm installation fails on this Houdini build (e.g.
-    the mock has no setSpareParms), returns the resolved default values anyway
-    so expression evaluation still works; a warning is recorded by the caller.
+    Returns {name: {"value", "channel_path", "label?", "installed"}}. The
+    "installed" flag is False when spare-parm installation is unsupported
+    (mock / stripped build) so the caller can warn that channel refs will not
+    bind; resolved default values are still returned so expression evaluation
+    proceeds regardless.
     """
     import hou as _hou
     result: dict[str, dict[str, Any]] = {}
@@ -1518,26 +1581,19 @@ def _install_spare_params(
         label = spec.get("label", name)
         min_v = float(mn) if mn is not None else 0.0
         max_v = float(mx) if mx is not None else 10.0
-        # Houdini FloatParmTemplate signature varies across versions; try the
-        # minimal (name, label, num_components, default_tuple, min, max) form
-        # which is stable across H18-H21.
-        tmpl = None
-        for ctor in (
-            lambda: _hou.FloatParmTemplate(name, label, 1, (default,), min_v, max_v),
-            lambda: _hou.FloatParmTemplate(name, label, 1, [default]),
-            lambda: _hou.FloatParmTemplate(name, label, 1),
-        ):
-            try:
-                tmpl = ctor()
-                break
-            except Exception:
-                continue
-        if tmpl is not None:
+        try:
+            tmpl = _build_float_parm_template(
+                _hou, name, label, default, min_v, max_v)
             templates.append(tmpl)
+        except Exception:
+            # Template construction failed for this one; skip it (the value is
+            # still recorded for expression evaluation).
+            pass
         result[name] = {
             "value": default,
             "channel_path": f"{root.path()}/{name}",
             "label": label if label != name else None,
+            "installed": False,  # set True only if group install succeeds
         }
     if templates:
         try:
@@ -1545,8 +1601,12 @@ def _install_spare_params(
             for t in templates:
                 group.append(t)
             root.setSpareParmGroup(group)
+            # Mark every constructed parm as installed.
+            for name in result:
+                result[name]["installed"] = True
         except Exception:
-            # Mock or unsupported build — defaults still usable for expr eval
+            # Mock or unsupported build — defaults still usable for expr eval.
+            # Caller emits a warning that channel refs may not bind.
             pass
     return result
 
@@ -1730,6 +1790,19 @@ def build_procedural_asset(
             try:
                 param_install = _install_spare_params(root, params_spec)
                 param_values = {n: v["value"] for n, v in param_install.items()}
+                # Surface which params failed to install as spare parms:
+                # channel refs (hou.ch) in component code will not bind
+                # for those, so the agent must add the parms itself or the
+                # geometry cook will error. This is the actionable signal.
+                not_installed = [n for n, v in param_install.items()
+                                 if not v.get("installed")]
+                if not_installed:
+                    warnings.append(
+                        f"spare parms not installed on sandbox root: "
+                        f"{not_installed}. Component code using hou.ch('../../<name>') "
+                        f"will fail unless these parms exist. Either the Houdini "
+                        f"build lacks setSpareParmGroup, or FloatParmTemplate "
+                        f"construction failed for them.")
             except Exception as e:
                 warnings.append(f"spare-param install failed ({e}); "
                                 "component channel refs may not bind")
@@ -1928,6 +2001,7 @@ def build_procedural_asset(
             "components_built": components_built,
             "anchors_built": anchors_built,
             "component_id_check": component_id_check,
+            "params_summary": param_install if param_install else {},
             "diagnostics": diag,
             "structural_checks": structural_checks,
             "warnings": warnings,

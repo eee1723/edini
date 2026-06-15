@@ -463,6 +463,15 @@ class TestBuildWithParams(unittest.TestCase):
         r = harness.build_procedural_asset(recipe)
         self.assertTrue(r["success"], msg=r.get("error"))
         self.assertEqual(r["anchors_built"], {"wheel": 2})
+        # A2: params_summary is exposed with channel paths + values.
+        self.assertIn("params_summary", r)
+        self.assertIn("wheelbase", r["params_summary"])
+        self.assertAlmostEqual(r["params_summary"]["wheelbase"]["value"], 1.0)
+        # The mock lacks FloatParmTemplate -> installed=False, and a
+        # warning lists the not-installed parms (actionable signal).
+        self.assertFalse(r["params_summary"]["wheelbase"]["installed"])
+        joined = " ".join(r.get("warnings", []))
+        self.assertIn("not installed", joined)
         anc = _mock_hou.node(f"{r['root_path']}/wheel_anchors")
         self.assertIsNotNone(anc)
         pts = anc.geometry().points()
@@ -503,6 +512,49 @@ class TestBuildWithParams(unittest.TestCase):
         r = harness.build_procedural_asset(recipe)
         self.assertFalse(r["success"])
         self.assertIn("bogus", r["error"])
+
+
+class TestInstallSpareParams(unittest.TestCase):
+    """_install_spare_params must return resolved defaults even when the
+    Houdini build lacks FloatParmTemplate/ParmTemplateGroup (mock / stripped
+    runtime). The H21-safe ctor candidate chain should not raise out of the
+    function — it records installed=False and lets expression eval proceed."""
+
+    def test_returns_defaults_when_parm_api_unavailable(self):
+        from tests.mock_hou import create_mock_hou, MockNode
+        from tests.test_node_utils import _mock_hou  # shared mock
+        # Build a throwaway node on the shared mock.
+        root = _mock_hou.node("/obj").createNode("geo", "tmp_root")
+        result = harness._install_spare_params(root, {
+            "wheelbase": {"default": 1.0, "min": 0.5, "max": 2.0},
+            "wheel_r": {"default": 0.35, "label": "Wheel Radius"},
+        })
+        # Every param recorded with its resolved default.
+        self.assertAlmostEqual(result["wheelbase"]["value"], 1.0)
+        self.assertAlmostEqual(result["wheel_r"]["value"], 0.35)
+        # channel_path points at the sandbox root.
+        self.assertTrue(result["wheelbase"]["channel_path"].endswith("/wheelbase"))
+        # label surfaces only when it differs from the name.
+        self.assertIsNone(result["wheelbase"]["label"])
+        self.assertEqual(result["wheel_r"]["label"], "Wheel Radius")
+        # Mock has no FloatParmTemplate -> not installed.
+        self.assertFalse(result["wheelbase"]["installed"])
+        root.destroy()
+
+    def test_empty_spec_returns_empty(self):
+        from tests.test_node_utils import _mock_hou
+        root = _mock_hou.node("/obj").createNode("geo", "tmp_empty")
+        self.assertEqual(harness._install_spare_params(root, {}), {})
+        root.destroy()
+
+    def test_build_float_parm_template_candidate_chain_is_safe(self):
+        """The ctor candidate chain must not raise unhandled — it raises a
+        clear RuntimeError only when ALL candidates fail (mock: all fail)."""
+        from tests.mock_hou import MockHou
+        with self.assertRaises(RuntimeError) as cm:
+            harness._build_float_parm_template(
+                MockHou(), "wb", "WB", 1.0, 0.0, 10.0)
+        self.assertIn("FloatParmTemplate", str(cm.exception))
 
 
 if __name__ == "__main__":
