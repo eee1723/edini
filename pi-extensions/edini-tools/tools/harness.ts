@@ -144,6 +144,8 @@ export const houdiniVerifyOrientation = {
     "kind=planar: surface normal = smallest eigenvalue's vector (fender, saddle, body panel).",
     "When a check fails, the result includes a 'hint' field with the exact hou.Quaternion to apply.",
     "Set signed=true ONLY when direction matters (e.g. saddle normal must point +Y, not just be along Y).",
+    "PREFERRED (B-station): declare construction_axis on each assert — the local-space axis the component is generated around. The builder then derives the world axis deterministically from the anchor @orient (no PCA, no point-sampling noise) and bakes it as the edini_world_axis prim attr. verify_orientation reads that directly (method='construction'). Without construction_axis the check falls back to PCA (method='pca').",
+    "construction_axis is the ground-truth path: declare it for any asset you build via houdini_build_procedural_asset so orientation becomes a deterministic check, not an estimate.",
   ],
   parameters: Type.Object({
     node_path: Type.String({
@@ -169,6 +171,12 @@ export const houdiniVerifyOrientation = {
         signed: Type.Optional(
           Type.Boolean({ description: "Direction matters (default false — axis is a line)" })
         ),
+        construction_axis: Type.Optional(
+          Type.Union([
+            Type.Literal("X"), Type.Literal("Y"), Type.Literal("Z"),
+            Type.Literal("-X"), Type.Literal("-Y"), Type.Literal("-Z"),
+          ], { description: "B-station (PREFERRED). The local-space axis the component is generated around. When set, the builder derives the world axis deterministically from the anchor @orient (no PCA) and bakes it as edini_world_axis. Omit to fall back to PCA." })
+        ),
       })
     ),
   }),
@@ -182,6 +190,7 @@ export const houdiniVerifyOrientation = {
         expected_axis: "X" | "Y" | "Z" | "-X" | "-Y" | "-Z";
         tolerance_deg?: number;
         signed?: boolean;
+        construction_axis?: "X" | "Y" | "Z" | "-X" | "-Y" | "-Z";
       }>;
     }
   ) {
@@ -225,6 +234,12 @@ export const houdiniCommitSandbox = {
           ]),
           tolerance_deg: Type.Optional(Type.Number()),
           signed: Type.Optional(Type.Boolean()),
+          construction_axis: Type.Optional(
+            Type.Union([
+              Type.Literal("X"), Type.Literal("Y"), Type.Literal("Z"),
+              Type.Literal("-X"), Type.Literal("-Y"), Type.Literal("-Z"),
+            ], { description: "B-station: local construction axis (deterministic). Omit for PCA fallback." })
+          ),
         }),
         { description: "Orientation checks to run as a commit gate (same schema as houdini_verify_orientation)" }
       )
@@ -245,6 +260,7 @@ export const houdiniCommitSandbox = {
         expected_axis: "X" | "Y" | "Z" | "-X" | "-Y" | "-Z";
         tolerance_deg?: number;
         signed?: boolean;
+        construction_axis?: "X" | "Y" | "Z" | "-X" | "-Y" | "-Z";
       }>;
       skip_orientation?: boolean;
     }
@@ -281,11 +297,12 @@ export const houdiniBuildProceduralAsset = {
     "The builder does NOT commit. After build, inspect the returned diagnostics/structure_advisory/orientation_check/component_id_check, then call houdini_commit_sandbox(root_path, name, orientation_checks=recipe.orientation_asserts) to run the hard gates and commit.",
     "If a component's cook fails, the builder reports which component and preserves the sandbox for diagnostics — do NOT discard before reading the error.",
     "orientation_asserts in the recipe flow to commit_sandbox's orientation gate automatically. Each needs component_id (matching a prim attr value), kind (radial|elongated|planar), expected_axis (X/Y/Z/-X/-Y/-Z).",
+    "B-station (PREFERRED): add construction_axis to each orientation_assert — the local-space axis the component is generated around (e.g. a wheel generated as a ring in the XZ plane has construction_axis:Y). The builder then derives the world axis DETERMINISTICALLY from the anchor @orient quaternion and bakes it as the edini_world_axis prim attr, so verify_orientation skips PCA entirely (method='construction'). The builder also REJECTS the recipe at build time if construction_axis, the anchor @orient, and expected_axis contradict each other — catching self-consistent errors before any cook.",
   ],
   parameters: Type.Object({
     recipe: Type.Record(Type.String(), Type.Unknown(), {
       description:
-        "Declarative recipe object. Keys: asset_name (str), units (str, doc only), components (list of {id, code, anchors?}), postprocess? (list of {type, params?}), orientation_asserts? (list of {component_id, kind, expected_axis, tolerance_deg?, signed?}), expected? (dict). See the Declarative Recipe Builder section of the procedural-modeling skill for the full schema.",
+        "Declarative recipe object. Keys: asset_name (str), units (str, doc only), components (list of {id, code, anchors?}), postprocess? (list of {type, params?}), orientation_asserts? (list of {component_id, kind, expected_axis, tolerance_deg?, signed?, construction_axis?}), expected? (dict). construction_axis (B-station) declares the local construction axis for deterministic world-axis derivation. See the Declarative Recipe Builder section of the procedural-modeling skill for the full schema.",
     }),
     sandbox_name: Type.Optional(
       Type.String({ description: "Optional name for the sandbox root (defaults to asset_name)" })

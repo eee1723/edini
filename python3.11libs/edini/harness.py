@@ -1326,6 +1326,21 @@ def _validate_recipe(recipe: Any) -> list[str]:
             if ax not in valid_axes:
                 errors.append(
                     f"orientation_asserts[{i}].expected_axis must be one of {sorted(valid_axes)}")
+            # construction_axis (B-station, optional): the local-space axis the
+            # component declares as its symmetry/long/normal axis. When present,
+            # the builder deterministically derives the world axis from the
+            # anchor's @orient quaternion instead of relying on PCA. Must be a
+            # valid axis specifier; "signed"/"tolerance_deg" still apply.
+            cax = a.get("construction_axis")
+            if cax is not None:
+                if isinstance(cax, str):
+                    cax_norm = cax.upper()
+                else:
+                    cax_norm = None
+                if cax_norm not in valid_axes:
+                    errors.append(
+                        f"orientation_asserts[{i}].construction_axis must be one "
+                        f"of {sorted(valid_axes)} if present")
 
     post = recipe.get("postprocess", [])
     if post is None:
@@ -1454,6 +1469,216 @@ def _set_parm_safe(node, parm_name: str, value: Any) -> None:
     parm.set(value)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Construction-axis derivation (B-station)
+#
+# Deterministically derives each component's world-space axis from its declared
+# local construction_axis + the anchor @orient quaternion. This replaces PCA
+# estimation with ground truth, and lets the builder reject self-consistent
+# errors (agent declares construction_axis:Y but anchor.orient rotates Y to
+# world Z while expected_axis says X) at BUILD time, before any cook.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _normalize_axis_spec(value: Any) -> str | None:
+    """Return an upper-cased axis name ('X'/'Y'/'Z'/'-X'/...) or None."""
+    if isinstance(value, str):
+        v = value.upper()
+        if v in ("X", "Y", "Z", "-X", "-Y", "-Z"):
+            return v
+    return None
+
+
+def _resolve_construction_world_axis(
+    orient_q: list[float],
+    construction_axis: str,
+) -> tuple[float, float, float]:
+    """Rotate a local construction axis into world space by the anchor @orient.
+
+    Pure algebra — no hou, no estimation. Imported lazily from
+    orientation_math to keep the top-level import graph stable.
+    """
+    from edini.orientation_math import LOCAL_AXIS_VECTORS, rotate_vector_by_quaternion
+
+    local_vec = LOCAL_AXIS_VECTORS[construction_axis]
+    return rotate_vector_by_quaternion(local_vec, tuple(orient_q))
+
+
+def _check_construction_axis_consistency(
+    components: list[dict],
+    orientation_asserts: list[dict],
+    tolerance_deg: float = 1.0,
+) -> list[str]:
+    """Pre-flight consistency check for construction_axis asserts.
+
+    For each assert that declares a construction_axis, resolve the world axis
+    from the matching anchor's @orient (or identity for direct-merge
+    components with no anchors) and verify it agrees with expected_axis within
+    `tolerance_deg`. Returns a list of human-readable error strings (empty =
+    all consistent, or no construction_axis asserts present).
+
+    A non-empty list means the recipe is internally contradictory — the agent
+    declared a construction axis whose deterministic world projection does NOT
+    match the expected_axis it also declared. The builder refuses to build so
+    the agent fixes the contradiction at the source instead of producing a
+    self-consistent-but-wrong asset that PCA would happily confirm.
+    """
+    from edini.orientation_math import (
+        AXIS_VECTORS, axis_angle_between, dominant_axis_name,
+    )
+
+    errors: list[str] = []
+    # Index anchors by per-instance component_id for quick lookup.
+    # cid_to_orient: maps a per-instance component_id -> its anchor orient
+    # (identity for direct-merge components that declare a construction_axis).
+    cid_to_orient: dict[str, list[float]] = {}
+    direct_components: set[str] = set()
+    for comp in components:
+        cid = comp.get("id")
+        anchors = comp.get("anchors") or []
+        if not anchors:
+            # Direct-merge component: no anchor, so its world frame is identity.
+            direct_components.add(cid)
+        else:
+            for anc in anchors:
+                anc_cid = anc.get("component_id", cid)
+                orient = anc.get("orient", [0.0, 0.0, 0.0, 1.0])
+                cid_to_orient[anc_cid] = list(orient)
+
+    for a in orientation_asserts:
+        caxis = _normalize_axis_spec(a.get("construction_axis"))
+        if caxis is None:
+            continue  # no construction_axis declared -> PCA path, skip
+        cid = a.get("component_id")
+        expected = _normalize_axis_spec(a.get("expected_axis"))
+        if expected is None:
+            continue  # validate_recipe already flagged this
+
+        if cid in cid_to_orient:
+            orient_q = cid_to_orient[cid]
+        elif cid in direct_components:
+            orient_q = [0.0, 0.0, 0.0, 1.0]  # identity for direct-merge
+        else:
+            # component_id not found among anchors or direct components.
+            # This may be a stamped instance id that wasn't declared as an
+            # anchor component_id — surface it so the agent fixes the recipe.
+            errors.append(
+                f"orientation_assert construction_axis references component_id "
+                f"{cid!r} but no anchor with that component_id exists (anchors "
+                f"use their per-instance component_id field). Either add an "
+                f"anchor with component_id={cid!r} or drop construction_axis "
+                f"to fall back to PCA for that component."
+            )
+            continue
+
+        world_vec = _resolve_construction_world_axis(orient_q, caxis)
+        expected_vec = AXIS_VECTORS[expected]
+        angle_deg, _ = axis_angle_between(world_vec, expected_vec, signed=False)
+        if angle_deg > tolerance_deg:
+            detected = dominant_axis_name(world_vec)
+            errors.append(
+                f"orientation_assert for {cid!r}: construction_axis {caxis} "
+                f"rotated by anchor @orient {orient_q} projects onto world axis "
+                f"{detected} ({[round(c, 3) for c in world_vec]}), which is "
+                f"{round(angle_deg, 1)}° from declared expected_axis {expected} "
+                f"(tolerance {tolerance_deg}°). This is a contradiction — the "
+                f"anchor orient does not place the construction axis where "
+                f"expected_axis claims. Fix anchor.orient (or expected_axis / "
+                f"construction_axis) so they agree."
+            )
+    return errors
+
+
+def _component_id_overwrite_snippet(
+    anchor_component_ids: list[str],
+    *,
+    world_axes: list[tuple[float, float, float]] | None = None,
+) -> str:
+    """Generate a single-SOP python cook body that overwrites the prim-level
+    component_id on stamped instances, so each instance carries its anchor's
+    per-instance id (e.g. wheel_fl) instead of the template id (wheel).
+
+    Copy-to-Points produces `n_anchors` consecutive copies of the source
+    geometry; the i-th copy's prims get component_id = anchor_component_ids[i].
+    We detect copy boundaries by counting prims per copy (source prim count).
+    Runs on the copytopoints output.
+
+    B-station: when ``world_axes`` is supplied (one tuple per anchor, parallel
+    to anchor_component_ids), the snippet also bakes a prim attribute
+    ``edini_world_axis`` (3 floats) carrying the deterministically-derived
+    world-space construction axis for that instance. verify_orientation reads
+    this to skip PCA entirely for that component.
+    """
+    # Emit a python list literal of the anchor ids.
+    ids_repr = "[" + ", ".join(repr(c) for c in anchor_component_ids) + "]"
+    # World axes are optional. Bake them only when every anchor has one and
+    # they're non-None; otherwise leave the attribute unset (PCA fallback).
+    bake_axes = bool(world_axes) and len(world_axes) == len(anchor_component_ids)
+    axes_repr = (
+        "[" + ", ".join(
+            "(" + ", ".join(repr(float(c)) for c in ax) + ")"
+            for ax in (world_axes or [])
+        ) + "]"
+        if bake_axes else "[]"
+    )
+
+    header = (
+        "node = hou.pwd()\n"
+        "geo = node.geometry()\n"
+        "anchor_ids = " + ids_repr + "\n"
+        "world_axes = " + axes_repr + "\n"
+        "n_anchors = len(anchor_ids)\n"
+        "prims = geo.prims()\n"
+        "total = len(prims)\n"
+    )
+    if not bake_axes:
+        return header + (
+            "if n_anchors > 0 and total > 0:\n"
+            "    per_copy = total // n_anchors\n"
+            "    if per_copy > 0:\n"
+            "        for i, prim in enumerate(prims):\n"
+            "            copy_index = min(i // per_copy, n_anchors - 1)\n"
+            "            prim.setAttribValue('component_id', anchor_ids[copy_index])\n"
+        )
+    # Baking world axes: declare the prim attrib up front, then write both
+    # component_id and edini_world_axis per instance.
+    return header + (
+        "bake_axes = len(world_axes) == n_anchors and n_anchors > 0\n"
+        "if bake_axes:\n"
+        "    geo.addAttrib(hou.attribType.Prim, 'edini_world_axis', (0.0, 0.0, 0.0))\n"
+        "if n_anchors > 0 and total > 0:\n"
+        "    per_copy = total // n_anchors\n"
+        "    if per_copy > 0:\n"
+        "        for i, prim in enumerate(prims):\n"
+        "            copy_index = min(i // per_copy, n_anchors - 1)\n"
+        "            prim.setAttribValue('component_id', anchor_ids[copy_index])\n"
+        "            if bake_axes:\n"
+        "                prim.setAttribValue('edini_world_axis', world_axes[copy_index])\n"
+    )
+
+
+def _direct_component_world_axis_snippet(
+    world_axis: tuple[float, float, float],
+) -> str:
+    """Append a prim-level edini_world_axis tag to a direct-merge component.
+
+    For components with no anchors, there's no idfix step — the world axis is
+    just the construction_axis itself (identity rotation). We return a small
+    cook-body SUFFIX (not a full cook body) to be appended after the
+    component's own geometry code, so the attrib lands on every prim that the
+    component emitted.
+    """
+    ax = "(" + ", ".join(repr(float(c)) for c in world_axis) + ")"
+    return (
+        "\n# edini construction-axis tag (direct-merge, identity world frame)\n"
+        "try:\n"
+        "    geo.addAttrib(hou.attribType.Prim, 'edini_world_axis', (0.0, 0.0, 0.0))\n"
+        "    for _prim in geo.prims():\n"
+        f"        _prim.setAttribValue('edini_world_axis', {ax})\n"
+        "except Exception:\n"
+        "    pass\n"
+    )
+
+
 def build_procedural_asset(
     recipe: dict,
     *,
@@ -1493,12 +1718,44 @@ def build_procedural_asset(
             "deleted": False,
         }
 
+    components = recipe.get("components", [])
+    orientation_asserts = recipe.get("orientation_asserts") or []
+
+    # ── Construction-axis consistency pre-check (B-station) ──
+    # Deterministically verify that every construction_axis declaration agrees
+    # with its anchor @orient + expected_axis BEFORE building anything. A
+    # contradiction here means the recipe is internally wrong — refuse rather
+    # than produce a self-consistent-but-incorrect asset (which PCA would
+    # happily confirm, since the agent generates geometry + writes asserts from
+    # the same mental model).
+    has_construction_axis = any(
+        _normalize_axis_spec(a.get("construction_axis")) is not None
+        for a in orientation_asserts
+    )
+    construction_errors: list[str] = []
+    if has_construction_axis:
+        construction_errors = _check_construction_axis_consistency(
+            components, orientation_asserts)
+    if construction_errors:
+        return {
+            "success": False,
+            "execution_mode": EXECUTION_MODE_LIVE,
+            "build_mode": "recipe",
+            "error": (
+                "Construction-axis consistency check failed — the recipe's "
+                "declared construction axes contradict its expected_axis / "
+                "anchor @orient. Fix the contradictions at the source (these "
+                "are deterministic, not estimated): " + " | ".join(construction_errors)
+            ),
+            "construction_axis_errors": construction_errors,
+            "preserved": False,
+            "deleted": False,
+        }
+
     asset_name = recipe.get("asset_name") or "asset"
     name = sandbox_name or asset_name
     job_id, root_path = _create_sandbox_root(name)
-    components = recipe.get("components", [])
     postprocess = recipe.get("postprocess") or []
-    orientation_asserts = recipe.get("orientation_asserts") or []
 
     warnings: list[str] = []
     errors_runtime: list[str] = []
@@ -1516,6 +1773,46 @@ def build_procedural_asset(
         # Track stamped components: {component_id: (copy_node, anchor_ids)}
         stamped: list[tuple[str, Any, list[str]]] = []
 
+        # B-station: index the recipe's anchor layout so the world-axis
+        # resolution below can look up each instance's @orient. This mirrors
+        # what _check_construction_axis_consistency already verified, so we
+        # can trust every construction_axis assert that reaches here resolves.
+        direct_components_set: set[str] = set()
+        anchor_cid_orient: dict[str, list[float]] = {}
+        for comp in components:
+            cid = comp.get("id")
+            anchors = comp.get("anchors") or []
+            if not anchors:
+                direct_components_set.add(cid)
+            else:
+                for anc in anchors:
+                    anc_cid = anc.get("component_id", cid)
+                    anchor_cid_orient[anc_cid] = list(
+                        anc.get("orient", [0.0, 0.0, 0.0, 1.0]))
+
+        # B-station: resolve deterministic world axes per component instance.
+        # world_axis_by_cid maps a per-instance component_id (or a direct-merge
+        # component id) -> its deterministically-derived world construction
+        # axis. Built once here from orientation_asserts so both the stamped
+        # idfix and the direct-merge suffix consume the same source of truth.
+        # NOTE: for stamped components, the assert's component_id is the
+        # per-INSTANCE id (wheel_fl), matching anchor.component_id. For direct
+        # components it's the component id itself (frame).
+        world_axis_by_cid: dict[str, tuple[float, float, float]] = {}
+        for a in orientation_asserts:
+            caxis = _normalize_axis_spec(a.get("construction_axis"))
+            if caxis is None:
+                continue
+            a_cid = a.get("component_id")
+            if a_cid in direct_components_set:
+                # Direct-merge: world frame is identity, so world axis == local.
+                world_axis_by_cid[a_cid] = _resolve_construction_world_axis(
+                    [0.0, 0.0, 0.0, 1.0], caxis)
+            elif a_cid in anchor_cid_orient:
+                world_axis_by_cid[a_cid] = _resolve_construction_world_axis(
+                    anchor_cid_orient[a_cid], caxis)
+            # else: pre-check already rejected these, so nothing to do.
+
         for comp in components:
             cid = comp["id"]
             code = comp["code"]
@@ -1528,7 +1825,14 @@ def build_procedural_asset(
                 errors_runtime.append(
                     f"component '{cid}': failed to create python SOP: {e}")
                 continue
-            _set_parm_safe(py_sop, "python", code)
+            # B-station: for direct-merge components that declare a construction
+            # axis, append a tag suffix so every prim carries edini_world_axis.
+            # (Stamped components get the tag via idfix instead, per-instance.)
+            effective_code = code
+            if not anchors and cid in world_axis_by_cid:
+                effective_code = code + _direct_component_world_axis_snippet(
+                    world_axis_by_cid[cid])
+            _set_parm_safe(py_sop, "python", effective_code)
             # Cook the component immediately so a per-component error surfaces
             # with a clear attribution (and geometry exists for wiring in the
             # mock; real Houdini would lazy-cook, but explicit is safer).
@@ -1562,11 +1866,27 @@ def build_procedural_asset(
                 copy_node.setInput(0, py_sop)
                 copy_node.setInput(1, anc_sop)
 
-                # id-overwrite python SOP: gives each instance its anchor component_id
+                # id-overwrite python SOP: gives each instance its anchor
+                # component_id, AND bakes edini_world_axis per instance when
+                # the recipe declared construction axes (B-station).
                 ow_name = f"{cid}_idfix"
                 ow_sop = _safe_create_node(root_path, "python", ow_name)
+                stamp_world_axes = [
+                    world_axis_by_cid.get(aid)
+                    for aid in anchor_ids
+                ]
+                # Only bake if ALL anchors of this component resolved a world
+                # axis (partial baking would leave some instances tag-less and
+                # silently fall back to PCA for them — confusing). If any is
+                # missing, pass None to keep the idfix on the PCA fallback.
+                if any(wa is None for wa in stamp_world_axes):
+                    stamp_world_axes_param: list[tuple[float, float, float]] | None = None
+                else:
+                    stamp_world_axes_param = stamp_world_axes  # type: ignore[assignment]
                 _set_parm_safe(
-                    ow_sop, "python", _component_id_overwrite_snippet(anchor_ids))
+                    ow_sop, "python",
+                    _component_id_overwrite_snippet(
+                        anchor_ids, world_axes=stamp_world_axes_param))
                 ow_sop.setInput(0, copy_node)
                 # Cook the idfix so the per-instance component_id lands on geometry.
                 # (Real Houdini lazy-cooks on OUT; explicit is safer and works in tests.)
@@ -1700,6 +2020,18 @@ def build_procedural_asset(
             "preserved": True,
             "deleted": False,
         }
+
+        # B-station: surface which components got deterministic construction
+        # axes baked (vs PCA fallback). The agent reads this to confirm the
+        # edini_world_axis prim attrib landed where it expected.
+        if world_axis_by_cid:
+            response["construction_axis_summary"] = {
+                cid: {
+                    "world_axis": [round(c, 6) for c in ax],
+                    "method": "construction",
+                }
+                for cid, ax in sorted(world_axis_by_cid.items())
+            }
 
         # structure advisory (reuses the same gate commit_sandbox enforces)
         try:

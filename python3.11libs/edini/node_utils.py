@@ -1907,6 +1907,7 @@ from edini.orientation_math import (
     axis_angle_between as _axis_angle_between,
     dominant_axis_name as _dominant_axis_name,
     flip_to_hemisphere as _flip_to_hemisphere,
+    dominant_axis_name as _axis_name_of,  # alias for construction-path reuse
 )
 
 
@@ -2006,6 +2007,116 @@ def verify_orientation(
                     pos = pt.position()
                     pts.append((float(pos[0]), float(pos[1]), float(pos[2])))
 
+            # ── B-station: construction-axis fast path ──
+            # If the builder baked `edini_world_axis` onto these prims
+            # (deterministic derivation from construction_axis + anchor @orient),
+            # read it directly and SKIP PCA. This is ground truth, not an
+            # estimate, so it supersedes the point-distribution-based path.
+            # We still run an OPTIONAL PCA crosscheck when enough points exist:
+            # a large divergence means the agent's declared construction axis
+            # disagrees with the geometry it actually emitted (caught here as a
+            # WARNING, not a failure — PCA is noisy, the construction axis is
+            # the authority).
+            world_axis_attr = geo.findPrimAttrib("edini_world_axis")
+            has_world_axis = world_axis_attr is not None
+            construction_vec: tuple[float, float, float] | None = None
+            if has_world_axis:
+                try:
+                    raw = comp_prims[0].floatListAttribValue("edini_world_axis") \
+                        if hasattr(comp_prims[0], "floatListAttribValue") \
+                        else None
+                except Exception:
+                    raw = None
+                if raw is None or len(raw) < 3:
+                    # Fallback: some mock/attrib backends expose tuple access.
+                    try:
+                        raw = comp_prims[0].attribValue("edini_world_axis")
+                        if not isinstance(raw, (list, tuple)) or len(raw) < 3:
+                            raw = None
+                    except Exception:
+                        raw = None
+                if raw is not None:
+                    construction_vec = (
+                        float(raw[0]), float(raw[1]), float(raw[2]))
+
+            if construction_vec is not None:
+                # Deterministic construction path.
+                detected_vec = construction_vec
+                expected_vec = _AXIS_VECTORS[expected_axis]
+                if not signed_kind:
+                    detected_vec = _flip_to_hemisphere(detected_vec, expected_vec)
+                detected_axis = _dominant_axis_name(detected_vec)
+                angle_deg, fix_q = _axis_angle_between(
+                    detected_vec, expected_vec, signed=signed_kind)
+                passed_check = angle_deg <= tol_deg
+
+                entry.update({
+                    "method": "construction",
+                    "point_count": len(pts),
+                    "detected_axis": detected_axis,
+                    "detected_vector": [round(c, 4) for c in detected_vec],
+                    "world_axis_baked": [round(c, 4) for c in construction_vec],
+                    "angle_error_deg": round(angle_deg, 2),
+                    "passed": passed_check,
+                })
+
+                # Optional PCA crosscheck (warning-only). Catches the case
+                # where the declared construction axis disagrees with the
+                # actual emitted geometry — e.g. agent said construction_axis:Y
+                # but the wheel code generates an X-symmetric ring.
+                if len(pts) >= 4:
+                    try:
+                        cov, _ = _compute_covariance(pts)
+                        eigs, vecs = _jacobi_eigen_3x3(cov)
+                        pca_vec = vecs[_KIND_EIGEN_RANK[kind]]
+                        if not signed_kind:
+                            pca_vec = _flip_to_hemisphere(pca_vec, construction_vec)
+                        pca_angle, _ = _axis_angle_between(
+                            pca_vec, construction_vec, signed=False)
+                        entry["pca_crosscheck"] = {
+                            "pca_axis": _dominant_axis_name(pca_vec),
+                            "divergence_deg": round(pca_angle, 2),
+                        }
+                        # 2x tolerance = clearly inconsistent, surface as warning.
+                        if pca_angle > 2.0 * tol_deg:
+                            entry["pca_crosscheck"]["warning"] = (
+                                f"Declared construction axis ({detected_axis}) "
+                                f"diverges from PCA estimate "
+                                f"({_dominant_axis_name(pca_vec)}) by "
+                                f"{round(pca_angle, 1)}°. The construction axis "
+                                f"is authoritative (passed), but this suggests "
+                                f"the component code emits geometry whose "
+                                f"distribution disagrees with the declared axis. "
+                                f"Verify the construction_axis value matches "
+                                f"how the geometry is actually generated."
+                            )
+                    except Exception:
+                        pass
+
+                if not passed_check:
+                    kind_hint = {
+                        "radial": "rotational symmetry axis (axle)",
+                        "planar": "surface normal",
+                        "elongated": "long axis",
+                    }[kind]
+                    entry["hint"] = (
+                        f"{cid} {kind_hint} baked as world axis {detected_axis} "
+                        f"({[round(c,2) for c in detected_vec]}). "
+                        f"Expected {expected_axis}. This is a deterministic "
+                        f"construction-axis mismatch — fix the component's "
+                        f"construction_axis or the anchor @orient in the recipe "
+                        f"(do NOT apply a post-hoc quaternion; the bake is "
+                        f"ground truth)."
+                    )
+
+                results.append(entry)
+                if passed_check:
+                    passed += 1
+                else:
+                    failed += 1
+                continue
+
+            # ── PCA fallback path (no edini_world_axis baked) ──
             if len(pts) < 4:
                 entry["error"] = (
                     f"Only {len(pts)} unique points - need >= 4 for PCA. "
@@ -2032,6 +2143,7 @@ def verify_orientation(
             ratios = [abs(e) / eig_total for e in eigs]
 
             entry.update({
+                "method": "pca",
                 "point_count": len(pts),
                 "centroid": [round(c, 4) for c in centroid],
                 "eigenvalues": [round(e, 6) for e in eigs],

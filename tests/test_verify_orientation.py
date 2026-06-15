@@ -19,6 +19,8 @@ from edini.orientation_math import (
     axis_angle_between,
     dominant_axis_name,
     flip_to_hemisphere,
+    rotate_vector_by_quaternion,
+    LOCAL_AXIS_VECTORS,
 )
 
 
@@ -188,6 +190,58 @@ class TestFlipToHemisphere(unittest.TestCase):
         self.assertEqual(flip_to_hemisphere((0, 1, 0), (1, 0, 0)), (0, 1, 0))
 
 
+class TestRotateVectorByQuaternion(unittest.TestCase):
+    """B-station pure-math core: deterministic local→world axis derivation."""
+
+    def test_identity_quaternion_leaves_vector_unchanged(self):
+        v = rotate_vector_by_quaternion((1, 0, 0), (0, 0, 0, 1))
+        self.assertAlmostEqual(v[0], 1.0, places=6)
+        self.assertAlmostEqual(v[1], 0.0, places=6)
+        self.assertAlmostEqual(v[2], 0.0, places=6)
+
+    def test_90deg_around_Z_maps_X_to_Y(self):
+        # q = (0,0,sin45,cos45) rotates X→Y
+        import math
+        s = math.sin(math.radians(45))
+        c = math.cos(math.radians(45))
+        v = rotate_vector_by_quaternion((1, 0, 0), (0, 0, s, c))
+        self.assertAlmostEqual(v[0], 0.0, places=5)
+        self.assertAlmostEqual(v[1], 1.0, places=5)
+        self.assertAlmostEqual(v[2], 0.0, places=5)
+
+    def test_90deg_around_X_maps_Y_to_Z(self):
+        import math
+        s = math.sin(math.radians(45))
+        c = math.cos(math.radians(45))
+        v = rotate_vector_by_quaternion((0, 1, 0), (s, 0, 0, c))
+        self.assertAlmostEqual(v[0], 0.0, places=5)
+        self.assertAlmostEqual(v[1], 0.0, places=5)
+        self.assertAlmostEqual(v[2], 1.0, places=5)
+
+    def test_180deg_around_Z_maps_X_to_negative_X(self):
+        import math
+        s = math.sin(math.radians(90))
+        c = math.cos(math.radians(90))
+        v = rotate_vector_by_quaternion((1, 0, 0), (0, 0, s, c))
+        self.assertAlmostEqual(v[0], -1.0, places=5)
+        self.assertAlmostEqual(v[1], 0.0, places=5)
+
+    def test_local_axis_vectors_table_present(self):
+        self.assertEqual(LOCAL_AXIS_VECTORS["Y"], (0.0, 1.0, 0.0))
+        self.assertEqual(LOCAL_AXIS_VECTORS["-X"], (-1.0, 0.0, 0.0))
+
+    def test_unit_quaternion_preserves_vector_length(self):
+        import math
+        # Fully normalized: axis (1,1,1)/sqrt(3), angle 30°
+        inv3 = 1.0 / math.sqrt(3.0)
+        s = math.sin(math.radians(30))
+        c = math.cos(math.radians(30))
+        q = (s * inv3, s * inv3, s * inv3, c)
+        v = rotate_vector_by_quaternion((3, 0, 0), q)
+        mag = math.sqrt(v[0] ** 2 + v[1] ** 2 + v[2] ** 2)
+        self.assertAlmostEqual(mag, 3.0, places=4)
+
+
 # ---------------------------------------------------------------------------
 # Full verify_orientation flow with mocked hou geometry
 # ---------------------------------------------------------------------------
@@ -326,6 +380,126 @@ class TestVerifyOrientationFlow(unittest.TestCase):
         ])
         self.assertEqual(result["failed"], 1)
         self.assertIn("Unknown kind", result["checks"][0]["error"])
+
+
+class TestVerifyOrientationConstructionPath(unittest.TestCase):
+    """B-station: when edini_world_axis is baked on prims, verify_orientation
+    uses the deterministic construction axis and SKIPS PCA (method=construction)."""
+
+    def setUp(self):
+        self.prev_hou = sys.modules.get("hou")
+        self.prev_edini = {
+            n: m for n, m in sys.modules.items() if n.startswith("edini")
+        }
+        from tests.mock_hou import create_mock_hou, MockNode
+        self.prev_hou_ref = MockNode._hou_ref
+        self.mock_hou = create_mock_hou()
+        sys.modules["hou"] = self.mock_hou
+        for mod_name in list(sys.modules):
+            if mod_name.startswith("edini"):
+                del sys.modules[mod_name]
+        self.nu = importlib.import_module("edini.node_utils")
+
+    def tearDown(self):
+        from tests.mock_hou import MockNode
+        for mod_name in list(sys.modules):
+            if mod_name.startswith("edini"):
+                del sys.modules[mod_name]
+        sys.modules.update(self.prev_edini)
+        if self.prev_hou is not None:
+            sys.modules["hou"] = self.prev_hou
+        else:
+            sys.modules.pop("hou", None)
+        MockNode._hou_ref = self.prev_hou_ref
+
+    def _build_geo_with_world_axis(self, world_axis):
+        """Build a minimal geo whose wheel prims carry edini_world_axis.
+        Point positions are deliberately a RING in the YZ plane (PCA would
+        detect X) so we can prove the construction axis OVERRIDES PCA."""
+        from tests.mock_hou import MockGeometry
+        geo = MockGeometry()
+        geo.clear()
+        geo.addAttrib("prim", "component_id", "")
+        # declare the attrib so findPrimAttrib sees it
+        geo.addAttrib("prim", "edini_world_axis", (0.0, 0.0, 0.0))
+        # ring in YZ plane → PCA radial axis = X. We bake world_axis="Y"
+        # to assert the construction authority overrides this.
+        for p in _ring_points(32, center=(0, 0, 0), radius=1.0, plane="YZ"):
+            pt = geo.createPoint(); pt.setPosition(p)
+            prim = geo.createPolygon(); prim.addVertex(pt)
+            prim.setAttribValue("component_id", "wheel_front")
+            prim.setAttribValue("edini_world_axis", tuple(world_axis))
+        return geo
+
+    def _patch_node(self, geo):
+        from tests.mock_hou import MockNode
+        node = MockNode("/obj/bike/OUT", "OUT", parent=None)
+        node.geometry = lambda: geo
+        self.mock_hou.node = lambda p: node if p == "/obj/bike/OUT" else None
+
+    def test_construction_axis_overrides_pca(self):
+        """edini_world_axis=Y but PCA would say X. Construction wins."""
+        geo = self._build_geo_with_world_axis((0.0, 1.0, 0.0))
+        self._patch_node(geo)
+        result = self.nu.verify_orientation("/obj/bike/OUT", [
+            {"component_id": "wheel_front", "kind": "radial",
+             "expected_axis": "Y", "tolerance_deg": 15},
+        ])
+        self.assertTrue(result["success"], msg=result)
+        self.assertEqual(result["passed"], 1)
+        chk = result["checks"][0]
+        self.assertEqual(chk["method"], "construction")
+        self.assertEqual(chk["detected_axis"], "Y")
+        self.assertTrue(chk["passed"])
+
+    def test_construction_mismatch_fails_with_deterministic_hint(self):
+        """Baked axis X, expected Z → fails, hint says fix recipe not quaternion."""
+        geo = self._build_geo_with_world_axis((1.0, 0.0, 0.0))
+        self._patch_node(geo)
+        result = self.nu.verify_orientation("/obj/bike/OUT", [
+            {"component_id": "wheel_front", "kind": "radial",
+             "expected_axis": "Z", "tolerance_deg": 15},
+        ])
+        self.assertEqual(result["failed"], 1)
+        chk = result["checks"][0]
+        self.assertFalse(chk["passed"])
+        self.assertEqual(chk["method"], "construction")
+        # hint must say this is deterministic (NOT a post-hoc quaternion fix)
+        self.assertIn("construction", chk["hint"].lower())
+
+    def test_pca_crosscheck_warning_when_divergent(self):
+        """Construction says Y, PCA estimates X (the ring) → crosscheck warning
+        present but the check still PASSES (construction is authoritative)."""
+        geo = self._build_geo_with_world_axis((0.0, 1.0, 0.0))
+        self._patch_node(geo)
+        result = self.nu.verify_orientation("/obj/bike/OUT", [
+            {"component_id": "wheel_front", "kind": "radial",
+             "expected_axis": "Y", "tolerance_deg": 15},
+        ])
+        chk = result["checks"][0]
+        self.assertIn("pca_crosscheck", chk)
+        # ring in YZ → PCA radial = X → divergence from Y is ~90°
+        self.assertGreater(chk["pca_crosscheck"]["divergence_deg"], 75)
+        self.assertIn("warning", chk["pca_crosscheck"])
+
+    def test_no_world_axis_falls_back_to_pca(self):
+        """Prims WITHOUT edini_world_axis still go through PCA (backward compat)."""
+        from tests.mock_hou import MockGeometry
+        geo = MockGeometry()
+        geo.clear()
+        geo.addAttrib("prim", "component_id", "")
+        for p in _ring_points(32, center=(0, 0, 0), radius=1.0, plane="YZ"):
+            pt = geo.createPoint(); pt.setPosition(p)
+            prim = geo.createPolygon(); prim.addVertex(pt)
+            prim.setAttribValue("component_id", "wheel_front")
+        self._patch_node(geo)
+        result = self.nu.verify_orientation("/obj/bike/OUT", [
+            {"component_id": "wheel_front", "kind": "radial",
+             "expected_axis": "X", "tolerance_deg": 15},
+        ])
+        self.assertEqual(result["passed"], 1)
+        chk = result["checks"][0]
+        self.assertEqual(chk["method"], "pca")
 
 
 if __name__ == "__main__":

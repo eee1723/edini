@@ -342,5 +342,201 @@ class TestBuildResultShape(unittest.TestCase):
         self.assertEqual(committed["final_path"], "/obj/committed_bike")
 
 
+# ---------------------------------------------------------------------------
+# B-station: construction-axis tests
+# ---------------------------------------------------------------------------
+
+class TestConstructionAxisValidation(unittest.TestCase):
+    """recipe validation + build-time consistency pre-check for construction_axis."""
+
+    def test_bad_construction_axis_rejected(self):
+        r = harness.build_procedural_asset(
+            {"components": [{"id": "a", "code": "x"}],
+             "orientation_asserts": [
+                 {"component_id": "a", "kind": "radial",
+                  "expected_axis": "X", "construction_axis": "W"}]})
+        self.assertFalse(r["success"])
+        self.assertIn("construction_axis must be one of", r["error"])
+
+    def test_construction_axis_contradiction_rejected_at_build(self):
+        """construction_axis=Y, but anchor orient rotates Y to world Z while
+        expected_axis says X. This is internally contradictory → build refuses."""
+        import math
+        # 90° rotation around X maps local Y → world Z. So construction_axis Y
+        # projects to world Z, NOT the declared expected_axis X. Reject.
+        s = math.sin(math.radians(45))
+        c = math.cos(math.radians(45))
+        r = harness.build_procedural_asset({
+            "asset_name": "contra",
+            "components": [
+                {"id": "wheel", "code": _geo_code("wheel"), "anchors": [
+                    {"position": [0, 0, 0], "orient": [s, 0, 0, c],
+                     "pscale": 1.0, "component_id": "wheel_fl"},
+                ]},
+            ],
+            "orientation_asserts": [
+                {"component_id": "wheel_fl", "kind": "radial",
+                 "expected_axis": "X", "construction_axis": "Y"},
+            ],
+        })
+        self.assertFalse(r["success"])
+        self.assertIn("construction_axis", r["error"].lower())
+        self.assertIn("contradiction", r["error"].lower())
+        # Must NOT leak a sandbox (rejected before _create_sandbox_root)
+        self.assertFalse(r["preserved"])
+        self.assertIn("construction_axis_errors", r)
+
+    def test_construction_axis_contradiction_does_not_create_sandbox(self):
+        """A rejected recipe must not leak a sandbox node (pre-check is pre-build)."""
+        before = len(_mock_hou._nodes)
+        import math
+        s = math.sin(math.radians(45))
+        c = math.cos(math.radians(45))
+        harness.build_procedural_asset({
+            "asset_name": "noleak",
+            "components": [
+                {"id": "w", "code": _geo_code("w"), "anchors": [
+                    {"position": [0, 0, 0], "orient": [s, 0, 0, c],
+                     "pscale": 1.0, "component_id": "w1"},
+                ]},
+            ],
+            "orientation_asserts": [
+                {"component_id": "w1", "kind": "radial",
+                 "expected_axis": "X", "construction_axis": "Y"},
+            ],
+        })
+        self.assertEqual(len(_mock_hou._nodes), before)
+
+    def test_construction_axis_with_unknown_cid_rejected(self):
+        """construction_axis references a component_id that has no matching anchor."""
+        r = harness.build_procedural_asset({
+            "asset_name": "badcid",
+            "components": [
+                {"id": "frame", "code": _geo_code("frame"), "anchors": []},
+            ],
+            "orientation_asserts": [
+                {"component_id": "ghost", "kind": "radial",
+                 "expected_axis": "X", "construction_axis": "Y"},
+            ],
+        })
+        self.assertFalse(r["success"])
+        self.assertIn("ghost", r["error"])
+
+
+class TestConstructionAxisBuildBake(unittest.TestCase):
+    """When construction_axis is consistent, the build succeeds and reports the
+    deterministic world-axis summary."""
+
+    def test_direct_component_construction_axis_builds(self):
+        """Direct-merge component with construction_axis=Y, expected_axis=Y →
+        consistent (identity frame), build succeeds with summary."""
+        r = harness.build_procedural_asset({
+            "asset_name": "direct_axis",
+            "components": [
+                {"id": "frame", "code": _geo_code("frame"), "anchors": []},
+            ],
+            "orientation_asserts": [
+                {"component_id": "frame", "kind": "elongated",
+                 "expected_axis": "Y", "construction_axis": "Y"},
+            ],
+        })
+        self.assertTrue(r["success"], msg=r)
+        self.assertIn("construction_axis_summary", r)
+        self.assertIn("frame", r["construction_axis_summary"])
+        self.assertEqual(
+            r["construction_axis_summary"]["frame"]["method"], "construction")
+        # identity frame → world axis = local Y = (0,1,0)
+        self.assertAlmostEqual(
+            r["construction_axis_summary"]["frame"]["world_axis"][1], 1.0, places=5)
+
+    def test_stamped_component_construction_axis_consistent(self):
+        """construction_axis=Y with identity orient → world axis Y. expected_axis=Y
+        agrees. Build succeeds; the idfix snippet carries the world axis."""
+        r = harness.build_procedural_asset({
+            "asset_name": "stamp_axis",
+            "components": [
+                {"id": "frame", "code": _geo_code("frame"), "anchors": []},
+                {"id": "wheel", "code": _geo_code("wheel"), "anchors": [
+                    {"position": [1, 0, 0], "orient": [0, 0, 0, 1],
+                     "pscale": 1.0, "component_id": "wheel_fl"},
+                ]},
+            ],
+            "orientation_asserts": [
+                {"component_id": "wheel_fl", "kind": "radial",
+                 "expected_axis": "Y", "construction_axis": "Y"},
+            ],
+        })
+        self.assertTrue(r["success"], msg=r)
+        self.assertIn("construction_axis_summary", r)
+        self.assertIn("wheel_fl", r["construction_axis_summary"])
+        # identity orient, local Y → world (0,1,0)
+        wa = r["construction_axis_summary"]["wheel_fl"]["world_axis"]
+        self.assertAlmostEqual(wa[1], 1.0, places=5)
+
+    def test_idfix_snippet_bakes_world_axis_when_provided(self):
+        """The generated idfix cook body writes edini_world_axis when world_axes
+        is supplied, and omits it when not (backward compat)."""
+        # With world axes
+        snippet = harness._component_id_overwrite_snippet(
+            ["w1", "w2"],
+            world_axes=[(0.0, 1.0, 0.0), (1.0, 0.0, 0.0)])
+        self.assertIn("edini_world_axis", snippet)
+        self.assertIn("world_axes", snippet)
+        # Without world axes (old behavior)
+        snippet_old = harness._component_id_overwrite_snippet(["w1", "w2"])
+        self.assertNotIn("edini_world_axis", snippet_old)
+
+    def test_construction_axis_omitted_falls_back_to_pca(self):
+        """orientation_asserts WITHOUT construction_axis → no summary, PCA path.
+        This proves backward compatibility: old recipes are untouched."""
+        r = harness.build_procedural_asset({
+            "asset_name": "pca_only",
+            "components": [
+                {"id": "frame", "code": _geo_code("frame"), "anchors": []},
+            ],
+            "orientation_asserts": [
+                {"component_id": "frame", "kind": "elongated",
+                 "expected_axis": "Y"},
+            ],
+        })
+        self.assertTrue(r["success"], msg=r)
+        self.assertNotIn("construction_axis_summary", r)
+
+    def test_consistency_check_helper_pure(self):
+        """The consistency pre-check is deterministic algebra — test it directly."""
+        errs = harness._check_construction_axis_consistency(
+            components=[
+                {"id": "w", "anchors": [
+                    {"component_id": "w1", "orient": [0, 0, 0, 1]},
+                ]},
+            ],
+            orientation_asserts=[
+                {"component_id": "w1", "expected_axis": "Y",
+                 "construction_axis": "Y"},
+            ],
+        )
+        # identity orient, Y→Y, expected Y → consistent, no errors
+        self.assertEqual(errs, [])
+
+    def test_consistency_check_detects_rotation_mismatch(self):
+        """orient rotates local Y to world Z, but expected_axis=X → error."""
+        import math
+        s = math.sin(math.radians(45))
+        c = math.cos(math.radians(45))
+        errs = harness._check_construction_axis_consistency(
+            components=[
+                {"id": "w", "anchors": [
+                    {"component_id": "w1", "orient": [s, 0, 0, c]},
+                ]},
+            ],
+            orientation_asserts=[
+                {"component_id": "w1", "expected_axis": "X",
+                 "construction_axis": "Y"},
+            ],
+        )
+        self.assertEqual(len(errs), 1)
+        self.assertIn("w1", errs[0])
+
+
 if __name__ == "__main__":
     unittest.main()
