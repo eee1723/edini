@@ -343,6 +343,7 @@ def commit_sandbox(
     replace_existing: bool = False,
     orientation_checks: list[dict] | None = None,
     skip_orientation: bool = False,
+    skip_structure_check: bool = False,
 ) -> dict[str, Any]:
     stripped_name = final_name.strip()
     if not stripped_name or "/" in final_name or "\\" in final_name or stripped_name == "..":
@@ -390,6 +391,31 @@ def commit_sandbox(
                     "error": f"Failed to replace existing node: {e}",
                     "traceback": traceback.format_exc(),
                 }
+
+    # ── Modular structure gate ──
+    # Refuse to commit monolithic assets (single Python SOP emitting all
+    # multi-component geometry with no Copy-to-Points/Sweep/foreach). This is
+    # the structural equivalent of the orientation gate: a hard check that the
+    # skill's modular-decomposition requirement is actually followed, not just
+    # stated in prose. Empirically, prose-only mandates are ignored.
+    structure_result = None
+    if not skip_structure_check:
+        structure_result = _run_structure_gate(sandbox_root_path)
+        if structure_result is not None and not structure_result.get("passed"):
+            return {
+                "success": False,
+                "sandbox_root_path": sandbox_root_path,
+                "final_path": final_path,
+                "committed": False,
+                "error": (
+                    "Modular structure check failed — refusing to commit a "
+                    "monolithic asset. " + structure_result.get("reason", "") +
+                    " Pass skip_structure_check=true ONLY for genuinely simple "
+                    "single-piece assets (one fractal, one parametric surface) "
+                    "with a documented reason."
+                ),
+                "structure": structure_result,
+            }
 
     # ── Orientation gate ──
     # If the agent supplied orientation_checks OR the asset has a component_id
@@ -447,6 +473,8 @@ def commit_sandbox(
     }
     if orientation_result is not None:
         result["orientation"] = orientation_result
+    if structure_result is not None:
+        result["structure"] = structure_result
     return result
 
 
@@ -500,6 +528,233 @@ def _select_gate_target(root) -> Any:
 
     # No geometry anywhere — return root (caller handles None geo).
     return root
+
+
+# SOP node types that indicate a modular/procedural decomposition.
+# Presence of ANY of these means the asset uses proper modular patterns.
+_MODULAR_NODE_TYPES = {
+    "copytopoints", "copytopoints::2.0", "copy", "copystamp",
+    "sweep", "sweep::2.0", "skin", "rails",
+    "foreach::count", "foreach::piece", "foreach", "foreach_begin",
+    "xformpieces", "transformpieces", "instanceto",
+    "boolean", "boolean::2.0", "polyextrude", "polyextrude::2.0",
+}
+
+# SOP node types that are pure post-processing (don't count toward modularity).
+_POSTPROCESS_NODE_TYPES = {
+    "normal", "polybevel", "polybevel::3.0", "subdivide", "facet",
+    "clean", "null", "merge", "blast", "group", "attribwrangle",
+    "attribpromote", "attribcreate", "transform", "xform",
+    "display", "output", "out", "edini_generate",
+}
+
+
+def _node_type_name(node) -> str:
+    """Return the bare type name (without namespace/version suffix)."""
+    try:
+        return node.type().name()
+    except Exception:
+        return ""
+
+
+def _node_type_components(node) -> str:
+    """Return the type name with namespace, lowercased for matching."""
+    try:
+        # type().nameWithCategory() or the full type name including version
+        return node.type().name().lower()
+    except Exception:
+        return ""
+
+
+def _python_sop_code_line_count(node) -> int:
+    """Count lines of the 'python' parm on a python SOP (0 if not python)."""
+    try:
+        if node.type().name() != "python":
+            return 0
+        code = node.evalParm("python") or ""
+        return code.count("\n") + 1
+    except Exception:
+        return 0
+
+
+def _geometry_component_ids(geo) -> set[str]:
+    """Return the set of distinct component_id prim attribute values."""
+    ids: set[str] = set()
+    try:
+        attr = geo.findPrimAttrib("component_id")
+        if attr is None:
+            return ids
+        for prim in geo.prims():
+            try:
+                v = str(prim.stringAttribValue("component_id"))
+                if v:
+                    ids.add(v)
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return ids
+
+
+def _check_modular_structure(root) -> dict[str, Any]:
+    """Detect monolithic procedural assets that violate modular decomposition.
+
+    A procedural asset is MONOLITHIC (a failure mode) when:
+      - It has multiple distinct geometric components (component_id >= 3
+        distinct values), AND
+      - All of those components' geometry originates from a SINGLE Python SOP,
+        AND
+      - There are NO modular assembly nodes (copytopoints/sweep/foreach/
+        boolean/polyextrude) in the network.
+
+    This combination means the agent stuffed the entire asset into one big
+    Python script instead of decomposing it into swappable sub-components
+    connected via Copy-to-Points/Sweep — which the skill explicitly forbids
+    ("No monolithic Python SOPs > 200 lines").
+
+    Returns {is_monolithic, reason, suggestion, details}.
+    `is_monolithic=False` means the structure is acceptable (either genuinely
+    simple, or properly modular).
+    """
+    result: dict[str, Any] = {
+        "is_monolithic": False,
+        "reason": "",
+        "suggestion": "",
+        "details": {},
+    }
+
+    # Gather all child SOP nodes under the sandbox root
+    try:
+        children = [c for c in root.allSubChildren() if hasattr(c, "geometry")]
+    except Exception:
+        children = []
+
+    python_sops = []
+    modular_nodes = []
+    generator_sops = []  # nodes that produce geometry (not post-process)
+    type_counts: dict[str, int] = {}
+
+    for child in children:
+        tname = _node_type_name(child)
+        tcomp = _node_type_components(child)
+        type_counts[tcomp] = type_counts.get(tcomp, 0) + 1
+
+        if tname == "python":
+            python_sops.append(child)
+        # Match modular types (bare name or namespaced)
+        if any(tcomp == m or tcomp.startswith(m + "::") for m in _MODULAR_NODE_TYPES):
+            modular_nodes.append(child)
+        # Generator = produces geometry but isn't pure post-process
+        if tcomp not in _POSTPROCESS_NODE_TYPES and tname not in ("",):
+            # python SOPs are generators too (counted separately above)
+            if tname != "python":
+                generator_sops.append(child)
+
+    # Find which Python SOP(s) actually emit the component_id geometry
+    component_sources: dict[str, set[str]] = {}  # node_path -> set of cids
+    all_cids: set[str] = set()
+    for child in children:
+        try:
+            geo = child.geometry()
+            if geo is None:
+                continue
+        except Exception:
+            continue
+        cids = _geometry_component_ids(geo)
+        if cids:
+            component_sources[child.path()] = cids
+            all_cids |= cids
+
+    result["details"] = {
+        "python_sop_count": len(python_sops),
+        "python_sop_max_lines": max(
+            (_python_sop_code_line_count(p) for p in python_sops), default=0),
+        "modular_node_count": len(modular_nodes),
+        "modular_node_types": [n.type().name() for n in modular_nodes],
+        "distinct_component_ids": len(all_cids),
+        "component_source_count": len(component_sources),
+        "node_type_counts": type_counts,
+    }
+
+    # ── Monolithic判定 ──
+    # Condition set: multi-component + single source + no modular nodes
+    multi_component = len(all_cids) >= 3
+    single_python_source = (
+        len([p for p in python_sops if p.path() in component_sources]) >= 1
+        and len(component_sources) <= 2  # at most the generator + the merge/OUT passthrough
+    )
+    # The "single source" check: do all component_ids come from python SOPs
+    # (rather than from separate copytopoints-driven component streams)?
+    python_paths = {p.path() for p in python_sops}
+    cids_from_python: set[str] = set()
+    for src_path, cids in component_sources.items():
+        if src_path in python_paths:
+            cids_from_python |= cids
+    all_cids_from_one_python = (
+        len(python_sops) >= 1
+        and len(cids_from_python) >= 3
+        and len(all_cids - cids_from_python) == 0
+    )
+    no_modular = len(modular_nodes) == 0
+
+    big_python = result["details"]["python_sop_max_lines"] > 200
+
+    if multi_component and all_cids_from_one_python and no_modular:
+        result["is_monolithic"] = True
+        result["reason"] = (
+            f"Asset has {len(all_cids)} distinct components (component_id) but "
+            f"all geometry originates from a single Python SOP "
+            f"(max {result['details']['python_sop_max_lines']} lines), with no "
+            f"modular assembly nodes (copytopoints/sweep/foreach/boolean). "
+            f"This is a monolithic structure — the skill requires modular "
+            f"decomposition for multi-component assets."
+        )
+        result["suggestion"] = (
+            "Decompose into separate component generators connected via "
+            "Copy-to-Points: (1) a body_generate Python SOP that outputs anchor "
+            "points with @component_id/@orient/@pscale, (2) separate Python SOPs "
+            "for each swappable sub-component (wheel, saddle, handlebar), "
+            "(3) Copy-to-Points nodes to instance sub-components onto anchors, "
+            "(4) merge + OUT. For tube/frame shapes, use Sweep 2.0 with profile "
+            "curves instead of hand-building every face in Python. "
+            "Pass skip_structure_check=true ONLY for genuinely simple single-piece "
+            "assets (one fractal, one parametric surface)."
+        )
+    elif big_python and multi_component and no_modular:
+        # Softer signal: big python SOP even if cid sourcing is ambiguous
+        result["is_monolithic"] = True
+        result["reason"] = (
+            f"Single Python SOP of {result['details']['python_sop_max_lines']} "
+            f"lines producing a {len(all_cids)}-component asset with no modular "
+            f"assembly nodes. Decompose per the modular pattern."
+        )
+        result["suggestion"] = (
+            "Split into body_generate + per-component generators + Copy-to-Points.")
+
+    return result
+
+
+def _run_structure_gate(
+    sandbox_root_path: str,
+) -> dict[str, Any] | None:
+    """Run the modular-structure check against the sandbox.
+
+    Returns None if the sandbox can't be analyzed. Otherwise returns a dict
+    with `passed` (True = structure OK, False = monolithic) and the check
+    details + fix guidance.
+    """
+    root = hou.node(sandbox_root_path)
+    if root is None:
+        return None
+
+    check = _check_modular_structure(root)
+    return {
+        "passed": not check["is_monolithic"],
+        "is_monolithic": check["is_monolithic"],
+        "reason": check["reason"],
+        "suggestion": check["suggestion"],
+        "details": check["details"],
+    }
 
 
 def _run_orientation_gate(
@@ -656,6 +911,16 @@ def run_python_sandbox(
             "commit_requested": bool(commit_on_success),
             "committed": False,
         }
+
+        # Surface the modular-structure advisory early so the agent can fix a
+        # monolithic build BEFORE attempting to commit (the commit gate would
+        # otherwise reject it). This is advisory — it doesn't block the sandbox.
+        try:
+            struct_check = _run_structure_gate(root_path)
+            if struct_check is not None:
+                response["structure_advisory"] = struct_check
+        except Exception:
+            pass
 
         if commit_on_success:
             commit_result = commit_sandbox(root_path, sandbox_name)
