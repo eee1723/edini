@@ -981,7 +981,48 @@ def capture_network(
         # Ensure output directory exists
         os.makedirs(os.path.dirname(os.path.abspath(filepath)) or ".", exist_ok=True)
 
-        pixmap = editor.grab()
+        # Grab the network editor widget. Houdini 21 removed the
+        # NetworkEditor.grab() convenience; the underlying Qt widget must
+        # be reached via qtWindow()/qtWidget() (hou.qt). Try several paths
+        # in order so this works across H19/H20/H21.
+        pixmap = None
+        tried: list[str] = []
+        grab_candidates = []
+        # 1. direct editor.grab() (H19/H20)
+        if hasattr(editor, "grab"):
+            grab_candidates.append(lambda: editor.grab())
+            tried.append("editor.grab")
+        # 2. Qt widget via hou.qt (H21 path)
+        try:
+            from hou import qt as _houqt  # type: ignore
+            if hasattr(_houqt, "qtWindow"):
+                grab_candidates.append(lambda: _houqt.qtWindow(editor).grab())
+                tried.append("hou.qt.qtWindow(editor).grab")
+            if hasattr(_houqt, "qtWidget"):
+                grab_candidates.append(lambda: _houqt.qtWidget(editor).grab())
+                tried.append("hou.qt.qtWidget(editor).grab")
+        except Exception:
+            pass
+        last_err = None
+        for grab_fn in grab_candidates:
+            try:
+                pixmap = grab_fn()
+                if pixmap is not None:
+                    break
+            except Exception as ge:
+                last_err = ge
+                continue
+        if pixmap is None:
+            return {
+                "success": False,
+                "error": (f"Network grab failed: no usable Qt grab API. "
+                          f"Tried: {tried}. Last error: {last_err}"),
+                "guidance": ("NetworkEditor screenshot is unavailable in this "
+                             "Houdini build. Use houdini_capture_review for "
+                             "viewport screenshots instead. To verify node "
+                             "network structure, use houdini_layout_nodes or "
+                             "houdini_list_nodes."),
+            }
         pixmap.save(filepath, "PNG")
 
         if os.path.exists(filepath):
@@ -995,14 +1036,6 @@ def capture_network(
                 "parent_path": parent_path,
             }
         return {"success": False, "error": f"File not created: {filepath}"}
-    except AttributeError as e:
-        return {
-            "success": False,
-            "error": f"Network grab failed (API mismatch): {e}",
-            "guidance": "NetworkEditor.grab is not available in Houdini 21. "
-                        "Use houdini_capture_review for viewport screenshots instead. "
-                        "To verify node network structure, use houdini_layout_nodes or houdini_list_nodes.",
-        }
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -1882,14 +1915,35 @@ def check_errors(node_path: str | None = None) -> dict[str, Any]:
 
 
 def set_display_flag(node_path: str) -> dict[str, Any]:
-    """Set a node as the display/render flag — the node shown in the viewport."""
+    """Set a node as the display/render flag — the node shown in the viewport.
+
+    Tolerates being handed an Object-level node (e.g. a /obj/<geo> container
+    from commit_sandbox) which has setDisplayFlag but NO setRenderFlag
+    (render flag is a SOP/ROP concept; Object nodes expose it differently).
+    Render-flag set is best-effort and never fails the call.
+    """
     try:
         node = hou.node(node_path)
         if node is None:
             return {"success": False, "error": f"Node not found: {node_path}"}
-        node.setDisplayFlag(True)
-        node.setRenderFlag(True)
-        return {"success": True, "path": node_path}
+        flags_set = {"display": False, "render": False}
+        try:
+            node.setDisplayFlag(True)
+            flags_set["display"] = True
+        except Exception:
+            pass
+        # Render flag is optional — not all node types support it
+        # (e.g. ObjNode). Setting it is best-effort.
+        try:
+            node.setRenderFlag(True)
+            flags_set["render"] = True
+        except Exception:
+            pass
+        if not flags_set["display"]:
+            return {"success": False, "error":
+                    f"Could not set display flag on {node_path} "
+                    f"({node.type().name()})"}
+        return {"success": True, "path": node_path, "flags": flags_set}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
