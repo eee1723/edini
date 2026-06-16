@@ -9,7 +9,12 @@ import os
 import json
 import traceback
 
-import hou
+try:
+    import hou
+except ImportError:
+    # Houdini runtime not available (e.g. offline manifest queries / unit
+    # tests install a mock into sys.modules before importing this module).
+    hou = None  # type: ignore[assignment]
 from typing import Any
 
 
