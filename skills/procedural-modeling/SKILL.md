@@ -222,12 +222,16 @@ rejects your `createNode`, switch to `network_mode=true`, not to raw python.
 owns the `class` / `method` / `iterations` parms, NOT the block_begin.
 **Rule:** prefer **Sweep 2.0 + Copy-to-Points** over hand-wired ForEach for
 tube/frame generation — it's one node with no blockpath bookkeeping. See the
-parameter cheat-sheet below.
+parameter cheat-sheet below (or query `houdini_node_parms`).
 
 ### 4. Guessing Houdini 21 parameter names
 H21 renamed several parms (e.g. `attribpromote` uses `inname`/`inclass`/`outclass`,
-not `original`). Guessing burns a get_node_info round per parm. **Either use the
-cheat-sheet below, or probe once** — never guess.
+not `original`; Normal SOP's cusp-angle parm is `cuspangle`, not `cangle`/`cusp`).
+**Call `houdini_node_parms(type)` first** — it returns the authoritative parm
+list (names/types/menu tokens/defaults) generated from the real Houdini install.
+Prefer it over the cheat-sheet below (which can go stale) and over manual probing.
+The build harness also hard-validates `postprocess` parm names against this
+catalogue, so a guessed name is a build-time error, not a silent miss.
 
 ## Network Mode (for modular assets)
 
@@ -590,23 +594,31 @@ No texturing required, but geometry MUST be organized for future material assign
 
 This enables one-click material assignment later without re-selecting geometry.
 
-## Probe-First Rule
+## Query Parameter Names Before Using a Node
 
-Before using ANY Houdini node type you haven't used in this session:
+Before setting parms on ANY Houdini node type, look up its real parm names with
+`houdini_node_parms(type)`. It reads a catalogue generated from the actual
+Houdini install — always accurate for this version, zero cost, no node created.
 
+```
+houdini_node_parms("normal")   → {name,type,label,default,menu_items,...} per parm
+houdini_node_parms("copytopoints::2.0")
+```
+
+**Do NOT guess parameter names.** Parm names drift across Houdini versions:
+- Normal SOP: cusp-angle parm is `cuspangle` (not `cangle`, not `cusp`)
+- PolyBevel: `offset` not `bevel`, `divisions` not `iterations`
+- Subdivide: `iterations` not `depth`
+- Attrib Promote: `inname`/`inclass`/`outclass` not `original`
+
+Fallback (sandbox probe) ONLY if `houdini_node_parms` is unavailable or the type
+isn't in the catalogue:
 ```python
-# ALWAYS probe parameter names BEFORE setting them
 n = container.createNode("nodetype", "_probe")
 for p in n.parms():
     print(f"{p.name()} = {p.eval()}")
 n.destroy()
 ```
-
-**Do NOT guess parameter names.** Common traps:
-- PolyBevel: `offset` not `bevel`, `divisions` not `iterations`
-- Subdivide: `iterations` not `depth`
-- Torus: `radx`/`rady` not `radius`
-- Line: `dist` not `length`, controlled by `order` mode
 
 ## Common Pitfalls
 
@@ -801,6 +813,7 @@ nodes under the injected `sandbox_root` container (see [Network Mode](#network-m
 # network_mode=true — runs in the sandbox geo container
 container = sandbox_root            # injected; == hou.node(sandbox_root_path)
 box = container.createNode("box", "my_box")
+# parm names are version-specific — verify with houdini_node_parms("box")
 box.parm("sizex").set(1)
 box.parm("sizey").set(1)
 box.parm("sizez").set(1)
@@ -830,11 +843,12 @@ When embedding string literals in Python code that will pass through JSON → pa
 - **MANDATORY orientation gate**: Run `houdini_verify_orientation` with checks derived from the recipe's ORIENTATION ASSERTS before `houdini_commit_sandbox`. The gate is also enforced inside `commit_sandbox` — if `@component_id` exists and any check fails, commit is refused. Use `skip_orientation=true` ONLY with a documented reason (e.g. abstract art).
 - **No monolithic Python SOPs**: A single `python` node > 200 lines for the whole asset is a failure. Decompose into Copy-to-Points structure with separate sub-component generators.
 - **Tag every component**: Every distinct geometric part must carry `@component_id`. Without it, `houdini_verify_orientation` cannot run and `commit_sandbox` will refuse to commit.
+- **Query parm names before building**: call `houdini_node_parms(type)` for any SOP you'll set parms on (especially in `postprocess`). The build harness hard-validates `postprocess` parm names against the bundled catalogue — an unknown name is a build-time error listing the valid names, not a silent miss.
 
 ## Workflow
 
 1. **Create a recipe** — Include COMPONENTS with `@component_id`, ORIENTATION ASSERTS (mandatory), PARAMETERS list, MODULAR ANCHORS, DETAIL PLAN, and VERIFICATION criteria.
-2. **Probe unknown nodes** — If the recipe uses node types you haven't probed this session, probe them first.
+2. **Look up parm names** — For any node type you'll set parms on (especially `postprocess` SOPs), call `houdini_node_parms(type)` to get the authoritative names. The build harness hard-validates `postprocess` parm names against this catalogue.
 3. **Choose backend + mode** — `python_sop` for algorithmic mesh generation, `vex_wrangle` for per-element math, `hybrid` for both. Then choose the BUILD path: if the asset has ≥2 components or any repeated/swappable part, **use `houdini_build_procedural_asset` (declarative recipe)** — it assembles the modular network deterministically and you only write per-component geometry code. Fall back to `houdini_run_python_sandbox(network_mode=true)` only for non-standard topologies you can't express as a recipe. Single-SOP mode only for genuinely single-piece generators.
 4. **Generate with sandbox/builder** — Use `houdini_build_procedural_asset` (preferred for multi-component) or `houdini_run_python_sandbox` with `commit_on_success=false`. The component code MUST: (a) call `geo.addAttrib(hou.attribType.Prim, "component_id", "")` before any geometry, then `poly.setAttribValue("component_id", "<id>")` on every component's polygons; (b) install spare parameters idempotently on the cooking node (or, in network mode / builder, on each generator SOP); (c) use Copy-to-Points (via builder anchors or manual network_mode) for any repeated/swappable part; (d) in builder mode, the network terminates in a builder-created OUT automatically; in network mode, terminate with a null named `OUT` (or pass `output_node_name`).
 5. **Check `structure_advisory` IMMEDIATELY** — The sandbox result now includes a `structure_advisory` field. If it reports `is_monolithic: true`, you MUST `houdini_discard_sandbox` and rebuild with a modular decomposition (separate component generators + Copy-to-Points/Sweep). Do NOT proceed to verification on a monolithic asset — the commit gate will refuse it anyway, so fixing it now saves a wasted verify cycle.
@@ -1110,7 +1124,7 @@ p@orient = quaternion(maketransform(side, @N, tangent));
 
 ## Houdini 21 SOP Parameter Reference
 
-Node parameter names differ from older versions. Always use these exact names:
+Node parameter names differ from older versions. **The authoritative source is `houdini_node_parms(type)`** — the tables below are a quick reference only and can go stale; always verify against the tool before writing a recipe.
 
 ### Line SOP
 | Purpose | Parm name | Type |
