@@ -566,15 +566,59 @@ def _flatten_parm_templates(group) -> list[dict[str, Any]]:
     return specs
 
 
-def generate_node_parms_manifest(category: str = "Sop") -> dict[str, Any]:
+def _node_type_namespace(type_name: str) -> str | None:
+    """Return the namespace prefix of a node type name, or None for built-ins.
+
+    Houdini namespaces node types as '<ns>::<base>::<ver>' (e.g.
+    'labs::tree_branch_generator::1.1', 'copytopoints::2.0'). A bare version
+    suffix like 'copytopoints::2.0' is NOT a namespace — it's a built-in with
+    a major version. We treat the prefix as a namespace only when the base
+    name (after the prefix) is itself a recognizable SOP base, which we
+    approximate by: the prefix is alphabetic AND the full type isn't a known
+    built-in pattern. In practice we just return the first '::'-segment and
+    let exclude_namespaces match against the well-known third-party set."""
+    if "::" not in type_name:
+        return None
+    return type_name.split("::")[0]
+
+
+# Third-party / plugin / asset namespaces excluded from the manifest by default.
+# These are large, environment-specific (installed plugins, user HDAs), and
+# irrelevant to procedural recipe building. Built-in versioned nodes
+# (copytopoints::2.0, polybevel::3.0) are KEPT because their prefix is the
+# bare SOP base name, which isn't in this set.
+_DEFAULT_EXCLUDE_NAMESPACES = frozenset({
+    "labs",        # SideFX Labs (380+ nodes, art-focused)
+    "kinefx",      # character rigging (133 nodes)
+    "apex",        # APEX graph framework
+    "DJA",         # third-party materialx shaders
+    "quadspinner", # third-party terrain
+    # User HDA namespaces are environment-specific; add yours here if needed.
+})
+
+
+def generate_node_parms_manifest(
+    category: str = "Sop",
+    exclude_namespaces: frozenset[str] | None = None,
+) -> dict[str, Any]:
     """Build the node-params manifest by walking hou.nodeTypeCategories().
     Requires a live Houdini (real hou module). Returns the manifest dict;
     the caller (script/tool) is responsible for writing it to disk.
 
+    By default excludes third-party/plugin/asset namespaces (labs, kinefx,
+    apex, ...) which are large, environment-specific, and irrelevant to
+    procedural recipe building. Built-in versioned nodes like
+    'copytopoints::2.0' are kept. Pass exclude_namespaces=set() to keep
+    everything, or a custom set to filter differently.
+
     The manifest shape:
       {"houdini_version": "...", "generated_at": "...", "category": "Sop",
+       "excluded_namespaces": [...],
        "node_types": {"<type_name>": {"parms": [{name,type,...}, ...]}, ...}}
     """
+    if exclude_namespaces is None:
+        exclude_namespaces = _DEFAULT_EXCLUDE_NAMESPACES
+
     try:
         version = hou.applicationVersionString()
     except Exception:
@@ -593,12 +637,16 @@ def generate_node_parms_manifest(category: str = "Sop") -> dict[str, Any]:
                 "houdini_version": version,
                 "generated_at": _now_iso(),
                 "category": category,
+                "excluded_namespaces": sorted(exclude_namespaces),
                 "node_types": {},
                 "error": f"category {category!r} not found",
             }
 
     for nt in cat.nodeTypes().values():
         type_name = nt.name()
+        ns = _node_type_namespace(type_name)
+        if ns is not None and ns in exclude_namespaces:
+            continue
         try:
             group = nt.parmTemplateGroup()
         except Exception:
@@ -612,6 +660,7 @@ def generate_node_parms_manifest(category: str = "Sop") -> dict[str, Any]:
         "houdini_version": version,
         "generated_at": _now_iso(),
         "category": category,
+        "excluded_namespaces": sorted(exclude_namespaces),
         "node_types": node_types,
     }
 

@@ -63,6 +63,7 @@ def main() -> int:
 
     manifest = generate_node_parms_manifest(args.category)
     count = len(manifest.get("node_types", {}))
+    excluded = manifest.get("excluded_namespaces", [])
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     tmp = args.out + ".tmp"
@@ -74,6 +75,7 @@ def main() -> int:
     print(f"  Houdini version: {manifest.get('houdini_version')}")
     print(f"  Category:        {args.category}")
     print(f"  Node types:      {count}")
+    print(f"  Excluded NS:     {', '.join(excluded) if excluded else '(none)'}")
 
     # Quick sanity spot-checks on a few nodes agents use most.
     nts = manifest.get("node_types", {})

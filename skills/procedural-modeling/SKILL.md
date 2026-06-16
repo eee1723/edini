@@ -327,7 +327,7 @@ errors that dominate failed procedural runs.
     }
   ],
   "postprocess": [                                // optional SOP Chain after merge
-    {"type": "normal", "params": {"cusp": 60}}     // parm NAMES are version-specific —
+    {"type": "normal", "params": {"cuspangle": 60}} // parm NAMES are version-specific —
                                                    // verify with houdini_node_parms("normal")
   ],
   "orientation_asserts": [                        // flows to commit_sandbox's orientation gate
@@ -1210,8 +1210,8 @@ No parms. Just `merge.setInput(0, a); merge.setInput(1, b); ...` (up to ~50 inpu
 > Parm names below may be version-specific — **verify with `houdini_node_parms("normal")`** before writing a recipe.
 | Purpose | Parm name | Type / menu |
 |---------|-----------|------|
-| Cusp angle | `cusp` | float (degrees) |
-| Add normals to | `type` | menu: `point`/`vertex`/`primitive` |
+| Cusp angle | `cuspangle` | float (degrees, 0-180) |
+| Add normals to | `type` | menu: `typepoint`/`typevertex`/`typeprim`/`typedetail` |
 
 ### Boolean SOP (2.0)
 | Purpose | Parm name | Type / menu |

@@ -121,8 +121,8 @@ class TestRecipeValidation(unittest.TestCase):
         """When all postprocess parm names are in the manifest, validation
         passes (no parm-name errors)."""
         recipe = {"components": [{"id": "a", "code": "pass"}],
-                  "postprocess": [{"type": "normal", "params": {"cusp": 30}}]}
-        original = self._patch_manifest({"normal": {"cusp", "type"}})
+                  "postprocess": [{"type": "normal", "params": {"cuspangle": 60}}]}
+        original = self._patch_manifest({"normal": {"cuspangle", "type"}})
         try:
             errors = harness._validate_recipe(recipe)
         finally:
@@ -133,11 +133,11 @@ class TestRecipeValidation(unittest.TestCase):
 
     def test_postprocess_misspelled_parm_rejected(self):
         """The canonical C-station case: 'cangle' does not exist on Normal SOP
-        in H21 (it's 'cusp'). The validator must reject it at build time with
-        the valid names listed, before any node is created."""
+        in H21 (the real name is 'cuspangle'). The validator must reject it at
+        build time with the valid names listed, before any node is created."""
         recipe = {"components": [{"id": "a", "code": "pass"}],
                   "postprocess": [{"type": "normal", "params": {"cangle": 30}}]}
-        original = self._patch_manifest({"normal": {"cusp", "type"}})
+        original = self._patch_manifest({"normal": {"cuspangle", "type"}})
         try:
             errors = harness._validate_recipe(recipe)
         finally:
@@ -146,7 +146,7 @@ class TestRecipeValidation(unittest.TestCase):
         self.assertIn("unknown parm", joined)
         self.assertIn("cangle", joined)
         # The error must list the valid names so the agent can self-correct.
-        self.assertIn("cusp", joined)
+        self.assertIn("cuspangle", joined)
 
     def test_postprocess_unknown_type_soft_degrades(self):
         """If the node type is NOT in the manifest, parm checks are skipped
@@ -155,7 +155,7 @@ class TestRecipeValidation(unittest.TestCase):
         recipe = {"components": [{"id": "a", "code": "pass"}],
                   "postprocess": [
                       {"type": "frobnicate", "params": {"bogus": 1}}]}
-        original = self._patch_manifest({"normal": {"cusp"}})
+        original = self._patch_manifest({"normal": {"cuspangle"}})
         try:
             errors = harness._validate_recipe(recipe)
         finally:

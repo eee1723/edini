@@ -858,13 +858,15 @@ class MockAttribType:
 
 def _make_normal_ptg():
     """Build a realistic Normal SOP parm template group (H21 names).
-    Note: H21 renamed the cusp-angle parm — these names mirror the real SOP so
-    the manifest/parm-name tests exercise the exact failure mode that prompted
-    the C-station (agent guessing 'cangle' which does not exist)."""
+    Note: H21 names the cusp-angle parm 'cuspangle' — NOT 'cangle' (a stale
+    name agents keep guessing) nor 'cusp'. These real names let the manifest/
+    parm-name tests exercise the exact failure mode that prompted the
+    C-station."""
     g = MockParmTemplateGroup()
     g.append(MockMenuParmTemplate("type", "Add Normals to",
-                                  ["point", "vertex", "primitive"], default=1))
-    g.append(MockFloatParmTemplate("cusp", "Cusp Angle",
+                                  ["typepoint", "typevertex", "typeprim",
+                                   "typedetail"], default=1))
+    g.append(MockFloatParmTemplate("cuspangle", "Cusp Angle",
                                    num_components=1, default_value=(60.0,),
                                    min=0.0, max=180.0))
     return g

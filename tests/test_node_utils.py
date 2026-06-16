@@ -840,21 +840,24 @@ class TestNodeParmsManifest(unittest.TestCase):
 
     def test_generate_manifest_extracts_normal_sop_parms(self):
         """The generator walks the Sop category and produces a parm spec per
-        node type. The mock Normal SOP carries 'type' (menu) + 'cusp' (float)
-        — note 'cusp' NOT 'cangle', which is the H21 name the C-station pins."""
+        node type. The mock Normal SOP carries 'type' (menu) + 'cuspangle'
+        (float) — the real H21 names (NOT 'cangle', a stale name agents keep
+        guessing)."""
         from edini.node_utils import generate_node_parms_manifest
         m = generate_node_parms_manifest("Sop")
         self.assertEqual(m["category"], "Sop")
         self.assertIn("houdini_version", m)
         self.assertIn("generated_at", m)
+        self.assertIn("excluded_namespaces", m)
         nts = m["node_types"]
         # Normal SOP must be present with its real H21 parm names.
         self.assertIn("normal", nts)
         parm_names = [p["name"] for p in nts["normal"]["parms"]]
-        self.assertIn("cusp", parm_names)
+        self.assertIn("cuspangle", parm_names)
         self.assertIn("type", parm_names)
-        # The infamous wrong name must NOT appear.
+        # The infamous wrong names must NOT appear.
         self.assertNotIn("cangle", parm_names)
+        self.assertNotIn("cusp", parm_names)
 
     def test_generate_manifest_captures_menu_items(self):
         """Menu parms must carry their menu_items token list."""
@@ -864,7 +867,7 @@ class TestNodeParmsManifest(unittest.TestCase):
         type_parm = normal_parms["type"]
         self.assertEqual(type_parm["type"], "Menu")
         self.assertEqual(type_parm["menu_items"],
-                         ["point", "vertex", "primitive"])
+                         ["typepoint", "typevertex", "typeprim", "typedetail"])
 
     def test_generate_manifest_captures_parm_types(self):
         """Each parm spec carries a 'type' field (Float/Menu/String/...)."""
@@ -882,6 +885,37 @@ class TestNodeParmsManifest(unittest.TestCase):
         # 'box' mock has no ptg -> should be absent or have empty parms, but
         # must not crash the whole dump.
         self.assertIn("normal", m["node_types"])  # at least one survived
+
+    def test_namespace_prefix_extraction(self):
+        """_node_type_namespace distinguishes built-in versioned nodes from
+        true third-party namespaces."""
+        from edini.node_utils import _node_type_namespace
+        # Built-in with no namespace.
+        self.assertIsNone(_node_type_namespace("normal"))
+        self.assertIsNone(_node_type_namespace("attribpromote"))
+        # Versioned built-in: 'copytopoints::2.0' — the prefix IS the SOP base,
+        # not a third-party namespace. _node_type_namespace returns the first
+        # segment; the caller decides via exclude_namespaces.
+        self.assertEqual(_node_type_namespace("copytopoints::2.0"),
+                         "copytopoints")
+        # True third-party namespaces.
+        self.assertEqual(_node_type_namespace("labs::tree_gen::1.1"), "labs")
+        self.assertEqual(_node_type_namespace("kinefx::bone::1.0"), "kinefx")
+
+    def test_generate_manifest_excludes_third_party_namespaces(self):
+        """The default exclude set drops labs/kinefx/apex but keeps built-in
+        versioned nodes (copytopoints::2.0). Pass exclude_namespaces=set() to
+        keep everything."""
+        from edini.node_utils import (
+            generate_node_parms_manifest, _DEFAULT_EXCLUDE_NAMESPACES)
+        m = generate_node_parms_manifest("Sop")
+        excluded = set(m["excluded_namespaces"])
+        self.assertIn("labs", excluded)
+        self.assertIn("kinefx", excluded)
+        # Built-in versioned node kept (its prefix isn't in the exclude set).
+        self.assertIn("copytopoints::2.0", m["node_types"])
+        # Default set is non-empty and frozen.
+        self.assertTrue(len(_DEFAULT_EXCLUDE_NAMESPACES) > 0)
 
 
 class TestNodeParmsQuery(unittest.TestCase):
@@ -910,8 +944,8 @@ class TestNodeParmsQuery(unittest.TestCase):
             "node_types": {
                 "normal": {"parms": [
                     {"name": "type", "type": "Menu",
-                     "menu_items": ["point", "vertex", "primitive"]},
-                    {"name": "cusp", "type": "Float", "default": 60.0},
+                     "menu_items": ["typepoint", "typevertex", "typeprim"]},
+                    {"name": "cuspangle", "type": "Float", "default": 60.0},
                 ]},
                 "copytopoints::2.0": {"parms": [
                     {"name": "pack", "type": "Toggle", "default": False},
@@ -937,7 +971,7 @@ class TestNodeParmsQuery(unittest.TestCase):
         self.assertEqual(r["source"], "manifest")
         self.assertEqual(r["node_type"], "normal")
         names = [p["name"] for p in r["parms"]]
-        self.assertEqual(names, ["type", "cusp"])
+        self.assertEqual(names, ["type", "cuspangle"])
         self.assertEqual(r["houdini_version"], "21.0.440")
 
     def test_query_miss_returns_not_found(self):
@@ -976,7 +1010,7 @@ class TestNodeParmsQuery(unittest.TestCase):
         the valid name set for a known type, None for unknown/missing."""
         from edini.node_utils import manifest_parm_names
         self._write_manifest(self._manifest_file, self._valid_manifest)
-        self.assertEqual(manifest_parm_names("normal"), {"type", "cusp"})
+        self.assertEqual(manifest_parm_names("normal"), {"type", "cuspangle"})
         self.assertIsNone(manifest_parm_names("nonexistent"))
         # Missing manifest -> None (validator must then skip checks).
 
