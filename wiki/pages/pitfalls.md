@@ -87,6 +87,40 @@ TypeBox 定义的参数类型（如 `Type.String()`）与 Python houp API 的期
 **解决**：工具设计上保持参数类型宽松（`Type.Unknown()` 用于 set_param value），
 让 Python 端做最终的类型转换和校验。
 
+### Type.Tuple 的 JSON Schema 触发智谱 400（兼容性炸弹）
+
+- **分类**: TypeScript / 模型兼容性
+- **优先级**: 高
+- **状态**: 已修复 (2026-06-16)
+
+**症状**：
+- `picli`（独立 CLI）用 `zai-coding-cn/glm-5.1/5.2`（智谱 coding plan）完全正常；
+- Edini（Houdini RPC，带全部 Houdini 工具）同样切换到 GLM 模型后，**每次请求都返回 `400 API 调用参数有误，请检查文档。`**。
+- 与 API key、套餐订阅、并发、请求体大小、工具数量、thinking/tool_stream/stream_options 全部无关（逐一用 curl 复现验证过，智谱 API 本身全盘接受）。
+
+**根因**：
+TypeBox 的 `Type.Tuple([Type.Number(), Type.Number()])` 生成的是**旧版 JSON Schema 的 tuple 写法**：
+```json
+{"type":"array","items":[{"type":"number"},{"type":"number"}],"additionalItems":false}
+```
+注意 `items` 是一个 **schema 数组**（已废弃形式，新版规范应改用 `prefixItems`）。
+智谱 coding plan API 的参数校验器对这种 `items: 数组` 形式直接判错返回 400。OpenAI、DeepSeek 等接受这个写法，所以平时测不出问题。
+
+Edini 当时有两个工具用了 `Type.Tuple`（`houdini_capture_review` 和 `houdini_capture_component_detail` 的 `resolution` 参数）。picli 没有这类 schema 所以一直正常——这解释了为什么「同一套 Pi 后端、同一个 key，picli 行而 Edini 不行」。
+
+**验证方法**（已证）：用 TypeBox 真实输出 + curl 直发智谱 →
+- `Type.Tuple`（items 数组形式）→ **400**
+- `Type.Record`（patternProperties）、`Type.Union`+`const`（anyOf）→ 200
+- 改 `Type.Array(Type.Number())` / `prefixItems` / object → 全部 200
+
+**解决**：把两处 `Type.Tuple([Type.Number(), Type.Number()])` 改成 `Type.Array(Type.Number())`，对应 TS 类型 `[number, number]` → `number[]`。语义不变（仍是 `[width, height]`）。
+
+**⚠️ 开发准则（适用所有要接智谱 / 严格 OpenAI 兼容 API 的工具）**：
+1. **禁用 `Type.Tuple`**——它生成废弃的 `items: 数组` 写法。固定长度数组用 `Type.Array(Type.X())`，必要时在 description 里说明顺序。
+2. 定义新工具后，**务必用目标 provider（尤其智谱 coding plan）实测一次**，不要只靠 OpenAI/DeepSeek 验证。校验严格度：智谱 > DeepSeek > OpenAI。
+3. 排查 provider 报 400 时，先隔离测试「是否带了某个特定工具的 schema」——用二分法逐步移除工具，定位到具体的 schema。
+4. 复现脚本模板见 `wiki/raw` 或本节验证方法：构造 payload → curl 直发 `https://open.bigmodel.cn/api/coding/paas/v4/chat/completions`。
+
 ### subprocess stdout 阻塞风险
 
 - **分类**: JSON-RPC

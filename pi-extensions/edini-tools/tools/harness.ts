@@ -368,8 +368,8 @@ export const houdiniCaptureReview = {
       Type.Boolean({ description: "Frame the target before each view capture. Default: true." })
     ),
     resolution: Type.Optional(
-      Type.Tuple([Type.Number(), Type.Number()], {
-        description: "Capture resolution (width, height) per cell. Default: viewport native. Use (960, 540) for consistent quad-view cells."
+      Type.Array(Type.Number(), {
+        description: "Capture resolution [width, height] per cell. Default: viewport native. Use [960, 540] for consistent quad-view cells."
       })
     ),
   }),
@@ -420,8 +420,8 @@ export const houdiniCaptureComponentDetail = {
       Type.String({ description: "Viewport shading: 'smooth', 'wire', 'flat'. Default 'smooth'." })
     ),
     resolution: Type.Optional(
-      Type.Tuple([Type.Number(), Type.Number()], {
-        description: "Capture resolution (width, height) per cell.",
+      Type.Array(Type.Number(), {
+        description: "Capture resolution [width, height] per cell.",
       })
     ),
   }),
@@ -433,7 +433,7 @@ export const houdiniCaptureComponentDetail = {
       component_ids: string[];
       views?: string[];
       shading_mode?: string;
-      resolution?: [number, number];
+      resolution?: number[];
     }
   ) {
     return forwardTool("houdini_capture_component_detail", params);
