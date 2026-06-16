@@ -49,6 +49,33 @@ export const houdiniGetHelp = {
   },
 };
 
+export const houdiniNodeParms = {
+  name: "houdini_node_parms",
+  label: "Query Node Type Parameters",
+  description:
+    "Look up the authoritative parameter list (names/types/menu tokens/defaults) for a Houdini node TYPE (e.g. 'normal', 'attribpromote', 'copytopoints'). " +
+    "Use this BEFORE writing postprocess params in a recipe so you never guess a parm name — the catalogue is generated from the real Houdini install and is always accurate (parm names change across Houdini versions, e.g. Normal SOP's cusp-angle parm).",
+  promptSnippet: "Look up a node type's real parameter names",
+  promptGuidelines: [
+    "Use this to get exact parm names/menu tokens for a SOP before writing recipe postprocess params — do NOT rely on memorized names, which go stale across Houdini versions.",
+    "Returns {name,type,label,default,menu_items?,min?,max?} per parm. source='manifest' means the pinned catalogue (fast, offline); source='live' means it queried the running Houdini because the type wasn't in the catalogue.",
+  ],
+  parameters: Type.Object({
+    node_type: Type.String({
+      description: "Node type name (e.g. 'normal', 'copytopoints', 'attribpromote').",
+    }),
+    category: Type.Optional(
+      Type.String({ description: "NodeType category. Default 'Sop'." })
+    ),
+  }),
+  async execute(
+    _toolCallId: string,
+    params: { node_type: string; category?: string }
+  ) {
+    return forwardTool("houdini_node_parms", params);
+  },
+};
+
 export const houdiniGetNodeInfo = {
   name: "houdini_get_node",
   label: "Get Houdini Node Info",
@@ -141,6 +168,7 @@ export const houdiniInspectGeometryHealth = {
 export const queryTools = [
   houdiniSearchNodes,
   houdiniGetHelp,
+  houdiniNodeParms,
   houdiniGetNodeInfo,
   houdiniInspectGeo,
   houdiniGeometryInventory,

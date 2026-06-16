@@ -237,5 +237,78 @@ class TestHarnessToolHandlers(unittest.TestCase):
         self.assertFalse(captured["delete_on_failure"])
 
 
+class TestNodeParmsHandler(unittest.TestCase):
+    """The houdini_node_parms handler (C-station query tool) must forward
+    node_type + category to node_parms()."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._previous_hou = sys.modules.get("hou")
+        cls._previous_edini_modules = {
+            name: module
+            for name, module in sys.modules.items()
+            if name.startswith("edini")
+        }
+        cls._mock_hou = create_mock_hou()
+        sys.modules["hou"] = cls._mock_hou
+        for _mod in list(sys.modules):
+            if _mod.startswith("edini"):
+                del sys.modules[_mod]
+        cls.tool_handlers = importlib.import_module(
+            "edini.tool_executor").TOOL_HANDLERS
+
+    @classmethod
+    def tearDownClass(cls):
+        for _mod in list(sys.modules):
+            if _mod.startswith("edini"):
+                del sys.modules[_mod]
+        sys.modules.update(cls._previous_edini_modules)
+        if cls._previous_hou is None:
+            sys.modules.pop("hou", None)
+        else:
+            sys.modules["hou"] = cls._previous_hou
+
+    def test_handler_registered(self):
+        self.assertIn("houdini_node_parms", self.tool_handlers)
+
+    def test_forwards_node_type_and_explicit_category(self):
+        captured = {}
+        import edini.tool_executor as te_mod
+        original = te_mod.node_parms
+
+        def spy(node_type, category="Sop"):
+            captured.update(node_type=node_type, category=category)
+            return {"success": True, "node_type": node_type, "parms": []}
+
+        te_mod.node_parms = spy
+        try:
+            self.tool_handlers["houdini_node_parms"](
+                node_type="normal", category="Object")
+        finally:
+            te_mod.node_parms = original
+
+        self.assertEqual(captured["node_type"], "normal")
+        self.assertEqual(captured["category"], "Object")
+
+    def test_defaults_category_to_sop(self):
+        captured = {}
+        import edini.tool_executor as te_mod
+        original = te_mod.node_parms
+
+        def spy(node_type, category="Sop"):
+            captured.update(node_type=node_type, category=category)
+            return {"success": True, "node_type": node_type, "parms": []}
+
+        te_mod.node_parms = spy
+        try:
+            # No category passed -> handler's lambda supplies "Sop".
+            self.tool_handlers["houdini_node_parms"](node_type="copytopoints")
+        finally:
+            te_mod.node_parms = original
+
+        self.assertEqual(captured["node_type"], "copytopoints")
+        self.assertEqual(captured["category"], "Sop")
+
+
 if __name__ == "__main__":
     unittest.main()

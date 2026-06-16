@@ -18,6 +18,7 @@ from edini.node_utils import (
     capture_review, capture_network, capture_component_detail,
     get_selection, check_errors, set_display_flag,
     verify_orientation, inspect_geometry_health, geometry_inventory,
+    node_parms,
 )
 from edini import screenshots
 from edini.harness import (
@@ -102,6 +103,8 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     ),
     "houdini_search_nodes": lambda **kw: search_nodes(kw["keyword"]),
     "houdini_get_help": lambda **kw: get_help(kw["node_type_name"]),
+    "houdini_node_parms": lambda **kw: node_parms(
+        kw["node_type"], category=kw.get("category", "Sop")),
     "houdini_inspect_geo": lambda **kw: inspect_geometry(kw["node_path"]),
     "houdini_run_python": lambda **kw: run_python(kw["code"]),
     "houdini_run_vex": lambda **kw: run_vex(
