@@ -66,7 +66,7 @@ export const houdiniRunPythonSandbox = {
     "Do not delete a failed sandbox before reviewing the diagnostics in the result.",
     "NEVER set commit_on_success=true on the first sandbox execution. Always capture (4-view quad) and verify with describe_image using the 3D verification prompt BEFORE committing.",
     "If describe_image reports critical or major defects (wrong orientation, missing components, STRUCTURAL_DETAIL < 3), fix the specific issue and re-verify — do NOT commit until verification passes or user approves.",
-    "Before using unfamiliar node types in your code, PROBE their parameter names first (create + inspect + destroy).",
+    "Before using unfamiliar node types in your code, look up their parameter names with houdini_node_parms(type) — do NOT guess or probe manually.",
   ],
   parameters: Type.Object({
     code: Type.String({ description: "Python code to execute in the sandbox" }),
