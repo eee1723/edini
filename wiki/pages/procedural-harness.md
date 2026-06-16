@@ -1,6 +1,6 @@
 # 🧪 Procedural Harness
 
-> 最后更新：2026-06-15 ｜ 状态：模块化门 + 朝向门 + network_mode + 声明式 Builder + 构造轴（B 站）已落地 ｜ 目标：让程序化建模先进入可诊断、可验证、可回滚的沙盒流程，并从"约束执行"转向"能力放大"。
+> 最后更新：2026-06-16 ｜ 状态：模块化门 + 朝向门 + network_mode + 声明式 Builder + 构造轴（B 站）+ Harness 两 Bug 修复（参数挂载/degenerate 误报，真实 Houdini 验证）已落地 ｜ 目标：让程序化建模先进入可诊断、可验证、可回滚的沙盒流程，并从"约束执行"转向"能力放大"。
 
 ## 这批解决了什么
 
@@ -20,10 +20,11 @@ Procedural Harness 是 Edini 给 Houdini 程序化建模加上的一层执行护
 | 模块化硬门 | `_check_modular_structure` 拒绝单体资产（≥3 cid 全来自单个 Python SOP） | commit 前结构门先跑，拒绝单体 |
 | 朝向门 | `houdini_verify_orientation` 按 construction_axis 确定性读取 edini_world_axis（无 PCA）；缺该属性时回退 PCA | failed check 带 hint |
 | 构造轴（B 站） | `orientation_asserts.construction_axis` 声明组件局部构造轴，builder 用 anchor @orient 代数推导世界轴并烘焙 edini_world_axis；build 时一致性预检拒绝自洽矛盾 | 朝向从估计变 ground truth，build 时挡住自洽错误 |
+| **asset 参数挂载** | recipe `params` 经 `_install_spare_params` 用 read-merge 文件夹参数（`parmTemplateGroup()` 读现有 + `FolderParmTemplate("edini_params")` 装 + `setParmTemplateGroup` 写回）落到 sandbox root；H21 兼容，`setSpareParmGroup` 受限时自动回退 | build 后 `params_summary[*].installed=true`，参数真实出现在 `/obj/<asset>` 面板可调 |
 | 三层验证 | geometry health → orientation → inventory/data → visual | health 是 MANDATORY layer-1 |
 | Diagnostics | `houdini_collect_diagnostics` 收集节点错误、警告、参数、几何统计 | 失败后先看诊断，不立即删节点 |
 | Inventory | `houdini_geometry_inventory` 列每个 component_id 的 prim 数 + 相对大小 | 确认组件存在，标 SMALL 需特写 |
-| Health | `houdini_inspect_geometry_health` 查 orphan/degenerate/non-manifold | Boolean/Sweep 前必修 |
+| Health | `houdini_inspect_geometry_health` 查 orphan/degenerate/non-manifold（degenerate 用 `intrinsicValue("measuredarea")` 真实面积，无 fan-cap/n-gon cap 误报） | Boolean/Sweep 前必修 |
 | Component detail | `houdini_capture_component_detail` 小组件逐个框取特写 | 解决"存在但太小看不见" |
 | Lifecycle | `houdini_commit_sandbox` / `houdini_discard_sandbox` | 通过后改名提交，废弃显式删除 |
 | Safe capture | `houdini_capture_review` 多视角接触表，自动框到 target bbox | 截图失败干净报告 |
@@ -98,35 +99,44 @@ Procedural Harness 是 Edini 给 Houdini 程序化建模加上的一层执行护
 - 朝向门对**声明了 construction_axis 的组件**是确定性检查（读 edini_world_axis，零估计）。对未声明该字段的组件回退 PCA——PCA 是点分布估计，对不均匀分布不稳；新资产建议优先用 construction_axis（B 站）。
 - builder 的 idfix 用 prim 等分定位实例边界——已验证 Copy-to-Points 连续排列下成立，但极端拓扑（交错排列）理论上可能错位。
 - builder 不内嵌 capture/commit（单一职责；commit 是显式后续调用）。
+- **postprocess 参数映射不全**：Normal SOP 的 `cangle`（cusp angle）参数名在 H21 变更，harness postprocess 设它时会静默失败（不影响几何/门禁，但法线非最优）。属 C 站（节点参数 DB）要解决的同类问题，已列为 P0 计划。
 
 ## 验证状态
 
-最近 A/B 站交付后的验证结果：
+最近 A/B 站 + 第三十阶段两 Bug 修复交付后的验证结果：
 
 ```text
-python -m pytest（harness 子集，忽略 manual_* 与 PySide6 依赖测试）
-197 passed（A 站 177 + B 站新增 20）
+python -m pytest（全量，忽略 manual_* 依赖真实 Houdini 的测试）
+382 passed
 
-B 站 mock 验证：
-- 纯数学 rotate_vector_by_quaternion：identity/90°/180°/长度保持 6 用例
-- build 一致性预检：构造轴/expected_axis 矛盾时拒绝且不泄漏 sandbox
-- build 烘焙：direct/stamped 组件 construction_axis 一致时构造 construction_axis_summary
-- verify_orientation 构造路径：edini_world_axis 覆盖 PCA（method=construction）
-- PCA crosscheck：构造轴与 PCA 估计分歧时只告警不 fail
-- 向后兼容：无 construction_axis 的老 recipe 仍走 PCA
+第三十阶段 mock 验证：
+- _install_spare_params 成功路径：installed=True，参数真实落到 root 的 _parms 并 evalParm 可读
+- _install_spare_params 降级路径：API 缺失时 installed=False 但默认值仍返回（_NoTemplate 模拟）
+- inspect_geometry_health：面积 2e-4 合法 fan-cap 三角形不被误报（count==0），共线三角仍标记
 
-真实 Houdini 双阶段实测（docs/BUILDER_FIRST_TEST.md / BUILDER_SECOND_TEST.md）：
+真实 Houdini 21.0.440 端到端验证（tests/manual_verify_fixes.py，13/13 全过）：
+- pre-flight：组件代码 isolation cook 抓真实 traceback（解决 Houdini node.errors() 泛化问题）
+- Fix A：5 个参数全部 installed=true、eval() 等于默认值、edini_params 文件夹在 root 接口
+- Fix B：degenerate count==1（仅共线三角），合法小三角实测 measuredarea=2e-4 不误报
+
+真实自行车 build 实证（修复前 vs 修复后）：
+- params_summary 5/5 installed=true（之前全 false）
+- degenerate_prims: 0（之前 1228，逼 agent 花 3 轮思考自证误报）
+- build 轮次 3→2，discard 2→1，输出 token -41%
+
+A/B 站历史验证（docs/BUILDER_FIRST_TEST.md / BUILDER_SECOND_TEST.md）：
 - 第一阶段（单组件）：builder 基础设施全过（sandbox/cook/component_id/structure gate）
 - 第二阶段（二组件 + Copy-to-Points）：idfix 逐实例 component_id 覆盖正确
   inventory 实扫 OUT：frame:6, wheel_fl:1, wheel_rr:1，40 点 8 prim
 ```
 
-## 后续规划（ABCDE 五站）
+## 后续规划（ABCDE 五站 + 第三十阶段遗留）
 
 | 站 | 内容 | 状态 | 依赖 |
 |---|---|---|---|
 | A | 声明式 Recipe Builder | ✅ 完成 | — |
 | B | 构造轴替代 PCA（construction_axis + edini_world_axis 烘焙 + build 时一致性预检） | ✅ 完成 | A |
-| C | 节点参数 DB（houdini_node_parms 查询工具） | ⬜ | 独立 |
+| 30 | Harness 两 Bug 修复（参数挂载 read-merge + degenerate 用 measuredarea）| ✅ 完成（真实 Houdini 验证）| — |
+| C | 节点参数 DB（houdini_node_parms 查询工具）— **前置**：先修 Normal SOP `cangle` 参数名（H21 变更，postprocess 静默失败） | 🔜 下一站 | 独立 |
 | D | 黄金范例检索（recipe 格式的验证过资产模板） | ⬜ | A |
 | E | 数值代理（轮廓圆度/对称性/silhouette IoU） | ⬜ | 独立 |

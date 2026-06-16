@@ -1,6 +1,6 @@
 # 📊 仪表盘
 
-> **当前阶段**：Procedural Harness Phase B 已合入主线 &nbsp;|&nbsp; **状态**：沙盒生成 / 诊断 / 验证 / 提交流程完成 &nbsp;|&nbsp; **最后更新**：2026-06-12
+> **当前阶段**：第三十阶段 — Harness 两 Bug 修复（参数挂载 + degenerate 误报，真实 Houdini 验证）&nbsp;|&nbsp; **状态**：声明式 Builder + 构造轴 + 双 Bug 修复已落地，382 测试通过 &nbsp;|&nbsp; **最后更新**：2026-06-16
 
 ## 快速导航
 
@@ -35,11 +35,11 @@
 | 节点创建 | ✅ namespace 自动解析 · shelf tool 预设应用 · diff 过滤内部子节点 |
 | 按钮布局 | ✅ 📷 截图 + 📁 上传（文本标签按钮，minHeight 34px，hover/pressed 动效）· 仅对话右对齐 · 执行按钮 minWidth 90px · 6px/8px 间距优化 |
 | 剪贴板 | ✅ Ctrl+V 图片粘贴 · 右键粘贴图片到附件栏 · 右键粘贴文本（defer focus+paste）· 多模式探测（QImage→mimeData→URL→raw png/jpeg）· Houdini PySide6 枚举兼容（整数 mode 值）|
-| 测试 | ⬜ 无自动化测试 |
+| 测试 | ✅ 382 测试通过（mock_hou 脱机 + harness/recipe/orientation/health 单测 + 真实 Houdini manual_verify_fixes.py 13/13）|
 | 知识检索 | ✅ edini_search_knowledge 工具已实现 |
 | 知识→Skills | ⬜ Traces → Skills 自动提取（规划中） |
 | 评估系统 | ✅ 5 维度评分 · LogParser · SQLite · EvalDashboard · edini_get_eval_stats · LLM-as-Judge (deepseek-chat) |
-| Procedural Harness | ✅ `houdini_run_python_sandbox` · diagnostics before delete · structural verify · safe capture · commit/discard lifecycle · [手测清单](procedural-harness.html) |
+| Procedural Harness | ✅ `houdini_run_python_sandbox` · 声明式 Recipe Builder（`houdini_build_procedural_asset`）· 构造轴（construction_axis 替代 PCA）· asset 参数 read-merge 文件夹挂载（H21 兼容）· diagnostics before delete · modular structure gate · orientation gate · commit/discard lifecycle · safe capture · [手测清单](procedural-harness.html) |
 
 ## 技术栈
 

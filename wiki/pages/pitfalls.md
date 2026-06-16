@@ -204,6 +204,28 @@ _on_agent_done   → flush(空路径跳过) → session_path为空? → 保留pe
 _on_pi_session_switched → 设置session_path → flush(写入!) → 清零pending
 ```
 
+### setSpareParmGroup 在 H21 非 HDA 节点静默失败
+
+- **分类**: Houdini API / Procedural Harness
+- **优先级**: 高
+- **状态**: 已修复 (2026-06-16，第三十阶段)
+
+**症状**：声明式 builder build 的资产，`params_summary` 里所有参数 `installed=false`，最终交付文案被迫写"参数暂时固化在代码里"。component 代码用 `hou.ch("../wheelbase")` 读不到值。
+**根因**：`_install_spare_params` 用全新空 `ParmTemplateGroup` 调 `root.setSpareParmGroup(group)`。该 API 在 H21 的非 HDA 节点（如 geo 容器）上受限会抛异常，但被 `except Exception: pass` 吞掉，`installed` 恒为 `False`，参数永不落地。
+**解决**：改用 Houdini 官方 read-merge 文件夹参数模式（H21 兼容、merge-safe）：`ptg = root.parmTemplateGroup()` 读现有（保留 Transform 等默认文件夹）→ `FolderParmTemplate("edini_params")` 装参数 → `setParmTemplateGroup(ptg)` 写回。主路径 `setParmTemplateGroup` → 失败回退 `setSpareParmGroup` → 仍失败才降级 `installed=False`+warning。真实 Houdini 21.0.440 验证 5/5 参数 `installed=true`。
+**教训**：泛化的 `except Exception: pass` 会吞掉真正失败，让"参数没挂上"变成静默降级。关键路径应把异常转成可观测信号（warning + installed 标志），而非静默吞。
+
+### 几何健康检查 degenerate 误报（0.5·|cross|² 单位错误）
+
+- **分类**: Houdini API / Procedural Harness
+- **优先级**: 高
+- **状态**: 已修复 (2026-06-16，第三十阶段)
+
+**症状**：`inspect_geometry_health` 报 `degenerate_prims: 1228`，但 agent 手算发现这些 fan-cap 三角形面积 2e-4（远超退化阈值），是误报。把 n-gon cap 改成 fan-cap 后误报数反而从 238 涨到 1228，逼 agent 花 3 轮思考自证清白、触发无谓 rebuild。
+**根因**：退化检测把 `0.5·|cross|²`（cross 是两边向量的叉积，`|cross|` = 2·面积，所以 `0.5·|cross|²` = `2·area²`，**不是**面积）与 `1e-7` 比，等效面积阈值 ~7e-5；且只取前 3 个顶点。合法 fan-cap 三角（面积 2e-4 → `2·area²`=8e-8 < 1e-7）被误报。fan-cap 把 1 个 n-gon 拆成 N 个小三角，每个 `2·area²` 更小，误报数暴涨。
+**解决**：改用 `prim.intrinsicValue("measuredarea")`（Houdini 原生真实多边形面积，含 n-gon），异常时回退修正后的 shoelace（遍历全部顶点对中心做扇形面积求和）。阈值 `1e-7` 现在真的是面积阈值。真实 Houdini 实测合法三角 measuredarea=2e-4 不再误报。
+**教训**：手写几何数学（叉积/面积）极易单位搞错（`|cross|` vs `|cross|²` vs `0.5·|cross|²`）；优先用 Houdini 内禀值（`intrinsicValue`）这类原生 API，它已封装好正确语义。注释里写"对于 >3 顶点仍可靠"的断言要有测试覆盖，否则像这个 bug 一样潜伏。
+
 - **分类**: Python/PySide6
 - **优先级**: 高
 - **状态**: 已修复

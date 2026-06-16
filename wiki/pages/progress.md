@@ -1,6 +1,6 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-15 &nbsp;|&nbsp; 第二十九阶段：构造轴替代 PCA（B 站）✅ &nbsp;|&nbsp; 规划：C 站节点参数 DB → D 站黄金范例 → E 站数值代理
+> 最后更新：2026-06-16 &nbsp;|&nbsp; 第三十阶段：Harness 两 Bug 修复（参数挂载 + degenerate 误报）✅ 真实 Houdini 验证 &nbsp;|&nbsp; 规划：Normal SOP 参数适配 → C 站节点参数 DB → D 站黄金范例 → E 站数值代理
 
 ## 总览看板
 
@@ -80,7 +80,7 @@
 
 # 🚀 开发进度
 
-> 最后更新：2026-06-15 &nbsp;|&nbsp; 第二十九阶段：构造轴替代 PCA（B 站）✅ &nbsp;|&nbsp; 规划：C 站节点参数 DB → D 站黄金范例 → E 站数值代理
+> 最后更新：2026-06-16 &nbsp;|&nbsp; 第三十阶段：Harness 两 Bug 修复（参数挂载 + degenerate 误报）✅ 真实 Houdini 验证 &nbsp;|&nbsp; 规划：Normal SOP 参数适配 → C 站节点参数 DB → D 站黄金范例 → E 站数值代理
 
 ## 总览看板
 
@@ -138,6 +138,20 @@
 - **验证工具补全**：`houdini_geometry_inventory` / `houdini_inspect_geometry_health` / `houdini_capture_component_detail` 之前只在 Python 注册、未暴露 TS schema（实测 agent 被迫退回 raw python），现已补全。
 - **测试隔离修复**：`test_error_surfacing` 无条件覆盖 `sys.modules["hou"]` orphan 了其它文件的 `edini.harness.hou`，改为幂等安装。
 - 316 测试通过。
+
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-16</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第三十阶段：Harness 两 Bug 修复 — 参数挂载 + degenerate 误报（真实 Houdini 验证）</span>
+      <span class="status-tag status-done">完成</span>
+    </div>
+    <div class="timeline-summary">① 根因诊断：日志分析暴露两个 Harness bug，共同特征是"工具误报逼 agent 花 3 轮思考自证清白"。Bug A：`_install_spare_params` 用全新空 group 调 `setSpareParmGroup`，H21 非 HDA 节点上受限，失败被 `except Exception: pass` 吞掉 → `installed` 恒为 False，参数永不落地（自行车交付文案被迫写"参数暂时固化在代码里"）。Bug B：`inspect_geometry_health` 把 `0.5·|cross|²`（= `2·area²`，**不是**面积）与 `1e-7` 比，等效面积阈值 ~7e-5；且只取前 3 顶点 → 合法 fan-cap 三角（面积 2e-4 → `2·area²`=8e-8）被误报；n-gon cap 改 fan-cap 后误报数 238→1228。② Fix A（harness.py `_install_spare_params`）：改 read-merge 文件夹参数模式（Houdini 官方推荐、H21 兼容）—— `ptg = root.parmTemplateGroup()` 读现有（保留 Transform 等默认文件夹）→ `FolderParmTemplate("edini_params")` 装参数 → `setParmTemplateGroup(ptg)` merge-safe 写回。主路径 `setParmTemplateGroup` → 失败回退 `setSpareParmGroup` → 仍失败才降级 `installed=False`+warning。保持 geo 容器不变（视口零回归——所有几何读取都针对子级 OUT SOP）。修正过时注释 `../../`→`../`（组件 SOP 只在 root 下一层），同步 SKILL.md 通道路径文档。③ Fix B（node_utils.py `inspect_geometry_health`）：改 `prim.intrinsicValue("measuredarea")`（真实多边形面积，含 n-gon）优先，异常时回退修正后的 shoelace（遍历全部顶点对中心做扇形面积求和，修掉"只看前 3 顶点"+"单位错误"两缺陷）。阈值 `1e-7` 现在真的是面积阈值。④ Fix C（mock_hou.py）：新增 `MockFloatParmTemplate`/`MockFolderParmTemplate`/`MockParmTemplateGroup` 类 + `MockNode.parmTemplateGroup()`/`setParmTemplateGroup()`/`setSpareParmGroup()`/`evalParm()` 方法 + 注册 subnet 类型，使成功安装路径可测。⑤ Fix D（测试翻转）：`installed` 断言 False→True，并拆出降级路径测试（`_NoTemplate` 模拟 API 缺失，验证 `installed=False` 但默认值仍返回，用 try/finally 在共享 mock 上打补丁避免状态污染）。⑥ 新增 fan-cap 不误报回归测试（面积 2e-4 合法三角形断言不被标记）。⑦ 真实 Houdini 21.0.440 端到端验证：`manual_verify_fixes.py` 脚本（pre-flight 组件代码 isolation cook 抓真实 traceback）13/13 全过——5 个参数全部 `installed=true` 且 `eval()` 等于默认值、`edini_params` 文件夹在 root 接口、degenerate count==1（仅共线三角，合法小三角实测 measuredarea=2e-4 不误报）。⑧ 修复后重跑自行车 build 实证：`params_summary` 5/5 `installed=true`（之前全 false）、`degenerate_prims: 0`（之前 1228）、agent build 轮次 3→2、discard 2→1、输出 token -41%。遗留：Normal SOP `cangle` 参数名在 H21 变更（独立 bug，见计划）。382 测试通过。</div>
+    <div class="timeline-tags">
+      <span>参数挂载</span><span>read-merge文件夹</span><span>setParmTemplateGroup</span><span>degenerate误报</span><span>measuredarea</span><span>H21兼容</span><span>真实Houdini验证</span><span>2·area²单位错误</span><span>fan-cap回归</span><span>382测试</span>
+    </div>
+  </div>
+</div>
 
 <div class="timeline-item timeline-done">
   <div class="timeline-date">2026-06-15</div>
@@ -558,6 +572,7 @@
 
 | 优先级 | 任务 | 说明 |
 |------|------|------|
+| **P0** | **Normal SOP 参数适配（C 站前置）** | 第三十阶段遗留：自行车 build 报 `postprocess[0] 'normal' parm 'cangle': Parm 'cangle' not found`。Normal SOP 在 H21 的法线/cusp 参数名变更，导致法线 postprocess 静默用默认值（影响着色但不挡门禁）。需查 H21 Normal SOP 正确参数名，更新 harness postprocess 参数映射 + SKILL.md 速查表。与 C 站（节点参数 DB）同源，可作为 C 站的最小验证用例。 |
 | **P1** | **Skill 使用效果追踪** | 基于 LogParser 参数数据，追踪 procedural-modeling Skill 对 VEX/Python 成功率的影响 |
 | **P1** | **Copernicus 程序化贴图 Skill** | 在 procedural-modeling Skill 基础上扩展 COPs 专用指导 |
 | **P2** | **多 Agent 组件级并行生成** | B 站之后：主 agent 定 recipe + 契约 → N 个子 agent 各产一个组件代码 → 确定性 builder 组装 → 主 agent 验证。先证明单 agent + builder 跑稳再上。 |
@@ -644,3 +659,7 @@
 - ✅ 声明式 Recipe Builder（`houdini_build_procedural_asset`）：agent 提交 recipe，harness 确定性建网，agent 永不写 createNode/wiring/blockpath
 - ✅ 构造轴（B 站，`orientation_asserts.construction_axis`）：声明组件局部构造轴 → builder 用 anchor @orient 四元数代数推导世界轴 → 烘焙 `edini_world_axis` prim 属性 → verify 直接读跳过 PCA（method=construction）。build 时一致性预检拒绝 construction_axis/expected_axis/anchor 矛盾（挡自洽错误）。无该字段老 recipe 仍走 PCA。PCA crosscheck 仅告警。
 - ✅ Forbidden Patterns + Network Mode + H21 参数速查表（SKILL.md：Attrib Promote / Blast / ForEach / Sweep / Copy-to-Points 等关键参数）
+- ✅ **spare 参数挂载修复**（`_install_spare_params`）：read-merge 文件夹参数模式（`parmTemplateGroup()` 读现有 + `FolderParmTemplate` 装 + `setParmTemplateGroup` 写回），H21 兼容、merge-safe；setSpareParmGroup 受限时自动回退；真实 Houdini 验证 5/5 参数 `installed=true` 并落到 `/obj/bicycle` 参数面板
+- ✅ **degenerate 误报修复**（`inspect_geometry_health`）：改用 `prim.intrinsicValue("measuredarea")` 真实多边形面积（含 n-gon），异常回退修正 shoelace（全顶点扇形求和）；消除 `0.5·|cross|²`(=2·area²) 单位错误 + "只看前 3 顶点"采样偏差；fan-cap/n-gon cap 不再误报
+- ✅ **mock_hou 参数模板模拟**：`MockFloatParmTemplate`/`MockFolderParmTemplate`/`MockParmTemplateGroup` + `MockNode.parmTemplateGroup()`/`setParmTemplateGroup()`/`evalParm()` + subnet 注册，成功安装路径可测
+- ✅ **真实 Houdini 验证脚本**（`tests/manual_verify_fixes.py`）：pre-flight 组件代码 isolation cook 抓真实 traceback + 双修复端到端断言（参数挂载 + degenerate 不误报），13/13 全过
