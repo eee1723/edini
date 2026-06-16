@@ -659,11 +659,17 @@ class TestBuildWithParams(unittest.TestCase):
         self.assertIn("params_summary", r)
         self.assertIn("wheelbase", r["params_summary"])
         self.assertAlmostEqual(r["params_summary"]["wheelbase"]["value"], 1.0)
-        # The mock lacks FloatParmTemplate -> installed=False, and a
-        # warning lists the not-installed parms (actionable signal).
-        self.assertFalse(r["params_summary"]["wheelbase"]["installed"])
+        # The mock now supports ParmTemplateGroup/FolderParmTemplate, so params
+        # install successfully via the read-merge setParmTemplateGroup path and
+        # are materialized as real parms on the root (installed=True). No
+        # "not installed" warning should be emitted.
+        self.assertTrue(r["params_summary"]["wheelbase"]["installed"])
         joined = " ".join(r.get("warnings", []))
-        self.assertIn("not installed", joined)
+        self.assertNotIn("not installed", joined)
+        # The installed parms are actually present on the root node.
+        root_node = _mock_hou.node(r["root_path"])
+        self.assertIsNotNone(root_node.parm("wheelbase"))
+        self.assertAlmostEqual(root_node.evalParm("wheelbase"), 1.0)
         anc = _mock_hou.node(f"{r['root_path']}/wheel_anchors")
         self.assertIsNotNone(anc)
         pts = anc.geometry().points()
@@ -707,13 +713,16 @@ class TestBuildWithParams(unittest.TestCase):
 
 
 class TestInstallSpareParams(unittest.TestCase):
-    """_install_spare_params must return resolved defaults even when the
-    Houdini build lacks FloatParmTemplate/ParmTemplateGroup (mock / stripped
-    runtime). The H21-safe ctor candidate chain should not raise out of the
-    function — it records installed=False and lets expression eval proceed."""
+    """_install_spare_params installs asset-level params on the sandbox root.
 
-    def test_returns_defaults_when_parm_api_unavailable(self):
-        from tests.mock_hou import create_mock_hou, MockNode
+    With the mock now simulating ParmTemplateGroup/FolderParmTemplate, the
+    success path installs the parms (installed=True) and materializes them as
+    real parms on the root. A degraded path is also covered: when the
+    FloatParmTemplate ctor cannot build any template, the function records
+    installed=False and still returns resolved defaults so expression eval can
+    proceed."""
+
+    def test_installs_params_and_materializes_on_root(self):
         from tests.test_node_utils import _mock_hou  # shared mock
         # Build a throwaway node on the shared mock.
         root = _mock_hou.node("/obj").createNode("geo", "tmp_root")
@@ -729,9 +738,43 @@ class TestInstallSpareParams(unittest.TestCase):
         # label surfaces only when it differs from the name.
         self.assertIsNone(result["wheelbase"]["label"])
         self.assertEqual(result["wheel_r"]["label"], "Wheel Radius")
-        # Mock has no FloatParmTemplate -> not installed.
-        self.assertFalse(result["wheelbase"]["installed"])
+        # Mock supports the template-group path -> installed.
+        self.assertTrue(result["wheelbase"]["installed"])
+        self.assertTrue(result["wheel_r"]["installed"])
+        # The parms are materialized as real parms on the root.
+        self.assertIsNotNone(root.parm("wheelbase"))
+        self.assertAlmostEqual(root.evalParm("wheelbase"), 1.0)
+        self.assertAlmostEqual(root.evalParm("wheel_r"), 0.35)
         root.destroy()
+
+    def test_returns_defaults_when_parm_api_unavailable(self):
+        """Degraded path: if FloatParmTemplate construction fails for every
+        candidate, params are recorded with installed=False but resolved
+        defaults are still returned (so anchor expr eval proceeds)."""
+        from tests.test_node_utils import _mock_hou
+
+        class _NoTemplate:
+            # Emulates a Houdini build lacking FloatParmTemplate: any ctor
+            # invocation raises AttributeError, failing every candidate in the
+            # H21-safe ctor chain.
+            def __init__(self, *a, **k):
+                raise AttributeError("FloatParmTemplate")
+
+        # _install_spare_params reads hou via sys.modules (the shared mock), so
+        # patch the shared mock's FloatParmTemplate, then restore it.
+        saved = _mock_hou.FloatParmTemplate
+        _mock_hou.FloatParmTemplate = _NoTemplate
+        try:
+            root = _mock_hou.node("/obj").createNode("geo", "tmp_degraded")
+            result = harness._install_spare_params(root, {
+                "wheelbase": {"default": 1.0, "min": 0.5, "max": 2.0},
+            })
+            self.assertAlmostEqual(result["wheelbase"]["value"], 1.0)
+            # No template could be built -> not installed, but value resolves.
+            self.assertFalse(result["wheelbase"]["installed"])
+            root.destroy()
+        finally:
+            _mock_hou.FloatParmTemplate = saved
 
     def test_empty_spec_returns_empty(self):
         from tests.test_node_utils import _mock_hou
@@ -741,11 +784,20 @@ class TestInstallSpareParams(unittest.TestCase):
 
     def test_build_float_parm_template_candidate_chain_is_safe(self):
         """The ctor candidate chain must not raise unhandled — it raises a
-        clear RuntimeError only when ALL candidates fail (mock: all fail)."""
+        clear RuntimeError only when ALL candidates fail. Simulate a stripped
+        build (no FloatParmTemplate attribute) to force every candidate to
+        raise."""
         from tests.mock_hou import MockHou
+
+        class _NoTemplate:
+            def __init__(self, *a, **k):
+                raise AttributeError("FloatParmTemplate")
+
+        mock = MockHou()
+        mock.FloatParmTemplate = _NoTemplate
         with self.assertRaises(RuntimeError) as cm:
             harness._build_float_parm_template(
-                MockHou(), "wb", "WB", 1.0, 0.0, 10.0)
+                mock, "wb", "WB", 1.0, 0.0, 10.0)
         self.assertIn("FloatParmTemplate", str(cm.exception))
 
 if __name__ == "__main__":

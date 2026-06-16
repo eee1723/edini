@@ -690,7 +690,35 @@ def inspect_geometry_health(
     }
 
     # ── Degenerate prims: zero-area polygons ──
+    # Area is obtained from the Houdini-native "measuredarea" intrinsic (the
+    # true polygon area for polygons AND n-gons), falling back to a corrected
+    # shoelace that sums the triangle fan over ALL vertices (not just the
+    # first three). This fixes two prior defects that produced false positives
+    # on legitimate tube/fan caps: (a) comparing 0.5*|cross|² (== 2·area²,
+    # NOT area) against the eps, and (b) sampling only the first three verts.
     degenerate_prims: list[int] = []
+
+    def _shoelace_fan_area(vts) -> float:
+        # Sum of |cross(e0i, e0j)| / 2 over consecutive vertex pairs around a
+        # reference vertex 0 — the true signed area for planar/convex faces.
+        if len(vts) < 3:
+            return 0.0
+        p0 = vts[0].point().position()
+        total = 0.0
+        for k in range(1, len(vts) - 1):
+            p1 = vts[k].point().position()
+            p2 = vts[k + 1].point().position()
+            e01 = (p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2])
+            e02 = (p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2])
+            cross = (
+                e01[1] * e02[2] - e01[2] * e02[1],
+                e01[2] * e02[0] - e01[0] * e02[2],
+                e01[0] * e02[1] - e01[1] * e02[0],
+            )
+            mag = (cross[0] ** 2 + cross[1] ** 2 + cross[2] ** 2) ** 0.5
+            total += 0.5 * mag
+        return total
+
     for prim in prims:
         try:
             type_name = prim.type().name().lower()
@@ -700,23 +728,15 @@ def inspect_geometry_health(
             if len(verts) < 3:
                 degenerate_prims.append(prim.number())
                 continue
-            # Shoelace via the first three vertices' positions in world space —
-            # a triangle area proxy. For >3 verts this still flags colinear/
-            # zero-area faces reliably.
-            p0 = verts[0].point().position()
-            p1 = verts[1].point().position()
-            p2 = verts[2].point().position()
-            e01 = (p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2])
-            e02 = (p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2])
-            cross = (
-                e01[1] * e02[2] - e01[2] * e02[1],
-                e01[2] * e02[0] - e01[0] * e02[2],
-                e01[0] * e02[1] - e01[1] * e02[0],
-            )
-            tri_area2 = 0.5 * (
-                cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]
-            )
-            if tri_area2 < degenerate_area_eps:
+            # Prefer the native measuredarea intrinsic (accurate for n-gons).
+            area = None
+            try:
+                area = float(prim.intrinsicValue("measuredarea"))
+            except Exception:
+                area = None
+            if area is None:
+                area = _shoelace_fan_area(verts)
+            if area < degenerate_area_eps:
                 degenerate_prims.append(prim.number())
         except Exception:
             continue

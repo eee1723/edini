@@ -451,8 +451,8 @@ relative channel reference. List the params you read in `reads` so a typo is
 caught at build (not silently returned as 0):
 ```python
 node = hou.pwd(); geo = node.geometry()
-wheelbase = hou.ch('../../wheelbase')   # two levels up = sandbox root
-wheel_r   = hou.ch('../../wheel_r')
+wheelbase = hou.ch('../wheelbase')   # one level up = sandbox root
+wheel_r   = hou.ch('../wheel_r')
 ...
 ```
 ```jsonc

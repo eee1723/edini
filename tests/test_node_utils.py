@@ -702,6 +702,22 @@ class TestInspectGeometryHealth(unittest.TestCase):
         self.assertFalse(r["checks"]["degenerate_prims"]["passed"])
         self.assertEqual(r["checks"]["degenerate_prims"]["count"], 1)
 
+    def test_small_but_valid_triangle_not_flagged_degenerate(self):
+        """Regression: a legitimate small-area triangle (like a tube fan-cap,
+        area ~2e-4) must NOT be flagged degenerate. The prior implementation
+        compared 0.5*|cross|² (== 2·area², NOT area) against the eps, which
+        made a 2e-4-area face register as 8e-8 < 1e-7 → false positive. The
+        fixed detector compares the true area directly."""
+        from edini.node_utils import inspect_geometry_health
+        node, geo = self._make_node_with_geo("health_small_valid")
+        # Triangle with area = 0.5 * base(0.02) * height(0.02) = 2e-4.
+        # Old buggy detector: 2 * (2e-4)^2 = 8e-8 < 1e-7 → wrongly "degenerate".
+        self._add_triangle(geo, [(0, 0, 0), (0.02, 0, 0), (0.01, 0.02, 0)])
+        r = inspect_geometry_health(node.path())
+        self.assertTrue(r["checks"]["degenerate_prims"]["passed"],
+                        msg=f"false positive: {r['checks']['degenerate_prims']}")
+        self.assertEqual(r["checks"]["degenerate_prims"]["count"], 0)
+
     def test_nonmanifold_edges_detected(self):
         from edini.node_utils import inspect_geometry_health
         node, geo = self._make_node_with_geo("health_nonmanifold")

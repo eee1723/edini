@@ -38,6 +38,130 @@ class MockParm:
         pass
 
 
+class MockParmTemplate:
+    """Mock base for a Houdini ParmTemplate — stores name/label/default."""
+
+    def __init__(self, name: str = "", label: str = "", components: int = 1):
+        self.name = name
+        self.label = label
+        self.components = components
+        self.default = 0.0
+        self.min_val = 0.0
+        self.max_val = 10.0
+
+    def name(self) -> str:
+        return self.name
+
+    def label(self) -> str:
+        return self.label
+
+    def setMin(self, v: float) -> None:
+        self.min_val = float(v)
+
+    def setMax(self, v: float) -> None:
+        self.max_val = float(v)
+
+    def setMinValueStr(self, s: str) -> None:
+        pass
+
+    def setMaxValueStr(self, s: str) -> None:
+        pass
+
+
+class MockFloatParmTemplate(MockParmTemplate):
+    """Mock hou.FloatParmTemplate. Accepts the diverse H18-H21 ctor shapes that
+    edini.harness._build_float_parm_template tries (keyword default_value,
+    positional list default, default-only, bare name/label/components)."""
+
+    def __init__(self, name: str = "", label: str = "", num_components: int = 1,
+                 *args, **kwargs):
+        super().__init__(name, label, num_components)
+        # Resolve the default value across ctor variants.
+        default = 0.0
+        mn = kwargs.get("min", 0.0)
+        mx = kwargs.get("max", 10.0)
+        if "default_value" in kwargs:
+            dv = kwargs["default_value"]
+            # real API takes a tuple-of-tuples or list; pull first element.
+            try:
+                default = float(dv[0] if not isinstance(dv, (int, float))
+                                else dv)
+            except Exception:
+                default = 0.0
+        elif args:
+            # First positional after components is the default list/tuple.
+            try:
+                default = float(args[0][0])
+            except Exception:
+                default = 0.0
+        self.default = float(default)
+        self.min_val = float(mn)
+        self.max_val = float(mx)
+
+
+class MockFolderParmTemplate(MockParmTemplate):
+    """Mock hou.FolderParmTemplate — holds child templates."""
+
+    def __init__(self, name: str = "", label: str = "", folder_type: int = 0):
+        super().__init__(name, label)
+        self.folder_type = folder_type
+        self._children: list[Any] = []
+
+    def addParmTemplate(self, tmpl: Any) -> None:
+        self._children.append(tmpl)
+
+    def parmTemplates(self) -> list[Any]:
+        return list(self._children)
+
+
+class MockParmTemplateGroup:
+    """Mock hou.ParmTemplateGroup — a list of top-level templates (folders or
+    parms). append() adds one; find() locates a template by name."""
+
+    def __init__(self):
+        self._templates: list[Any] = []
+
+    def append(self, tmpl: Any) -> None:
+        self._templates.append(tmpl)
+
+    def find(self, name: str):
+        for tmpl in self._templates:
+            try:
+                if tmpl.name() == name:
+                    return tmpl
+            except Exception:
+                continue
+            # Recurse into folders.
+            for child in getattr(tmpl, "parmTemplates", lambda: [])():
+                try:
+                    if child.name() == name:
+                        return child
+                except Exception:
+                    continue
+        return None
+
+    def entries(self) -> list[Any]:
+        return list(self._templates)
+
+    def asParmSpecs(self) -> dict[str, dict]:
+        """Flatten all templates (recursing folders) to {name: {default,...}}."""
+        out: dict[str, dict] = {}
+
+        def walk(templates):
+            for tmpl in templates:
+                if isinstance(tmpl, MockFolderParmTemplate):
+                    walk(tmpl.parmTemplates())
+                elif isinstance(tmpl, MockFloatParmTemplate):
+                    out[tmpl.name] = {
+                        "default": tmpl.default,
+                        "min": tmpl.min_val,
+                        "max": tmpl.max_val,
+                        "label": tmpl.label,
+                    }
+        walk(self._templates)
+        return out
+
+
 class MockNodeType:
     """Mock Houdini node type."""
 
@@ -473,6 +597,35 @@ class MockNode:
     def allowEditingOfContents(self, propagate: bool = False) -> None:
         pass
 
+    # ── Parameter template group (mocks hou.ParmTemplateGroup machinery) ──
+    # The sandbox root installs asset-level params via setParmTemplateGroup +
+    # FolderParmTemplate. The group is held on the node; setParmTemplateGroup
+    # materializes its templates into real MockParm entries so parm()/evalParm()
+    # see them — mirroring how real Houdini exposes template parms.
+    def parmTemplateGroup(self):
+        return getattr(self, "_ptg", None) or MockParmTemplateGroup()
+
+    def setParmTemplateGroup(self, ptg) -> None:
+        self._ptg = ptg
+        for name, spec in ptg.asParmSpecs().items():
+            existing = self._parms.get(name)
+            if existing is None:
+                self._parms[name] = MockParm(name, spec.get("default", 0.0),
+                                             spec.get("label", name))
+            else:
+                existing._value = spec.get("default", existing._value)
+
+    def setSpareParmGroup(self, ptg) -> None:
+        # Legacy fallback path — same effect as setParmTemplateGroup in mock.
+        self.setParmTemplateGroup(ptg)
+
+    def evalParm(self, name: str) -> Any:
+        p = self._parms.get(name)
+        return p.eval() if p is not None else 0.0
+
+    def setSpareParms(self, parms) -> None:
+        pass
+
 
 class MockHipFile:
     def __init__(self, name: str = "test.hip"):
@@ -628,6 +781,17 @@ class MockHou:
 
     MockGeometry = MockGeometry
 
+    # Parameter template classes (mocked). These mirror hou.FloatParmTemplate /
+    # hou.FolderParmTemplate / hou.ParmTemplateGroup and the hou.folderType enum
+    # so harness._install_spare_params can exercise the success path.
+    FloatParmTemplate = MockFloatParmTemplate
+    FolderParmTemplate = MockFolderParmTemplate
+    ParmTemplateGroup = MockParmTemplateGroup
+    parmNamingScheme = type("parmNamingScheme", (), {"Base1": 0})()
+    parmLook = type("parmLook", (), {"Regular": 0})()
+    parmNaming = type("parmNaming", (), {"Base1": 0})()
+    folderType = type("folderType", (), {"Tabs": 0, "Simple": 1})()
+
     def __init__(self):
         self._nodes: dict[str, MockNode] = {}
         self._selected_nodes: list[MockNode] = []
@@ -658,6 +822,7 @@ class MockHou:
         })
         obj_cat = MockCategory("Object", {
             "geo": MockNodeType("geo", "Geometry", "Object", 1, 0),
+            "subnet": MockNodeType("subnet", "Subnetwork", "Object", 1, 0),
             "cam": MockNodeType("cam", "Camera", "Object", 0, 0),
             "light": MockNodeType("light", "Light", "Object", 0, 0),
         })

@@ -1567,22 +1567,54 @@ def _build_float_parm_template(
     return tmpl
 
 
+def _install_params_via_template_group(
+    root: Any, hou_module: Any, templates: list[Any],
+) -> bool:
+    """Install templates as a merge folder on root via setParmTemplateGroup.
+
+    Uses the Houdini-official read-merge pattern: read the node's existing
+    ParmTemplateGroup (preserving the geo's default Transform etc. folders),
+    add the templates inside a fresh FolderParmTemplate, then write it back.
+    This is H21-compatible on a non-HDA geo container, unlike
+    setSpareParmGroup which is restricted there. Returns True on success.
+
+    Note: this is a REPLACE-style API at the hou level, but because we read
+    the current group first and only append our folder, it is merge-safe —
+    pre-existing folders and parms are preserved.
+    """
+    ptg = root.parmTemplateGroup()
+    folder = hou_module.FolderParmTemplate(
+        "edini_params", "Parameters",
+        folder_type=getattr(hou_module.folderType, "Tabs", 0),
+    )
+    for tmpl in templates:
+        folder.addParmTemplate(tmpl)
+    ptg.append(folder)
+    root.setParmTemplateGroup(ptg)
+    return True
+
+
 def _install_spare_params(
     root: Any,
     params_spec: dict[str, dict],
 ) -> dict[str, dict[str, Any]]:
-    """Install asset-level spare parms on the sandbox root (A2-station).
+    """Install asset-level params on the sandbox root (A2-station).
 
     Each entry in params_spec is {name: {default, min?, max?, label?}}. The
     parms land on the sandbox root (the /obj/<sandbox> geo container), so a
-    component python SOP reads them via hou.ch("../../<name>") — and changing
-    any one parm re-cooks every dependent component (true linkage).
+    component python SOP reads them via hou.ch("../<name>") — it sits ONE
+    level below the root, so `..` resolves to the root and changing any one
+    parm re-cooks every dependent component (true linkage).
 
-    Returns {name: {"value", "channel_path", "label?", "installed"}}. The
-    "installed" flag is False when spare-parm installation is unsupported
-    (mock / stripped build) so the caller can warn that channel refs will not
-    bind; resolved default values are still returned so expression evaluation
-    proceeds regardless.
+    Installation strategy (in order, first success wins):
+      1. Read-merge folder params via setParmTemplateGroup + FolderParmTemplate
+         (H21-compatible on a non-HDA geo container — the documented pattern).
+      2. Legacy setSpareParmGroup (older Houdini where it is not restricted).
+      3. Give up: installed stays False; the caller warns that channel refs
+         will not bind. Resolved default values are still returned so anchor
+         expression evaluation proceeds regardless.
+
+    Returns {name: {"value", "channel_path", "label?", "installed"}}.
     """
     import hou as _hou
     result: dict[str, dict[str, Any]] = {}
@@ -1608,21 +1640,31 @@ def _install_spare_params(
             "value": default,
             "channel_path": f"{root.path()}/{name}",
             "label": label if label != name else None,
-            "installed": False,  # set True only if group install succeeds
+            "installed": False,  # set True only if a group install succeeds
         }
     if templates:
+        installed = False
+        # 1. Preferred: read-merge folder params (H21-compatible on geo).
         try:
-            group = _hou.ParmTemplateGroup()
-            for t in templates:
-                group.append(t)
-            root.setSpareParmGroup(group)
-            # Mark every constructed parm as installed.
+            installed = _install_params_via_template_group(
+                root, _hou, templates)
+        except Exception:
+            installed = False
+        # 2. Legacy fallback: setSpareParmGroup (older Houdini).
+        if not installed:
+            try:
+                group = _hou.ParmTemplateGroup()
+                for t in templates:
+                    group.append(t)
+                root.setSpareParmGroup(group)
+                installed = True
+            except Exception:
+                # Mock or unsupported build — defaults still usable for expr
+                # eval. Caller emits a warning that channel refs may not bind.
+                installed = False
+        if installed:
             for name in result:
                 result[name]["installed"] = True
-        except Exception:
-            # Mock or unsupported build — defaults still usable for expr eval.
-            # Caller emits a warning that channel refs may not bind.
-            pass
     return result
 
 
