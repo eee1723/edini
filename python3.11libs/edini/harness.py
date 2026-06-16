@@ -1441,6 +1441,29 @@ def _validate_recipe(recipe: Any) -> list[str]:
             if "params" in pp and not isinstance(pp["params"], dict):
                 errors.append(f"postprocess[{i}].params must be an object if present")
 
+        # Parm-name validity precheck (C-station): for each postprocess node
+        # whose type IS in the bundled manifest, reject parm names that don't
+        # exist on that node type — BEFORE any node is created, so the agent
+        # gets a hard, actionable error instead of a silent build-time warning.
+        # Soft-degrade: if the manifest or the node type is absent, skip the
+        # check (never block a build just because the manifest is incomplete).
+        from edini.node_utils import manifest_parm_names
+        for i, pp in enumerate(post):
+            if not isinstance(pp, dict):
+                continue
+            pp_type = pp.get("type")
+            pp_params = pp.get("params") or {}
+            if not isinstance(pp_type, str) or not isinstance(pp_params, dict):
+                continue
+            valid = manifest_parm_names(pp_type)
+            if valid is None:
+                continue  # manifest/type unknown -> soft degrade, don't block
+            unknown = [k for k in pp_params if k not in valid]
+            if unknown:
+                errors.append(
+                    f"postprocess[{i}] '{pp_type}' has unknown parm(s) "
+                    f"{unknown} (valid: {sorted(valid)})")
+
     return errors
 
 

@@ -99,7 +99,7 @@ Procedural Harness 是 Edini 给 Houdini 程序化建模加上的一层执行护
 - 朝向门对**声明了 construction_axis 的组件**是确定性检查（读 edini_world_axis，零估计）。对未声明该字段的组件回退 PCA——PCA 是点分布估计，对不均匀分布不稳；新资产建议优先用 construction_axis（B 站）。
 - builder 的 idfix 用 prim 等分定位实例边界——已验证 Copy-to-Points 连续排列下成立，但极端拓扑（交错排列）理论上可能错位。
 - builder 不内嵌 capture/commit（单一职责；commit 是显式后续调用）。
-- **postprocess 参数映射不全**：Normal SOP 的 `cangle`（cusp angle）参数名在 H21 变更，harness postprocess 设它时会静默失败（不影响几何/门禁，但法线非最优）。属 C 站（节点参数 DB）要解决的同类问题，已列为 P0 计划。
+ - **postprocess 参数名校验（C 站）**：`_validate_recipe` 现用 manifest 校验 postprocess 参数名——命中 manifest 但参数不存在→build 前硬报错（带 valid 列表）；未命中→软降级。`houdini_node_parms` 工具让 agent 按需查参数名。`cangle` 类过时参数名错误从此在 build 前被挡。**注**：待真实 Houdini 跑生成脚本产出 manifest.json 后，校验才会对真实节点类型生效。
 
 ## 验证状态
 
@@ -137,6 +137,6 @@ A/B 站历史验证（docs/BUILDER_FIRST_TEST.md / BUILDER_SECOND_TEST.md）：
 | A | 声明式 Recipe Builder | ✅ 完成 | — |
 | B | 构造轴替代 PCA（construction_axis + edini_world_axis 烘焙 + build 时一致性预检） | ✅ 完成 | A |
 | 30 | Harness 两 Bug 修复（参数挂载 read-merge + degenerate 用 measuredarea）| ✅ 完成（真实 Houdini 验证）| — |
-| C | 节点参数 DB（houdini_node_parms 查询工具）— **前置**：先修 Normal SOP `cangle` 参数名（H21 变更，postprocess 静默失败） | 🔜 下一站 | 独立 |
+| C | 节点参数 DB（`houdini_node_parms` 查询工具 + manifest 生成端 + `_validate_recipe` 参数名校验）| ✅ 代码完成（待真实 Houdini 跑 `scripts/generate_node_parms_manifest.py` 产出 manifest.json）| 独立 |
 | D | 黄金范例检索（recipe 格式的验证过资产模板） | ⬜ | A |
 | E | 数值代理（轮廓圆度/对称性/silhouette IoU） | ⬜ | 独立 |

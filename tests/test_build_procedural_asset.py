@@ -92,6 +92,90 @@ class TestRecipeValidation(unittest.TestCase):
         harness.build_procedural_asset({"components": []})
         self.assertEqual(len(_mock_hou._nodes), before)
 
+    # ── C-station postprocess parm-name validation ────────────────────────
+    # These exercise the build-time precheck that rejects misspelled parm
+    # names (e.g. Normal SOP's 'cangle' in H21) before any node is created.
+    # manifest_parm_names is monkeypatched so the tests don't depend on a
+    # real Houdini-generated manifest file.
+
+    def _patch_manifest(self, mapping):
+        """Patch edini.node_utils.manifest_parm_names to return canned sets.
+        `mapping` is {node_type: set(parm_names)}; types not in the mapping
+        return None (simulating 'not in manifest' -> soft degrade)."""
+        import edini.node_utils as nu_mod
+
+        def fake(node_type):
+            return mapping.get(node_type)
+
+        original = nu_mod.manifest_parm_names
+        # _validate_recipe imports manifest_parm_names lazily from
+        # edini.node_utils at call time, so patching the module attr is enough.
+        nu_mod.manifest_parm_names = fake
+        return original
+
+    def _restore_manifest(self, original):
+        import edini.node_utils as nu_mod
+        nu_mod.manifest_parm_names = original
+
+    def test_postprocess_valid_parm_names_accepted(self):
+        """When all postprocess parm names are in the manifest, validation
+        passes (no parm-name errors)."""
+        recipe = {"components": [{"id": "a", "code": "pass"}],
+                  "postprocess": [{"type": "normal", "params": {"cusp": 30}}]}
+        original = self._patch_manifest({"normal": {"cusp", "type"}})
+        try:
+            errors = harness._validate_recipe(recipe)
+        finally:
+            self._restore_manifest(original)
+        self.assertFalse(
+            any("unknown parm" in e for e in errors),
+            msg=f"unexpected parm error: {errors}")
+
+    def test_postprocess_misspelled_parm_rejected(self):
+        """The canonical C-station case: 'cangle' does not exist on Normal SOP
+        in H21 (it's 'cusp'). The validator must reject it at build time with
+        the valid names listed, before any node is created."""
+        recipe = {"components": [{"id": "a", "code": "pass"}],
+                  "postprocess": [{"type": "normal", "params": {"cangle": 30}}]}
+        original = self._patch_manifest({"normal": {"cusp", "type"}})
+        try:
+            errors = harness._validate_recipe(recipe)
+        finally:
+            self._restore_manifest(original)
+        joined = " ".join(errors)
+        self.assertIn("unknown parm", joined)
+        self.assertIn("cangle", joined)
+        # The error must list the valid names so the agent can self-correct.
+        self.assertIn("cusp", joined)
+
+    def test_postprocess_unknown_type_soft_degrades(self):
+        """If the node type is NOT in the manifest, parm checks are skipped
+        (soft degrade) — never block a build just because the manifest is
+        incomplete. Here 'frobnicate' is unknown, so even bogus parms pass."""
+        recipe = {"components": [{"id": "a", "code": "pass"}],
+                  "postprocess": [
+                      {"type": "frobnicate", "params": {"bogus": 1}}]}
+        original = self._patch_manifest({"normal": {"cusp"}})
+        try:
+            errors = harness._validate_recipe(recipe)
+        finally:
+            self._restore_manifest(original)
+        self.assertFalse(any("unknown parm" in e for e in errors),
+                         msg=f"should soft-degrade, got: {errors}")
+
+    def test_postprocess_manifest_missing_soft_degrades(self):
+        """With no manifest at all (manifest_parm_names returns None for
+        everything), parm validation is skipped entirely."""
+        recipe = {"components": [{"id": "a", "code": "pass"}],
+                  "postprocess": [
+                      {"type": "normal", "params": {"totally_bogus": 1}}]}
+        original = self._patch_manifest({})  # empty -> everything returns None
+        try:
+            errors = harness._validate_recipe(recipe)
+        finally:
+            self._restore_manifest(original)
+        self.assertFalse(any("unknown parm" in e for e in errors))
+
 
 class TestBuildDirectMerge(unittest.TestCase):
     """Single / multi component WITHOUT anchors: each goes straight to merge."""

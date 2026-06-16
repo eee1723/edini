@@ -326,8 +326,9 @@ errors that dominate failed procedural runs.
       ]                                            // (static "position": [x,y,z] numbers are also valid)
     }
   ],
-  "postprocess": [                                // optional SOP chain after merge
-    {"type": "normal", "params": {"cangle": 30}}
+  "postprocess": [                                // optional SOP Chain after merge
+    {"type": "normal", "params": {"cusp": 60}}     // parm NAMES are version-specific —
+                                                   // verify with houdini_node_parms("normal")
   ],
   "orientation_asserts": [                        // flows to commit_sandbox's orientation gate
     {"component_id": "wheel_fl", "kind": "radial", "expected_axis": "X",
@@ -1206,9 +1207,10 @@ Gotcha: if you create block_begin and block_end separately, `blockpath` is empty
 No parms. Just `merge.setInput(0, a); merge.setInput(1, b); ...` (up to ~50 inputs).
 
 ### Normal SOP
+> Parm names below may be version-specific — **verify with `houdini_node_parms("normal")`** before writing a recipe.
 | Purpose | Parm name | Type / menu |
 |---------|-----------|------|
-| Cusp angle | `cangle` | float (degrees) |
+| Cusp angle | `cusp` | float (degrees) |
 | Add normals to | `type` | menu: `point`/`vertex`/`primitive` |
 
 ### Boolean SOP (2.0)
@@ -1216,8 +1218,16 @@ No parms. Just `merge.setInput(0, a); merge.setInput(1, b); ...` (up to ~50 inpu
 |---------|-----------|------|
 | Operation (subtract/union/intersect) | `subtract`/`union`/`intersect` | bool flags (set the one you want to 1) |
 
-### Discovery
-If unsure about a node's parm names, create a throwaway probe:
+### Discovery (recommended: query the manifest)
+Parm names drift across Houdini versions (e.g. Normal SOP's cusp-angle parm).
+**Before writing `postprocess` params, call `houdini_node_parms("normal")`**
+— it returns the authoritative parm list (names/types/menu tokens/defaults)
+from a catalogue generated against the real Houdini install, and the harness
+validates your `postprocess` parm names against it at build time (an unknown
+name is a hard error before any node is created). This replaces guessing from
+the tables above, which can go stale.
+
+Fallback (sandbox probe) if the tool is unavailable:
 ```python
 n = container.createNode("nodetype", "_probe")
 for p in n.parms():
