@@ -834,5 +834,158 @@ class TestGeometryInventory(unittest.TestCase):
         self.assertIn("wheel", r["inventory_text"])
 
 
+class TestNodeParmsManifest(unittest.TestCase):
+    """C-station: generate_node_parms_manifest walks hou.nodeTypeCategories and
+    extracts per-type parm specs; load/read helpers degrade gracefully."""
+
+    def test_generate_manifest_extracts_normal_sop_parms(self):
+        """The generator walks the Sop category and produces a parm spec per
+        node type. The mock Normal SOP carries 'type' (menu) + 'cusp' (float)
+        — note 'cusp' NOT 'cangle', which is the H21 name the C-station pins."""
+        from edini.node_utils import generate_node_parms_manifest
+        m = generate_node_parms_manifest("Sop")
+        self.assertEqual(m["category"], "Sop")
+        self.assertIn("houdini_version", m)
+        self.assertIn("generated_at", m)
+        nts = m["node_types"]
+        # Normal SOP must be present with its real H21 parm names.
+        self.assertIn("normal", nts)
+        parm_names = [p["name"] for p in nts["normal"]["parms"]]
+        self.assertIn("cusp", parm_names)
+        self.assertIn("type", parm_names)
+        # The infamous wrong name must NOT appear.
+        self.assertNotIn("cangle", parm_names)
+
+    def test_generate_manifest_captures_menu_items(self):
+        """Menu parms must carry their menu_items token list."""
+        from edini.node_utils import generate_node_parms_manifest
+        m = generate_node_parms_manifest("Sop")
+        normal_parms = {p["name"]: p for p in m["node_types"]["normal"]["parms"]}
+        type_parm = normal_parms["type"]
+        self.assertEqual(type_parm["type"], "Menu")
+        self.assertEqual(type_parm["menu_items"],
+                         ["point", "vertex", "primitive"])
+
+    def test_generate_manifest_captures_parm_types(self):
+        """Each parm spec carries a 'type' field (Float/Menu/String/...)."""
+        from edini.node_utils import generate_node_parms_manifest
+        m = generate_node_parms_manifest("Sop")
+        ct_parms = {p["name"]: p for p in
+                    m["node_types"]["copytopoints::2.0"]["parms"]}
+        self.assertEqual(ct_parms["pack"]["type"], "Toggle")
+        self.assertEqual(ct_parms["sourcegrp"]["type"], "String")
+
+    def test_generate_manifest_skips_node_types_without_ptg(self):
+        """Node types lacking a parmTemplateGroup are skipped, not fatal."""
+        from edini.node_utils import generate_node_parms_manifest
+        m = generate_node_parms_manifest("Sop")
+        # 'box' mock has no ptg -> should be absent or have empty parms, but
+        # must not crash the whole dump.
+        self.assertIn("normal", m["node_types"])  # at least one survived
+
+
+class TestNodeParmsQuery(unittest.TestCase):
+    """C-station query path: node_parms() reads the bundled manifest."""
+
+    def _write_manifest(self, tmp_path: str, data: dict) -> str:
+        """Write a manifest to tmp_path and return it."""
+        import json
+        import os
+        os.makedirs(os.path.dirname(tmp_path), exist_ok=True)
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        return tmp_path
+
+    def setUp(self):
+        """Point the manifest path at a temp file so tests don't depend on the
+        real bundled manifest (which is generated on a real Houdini)."""
+        import tempfile
+        self._tmpdir = tempfile.mkdtemp(prefix="edini_manifest_test_")
+        self._manifest_file = os.path.join(self._tmpdir,
+                                           "node_parms_manifest.json")
+        self._valid_manifest = {
+            "houdini_version": "21.0.440",
+            "generated_at": "2026-06-16T00:00:00Z",
+            "category": "Sop",
+            "node_types": {
+                "normal": {"parms": [
+                    {"name": "type", "type": "Menu",
+                     "menu_items": ["point", "vertex", "primitive"]},
+                    {"name": "cusp", "type": "Float", "default": 60.0},
+                ]},
+                "copytopoints::2.0": {"parms": [
+                    {"name": "pack", "type": "Toggle", "default": False},
+                ]},
+            },
+        }
+        # Monkeypatch the path resolver + reload the module's binding.
+        import edini.node_utils as nu
+        self._nu = nu
+        self._orig_path = nu._node_parms_manifest_path
+        nu._node_parms_manifest_path = lambda: self._manifest_file
+
+    def tearDown(self):
+        import shutil
+        self._nu._node_parms_manifest_path = self._orig_path
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+    def test_query_hit_returns_parms_from_manifest(self):
+        from edini.node_utils import node_parms
+        self._write_manifest(self._manifest_file, self._valid_manifest)
+        r = node_parms("normal")
+        self.assertTrue(r["success"])
+        self.assertEqual(r["source"], "manifest")
+        self.assertEqual(r["node_type"], "normal")
+        names = [p["name"] for p in r["parms"]]
+        self.assertEqual(names, ["type", "cusp"])
+        self.assertEqual(r["houdini_version"], "21.0.440")
+
+    def test_query_miss_returns_not_found(self):
+        from edini.node_utils import node_parms
+        self._write_manifest(self._manifest_file, self._valid_manifest)
+        r = node_parms("nonexistent_node")
+        self.assertFalse(r["success"])
+        self.assertIn("not found", r["error"])
+
+    def test_query_empty_node_type_rejected(self):
+        from edini.node_utils import node_parms
+        self._write_manifest(self._manifest_file, self._valid_manifest)
+        r = node_parms("")
+        self.assertFalse(r["success"])
+        self.assertIn("required", r["error"])
+
+    def test_query_manifest_missing_degrades_gracefully(self):
+        """If the manifest file is absent, node_parms reports not-found with a
+        hint (no crash). The live fallback is skipped under the mock."""
+        from edini.node_utils import node_parms
+        # No file written -> load returns None -> miss.
+        r = node_parms("normal")
+        self.assertFalse(r["success"])
+        self.assertIn("not found", r["error"])
+
+    def test_query_manifest_corrupt_degrades_gracefully(self):
+        """A corrupt JSON file must not crash the query."""
+        from edini.node_utils import node_parms
+        with open(self._manifest_file, "w", encoding="utf-8") as f:
+            f.write("{ this is not valid json }}}")
+        r = node_parms("normal")
+        self.assertFalse(r["success"])
+
+    def test_manifest_parm_names_returns_set_or_none(self):
+        """manifest_parm_names is the harness validator's entry point: returns
+        the valid name set for a known type, None for unknown/missing."""
+        from edini.node_utils import manifest_parm_names
+        self._write_manifest(self._manifest_file, self._valid_manifest)
+        self.assertEqual(manifest_parm_names("normal"), {"type", "cusp"})
+        self.assertIsNone(manifest_parm_names("nonexistent"))
+        # Missing manifest -> None (validator must then skip checks).
+
+    def test_manifest_parm_names_none_when_manifest_missing(self):
+        """No manifest at all -> None, so the validator degrades safely."""
+        from edini.node_utils import manifest_parm_names
+        # No file written.
+        self.assertIsNone(manifest_parm_names("normal"))
+
+
 if __name__ == "__main__":
     unittest.main()

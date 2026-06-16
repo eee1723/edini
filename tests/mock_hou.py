@@ -39,7 +39,12 @@ class MockParm:
 
 
 class MockParmTemplate:
-    """Mock base for a Houdini ParmTemplate — stores name/label/default."""
+    """Mock base for a Houdini ParmTemplate — stores name/label/default.
+
+    Also carries a type tag (matching hou.parmTemplateType enum names like
+    "Float"/"Int"/"Menu"/"Toggle"/"String") so the node-params manifest
+    generator can categorize parms. Subclasses (MockIntParmTemplate,
+    MockMenuParmTemplate) override the type and add type-specific accessors."""
 
     def __init__(self, name: str = "", label: str = "", components: int = 1):
         self.name = name
@@ -48,12 +53,18 @@ class MockParmTemplate:
         self.default = 0.0
         self.min_val = 0.0
         self.max_val = 10.0
+        self._type_name = "Float"
 
     def name(self) -> str:
         return self.name
 
     def label(self) -> str:
         return self.label
+
+    # hou.parmTemplateType parity: type() returns an object whose .name() is the
+    # enum member name (e.g. "Float", "Menu").
+    def type(self):
+        return _MockTypeEnum(self._type_name)
 
     def setMin(self, v: float) -> None:
         self.min_val = float(v)
@@ -66,6 +77,27 @@ class MockParmTemplate:
 
     def setMaxValueStr(self, s: str) -> None:
         pass
+
+    def defaultValue(self):
+        return self.default
+
+    def minValue(self):
+        return self.min_val
+
+    def maxValue(self):
+        return self.max_val
+
+    def menuItems(self):
+        raise AttributeError("not a menu template")
+
+
+class _MockTypeEnum:
+    """A tiny stand-in for a hou.parmTemplateType enum member."""
+    def __init__(self, n: str):
+        self._n = n
+
+    def name(self) -> str:
+        return self._n
 
 
 class MockFloatParmTemplate(MockParmTemplate):
@@ -97,6 +129,55 @@ class MockFloatParmTemplate(MockParmTemplate):
         self.default = float(default)
         self.min_val = float(mn)
         self.max_val = float(mx)
+        self._type_name = "Float"
+
+
+class MockIntParmTemplate(MockParmTemplate):
+    """Mock hou.IntParmTemplate — integer parameter."""
+
+    def __init__(self, name: str = "", label: str = "", num_components: int = 1,
+                 default: int = 0, *args, **kwargs):
+        super().__init__(name, label, num_components)
+        self.default = int(default)
+        self.min_val = float(kwargs.get("min", 0))
+        self.max_val = float(kwargs.get("max", 10))
+        self._type_name = "Int"
+
+
+class MockMenuParmTemplate(MockParmTemplate):
+    """Mock hou.MenuParmTemplate — enum/menu parameter with token list."""
+
+    def __init__(self, name: str = "", label: str = "",
+                 menu_items: list[str] | None = None, default: int = 0):
+        super().__init__(name, label)
+        self._menu_items = list(menu_items or [])
+        self.default = int(default)
+        self._type_name = "Menu"
+
+    def menuItems(self) -> list[str]:
+        return list(self._menu_items)
+
+
+class MockToggleParmTemplate(MockParmTemplate):
+    """Mock hou.ToggleParmTemplate — boolean parameter."""
+
+    def __init__(self, name: str = "", label: str = "", default: bool = False):
+        super().__init__(name, label)
+        self.default = bool(default)
+        self._type_name = "Toggle"
+
+
+class MockStringParmTemplate(MockParmTemplate):
+    """Mock hou.StringParmTemplate — string parameter."""
+
+    def __init__(self, name: str = "", label: str = "", default: str = ""):
+        super().__init__(name, label)
+        self.default = str(default)
+        self._type_name = "String"
+
+    def menuItems(self) -> list[str]:
+        # String templates may have menus; default empty.
+        return []
 
 
 class MockFolderParmTemplate(MockParmTemplate):
@@ -166,12 +247,14 @@ class MockNodeType:
     """Mock Houdini node type."""
 
     def __init__(self, name: str, description: str = "", category_name: str = "Sop",
-                 max_inputs: int = 2, min_inputs: int = 0):
+                 max_inputs: int = 2, min_inputs: int = 0,
+                 parm_template_group: Any = None):
         self._name = name
         self._description = description or name
         self._category_name = category_name
         self._max_inputs = max_inputs
         self._min_inputs = min_inputs
+        self._ptg = parm_template_group
 
     def name(self) -> str:
         return self._name
@@ -193,6 +276,11 @@ class MockNodeType:
 
     def definition(self):
         return None
+
+    def parmTemplateGroup(self):
+        """Return the node type's parameter template group (may be None if the
+        node type was constructed without one)."""
+        return self._ptg
 
 
 class MockCategory:
@@ -768,6 +856,39 @@ class MockAttribType:
     Global = "Global"
 
 
+def _make_normal_ptg():
+    """Build a realistic Normal SOP parm template group (H21 names).
+    Note: H21 renamed the cusp-angle parm — these names mirror the real SOP so
+    the manifest/parm-name tests exercise the exact failure mode that prompted
+    the C-station (agent guessing 'cangle' which does not exist)."""
+    g = MockParmTemplateGroup()
+    g.append(MockMenuParmTemplate("type", "Add Normals to",
+                                  ["point", "vertex", "primitive"], default=1))
+    g.append(MockFloatParmTemplate("cusp", "Cusp Angle",
+                                   num_components=1, default_value=(60.0,),
+                                   min=0.0, max=180.0))
+    return g
+
+
+def _make_copytopoints_ptg():
+    """Copy to Points 2.0 parm template group (subset agents use)."""
+    g = MockParmTemplateGroup()
+    g.append(MockStringParmTemplate("sourcegrp", "Source Group"))
+    g.append(MockStringParmTemplate("targetgrp", "Target Group"))
+    g.append(MockToggleParmTemplate("pack", "Pack Geometry", default=False))
+    return g
+
+
+def _make_wrangle_ptg():
+    """Attrib Wrangle parm template group (subset)."""
+    g = MockParmTemplateGroup()
+    g.append(MockStringParmTemplate("snippet", "VEXpression"))
+    g.append(MockMenuParmTemplate("class", "Run Over",
+                                  ["detail", "point", "prim", "vertex"],
+                                  default=1))
+    return g
+
+
 class MockHou:
     """Complete mock of the hou module for testing."""
 
@@ -781,16 +902,27 @@ class MockHou:
 
     MockGeometry = MockGeometry
 
+    # Sentinel: node_utils._node_parms_live checks this to skip the live
+    # fallback path under the mock (so tests don't pretend Houdini is online).
+    _MOCK = True
+
     # Parameter template classes (mocked). These mirror hou.FloatParmTemplate /
     # hou.FolderParmTemplate / hou.ParmTemplateGroup and the hou.folderType enum
     # so harness._install_spare_params can exercise the success path.
     FloatParmTemplate = MockFloatParmTemplate
+    IntParmTemplate = MockIntParmTemplate
+    MenuParmTemplate = MockMenuParmTemplate
+    ToggleParmTemplate = MockToggleParmTemplate
+    StringParmTemplate = MockStringParmTemplate
     FolderParmTemplate = MockFolderParmTemplate
     ParmTemplateGroup = MockParmTemplateGroup
     parmNamingScheme = type("parmNamingScheme", (), {"Base1": 0})()
     parmLook = type("parmLook", (), {"Regular": 0})()
     parmNaming = type("parmNaming", (), {"Base1": 0})()
     folderType = type("folderType", (), {"Tabs": 0, "Simple": 1})()
+
+    def applicationVersionString(self) -> str:
+        return "20.0.0 (mock)"
 
     def __init__(self):
         self._nodes: dict[str, MockNode] = {}
@@ -815,10 +947,17 @@ class MockHou:
             "grid": MockNodeType("grid", "Grid", "Sop", 2, 0),
             "null": MockNodeType("null", "Null", "Sop", 1, 0),
             "merge": MockNodeType("merge", "Merge", "Sop", 4, 0),
-            "attribwrangle": MockNodeType("attribwrangle", "Attribute Wrangle", "Sop", 1, 1),
+            "attribwrangle": MockNodeType(
+                "attribwrangle", "Attribute Wrangle", "Sop", 1, 1,
+                parm_template_group=_make_wrangle_ptg()),
             "file": MockNodeType("file", "File", "Sop", 1, 0),
             "pyro": MockNodeType("pyro", "Pyro Solver", "Sop", 5, 2),
-            "copytopoints": MockNodeType("copytopoints::2.0", "Copy to Points", "Sop", 2, 1),
+            "copytopoints": MockNodeType(
+                "copytopoints::2.0", "Copy to Points", "Sop", 2, 1,
+                parm_template_group=_make_copytopoints_ptg()),
+            "normal": MockNodeType(
+                "normal", "Normal", "Sop", 1, 0,
+                parm_template_group=_make_normal_ptg()),
         })
         obj_cat = MockCategory("Object", {
             "geo": MockNodeType("geo", "Geometry", "Object", 1, 0),

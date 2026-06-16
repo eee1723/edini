@@ -6,6 +6,7 @@ JSON-serializable dicts with {"success": bool, ...} shape.
 from __future__ import annotations
 
 import os
+import json
 import traceback
 
 import hou
@@ -407,6 +408,305 @@ def get_help(node_type_name: str) -> dict[str, Any]:
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# Node Type Parameter Manifest (C-station)
+# ---------------------------------------------------------------------------
+# A pre-generated, version-pinned catalogue of every SOP node type's
+# parameters (name/type/label/default/menu_items). Generated once against a
+# real Houdini install and committed to the repo, so:
+#   - `node_parms()` (the houdini_node_parms tool) reads it with zero runtime
+#     cost and no Houdini dependency — always accurate for the pinned version.
+#   - harness `_validate_recipe` uses it to reject misspelled postprocess parm
+#     names at build time (before any node is created).
+# See scripts/generate_node_parms_manifest.py for the generator.
+
+_NODE_PARMS_MANIFEST_REL = os.path.join("edini", "data", "node_parms_manifest.json")
+
+
+def _node_parms_manifest_path() -> str:
+    """Absolute path to the bundled manifest (next to the edini package)."""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "data", "node_parms_manifest.json")
+
+
+def load_node_parms_manifest() -> dict | None:
+    """Load the bundled node-params manifest. Returns None if missing or
+    corrupt (callers degrade gracefully — the tool reports 'manifest not
+    available', the validator skips parm-name checks). Pure file I/O, no hou."""
+    path = _node_parms_manifest_path()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(data, dict) or "node_types" not in data:
+        return None
+    return data
+
+
+def _attr_or_call(obj, attr: str, default=None):
+    """Read `obj.<attr>` whether it is a method (real Houdini) or a plain
+    attribute (mock). Returns default on any failure. Houdini ParmTemplates
+    expose name/label/defaultValue/menuItems as methods; our mock stores some
+    as attributes, so this normalizes both."""
+    val = getattr(obj, attr, None)
+    if val is None:
+        return default
+    try:
+        return val() if callable(val) else val
+    except Exception:
+        return default
+
+
+def _extract_parm_spec(tmpl) -> dict[str, Any] | None:
+    """Extract a JSON-serializable spec from one ParmTemplate.
+    Returns None for folders/separators/labels (non-parm entries). The spec
+    captures what an agent needs to write a recipe: name, type, label, default,
+    menu tokens, and numeric range."""
+    # Skip non-parm template kinds (folders, separators, labels).
+    name = _attr_or_call(tmpl, "name")
+    if not name or not isinstance(name, str):
+        return None
+
+    # Determine the template's type. hou.parmTemplateType is an enum whose
+    # member's .name() yields "Float"/"Int"/"Menu"/"Toggle"/"String"/...;
+    # the mock carries a plain _type_name string as a fallback.
+    type_name = "unknown"
+    t = _attr_or_call(tmpl, "type")
+    if t is not None:
+        type_name = _attr_or_call(t, "name") or "unknown"
+    if type_name in (None, "unknown"):
+        type_name = getattr(tmpl, "_type_name", "unknown")
+
+    spec: dict[str, Any] = {"name": name, "type": type_name}
+
+    lbl = _attr_or_call(tmpl, "label")
+    if lbl and lbl != name:
+        spec["label"] = lbl
+
+    # Default value: most templates expose defaultValue().
+    dv = _attr_or_call(tmpl, "defaultValue")
+    if dv is not None:
+        spec["default"] = _json_safe(dv)
+
+    # Menu items: only Menu/String-menu templates have menuItems().
+    if type_name in ("Menu", "String"):
+        items = _attr_or_call(tmpl, "menuItems")
+        if items:
+            spec["menu_items"] = [str(i) for i in items]
+
+    # Numeric range (min/max) for Float/Int.
+    if type_name in ("Float", "Int"):
+        mn = _attr_or_call(tmpl, "minValue")
+        if mn is not None:
+            spec["min"] = _json_safe(mn)
+        mx = _attr_or_call(tmpl, "maxValue")
+        if mx is not None:
+            spec["max"] = _json_safe(mx)
+
+    return spec
+    return spec
+
+
+def _json_safe(value) -> Any:
+    """Coerce a Houdini value (vector/tuple/enum) into JSON-serializable form."""
+    # Vector3 / Vector2 / Vector4 — duck-typed by indexing.
+    if isinstance(value, (int, float, str, bool)) or value is None:
+        return value
+    if isinstance(value, (list, tuple)):
+        try:
+            return [_json_safe(v) for v in value]
+        except Exception:
+            return str(value)
+    # Single-element numeric (hou layer may return a 1-tuple for scalar defaults).
+    try:
+        for attr in ("x", "y", "z", "w"):
+            if hasattr(value, attr):
+                return [_json_safe(getattr(value, a)())
+                        for a in ("x", "y", "z", "w") if hasattr(value, a)]
+    except Exception:
+        pass
+    try:
+        return float(value)
+    except Exception:
+        pass
+    return str(value)
+
+
+def _flatten_parm_templates(group) -> list[dict[str, Any]]:
+    """Walk a ParmTemplateGroup, recursing into folders, returning a flat list
+    of parm specs (folders/separators skipped)."""
+    specs: list[dict[str, Any]] = []
+    seen_names: set[str] = set()
+
+    def walk(templates):
+        for tmpl in templates:
+            # Detect folder templates: they expose parmTemplates() returning a
+            # non-empty list. Real parm templates either lack the method or it
+            # raises, so the try/except below falls through to _extract_parm_spec.
+            try:
+                children = tmpl.parmTemplates()
+            except Exception:
+                children = None
+            if children:
+                walk(children)
+                continue
+            spec = _extract_parm_spec(tmpl)
+            if spec and spec["name"] not in seen_names:
+                seen_names.add(spec["name"])
+                specs.append(spec)
+
+    try:
+        entries = group.entries()
+    except Exception:
+        entries = []
+    walk(entries)
+    return specs
+
+
+def generate_node_parms_manifest(category: str = "Sop") -> dict[str, Any]:
+    """Build the node-params manifest by walking hou.nodeTypeCategories().
+    Requires a live Houdini (real hou module). Returns the manifest dict;
+    the caller (script/tool) is responsible for writing it to disk.
+
+    The manifest shape:
+      {"houdini_version": "...", "generated_at": "...", "category": "Sop",
+       "node_types": {"<type_name>": {"parms": [{name,type,...}, ...]}, ...}}
+    """
+    try:
+        version = hou.applicationVersionString()
+    except Exception:
+        version = "unknown"
+
+    node_types: dict[str, Any] = {}
+    categories = hou.nodeTypeCategories()
+    cat = categories.get(category) if hasattr(categories, "get") else None
+    if cat is None:
+        # nodeTypeCategories() on real hou returns a dict; on mock it may be a
+        # custom mapping. Fall back to bracket access.
+        try:
+            cat = categories[category]
+        except Exception:
+            return {
+                "houdini_version": version,
+                "generated_at": _now_iso(),
+                "category": category,
+                "node_types": {},
+                "error": f"category {category!r} not found",
+            }
+
+    for nt in cat.nodeTypes().values():
+        type_name = nt.name()
+        try:
+            group = nt.parmTemplateGroup()
+        except Exception:
+            # Some node types (e.g. heavily customized HDAs) may not expose a
+            # template group — skip them rather than aborting the whole dump.
+            continue
+        parms = _flatten_parm_templates(group)
+        node_types[type_name] = {"parms": parms}
+
+    return {
+        "houdini_version": version,
+        "generated_at": _now_iso(),
+        "category": category,
+        "node_types": node_types,
+    }
+
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def node_parms(node_type: str, category: str = "Sop") -> dict[str, Any]:
+    """Query a node TYPE's parameter list (C-station).
+
+    Reads the bundled, version-pinned manifest first (zero hou dependency,
+    always accurate for the pinned Houdini version). If the type is absent
+    from the manifest AND a live Houdini is available, falls back to a live
+    query so the tool stays useful on versions the manifest predates.
+
+    Returns:
+      {"success": True, "node_type": ..., "category": ..., "parms": [...],
+       "source": "manifest"|"live", "houdini_version"?}  on hit;
+      {"success": False, "error": "..."}  on miss (or "not found").
+    """
+    node_type = (node_type or "").strip()
+    if not node_type:
+        return {"success": False, "error": "node_type is required"}
+
+    # 1. Bundled manifest (preferred — pinned, offline, fast).
+    manifest = load_node_parms_manifest()
+    if manifest is not None:
+        nt_entry = manifest.get("node_types", {}).get(node_type)
+        if nt_entry is not None:
+            return {
+                "success": True,
+                "node_type": node_type,
+                "category": manifest.get("category", category),
+                "parms": nt_entry.get("parms", []),
+                "source": "manifest",
+                "houdini_version": manifest.get("houdini_version"),
+            }
+
+    # 2. Live fallback (only if hou is a real Houdini, not a mock).
+    try:
+        live = _node_parms_live(node_type, category)
+        if live is not None:
+            return live
+    except Exception:
+        pass
+
+    # 3. Missed everywhere.
+    hint = ""
+    if manifest is None:
+        hint = " (manifest not bundled; run generate_node_parms_manifest)"
+    return {"success": False, "error": f"node type {node_type!r} not found"
+            + hint}
+
+
+def _node_parms_live(node_type: str, category: str) -> dict[str, Any] | None:
+    """Live query against a real Houdini install. Returns None if the type
+    isn't found or hou is a mock. Used only as a fallback when the bundled
+    manifest doesn't cover the requested type."""
+    # Detect mock: MockHou exposes a sentinel attribute.
+    if getattr(hou, "_MOCK", False):
+        return None
+    categories = hou.nodeTypeCategories()
+    cat = categories.get(category) if hasattr(categories, "get") else None
+    if cat is None:
+        return None
+    nt = cat.nodeType(node_type) if hasattr(cat, "nodeType") else None
+    if nt is None:
+        return None
+    try:
+        group = nt.parmTemplateGroup()
+    except Exception:
+        return None
+    return {
+        "success": True,
+        "node_type": node_type,
+        "category": category,
+        "parms": _flatten_parm_templates(group),
+        "source": "live",
+        "houdini_version": getattr(hou, "applicationVersionString", lambda: "?")(),
+    }
+
+
+def manifest_parm_names(node_type: str) -> set[str] | None:
+    """Return the set of valid parm names for a node type per the manifest,
+    or None if the manifest/type is unavailable. Used by harness validation to
+    decide whether to enforce parm-name checks (None = skip, soft degrade)."""
+    manifest = load_node_parms_manifest()
+    if manifest is None:
+        return None
+    nt_entry = manifest.get("node_types", {}).get(node_type)
+    if nt_entry is None:
+        return None
+    return {p["name"] for p in nt_entry.get("parms", []) if p.get("name")}
 
 
 def _vector_to_list(value) -> list[float]:
