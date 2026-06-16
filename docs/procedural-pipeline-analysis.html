@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>程序化生成系统 · 全链路分析</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-card: #161b22;
+    --bg-card-hover: #1c2330;
+    --border: #30363d;
+    --border-soft: #21262d;
+    --text: #e6edf3;
+    --text-dim: #8b949e;
+    --text-muted: #6e7681;
+    --accent: #58a6ff;
+    --accent-soft: rgba(88, 166, 255, 0.12);
+    --green: #3fb950;
+    --green-soft: rgba(63, 185, 80, 0.12);
+    --red: #f85149;
+    --red-soft: rgba(248, 81, 73, 0.12);
+    --yellow: #d29922;
+    --yellow-soft: rgba(210, 153, 34, 0.12);
+    --purple: #bc8cff;
+    --purple-soft: rgba(188, 140, 255, 0.12);
+    --orange: #db6d28;
+    --orange-soft: rgba(219, 109, 40, 0.12);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                 "Microsoft YaHei", "Hiragino Sans GB", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    font-size: 15px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── Layout ── */
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 24px; }
+
+  /* ── Hero ── */
+  .hero {
+    background: linear-gradient(135deg, #0d1117 0%, #161b22 50%, #1a2233 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 56px 0 48px;
+    position: relative;
+    overflow: hidden;
+  }
+  .hero::before {
+    content: "";
+    position: absolute; top: -50%; right: -10%;
+    width: 500px; height: 500px;
+    background: radial-gradient(circle, var(--accent-soft) 0%, transparent 70%);
+    pointer-events: none;
+  }
+  .hero h1 {
+    font-size: 32px; font-weight: 700; letter-spacing: -0.5px;
+    background: linear-gradient(90deg, #e6edf3, #58a6ff);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 12px;
+  }
+  .hero .subtitle { color: var(--text-dim); font-size: 16px; max-width: 680px; }
+  .hero .meta {
+    display: flex; gap: 8px; flex-wrap: wrap; margin-top: 22px;
+  }
+  .meta-tag {
+    font-size: 12px; padding: 4px 12px; border-radius: 20px;
+    border: 1px solid var(--border); color: var(--text-dim);
+    background: var(--bg-card);
+  }
+  .meta-tag.green { color: var(--green); border-color: rgba(63,185,80,0.3); background: var(--green-soft); }
+  .meta-tag.blue  { color: var(--accent); border-color: rgba(88,166,255,0.3); background: var(--accent-soft); }
+
+  /* ── Section ── */
+  section { padding: 48px 0; border-bottom: 1px solid var(--border-soft); }
+  section h2 {
+    font-size: 24px; font-weight: 700; margin-bottom: 8px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  section h2 .num {
+    font-size: 13px; font-weight: 600; color: var(--accent);
+    background: var(--accent-soft); border: 1px solid rgba(88,166,255,0.25);
+    width: 30px; height: 30px; border-radius: 8px;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  section .lead { color: var(--text-dim); margin-bottom: 28px; font-size: 14px; }
+  section h3 {
+    font-size: 17px; font-weight: 600; margin: 28px 0 12px;
+    color: var(--text);
+  }
+
+  /* ── TOC ── */
+  .toc {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px 24px; margin: 24px 0;
+  }
+  .toc-title { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; }
+  .toc ol { list-style: none; counter-reset: toc; display: flex; flex-wrap: wrap; gap: 6px 20px; }
+  .toc li { counter-increment: toc; }
+  .toc li a {
+    color: var(--text-dim); text-decoration: none; font-size: 14px;
+    display: inline-flex; align-items: center; gap: 6px;
+    transition: color .15s;
+  }
+  .toc li a::before {
+    content: counter(toc); font-size: 11px; color: var(--accent);
+    font-weight: 600;
+  }
+  .toc li a:hover { color: var(--accent); }
+
+  /* ── Pipeline Flow ── */
+  .pipeline { display: flex; flex-direction: column; gap: 0; }
+  .phase {
+    position: relative; padding: 18px 20px 18px 64px;
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 12px; margin-bottom: 0;
+    transition: background .15s, border-color .15s;
+  }
+  .phase + .phase { margin-top: -1px; border-top-left-radius: 0; border-top-right-radius: 0; }
+  .phase:first-of-type { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+  .phase:hover { background: var(--bg-card-hover); border-color: var(--accent); z-index: 1; }
+  .phase-num {
+    position: absolute; left: 18px; top: 18px;
+    width: 30px; height: 30px; border-radius: 50%;
+    background: var(--accent-soft); border: 1.5px solid var(--accent);
+    color: var(--accent); font-weight: 700; font-size: 13px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .phase-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+  .phase-title { font-weight: 600; font-size: 15px; }
+  .phase-tool {
+    font-family: "SF Mono", "Consolas", "Liberation Mono", monospace;
+    font-size: 12px; color: var(--accent);
+    background: var(--accent-soft); padding: 2px 8px; border-radius: 5px;
+    border: 1px solid rgba(88,166,255,0.2);
+  }
+  .phase-tool.none { color: var(--text-muted); background: transparent; border-color: var(--border); }
+  .phase-desc { color: var(--text-dim); font-size: 13px; }
+  .phase-prompt { color: var(--text-muted); font-size: 12px; margin-top: 4px; }
+  .phase-prompt code { color: var(--purple); font-family: "SF Mono", monospace; font-size: 11px; }
+  .phase-gate {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 11px; font-weight: 600; margin-top: 6px;
+    padding: 3px 9px; border-radius: 5px;
+  }
+  .gate-hard { color: var(--red); background: var(--red-soft); border: 1px solid rgba(248,81,73,0.25); }
+  .gate-soft { color: var(--yellow); background: var(--yellow-soft); border: 1px solid rgba(210,153,34,0.25); }
+  .gate-forced { color: var(--orange); background: var(--orange-soft); border: 1px solid rgba(219,109,40,0.25); }
+
+  .arrow-down {
+    text-align: center; color: var(--text-muted); font-size: 18px;
+    line-height: 1; padding: 2px 0; opacity: 0.5;
+  }
+
+  /* ── Cards grid ── */
+  .grid { display: grid; gap: 16px; }
+  .grid-2 { grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+  .grid-3 { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+  .card {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px;
+    transition: border-color .15s, transform .15s;
+  }
+  .card:hover { border-color: var(--accent); }
+  .card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  .card-title { font-weight: 600; font-size: 15px; }
+  .badge {
+    font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 12px;
+    white-space: nowrap;
+  }
+  .badge-fixed   { color: var(--green); background: var(--green-soft); }
+  .badge-risk    { color: var(--red); background: var(--red-soft); }
+  .badge-design  { color: var(--yellow); background: var(--yellow-soft); }
+  .badge-polish  { color: var(--purple); background: var(--purple-soft); }
+  .card-body { color: var(--text-dim); font-size: 13px; }
+  .card-body strong { color: var(--text); }
+  .card-meta { margin-top: 10px; font-size: 12px; color: var(--text-muted); }
+
+  /* ── Table ── */
+  .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 12px 14px; color: var(--text-dim); font-weight: 600;
+       border-bottom: 1px solid var(--border); background: var(--bg-card); white-space: nowrap; }
+  td { padding: 11px 14px; border-bottom: 1px solid var(--border-soft); color: var(--text); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--bg-card-hover); }
+  td code, p code, li code {
+    font-family: "SF Mono", "Consolas", monospace; font-size: 12px;
+    color: var(--accent); background: var(--accent-soft);
+    padding: 1px 6px; border-radius: 4px;
+  }
+
+  /* ── Perspective ── */
+  .perspective {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 24px; border-left: 3px solid;
+  }
+  .perspective.user { border-left-color: var(--accent); }
+  .perspective.td { border-left-color: var(--purple); }
+  .perspective h3 { margin-top: 0; display: flex; align-items: center; gap: 8px; }
+  .perspective h3 .icon { font-size: 20px; }
+  .perspective .section-label { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; margin: 16px 0 6px; }
+  .perspective ul { list-style: none; padding: 0; }
+  .perspective li { padding: 5px 0 5px 22px; position: relative; color: var(--text-dim); font-size: 14px; }
+  .perspective li::before { position: absolute; left: 0; font-weight: 700; }
+  .perspective .pros li::before { content: "✓"; color: var(--green); }
+  .perspective .cons li::before { content: "✕"; color: var(--red); }
+
+  /* ── Callout ── */
+  .callout {
+    background: var(--green-soft); border: 1px solid rgba(63,185,80,0.25);
+    border-radius: 10px; padding: 14px 18px; margin: 20px 0;
+    font-size: 13px; color: var(--text);
+  }
+  .callout.warn { background: var(--yellow-soft); border-color: rgba(210,153,34,0.25); }
+  .callout strong { color: var(--green); }
+  .callout.warn strong { color: var(--yellow); }
+
+  /* ── Stats ── */
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; margin: 24px 0; }
+  .stat {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px; text-align: center;
+  }
+  .stat-num { font-size: 26px; font-weight: 700; color: var(--accent); }
+  .stat-label { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+
+  /* ── Footer ── */
+  footer { padding: 32px 0; text-align: center; color: var(--text-muted); font-size: 13px; }
+
+  @media (max-width: 720px) {
+    .hero h1 { font-size: 24px; }
+    .grid-2, .grid-3 { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════ HERO ═══════════════ -->
+<header class="hero">
+  <div class="wrap">
+    <h1>程序化生成系统 · 全链路分析</h1>
+    <p class="subtitle">
+      Edini Procedural Harness —— 从用户一句话到可交付的模块化 Houdini 资产：
+      8 个阶段、22 个工具、3 层验证门禁的完整链路拆解，含风险审计与双视角评估。
+    </p>
+    <div class="meta">
+      <span class="meta-tag green">✓ 已基于最新代码（C 站 + probe 修复后）</span>
+      <span class="meta-tag blue">Houdini 21.0.440</span>
+      <span class="meta-tag">402 测试通过</span>
+      <span class="meta-tag">2026-06-16</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+<!-- ═══════════════ TOC ═══════════════ -->
+<nav class="toc">
+  <div class="toc-title">目录</div>
+  <ol>
+    <li><a href="#overview">系统概览</a></li>
+    <li><a href="#pipeline">全链路流程图（8 阶段）</a></li>
+    <li><a href="#matrix">工具 × 提示词 × 门禁矩阵</a></li>
+    <li><a href="#risks">风险审计（8 项）</a></li>
+    <li><a href="#perspectives">双视角评估</a></li>
+  </ol>
+</nav>
+
+<!-- ═══════════════ 1. OVERVIEW ═══════════════ -->
+<section id="overview">
+  <h2><span class="num">1</span>系统概览</h2>
+  <p class="lead">程序化生成系统的核心设计哲学：<strong>把易错的命令式操作从 agent 手里拿走</strong>，换成确定性建网 + 分层门禁验证。</p>
+
+  <div class="stats">
+    <div class="stat"><div class="stat-num">8</div><div class="stat-label">流程阶段</div></div>
+    <div class="stat"><div class="stat-num">22</div><div class="stat-label">工具</div></div>
+    <div class="stat"><div class="stat-num">3</div><div class="stat-label">验证层</div></div>
+    <div class="stat"><div class="stat-num">4</div><div class="stat-label">硬门禁</div></div>
+    <div class="stat"><div class="stat-num">1076</div><div class="stat-label">manifest 节点</div></div>
+    <div class="stat"><div class="stat-num">5</div><div class="stat-label">ABCDE 站</div></div>
+  </div>
+
+  <div class="callout">
+    <strong>设计原则：</strong> 确定性层（几何健康 / 朝向 / 库存）权威且廉价，视觉层仅作 advisory——
+    这避免了"用昂贵的视觉模型做它不擅长的朝向判断"。agent 永远先走 cheap authoritative 层，
+    只在无法决断时才升级到视觉。
+  </div>
+</section>
+
+<!-- ═══════════════ 2. PIPELINE ═══════════════ -->
+<section id="pipeline">
+  <h2><span class="num">2</span>全链路流程图</h2>
+  <p class="lead">从用户输入到资产提交的完整 8 阶段链路。每个阶段标注工具、提示词来源、门禁类型。</p>
+
+  <div class="pipeline">
+
+    <div class="phase">
+      <div class="phase-num">0</div>
+      <div class="phase-head">
+        <span class="phase-title">Skill 路由与上下文注入</span>
+        <span class="phase-tool none">无工具调用</span>
+      </div>
+      <div class="phase-desc">用户提到"程序化建模/程序化生成"等触发词 → 加载 <code>procedural-modeling</code> skill，注入 SKILL.md 全文 + edini-context 铁律（rules.json）。</div>
+      <div class="phase-prompt">提示词：SKILL.md frontmatter 触发词 · rules.json ≤20 条铁律自动注入 system prompt</div>
+    </div>
+    <div class="arrow-down">▼</div>
+
+    <div class="phase">
+      <div class="phase-num">1</div>
+      <div class="phase-head">
+        <span class="phase-title">声明 Recipe（纯思考）</span>
+        <span class="phase-tool none">无工具调用</span>
+      </div>
+      <div class="phase-desc">agent 在回复中输出结构化 RECIPE：组件清单（component_id）、参数、朝向断言、锚点、验证标准。</div>
+      <div class="phase-prompt">提示词：SKILL.md <code>L27-67 Recipe Template</code></div>
+      <div class="phase-desc"><strong>★ 此处定义的 component_id / orientation_asserts 贯穿后续所有门禁。</strong></div>
+    </div>
+    <div class="arrow-down">▼</div>
+
+    <div class="phase">
+      <div class="phase-num">2</div>
+      <div class="phase-head">
+        <span class="phase-title">查询参数名（C 站）</span>
+        <span class="phase-tool">houdini_node_parms</span>
+      </div>
+      <div class="phase-desc">对将要用到的 SOP（尤其 postprocess 链），查权威参数清单。manifest 来自真实 H21 安装，1076 个 SOP，零运行时开销。</div>
+      <div class="phase-prompt">提示词：SKILL.md <code>Query Parameter Names</code> · <code>Forbidden #4</code> · <code>Harness Rules</code> · <code>Workflow step 2</code></div>
+      <div class="phase-gate gate-hard">🔒 硬门禁：_validate_recipe 校验 postprocess 参数名（拼错→build 前拒绝）</div>
+    </div>
+    <div class="arrow-down">▼</div>
+
+    <div class="phase">
+      <div class="phase-num">3</div>
+      <div class="phase-head">
+        <span class="phase-title">建网生成（三选一）</span>
+        <span class="phase-tool">houdini_build_procedural_asset</span>
+      </div>
+      <div class="phase-desc">
+        <strong>① 首选：声明式 Builder</strong> —— agent 只写每组件纯几何代码 + recipe，harness 确定性建网（组件 SOP → 锚点 → Copy-to-Points → merge → postprocess → OUT）。<br>
+        <strong>② 回退：network_mode</strong> —— agent 手写 createNode 网络（非标准拓扑）。<br>
+        <strong>③ 单件：单 SOP cook</strong> —— 纯单件生成器。
+      </div>
+      <div class="phase-prompt">提示词：SKILL.md <code>Code-First</code> · <code>Forbidden #1</code>(递归) · <code>#2</code>(绕沙盒) · <code>Network Mode</code> · harness.ts promptGuidelines</div>
+      <div class="phase-gate gate-forced">⚠ 建网后立即检查：structure_advisory.is_monolithic</div>
+    </div>
+    <div class="arrow-down">▼</div>
+
+    <div class="phase">
+      <div class="phase-num">4</div>
+      <div class="phase-head">
+        <span class="phase-title">三层验证（核心防线）</span>
+        <span class="phase-tool">houdini_inspect_geometry_health</span>
+      </div>
+      <div class="phase-desc">
+        <strong>Layer 1 几何健康</strong>（权威·强制）：孤儿点、退化面、非流形边、开放边界——不通过禁止继续。<br>
+        <strong>Layer 2a 朝向</strong>（权威·门禁）：PCA / construction_axis 按组件检测轴向。<br>
+        <strong>Layer 2b 库存</strong>（权威·数据）：component_id 清单 + prim 数 + 相对大小。<br>
+        <strong>Layer 3 视觉</strong>（advisory）：4 视图截图 → describe_image 交叉验证。
+      </div>
+      <div class="phase-prompt">提示词：SKILL.md <code>Three-Layer Verification Protocol</code> · <code>Debug Discipline</code></div>
+      <div class="phase-gate gate-hard">🔒 commit 时双硬门：structure + orientation</div>
+    </div>
+    <div class="arrow-down">▼</div>
+
+    <div class="phase">
+      <div class="phase-num">5</div>
+      <div class="phase-head">
+        <span class="phase-title">修复循环</span>
+        <span class="phase-tool">（循环回到 3/4）</span>
+      </div>
+      <div class="phase-desc">命名缺陷 → 定向修复 → 单层重验。规则：一轮一个缺陷、diff 库存、不盲重建。上限 3 轮，超限问用户。</div>
+      <div class="phase-prompt">提示词：SKILL.md <code>Debug Discipline</code>（5 条反 flail 规则）</div>
+      <div class="phase-gate gate-soft">⚠ 软约束：3 轮上限</div>
+    </div>
+    <div class="arrow-down">▼</div>
+
+    <div class="phase">
+      <div class="phase-num">6</div>
+      <div class="phase-head">
+        <span class="phase-title">提交</span>
+        <span class="phase-tool">houdini_commit_sandbox</span>
+      </div>
+      <div class="phase-desc">运行双硬门（模块化结构 + 朝向）作为最终检查。任一失败拒绝提交。bypass 需 skip_orientation/skip_structure + 文档化理由。</div>
+      <div class="phase-gate gate-hard">🔒 双硬门禁</div>
+    </div>
+    <div class="arrow-down">▼</div>
+
+    <div class="phase">
+      <div class="phase-num">7</div>
+      <div class="phase-head">
+        <span class="phase-title">失败处理</span>
+        <span class="phase-tool">houdini_discard_sandbox / houdini_collect_diagnostics</span>
+      </div>
+      <div class="phase-desc">诊断先于删除；策略性错误（拓扑破裂、多组件朝向错）才 discard + 全量重建。</div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ═══════════════ 3. MATRIX ═══════════════ -->
+<section id="matrix">
+  <h2><span class="num">3</span>工具 × 提示词 × 门禁矩阵</h2>
+  <p class="lead">每个工具的完整归属：触发它的 SKILL.md 章节、TS promptGuidelines、以及它参与的门禁。</p>
+
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>阶段</th>
+        <th>工具</th>
+        <th>SKILL.md 提示词位置</th>
+        <th>TS promptGuidelines</th>
+        <th>门禁</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>2 查参数</td>
+        <td><code>houdini_node_parms</code></td>
+        <td>L593 Query / L227 Forbidden#4 / L846 Harness Rules / L851 Workflow / L1127 Reference 导语</td>
+        <td>query.ts:53</td>
+        <td><span class="badge badge-fixed">_validate_recipe</span></td>
+      </tr>
+      <tr>
+        <td>3a 建网</td>
+        <td><code>houdini_build_procedural_asset</code></td>
+        <td>L822 Harness Rules / L852-853 Workflow / L285 A站schema</td>
+        <td>harness.ts:285</td>
+        <td><span class="badge badge-polish">structure_advisory</span></td>
+      </tr>
+      <tr>
+        <td>3b 建网</td>
+        <td><code>houdini_run_python_sandbox</code></td>
+        <td>L189-234 Forbidden / L236 Network Mode</td>
+        <td>harness.ts:53</td>
+        <td>—</td>
+      </tr>
+      <tr>
+        <td>4-L1</td>
+        <td><code>houdini_inspect_geometry_health</code></td>
+        <td>L872 / L886 三层验证</td>
+        <td>query.ts:108</td>
+        <td><span class="badge badge-risk">强制前置</span></td>
+      </tr>
+      <tr>
+        <td>4-L2</td>
+        <td><code>houdini_verify_orientation</code></td>
+        <td>L873 / L893 / L965 朝向示例</td>
+        <td>harness.ts:130</td>
+        <td><span class="badge badge-risk">commit 门禁</span></td>
+      </tr>
+      <tr>
+        <td>4-L2</td>
+        <td><code>houdini_geometry_inventory</code></td>
+        <td>L874 / L898 库存</td>
+        <td>query.ts:80</td>
+        <td>—</td>
+      </tr>
+      <tr>
+        <td>4-L3</td>
+        <td><code>houdini_capture_review</code> + describe_image</td>
+        <td>L875 / L904 / L952 视觉</td>
+        <td>harness.ts:326</td>
+        <td>advisory</td>
+      </tr>
+      <tr>
+        <td>4-L3</td>
+        <td><code>houdini_capture_component_detail</code></td>
+        <td>L916 小组件特写</td>
+        <td>harness.ts:392</td>
+        <td>—</td>
+      </tr>
+      <tr>
+        <td>6 提交</td>
+        <td><code>houdini_commit_sandbox</code></td>
+        <td>L859 / L923 提交序列</td>
+        <td>harness.ts:201</td>
+        <td><span class="badge badge-risk">双门禁</span></td>
+      </tr>
+      <tr>
+        <td>7 失败</td>
+        <td><code>houdini_discard_sandbox</code> / <code>collect_diagnostics</code></td>
+        <td>L828 / L847</td>
+        <td>harness.ts:22/272</td>
+        <td>—</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="callout warn">
+    <strong>一致性状态（已修复）：</strong>
+    参数查询的指引现在在三条提示词通道（SKILL.md / harness.ts / query.ts）完全一致——
+    "先用 <code>houdini_node_parms</code>，不要猜、不要手动 probe"。
+    此前 <code>harness.ts:69</code> 残留的"PROBE parameter names first"已于 commit
+    <code>18782ab</code> 修复。
+  </div>
+</section>
+
+<!-- ═══════════════ 4. RISKS ═══════════════ -->
+<section id="risks">
+  <h2><span class="num">4</span>风险审计</h2>
+  <p class="lead">基于最新代码状态的 8 项风险与优化点。已修复项标注 ✓，待办项按优先级分级。</p>
+
+  <div class="grid grid-2">
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">R1 · 提示词冲突：harness.ts 残留 probe 指引</span>
+        <span class="badge badge-fixed">✓ 已修复</span>
+      </div>
+      <div class="card-body">
+        <code>harness.ts:69</code> 曾教 agent "PROBE parameter names first (create + inspect + destroy)"，
+        与 C 站 + SKILL.md 的新流程矛盾。agent 在 sandbox 流程会看到这条，可能走回手动 probe。
+        <div class="card-meta">修复：commit 18782ab → 改为指向 houdini_node_parms</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">R2 · Recipe 阶段无强制约束</span>
+        <span class="badge badge-risk">🔴 高</span>
+      </div>
+      <div class="card-body">
+        Recipe 是纯思考阶段，无工具强制 agent 先提交。若 agent 跳过 recipe 直接
+        <code>run_python_sandbox</code>，component_id / orientation 门禁形同虚设——
+        门禁只在 <code>commit_sandbox</code> 时跑，而用户可能直接接受未 commit 的 sandbox。
+        <div class="card-meta">建议：考虑 recipe 校验前置工具，或 sandbox 也跑门禁预览</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">R3 · 视觉模型不可用时无降级路径</span>
+        <span class="badge badge-risk">🔴 高</span>
+      </div>
+      <div class="card-body">
+        Layer 3 强依赖 <code>describe_image</code>。SKILL.md 写 "Do NOT skip describe_image"，
+        但视觉模型配置错误 / API 失败时（历史多次出现，见第24阶段），agent 会卡住。
+        没有明确的"视觉不可用时，确定性层全过能否 commit"的指引。
+        <div class="card-meta">建议：增加视觉降级策略文档 + 确定性层全通过时的 commit 放行规则</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">R4 · Builder vs network_mode 边界模糊</span>
+        <span class="badge badge-design">🟡 中</span>
+      </div>
+      <div class="card-body">
+        Agent 须判断"能否表达为 recipe"，但 recipe schema 边界无清晰文档——只说 "non-standard topologies"。
+        带布尔切割、动态细分、条件分支的资产算不算？资深 TD 也会困惑，导致 agent 强行用 recipe 表达
+        不适合的拓扑，或在两者间反复横跳。
+        <div class="card-meta">建议：补充 recipe 表达力边界文档 + 典型反例</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">R5 · PCA 回退路径的自洽错误风险</span>
+        <span class="badge badge-design">🟡 中</span>
+      </div>
+      <div class="card-body">
+        Agent 同时写组件代码 + expected_axis 时，错误是相关的——误解"X轴水平"会同时生成躺平轮子 +
+        写 expected_axis:X，PCA"愉快确认"。B 站用 construction_axis 解决了构造路径，
+        但 <strong>PCA 回退路径（老 recipe / 未声明 construction_axis）仍有此风险</strong>。
+        <div class="card-meta">建议：强制 construction_axis，或对 PCA 路径加 crosscheck 告警</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">R6 · Manifest 重复加载无缓存</span>
+        <span class="badge badge-design">🟡 中</span>
+      </div>
+      <div class="card-body">
+        <code>load_node_parms_manifest</code> 每次调用都重新读 6MB 文件 + json.parse。
+        单次可接受，但 <code>_validate_recipe</code> 对每个 postprocess 节点都调一次
+        <code>manifest_parm_names</code>（每次都 load），多个节点会重复加载。
+        <div class="card-meta">建议：加模块级缓存（load 一次，invalidate 靠版本号）</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">R7 · network_mode OUT 命名陷阱</span>
+        <span class="badge badge-polish">🟢 低</span>
+      </div>
+      <div class="card-body">
+        network_mode 要求 OUT 节点名为 "OUT"，agent 可能命名 "out"/"OUTPUT"。
+        harness 有自动发现逻辑（找最大 component_id 节点），但这是隐式的，agent 不知道。
+        <div class="card-meta">建议：Forbidden Patterns 补充 OUT 命名陷阱</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">R8 · SKILL.md 过长（1250+ 行）</span>
+        <span class="badge badge-polish">🟢 低</span>
+      </div>
+      <div class="card-body">
+        整个 skill 注入 system prompt，对每次程序化任务都消耗大量 token。速查表（14 个 SOP）
+        现在可被 <code>houdini_node_parms</code> 替代，可考虑移到工具查询以大幅瘦身。
+        <div class="card-meta">建议：速查表移到按需查询，SKILL 只保留触发指引</div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ═══════════════ 5. PERSPECTIVES ═══════════════ -->
+<section id="perspectives">
+  <h2><span class="num">5</span>双视角评估</h2>
+  <p class="lead">同一套系统，普通用户与资深 TD 看到的是不同的图景。</p>
+
+  <div class="grid grid-2">
+    <div class="perspective user">
+      <h3><span class="icon">👤</span>普通用户视角</h3>
+
+      <div class="section-label">优点</div>
+      <ul class="pros">
+        <li>"说一句话就出模型"——recipe → 自动建网 → 自动验证 → 提交，几乎不用懂 Houdini</li>
+        <li>三层验证 + 门禁让结果<strong>可信任</strong>：不会提交一个轮子躺平的自行车</li>
+        <li>Debug Discipline 防止 agent 无脑重建，不浪费用户时间</li>
+        <li>C 站让参数名不再靠猜，减少了"做出来但法线不对"这类隐蔽缺陷</li>
+      </ul>
+
+      <div class="section-label">痛点</div>
+      <ul class="cons">
+        <li><strong>失败时很被动</strong>：agent 跑 3 轮放弃后说"请你帮忙"，但用户可能不懂 Houdini。缺少"降级交付"机制</li>
+        <li><strong>等待时间长</strong>：build + 4 视图 + 视觉分析约 1-2 分钟，修复 ×3 约 5 分钟，无进度反馈</li>
+        <li><strong>视觉判断用户无法干预</strong>：describe_image 说 STRUCTURAL_DETAIL=2 要修，用户可能觉得够了，agent 却固执继续</li>
+      </ul>
+    </div>
+
+    <div class="perspective td">
+      <h3><span class="icon">🛠️</span>资深 TD 视角</h3>
+
+      <div class="section-label">优点（架构专业）</div>
+      <ul class="pros">
+        <li><strong>声明式 Builder 方向正确</strong>——把 createNode/wiring 易错操作换成确定性建网，解决"agent 不会写 Houdini API"根因</li>
+        <li><strong>门禁分层精准</strong>：确定性层权威廉价，视觉仅 advisory——避免用昂贵视觉模型做不擅长的朝向判断</li>
+        <li><strong>construction_axis（B站）是亮点</strong>：PCA 估计变 ground truth，消除 AI 特有的自洽错误</li>
+        <li>sandbox 隔离 + commit 门禁符合 TD "先验证再落地"的工作习惯</li>
+        <li>C 站 manifest 把参数名漂移问题彻底解决——真实 H21 数据，端到端验证 cuspangle</li>
+      </ul>
+
+      <div class="section-label">担忧</div>
+      <ul class="cons">
+        <li><strong>recipe 表达力受限是硬伤</strong>：真实生产资产（布尔切割、变截面、条件细分、UV）很难塞进固定拓扑，TD 被迫回到 network_mode 手写</li>
+        <li><strong>缺少 HDA 封装路径</strong>：TD 核心工作流是"做完→封装 HDA 复用"，但 create_hda 没和 procedural pipeline 打通</li>
+        <li><strong>manifest 是死快照</strong>：Houdini 升级/装新插件后需手动重跑生成脚本，无自动版本漂移检测</li>
+        <li><strong>没有黄金范例参考</strong>（D 站未做）：agent 每次从零推理，质量天花板受限</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+</div><!-- /wrap -->
+
+<footer>
+  <div class="wrap">
+    Edini Procedural Harness · 全链路分析报告<br>
+    基于代码状态截至 <code>18782ab</code>（C 站完成 + probe 修复）· 2026-06-16
+  </div>
+</footer>
+
+</body>
+</html>
