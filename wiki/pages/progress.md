@@ -564,7 +564,7 @@
 |------|------|------|------|
 | **P0** | **A. 声明式 Recipe Builder** | agent 只写每组件纯几何代码 + recipe，harness 确定性建网。消灭 createNode/wiring/blockpath 整类错误。真实 Houdini 验证通过。 | ✅ 完成 |
 | **P0** | **B. 构造轴替代 PCA** | 组件在 recipe 里声明自己的构造轴，builder 用 anchor @orient 代数推导世界轴并烘焙 edini_world_axis；verify 直接读构造参数而非事后 PCA 估计。build 时一致性预检拒绝自洽矛盾。把启发式变成 ground truth。寄生在 A 的 orientation_asserts schema 上，向后兼容。 | ✅ 完成 |
-| **P1** | **C. 节点参数 DB** | ① 生成端 `generate_node_parms_manifest` 遍历 `nodeTypeCategories` → `parmTemplateGroup` 落盘 manifest；② 查询端 `houdini_node_parms` 工具读 manifest（零 Houdini 依赖、离线可测），未命中回退实时查询；③ build 前 `_validate_recipe` 校验 postprocess 参数名（命中 manifest 但参数不存在→硬报错，带 valid 列表；未命中→软降级）。消灭 cangle 类参数名过时错误。 | ✅ 完成（代码）；⏳ 待真实 Houdini 跑生成脚本产出 manifest.json |
+| **P1** | **C. 节点参数 DB** | ① 生成端 `generate_node_parms_manifest` 遍历 `nodeTypeCategories` → `parmTemplateGroup` 落盘 manifest（排除 labs/kinefx/apex 第三方 namespace）；② 查询端 `houdini_node_parms` 工具读 manifest（零 Houdini 依赖、离线可测），未命中回退实时查询；③ build 前 `_validate_recipe` 校验 postprocess 参数名（命中 manifest 但参数不存在→硬报错，带 valid 列表；未命中→软降级）。真实 H21.0.440 manifest 已入库（1076 SOP、6MB），端到端验证 cuspangle（非 cangle）参数名校验联动正确。 | ✅ 完成 |
 | **P1** | **D. 黄金范例检索** | 为每个资产类准备验证过的模块化黄金网络（recipe 格式），agent 接任务时按类检索范例作模板模仿。提升质量天花板。依赖 A 的 recipe 格式。 | ⬜ 待做 |
 | **P2** | **E. 数值代理** | 加不依赖 vision 的感知级反馈：轮廓圆度、对称性分数、截面剖面采样、参考 silhouette IoU。cheap numerical proxy for "看起来对不对"。独立增量。 | ⬜ 待做 |
 

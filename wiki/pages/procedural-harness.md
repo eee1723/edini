@@ -137,6 +137,6 @@ A/B 站历史验证（docs/BUILDER_FIRST_TEST.md / BUILDER_SECOND_TEST.md）：
 | A | 声明式 Recipe Builder | ✅ 完成 | — |
 | B | 构造轴替代 PCA（construction_axis + edini_world_axis 烘焙 + build 时一致性预检） | ✅ 完成 | A |
 | 30 | Harness 两 Bug 修复（参数挂载 read-merge + degenerate 用 measuredarea）| ✅ 完成（真实 Houdini 验证）| — |
-| C | 节点参数 DB（`houdini_node_parms` 查询工具 + manifest 生成端 + `_validate_recipe` 参数名校验）| ✅ 代码完成（待真实 Houdini 跑 `scripts/generate_node_parms_manifest.py` 产出 manifest.json）| 独立 |
+| C | 节点参数 DB（`houdini_node_parms` 查询工具 + manifest 生成端 + `_validate_recipe` 参数名校验）| ✅ 完成（真实 H21.0.440 manifest 入库，1076 SOP，端到端验证 cuspangle 参数名联动）| 独立 |
 | D | 黄金范例检索（recipe 格式的验证过资产模板） | ⬜ | A |
 | E | 数值代理（轮廓圆度/对称性/silhouette IoU） | ⬜ | 独立 |
