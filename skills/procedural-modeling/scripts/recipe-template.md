@@ -44,3 +44,43 @@ VERIFICATION:
 - `radial`: component has rotational symmetry around an axis (wheel, gear). `expected_axis` = the axle direction.
 - `elongated`: component is long/thin (tube, bar, handlebar). `expected_axis` = the long dimension.
 - `planar`: component is flat (panel, plate, saddle). `expected_axis` = the surface normal. Use `signed=true` when direction matters (e.g. saddle must point up +Y).
+
+---
+
+## VARIANT SCATTER RECIPE (for `houdini_variant_scatter`)
+
+Use this template when a repeated part has **multiple styles** (windows/doors/trees) that should be distributed with weighted, seeded randomness. Full schema: [references/declarative-builder.md](../references/declarative-builder.md#variant-scatter-变体散布).
+
+```
+RECIPE: [Asset Name]
+TYPE: architectural | organic | mechanical
+BACKEND: variant_scatter (houdini_variant_scatter)
+
+VARIANTS (each gets a source geometry + integer variant index, auto-assigned):
+  - variant 0: id="win_a" — window style A (e.g. 2-pane)
+  - variant 1: id="win_b" — window style B (e.g. 4-pane with mullions)
+  - variant 2: id="win_c" — window style C (e.g. arched)
+
+SCATTER:
+  - source: <python code emitting points with @P, optional @orient/@pscale>
+  - seed: 42                      (integer — reproducible)
+  - weights: {win_a: 0.6, win_b: 0.3, win_c: 0.1}   (auto-normalized)
+
+POSTPROCESS: [fuse, clean, normal(cusp 60°)]
+
+PER-INSTANCE IDS: auto-assigned as {variant_id}_{ptnum} (e.g. win_a_0, win_b_3)
+
+ORIENTATION ASSERTS (declare on variant source geometry via construction_axis):
+  - win_a: construction_axis=Z, expected_axis=Z  (window faces +Z in source space)
+  - win_b: construction_axis=Z, expected_axis=Z
+  - win_c: construction_axis=Z, expected_axis=Z
+
+VERIFICATION:
+  - n_variants: 3
+  - structure_advisory.passed: true (attribfrompieces + copytopoints = modular)
+  - detail_level: 3-4 (variation across instances = real detail, not repetition)
+```
+
+### When to choose variant scatter over single-template Copy-to-Points
+- **Single template** (`houdini_build_procedural_asset` + one anchored component): all N instances identical. Use when the repeated part has ONE canonical form (e.g. 4 identical bike wheels).
+- **Variant scatter** (`houdini_variant_scatter`): N instances each pick from M styles. Use when the repeated part has multiple interchangeable forms (windows, trees, debris) — this is what breaks the "procedural repetition" feel and lifts detail to Level 3+.

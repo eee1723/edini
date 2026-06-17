@@ -28,6 +28,7 @@ from edini.harness import (
     commit_sandbox,
     discard_sandbox,
     build_procedural_asset,
+    build_variant_scatter,
 )
 
 # Knowledge and eval handlers (available only in Houdini runtime)
@@ -191,6 +192,11 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
         kw["sandbox_root_path"],
     ),
     "houdini_build_procedural_asset": lambda **kw: build_procedural_asset(
+        kw["recipe"],
+        sandbox_name=kw.get("sandbox_name"),
+        delete_on_failure=kw.get("delete_on_failure", False),
+    ),
+    "houdini_variant_scatter": lambda **kw: build_variant_scatter(
         kw["recipe"],
         sandbox_name=kw.get("sandbox_name"),
         delete_on_failure=kw.get("delete_on_failure", False),

@@ -876,7 +876,12 @@ class TestNodeParmsManifest(unittest.TestCase):
         ct_parms = {p["name"]: p for p in
                     m["node_types"]["copytopoints::2.0"]["parms"]}
         self.assertEqual(ct_parms["pack"]["type"], "Toggle")
-        self.assertEqual(ct_parms["sourcegrp"]["type"], "String")
+        # H21 Copy to Points 2.0 uses `sourcegroup` (not the stale `sourcegrp`).
+        self.assertEqual(ct_parms["sourcegroup"]["type"], "String")
+        # The piece-attribute dispatch toggle + name (the load-bearing parms for
+        # variant scatter). Verified against the H21 manifest.
+        self.assertEqual(ct_parms["useidattrib"]["type"], "Toggle")
+        self.assertEqual(ct_parms["idattrib"]["type"], "String")
 
     def test_generate_manifest_skips_node_types_without_ptg(self):
         """Node types lacking a parmTemplateGroup are skipped, not fatal."""

@@ -16,6 +16,36 @@ geo.addAttrib(hou.attribType.Prim, "component_id", "")
 geo.addAttrib(hou.attribType.Prim, "material_zone", "")
 geo.addAttrib(hou.attribType.Point, "height", 0.0)
 
+# ── add_box helper (canonical, outward-facing winding) ──────────────
+# Reuse this instead of hand-writing a box every component. Verified:
+# a SINGLE box emits ZERO non-manifold edges regardless of winding (the
+# health-check detector counts edges shared by >=3 prims; a box edge is
+# always shared by exactly 2 faces). Non-manifold edges ONLY appear when
+# ADJACENT boxes share coincident points (e.g. a door panel inset whose
+# back face is coplanar with the slab front). That is fixed by a `fuse`
+# SOP in postprocess, NOT by changing this winding table.
+#
+# Point order:  0=(x0,y0,z0) 1=(x1,y0,z0) 2=(x1,y1,z0) 3=(x0,y1,z0)
+#               4=(x0,y0,z1) 5=(x1,y0,z1) 6=(x1,y1,z1) 7=(x0,y1,z1)
+# Faces (outward CCW viewed from outside):
+#   bottom [0,3,2,1]  top    [4,5,6,7]
+#   front  [0,1,2,3]  back   [7,6,5,4]
+#   left   [0,4,7,3]  right  [1,2,6,5]
+def add_box(geo, pmin, pmax, comp_id, mat=""):
+    x0, y0, z0 = pmin
+    x1, y1, z1 = pmax
+    pts = []
+    for x, y, z in [(x0,y0,z0),(x1,y0,z0),(x1,y1,z0),(x0,y1,z0),
+                    (x0,y0,z1),(x1,y0,z1),(x1,y1,z1),(x0,y1,z1)]:
+        p = geo.createPoint(); p.setPosition((x, y, z)); pts.append(p)
+    for idx in ([0,3,2,1],[4,5,6,7],[0,1,2,3],[7,6,5,4],[0,4,7,3],[1,2,6,5]):
+        poly = geo.createPolygon()
+        for i in idx:
+            poly.addVertex(pts[i])
+        poly.setAttribValue("component_id", comp_id)
+        if mat:
+            poly.setAttribValue("material_zone", mat)
+
 # --- 2. Install spare parameters idempotently (first cook only) ---
 PARM_SPECS = [
     ("radius", hou.FloatParmTemplate("radius", "Radius", 1,

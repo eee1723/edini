@@ -884,5 +884,293 @@ class TestInstallSpareParams(unittest.TestCase):
                 mock, "wb", "WB", 1.0, 0.0, 10.0)
         self.assertIn("FloatParmTemplate", str(cm.exception))
 
+
+# ---------------------------------------------------------------------------
+# Variant Scatter (V-station) tests
+# ---------------------------------------------------------------------------
+
+def _variant_geo_code(cid):
+    """Minimal variant cook body: emits one prim tagged with component_id."""
+    return (
+        "node = hou.pwd()\n"
+        "geo = node.geometry()\n"
+        "geo.clear()\n"
+        'geo.addAttrib(hou.attribType.Prim, "component_id", "")\n'
+        "pt = geo.createPoint(); pt.setPosition((0, 0, 0))\n"
+        "poly = geo.createPolygon(); poly.addVertex(pt)\n"
+        f'poly.setAttribValue("component_id", "{cid}")\n'
+    )
+
+
+def _scatter_points_code(n=3):
+    """Minimal scatter source: emits n points along X."""
+    code = (
+        "node = hou.pwd()\n"
+        "geo = node.geometry()\n"
+        "geo.clear()\n"
+    )
+    for i in range(n):
+        code += (
+            f"pt{i} = geo.createPoint(); pt{i}.setPosition(({i}, 0, 0))\n")
+    return code
+
+
+class TestVariantRecipeValidation(unittest.TestCase):
+    """_validate_variant_recipe mirrors _validate_recipe's shape."""
+
+    def test_non_object_recipe_rejected(self):
+        errs = harness._validate_variant_recipe(["not", "a", "dict"])
+        self.assertTrue(any("must be a JSON object" in e for e in errs))
+
+    def test_empty_variants_rejected(self):
+        errs = harness._validate_variant_recipe({"variants": []})
+        self.assertTrue(any("non-empty list" in e for e in errs))
+
+    def test_missing_variant_id_rejected(self):
+        errs = harness._validate_variant_recipe(
+            {"variants": [{"code": "x"}]})
+        self.assertTrue(any("id must be a non-empty string" in e for e in errs))
+
+    def test_missing_variant_code_rejected(self):
+        errs = harness._validate_variant_recipe(
+            {"variants": [{"id": "a"}], "scatter": {"source": "s"}})
+        self.assertTrue(any("code must be a non-empty string" in e for e in errs))
+
+    def test_duplicate_variant_id_rejected(self):
+        errs = harness._validate_variant_recipe({
+            "variants": [
+                {"id": "a", "code": "x"},
+                {"id": "a", "code": "y"},
+            ],
+            "scatter": {"source": "s"}})
+        self.assertTrue(any("duplicates" in e for e in errs))
+
+    def test_missing_scatter_rejected(self):
+        errs = harness._validate_variant_recipe(
+            {"variants": [{"id": "a", "code": "x"}]})
+        self.assertTrue(any("scatter must be an object" in e for e in errs))
+
+    def test_missing_scatter_source_rejected(self):
+        errs = harness._validate_variant_recipe(
+            {"variants": [{"id": "a", "code": "x"}],
+             "scatter": {"seed": 1}})
+        self.assertTrue(any("source must be a non-empty" in e for e in errs))
+
+    def test_non_int_seed_rejected(self):
+        errs = harness._validate_variant_recipe({
+            "variants": [{"id": "a", "code": "x"}],
+            "scatter": {"source": "s", "seed": 1.5}})
+        self.assertTrue(any("seed must be an integer" in e for e in errs))
+
+    def test_weight_for_unknown_variant_rejected(self):
+        errs = harness._validate_variant_recipe({
+            "variants": [{"id": "a", "code": "x"}],
+            "scatter": {"source": "s", "weights": {"ghost": 1.0}}})
+        self.assertTrue(any("unknown variant 'ghost'" in e for e in errs))
+
+    def test_all_zero_weights_rejected(self):
+        errs = harness._validate_variant_recipe({
+            "variants": [{"id": "a", "code": "x"},
+                         {"id": "b", "code": "y"}],
+            "scatter": {"source": "s", "weights": {"a": 0, "b": 0}}})
+        self.assertTrue(any("all zero" in e for e in errs))
+
+    def test_valid_recipe_no_errors(self):
+        errs = harness._validate_variant_recipe({
+            "variants": [{"id": "a", "code": "x"},
+                         {"id": "b", "code": "y"}],
+            "scatter": {"source": "s", "seed": 7,
+                        "weights": {"a": 0.7, "b": 0.3}}})
+        self.assertEqual(errs, [])
+
+
+class TestBuildVariantScatter(unittest.TestCase):
+    """Variant-scatter network structure tests.
+
+    The mock does not simulate real Copy-to-Points piece-attribute dispatch
+    or Attribute from Pieces, so we verify the NETWORK STRUCTURE (node names +
+    wiring) rather than per-instance geometry — same approach as
+    TestBuildStampedComponents for the recipe builder.
+    """
+
+    def _minimal_recipe(self):
+        return {
+            "asset_name": "vscatter",
+            "variants": [
+                {"id": "win_a", "code": _variant_geo_code("win_a")},
+                {"id": "win_b", "code": _variant_geo_code("win_b")},
+            ],
+            "scatter": {"source": _scatter_points_code(3), "seed": 42},
+        }
+
+    def test_build_succeeds_and_reports_mode(self):
+        r = harness.build_variant_scatter(self._minimal_recipe())
+        self.assertTrue(r["success"], msg=r.get("error"))
+        self.assertEqual(r["build_mode"], "variant_scatter")
+        self.assertEqual(sorted(r["variants_built"]), ["win_a", "win_b"])
+        self.assertEqual(r["n_variants"], 2)
+        self.assertEqual(r["seed"], 42)
+        self.assertEqual(r["piece_attribute"], "variant")
+
+    def test_expected_node_network_built(self):
+        r = harness.build_variant_scatter(self._minimal_recipe())
+        self.assertTrue(r["success"], msg=r.get("error"))
+        root = _mock_hou.node(r["root_path"])
+        names = {c.name() for c in root.children()}
+        # One python SOP per variant.
+        self.assertIn("win_a_python", names)
+        self.assertIn("win_b_python", names)
+        # The variant chain: merge → pack(packbyname) → scatter → copytopoints
+        # → unpack → idfix. NOTE: no attribfrompieces — the weighted assignment
+        # lives in the scatter-points Python wrapper, so Copy to Points
+        # dispatches directly by matching the point's `variant` against the
+        # packed source's `variant`.
+        self.assertIn("variants_merge", names)
+        self.assertIn("variants_pack", names)
+        self.assertIn("scatter_points", names)
+        self.assertIn("copy_scatter", names)
+        self.assertIn("scatter_unpack", names)
+        self.assertIn("scatter_idfix", names)
+        self.assertIn("OUT", names)
+        self.assertNotIn("attribfrompieces", names)
+
+    def test_structure_gate_passes_not_monolithic(self):
+        """pack/copytopoints are recognized as modular by _MODULAR_NODE_TYPES,
+        so the structure gate must NOT flag the result as monolithic."""
+        r = harness.build_variant_scatter(self._minimal_recipe())
+        self.assertTrue(r["success"], msg=r.get("error"))
+        advisory = r["structure_advisory"]
+        self.assertTrue(advisory["passed"], msg=advisory)
+        self.assertFalse(advisory["is_monolithic"])
+        # copy_scatter (copytopoints) must be counted as a modular node.
+        self.assertGreaterEqual(advisory["details"]["modular_node_count"], 1)
+
+    def test_weights_normalized_and_reported(self):
+        """Weights are auto-normalized; the response echoes the per-variant
+        weight regardless of sum."""
+        recipe = self._minimal_recipe()
+        recipe["scatter"]["weights"] = {"win_a": 14, "win_b": 6}
+        r = harness.build_variant_scatter(recipe)
+        self.assertTrue(r["success"], msg=r.get("error"))
+        # Echoed raw weights (normalization happens in the generated code).
+        self.assertEqual(r["weights"], {"win_a": 14, "win_b": 6})
+
+    def test_postprocess_chain_built(self):
+        recipe = self._minimal_recipe()
+        recipe["postprocess"] = [
+            {"type": "fuse"},
+            {"type": "clean"},
+            {"type": "normal", "params": {"cuspangle": 60}},
+        ]
+        r = harness.build_variant_scatter(recipe)
+        self.assertTrue(r["success"], msg=r.get("error"))
+        root = _mock_hou.node(r["root_path"])
+        names = {c.name() for c in root.children()}
+        self.assertIn("post_0_fuse", names)
+        self.assertIn("post_1_clean", names)
+        self.assertIn("post_2_normal", names)
+
+    def test_variant_cook_failure_preserves_sandbox(self):
+        recipe = {
+            "asset_name": "failvs",
+            "variants": [
+                {"id": "broken", "code": "raise RuntimeError('boom in variant')"},
+            ],
+            "scatter": {"source": _scatter_points_code(2), "seed": 1},
+        }
+        r = harness.build_variant_scatter(recipe)
+        self.assertFalse(r["success"])
+        self.assertIn("broken", r["error"])
+        self.assertIn("boom in variant", r["error"])
+        self.assertTrue(r["preserved"])
+        self.assertIsNotNone(_mock_hou.node(r["root_path"]))
+
+    def test_variant_cook_failure_delete_on_failure(self):
+        recipe = {
+            "asset_name": "faildelvs",
+            "variants": [
+                {"id": "broken", "code": "raise RuntimeError('nope')"},
+            ],
+            "scatter": {"source": _scatter_points_code(2), "seed": 1},
+        }
+        r = harness.build_variant_scatter(recipe, delete_on_failure=True)
+        self.assertFalse(r["success"])
+        self.assertTrue(r["deleted"])
+        self.assertIsNone(_mock_hou.node(r["root_path"]))
+
+    def test_invalid_recipe_does_not_create_sandbox(self):
+        before = len(_mock_hou._nodes)
+        harness.build_variant_scatter({"variants": []})
+        self.assertEqual(len(_mock_hou._nodes), before)
+
+    def test_result_is_json_serializable(self):
+        r = harness.build_variant_scatter(self._minimal_recipe())
+        self.assertTrue(r["success"], msg=r.get("error"))
+        json.dumps(r)  # must not raise
+
+    def test_built_asset_commits_via_commit_sandbox(self):
+        """The variant-scatter OUT must be consumable by the existing commit
+        gate (no gate changes needed), same contract as build_procedural_asset."""
+        r = harness.build_variant_scatter(self._minimal_recipe())
+        self.assertTrue(r["success"], msg=r.get("error"))
+        committed = harness.commit_sandbox(
+            r["root_path"], "committed_scatter", replace_existing=False)
+        self.assertTrue(committed["success"])
+        self.assertTrue(committed["committed"])
+        self.assertEqual(committed["final_path"], "/obj/committed_scatter")
+
+
+class TestVariantIdfixSnippet(unittest.TestCase):
+    """The idfix code generator is pure string assembly — test it directly."""
+
+    def test_snippet_reads_prim_variant_and_connectivity_piece(self):
+        """The variant idfix must NOT use the `per_copy = total // n_anchors`
+        boundary detection of _component_id_overwrite_snippet (which assumes a
+        single uniform source). Instead it reads the prim-level `variant`
+        attribute (which survives unpack) + the `piece` attribute from a
+        Connectivity SOP (which gives each connected instance a unique number).
+        It must NOT rely on point attributes (edini_scatter_ptnum) because Copy
+        to Points does not transfer target-point attributes onto instances."""
+        snippet = harness._variant_idfix_snippet(["win_a", "win_b"])
+        self.assertIn("variant_ids", snippet)
+        self.assertIn("win_a", snippet)
+        self.assertIn("win_b", snippet)
+        # Reads variant from the PRIM (survives unpack), not from points.
+        self.assertIn("prim.attribValue('variant')", snippet)
+        # Reads the connectivity `piece` attrib for per-instance uniqueness.
+        self.assertIn("'piece'", snippet)
+        # Must NOT contain the single-source boundary detection.
+        self.assertNotIn("per_copy", snippet)
+        # Must NOT rely on the now-gone point-level scatter ptnum.
+        self.assertNotIn("edini_scatter_ptnum", snippet)
+        # Builds per-instance ids as {variant_id}_{piece}.
+        self.assertIn("str(piece)", snippet)
+
+
+class TestVariantScatterPointsCode(unittest.TestCase):
+    """The scatter-points wrapper assigns the `variant` piece attribute per
+    point using a weighted, seeded distribution."""
+
+    def test_wrapper_includes_user_code(self):
+        wrapper = harness._variant_scatter_points_code(
+            ["a", "b"], {"a": 1.0, "b": 1.0}, 42, "# USER CODE HERE")
+        self.assertIn("# USER CODE HERE", wrapper)
+        self.assertIn("variant", wrapper)
+        self.assertIn("edini_scatter_ptnum", wrapper)
+
+    def test_weights_normalized_to_cumulative_thresholds(self):
+        """2 variants at 3:1 -> normalized cumulative [0.75, 1.0]."""
+        wrapper = harness._variant_scatter_points_code(
+            ["a", "b"], {"a": 3.0, "b": 1.0}, 0, "")
+        # The first threshold should be ~0.75 (3/4).
+        self.assertIn("0.75", wrapper)
+
+    def test_seed_threaded_into_rng(self):
+        wrapper = harness._variant_scatter_points_code(
+            ["a"], {}, 123, "")
+        self.assertIn("123", wrapper)
+        self.assertIn("random.Random", wrapper)
+
+
 if __name__ == "__main__":
     unittest.main()

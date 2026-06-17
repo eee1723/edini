@@ -538,6 +538,11 @@ _MODULAR_NODE_TYPES = {
     "foreach::count", "foreach::piece", "foreach", "foreach_begin",
     "xformpieces", "transformpieces", "instanceto",
     "boolean", "boolean::2.0", "polyextrude", "polyextrude::2.0",
+    # Variant-scatter chain: pack(packbyname) builds per-variant packed
+    # prims; unpack restores per-prim geometry so connectivity + idfix can
+    # write per-instance component_id. Copy to Points dispatches by matching
+    # i@variant.
+    "pack", "unpack", "connectivity",
 }
 
 # SOP node types that are pure post-processing (don't count toward modularity).
@@ -2473,3 +2478,521 @@ def build_procedural_asset(
             "preserved": not deleted,
             "deleted": deleted,
         }
+
+
+# ===========================================================================
+# Variant Scatter (V-station) — multi-source Copy-to-Points via piece attr
+# ===========================================================================
+# build_variant_scatter builds a network where DIFFERENT variant geometries are
+# scattered onto points according to a weighted, seeded distribution. This is
+# the modern (H19.5+) workflow: pack each variant, tag with an integer `variant`
+# attribute, let Attribute from Pieces + Copy to Points (piece attribute) pick
+# the right variant per point.
+#
+# Why a separate tool (not a recipe extension): build_procedural_asset's idfix
+# (_component_id_overwrite_snippet) detects copy boundaries via
+# `per_copy = total // n_anchors`, which assumes ONE uniform source geometry.
+# A variant library has different prim counts per variant, so that boundary
+# detection breaks. This tool owns a piece-attribute-based id strategy instead.
+
+# Name of the integer piece attribute Copy to Points 2.0 reads by default to
+# dispatch variants (Houdini 21). Must be int or string — never float.
+_VARIANT_PIECE_ATTR = "variant"
+
+
+def _validate_variant_recipe(recipe: Any) -> list[str]:
+    """Validate a variant-scatter recipe. Returns a list of error strings
+    (empty = valid). Mirrors the shape of _validate_recipe."""
+    errors: list[str] = []
+
+    if not isinstance(recipe, dict):
+        return ["recipe must be a JSON object"]
+
+    variants = recipe.get("variants")
+    if not isinstance(variants, list) or not variants:
+        errors.append("recipe.variants must be a non-empty list")
+        return errors  # nothing else to check meaningfully
+
+    seen_ids: set[str] = set()
+    for i, v in enumerate(variants):
+        if not isinstance(v, dict):
+            errors.append(f"variants[{i}] must be an object")
+            continue
+        vid = v.get("id")
+        if not isinstance(vid, str) or not vid:
+            errors.append(f"variants[{i}].id must be a non-empty string")
+        elif vid in seen_ids:
+            errors.append(f"variants[{i}].id duplicates an earlier variant id")
+        else:
+            seen_ids.add(vid)
+        code = v.get("code")
+        if not isinstance(code, str) or not code:
+            errors.append(f"variants[{i}].code must be a non-empty string")
+
+    scatter = recipe.get("scatter")
+    if not isinstance(scatter, dict):
+        errors.append("recipe.scatter must be an object")
+    else:
+        src = scatter.get("source")
+        if not isinstance(src, str) or not src:
+            errors.append("scatter.source must be a non-empty string "
+                          "(python code emitting scatter points)")
+        seed = scatter.get("seed", 0)
+        if not isinstance(seed, int) or isinstance(seed, bool):
+            errors.append("scatter.seed must be an integer (for reproducibility)")
+        weights = scatter.get("weights")
+        if weights is not None:
+            if not isinstance(weights, dict):
+                errors.append("scatter.weights must be an object {variant_id: weight}")
+            else:
+                for wid, w in weights.items():
+                    if wid not in seen_ids:
+                        errors.append(
+                            f"scatter.weights references unknown variant '{wid}'")
+                    if not isinstance(w, (int, float)) or isinstance(w, bool):
+                        errors.append(
+                            f"scatter.weights['{wid}'] must be a number")
+                # Weights are auto-normalized at build time; only flag the
+                # pathological all-zero case (can't normalize).
+                if weights and isinstance(weights, dict) and all(
+                        isinstance(w, (int, float)) and w == 0
+                        for w in weights.values()):
+                    errors.append("scatter.weights are all zero — cannot normalize")
+
+    return errors
+
+
+def _variant_idfix_snippet(variant_ids: list[str]) -> str:
+    """Generate a single-SOP python cook body that runs AFTER unpacking, and
+    overwrites prim component_id per instance.
+
+    After unpack, each instance is a separate connected mesh. The prim-level
+    integer `variant` attribute (tagged on the source variant geometry)
+    survives unpack — it identifies WHICH variant each prim belongs to. A
+    Connectivity SOP (run before this node) stamps each connected piece
+    (instance) with a unique integer `piece` attribute. Combined, these yield
+    a globally-unique component_id `{variant_id}_{piece}`.
+
+    This intentionally does NOT use the `per_copy = total // n_anchors`
+    boundary detection of _component_id_overwrite_snippet, because variant
+    sources have differing prim counts. It also does NOT rely on target-point
+    attributes (edini_scatter_ptnum) because Copy to Points does not transfer
+    them onto instance geometry by default.
+    """
+    ids_repr = "[" + ", ".join(repr(c) for c in variant_ids) + "]"
+    return (
+        "node = hou.pwd()\n"
+        "geo = node.geometry()\n"
+        "variant_ids = " + ids_repr + "\n"
+        "# `variant` is a PRIM attrib (survives unpack from source tagging).\n"
+        "# `piece` is written by Connectivity onto POINTS (default class).\n"
+        "# We read piece from the prim's first vertex point so it works\n"
+        "# regardless of where Connectivity stores it.\n"
+        "if geo.findPrimAttrib('component_id') is None:\n"
+        "    geo.addAttrib(hou.attribType.Prim, 'component_id', '')\n"
+        "for prim in geo.prims():\n"
+        "    vidx = 0\n"
+        "    try: vidx = int(prim.attribValue('" + _VARIANT_PIECE_ATTR + "'))\n"
+        "    except Exception: vidx = 0\n"
+        "    if vidx < 0 or vidx >= len(variant_ids):\n"
+        "        vidx = 0\n"
+        "    piece = 0\n"
+        "    verts = prim.vertices()\n"
+        "    if verts:\n"
+        "        pt = verts[0].point()\n"
+        "        try: piece = int(pt.attribValue('piece'))\n"
+        "        except Exception: piece = 0\n"
+        "    cid = variant_ids[vidx] + '_' + str(piece)\n"
+        "    prim.setAttribValue('component_id', cid)\n"
+    )
+
+
+def _variant_scatter_points_code(
+    variant_ids: list[str],
+    weights: dict[str, float],
+    seed: int,
+    source_code: str,
+) -> str:
+    """Wrap the user's scatter `source` code with the variant-assignment
+    logic. The user's code emits points (with @P, optionally @orient/@pscale/@N).
+    This wrapper then: (1) numbers the points, (2) assigns each point an integer
+    `variant` attribute drawn from the weighted distribution with the given
+    seed, and (3) records the original point number as `edini_scatter_ptnum`
+    so idfix can build per-instance component_ids.
+
+    The user's code is executed verbatim first (it does its own geo.clear() and
+    point emission); then this wrapper annotates the resulting points.
+    """
+    # Build cumulative thresholds from weights (auto-normalized).
+    norm = []
+    total_w = sum(weights.get(vid, 1.0) for vid in variant_ids) or 1.0
+    running = 0.0
+    for vid in variant_ids:
+        running += weights.get(vid, 1.0) / total_w
+        norm.append(repr(round(running, 6)))
+    thresholds = "[" + ", ".join(norm) + "]"
+    n_variants = len(variant_ids)
+
+    return (
+        "# ── User scatter code (emits points) ──\n"
+        + source_code
+        + "\n"
+        "# ── Variant assignment (generated wrapper) ──\n"
+        "import random\n"
+        "_thresholds = " + thresholds + "\n"
+        "_seed = " + repr(int(seed)) + "\n"
+        "_rng = random.Random(_seed)\n"
+        "geo.addAttrib(hou.attribType.Point, '" + _VARIANT_PIECE_ATTR + "', 0)\n"
+        "geo.addAttrib(hou.attribType.Point, 'edini_scatter_ptnum', 0)\n"
+        "for idx, pt in enumerate(geo.points()):\n"
+        "    r = _rng.random()\n"
+        "    chosen = " + repr(n_variants - 1) + "\n"
+        "    for ti, thr in enumerate(_thresholds):\n"
+        "        if r <= thr:\n"
+        "            chosen = ti\n"
+        "            break\n"
+        "    pt.setAttribValue('" + _VARIANT_PIECE_ATTR + "', chosen)\n"
+        "    pt.setAttribValue('edini_scatter_ptnum', idx)\n"
+    )
+
+
+def _variant_tag_code(variant_index: int, user_code: str) -> str:
+    """Wrap a variant's user code so that, after it emits its geometry, every
+    prim is tagged with an integer `variant` attribute = variant_index (in
+    addition to whatever component_id the user set). This attribute survives
+    packing and is what Attribute from Pieces / Copy to Points reads."""
+    return (
+        "# ── Variant geometry code ──\n"
+        + user_code
+        + "\n"
+        "# ── Tag every prim with the variant piece index ──\n"
+        "geo.addAttrib(hou.attribType.Prim, '" + _VARIANT_PIECE_ATTR + "', 0)\n"
+        "for prim in geo.prims():\n"
+        "    prim.setAttribValue('" + _VARIANT_PIECE_ATTR + "', "
+        + repr(int(variant_index)) + ")\n"
+    )
+
+
+def build_variant_scatter(
+    recipe: dict,
+    *,
+    sandbox_name: str | None = None,
+    delete_on_failure: bool = False,
+) -> dict[str, Any]:
+    """Build a variant-scatter asset: multiple variant geometries distributed
+    onto scatter points via a weighted, seeded distribution, using the modern
+    packed-primitive + piece-attribute workflow (Attribute from Pieces +
+    Copy to Points 2.0).
+
+    The recipe describes variant source geometries (each pure-geometry python
+    code), a scatter source (python code emitting points), an optional weighted
+    distribution + seed, and the usual postprocess / orientation asserts.
+
+    Commit is a separate explicit step: ``houdini_commit_sandbox(root_path,
+    name, orientation_checks=recipe['orientation_asserts'])``.
+
+    Per-instance ``component_id`` is assigned as ``{variant_id}_{ptnum}`` so
+    orientation verification can PCA each instance independently.
+    """
+    errors = _validate_variant_recipe(recipe)
+    if errors:
+        return {
+            "success": False,
+            "execution_mode": EXECUTION_MODE_LIVE,
+            "build_mode": "variant_scatter",
+            "error": "Invalid recipe: " + "; ".join(errors),
+            "validation_errors": errors,
+            "preserved": False,
+            "deleted": False,
+        }
+
+    variants = recipe.get("variants", [])
+    variant_ids = [v["id"] for v in variants]
+    scatter_spec = recipe.get("scatter", {})
+    weights = scatter_spec.get("weights") or {}
+    seed = scatter_spec.get("seed", 0)
+    source_code = scatter_spec["source"]
+    postprocess = recipe.get("postprocess") or []
+
+    asset_name = recipe.get("asset_name") or "variant_asset"
+    name = sandbox_name or asset_name
+    job_id, root_path = _create_sandbox_root(name)
+
+    warnings: list[str] = []
+    variants_built: list[str] = []
+    out_path = ""
+
+    try:
+        root = hou.node(root_path)
+        if root is None:
+            raise RuntimeError(f"Sandbox root not found after creation: {root_path}")
+
+        # ── 1. One python SOP per variant (tagged with `variant` index) ──
+        variant_nodes: list[Any] = []
+        for i, v in enumerate(variants):
+            py_name = f"{v['id']}_python"
+            tagged = _variant_tag_code(i, v["code"])
+            py_sop = _safe_create_node(root_path, "python", py_name)
+            _set_parm_safe(py_sop, "python", tagged)
+            try:
+                py_sop.cook(force=True)
+                cook_errs = list(py_sop.errors() or [])
+            except Exception as e:
+                cook_errs = [str(e)]
+            if cook_errs:
+                raise RuntimeError(
+                    f"variant '{v['id']}' cook failed: " + "; ".join(cook_errs))
+            variant_nodes.append(py_sop)
+            variants_built.append(v["id"])
+
+        if not variant_nodes:
+            raise RuntimeError("no variant source nodes were built")
+
+        # ── 2. Merge variants → pack each into its OWN packed prim ──
+        # Each variant is tagged with an integer `variant` piece attribute by
+        # _variant_tag_code. Pack By Name (on that integer attribute) produces
+        # exactly one packed primitive per variant index.
+        variants_merge = _safe_create_node(root_path, "merge", "variants_merge")
+        for idx, node in enumerate(variant_nodes):
+            variants_merge.setInput(idx, node)
+
+        # Pack By Name on the integer `variant` attribute: one packed prim per
+        # variant index. (Pack's default "Packed Fragments" merges overlapping
+        # geometry into a single prim — observed producing prims=1 — so we must
+        # use packbyname to get per-variant packed prims.)
+        pack_node = _safe_create_node(root_path, "pack", "variants_pack")
+        pack_node.setInput(0, variants_merge)
+        _set_parm_safe(pack_node, "packbyname", 1)
+        _set_parm_safe(pack_node, "nameattribute", _VARIANT_PIECE_ATTR)
+
+        # ── 3. Scatter source — emit target points + assign variant per point ──
+        # The wrapper assigns each scatter point an integer `variant` attribute
+        # drawn from the weighted distribution using `seed` (deterministic +
+        # reproducible), plus `edini_scatter_ptnum` for per-instance uniqueness.
+        # NOTE: Attribute from Pieces is NOT used — it requires TWO inputs and
+        # does its own (non-deterministic-by-default) assignment. Since the
+        # wrapper already assigns `variant` deterministically, we skip AFP and
+        # let Copy to Points dispatch directly by matching the point's `variant`
+        # against the packed source's `variant`.
+        scatter_code = _variant_scatter_points_code(
+            variant_ids, weights, seed, source_code)
+        scatter_sop = _safe_create_node(root_path, "python", "scatter_points")
+        _set_parm_safe(scatter_sop, "python", scatter_code)
+        try:
+            scatter_sop.cook(force=True)
+            cook_errs = list(scatter_sop.errors() or [])
+        except Exception as e:
+            cook_errs = [str(e)]
+        if cook_errs:
+            raise RuntimeError(
+                "scatter source cook failed: " + "; ".join(cook_errs))
+
+        # ── 4. Copy to Points (piece attribute dispatches variants) ──
+        #    Houdini 21 Copy to Points 2.0 uses `useidattrib` (the "Piece
+        #    Attribute" toggle) + `idattrib` (the attribute NAME) to dispatch.
+        #    Both the packed source AND the scatter points carry the integer
+        #    `variant` attribute — Copy matches them 1:1.
+        copy_node = _safe_create_node(root_path, "copytopoints", "copy_scatter")
+        copy_node.setInput(0, pack_node)      # packed variant library (source)
+        copy_node.setInput(1, scatter_sop)    # scatter points (with i@variant)
+        try:
+            copy_node.parm("useidattrib").set(1)   # enable Piece Attribute dispatch
+            copy_node.parm("idattrib").set(_VARIANT_PIECE_ATTR)  # match by `variant`
+        except Exception as e:
+            warnings.append(
+                f"Copy to Points piece-attribute setup failed ({e}); variants "
+                f"may not dispatch correctly. Check copytopoints::2.0 parms.")
+
+        # ── 6. Unpack — so per-prim component_id overwrite is possible ──
+        unpack_node = _safe_create_node(root_path, "unpack", "scatter_unpack")
+        unpack_node.setInput(0, copy_node)
+
+        # ── 7. Connectivity — stamp each connected instance with a unique
+        #    integer `piece` attribute. Each unpacked copy is a separate
+        #    connected mesh, so this gives every instance a distinct number.
+        #    Runs BEFORE idfix so idfix can build unique component_ids.
+        #    NOTE: this must run BEFORE any fuse in postprocess — instances are
+        #    at different scatter positions so they won't merge, but the
+        #    `piece` attrib must exist when idfix reads it.
+        connect = _safe_create_node(root_path, "connectivity", "scatter_connect")
+        connect.setInput(0, unpack_node)
+        # Connectivity's default attribute name is `class`; we need `piece`
+        # so idfix can read it. Use the real H21 parm name (verified manifest).
+        _set_parm_safe(connect, "attribname", "piece")
+
+        # ── 8. idfix — assign per-instance component_id {variant_id}_{piece} ──
+        # Reads the prim `variant` (which variant) + prim `piece` (which
+        # instance) to build a globally-unique id per instance.
+        idfix_code = _variant_idfix_snippet(variant_ids)
+        idfix = _safe_create_node(root_path, "python", "scatter_idfix")
+        _set_parm_safe(idfix, "python", idfix_code)
+        idfix.setInput(0, connect)
+
+        last_node = idfix
+
+        # ── 8. Post-processing chain (fuse/clean/normal ...) ──
+        for i, pp in enumerate(postprocess):
+            pp_type = pp.get("type")
+            pp_params = pp.get("params") or {}
+            if not isinstance(pp_type, str) or not pp_type:
+                warnings.append(f"postprocess[{i}] has no type; skipped")
+                continue
+            pp_name = f"post_{i}_{pp_type}"
+            try:
+                pp_node = _safe_create_node(root_path, pp_type, pp_name)
+            except Exception as e:
+                warnings.append(
+                    f"postprocess[{i}] '{pp_type}' could not be created: {e}; skipped")
+                continue
+            pp_node.setInput(0, last_node)
+            for pname, pval in pp_params.items():
+                try:
+                    _set_parm_safe(pp_node, pname, pval)
+                except Exception as e:
+                    warnings.append(
+                        f"postprocess[{i}] '{pp_type}' parm '{pname}': {e}")
+            last_node = pp_node
+
+        # ── 9. OUT ──
+        out_node = _safe_create_node(root_path, "null", "OUT")
+        out_node.setInput(0, last_node)
+        out_node.setDisplayFlag(True)
+        out_path = out_node.path()
+        try:
+            root.layoutChildren()
+        except Exception:
+            pass
+
+        # ── 10. Cook OUT + collect errors ──
+        cook_errors: list[str] = []
+        cook_exc: Exception | None = None
+        try:
+            out_node.cook(force=True)
+        except Exception as e:
+            cook_exc = e
+        # Whether or not cook raised, scan every node for its own error/warning
+        # messages — Houdini stores per-node cook diagnostics that survive the
+        # raised exception and pinpoint WHICH node failed.
+        for sub in root.allSubChildren():
+            try:
+                sub_errs = list(sub.errors() or [])
+            except Exception:
+                sub_errs = []
+            try:
+                sub_warns = list(sub.warnings() or [])
+            except Exception:
+                sub_warns = []
+            for e in sub_errs:
+                tag = f"[{sub.name()} ERROR] {e}"
+                if tag not in cook_errors:
+                    cook_errors.append(tag)
+            for w in sub_warns:
+                tag = f"[{sub.name()} warn] {w}"
+                if tag not in cook_errors:
+                    cook_errors.append(tag)
+        if cook_exc is not None:
+            cook_errors.insert(0, f"OUT cook raised: {cook_exc}")
+
+        if cook_errors:
+            raise RuntimeError("; ".join(cook_errors))
+
+        # ── 11. component_id presence check ──
+        component_id_check = {"missing": [], "ok": []}
+        try:
+            gate_target = _select_gate_target(root)
+            gate_geo = gate_target.geometry() if gate_target is not None else None
+            found_cids = _geometry_component_ids(gate_geo) if gate_geo else set()
+            # We can't predict exact per-instance ids ({variant}_{ptnum}) without
+            # cooking the scatter, so just confirm at least one cid per variant
+            # prefix is present, and report what we found.
+            for vid in variant_ids:
+                if any(cid.startswith(vid + "_") or cid == vid
+                       for cid in found_cids):
+                    component_id_check["ok"].append(vid)
+                else:
+                    component_id_check["missing"].append(vid)
+        except Exception as e:
+            warnings.append(f"component_id check failed: {e}")
+
+        # ── 12. Diagnostics + structure gate + orientation preview ──
+        diag = _safe_collect_diagnostics(out_path, include_geometry=True)
+        geo_stats = diag.get("geometry") or {}
+        structural_checks = {
+            "has_geometry": geo_stats.get("point_count", 0) > 0,
+            "point_count": geo_stats.get("point_count", 0),
+            "prim_count": geo_stats.get("prim_count", 0),
+            "bounds_nonzero": _bounds_nonzero(geo_stats),
+        }
+        structure_advisory = _run_structure_gate(root_path) or {
+            "passed": True, "is_monolithic": False,
+            "reason": "structure gate unavailable", "suggestion": "",
+            "details": {},
+        }
+
+        response: dict[str, Any] = {
+            "success": True,
+            "execution_mode": EXECUTION_MODE_LIVE,
+            "build_mode": "variant_scatter",
+            "job_id": job_id,
+            "root_path": root_path,
+            "output_node": out_path,
+            "variants_built": variants_built,
+            "n_variants": len(variants_built),
+            "weights": {vid: weights.get(vid, 1.0) for vid in variant_ids},
+            "seed": seed,
+            "piece_attribute": _VARIANT_PIECE_ATTR,
+            "component_id_check": component_id_check,
+            "diagnostics": diag,
+            "structural_checks": structural_checks,
+            "structure_advisory": structure_advisory,
+            "warnings": warnings,
+            "preserved": True,
+            "deleted": False,
+        }
+
+        # Orientation preview (same shape as build_procedural_asset).
+        orientation_asserts = recipe.get("orientation_asserts") or []
+        if orientation_asserts:
+            try:
+                from edini.node_utils import verify_orientation
+                ori = verify_orientation(out_path, orientation_asserts)
+                response["orientation_check"] = {
+                    "passed": ori.get("passed", 0),
+                    "failed": ori.get("failed", 0),
+                    "total": ori.get("total", 0),
+                    "checks": ori.get("checks", []),
+                }
+                if not ori.get("success"):
+                    response["orientation_check_error"] = ori.get("error", "")
+            except Exception as e:
+                response["orientation_check_error"] = str(e)
+
+        return response
+
+    except Exception as e:
+        execution_traceback = traceback.format_exc()
+        diag = _safe_collect_diagnostics(
+            out_path or root_path, include_geometry=True)
+        deleted = False
+        if delete_on_failure:
+            try:
+                _destroy_node(root_path)
+                deleted = True
+            except Exception:
+                pass
+        return {
+            "success": False,
+            "execution_mode": EXECUTION_MODE_LIVE,
+            "build_mode": "variant_scatter",
+            "job_id": job_id,
+            "root_path": root_path,
+            "output_node": out_path,
+            "variants_built": variants_built,
+            "error": str(e),
+            "traceback": execution_traceback,
+            "diagnostics": diag,
+            "warnings": warnings,
+            "preserved": not deleted,
+            "deleted": deleted,
+        }
+

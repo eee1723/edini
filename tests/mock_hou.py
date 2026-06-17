@@ -609,10 +609,45 @@ class MockNode:
             child._parms["snippet_attribname"] = MockParm("snippet_attribname", "result")
         elif node_type_name == "python":
             child._parms["python"] = MockParm("python", "")
+        # For node types that declare a parm template group, materialize their
+        # parms from it (mirrors how real Houdini populates a node's parms from
+        # its type definition). This lets _set_parm_safe find real parm names
+        # like copytopoints::2.0's useidattrib/idattrib or normal's cuspangle.
+        ntype = self._node_type_for_create(node_type_name)
+        if ntype is not None and getattr(ntype, "_ptg", None) is not None:
+            for tmpl in ntype._ptg._templates:
+                # NOTE: MockParmTemplate stores `name` as a STRING attribute in
+                # __init__, which shadows the name() method — so read the attr,
+                # don't call it. (The existing find() swallows this via try/except.)
+                nm = getattr(tmpl, "name", None)
+                if not isinstance(nm, str):
+                    continue
+                if nm not in child._parms:
+                    default = getattr(tmpl, "default", 0)
+                    child._parms[nm] = MockParm(nm, default)
         self._children.append(child)
         if MockNode._hou_ref is not None:
             MockNode._hou_ref._nodes[child.path()] = child
         return child
+
+    def _node_type_for_create(self, node_type_name: str):
+        """Look up the MockNodeType for a createNode type name, checking the
+        SOP category (and its namespace variants like copytopoints::2.0)."""
+        hou = MockNode._hou_ref
+        if hou is None:
+            return None
+        try:
+            cat = hou.sopNodeTypeCategory()
+        except Exception:
+            return None
+        # Direct lookup (e.g. "normal", "attribfrompieces").
+        nt = cat.nodeType(node_type_name)
+        if nt is not None:
+            return nt
+        # Namespace variant: the registry stores the versioned name
+        # (e.g. "copytopoints::2.0") under the bare key ("copytopoints").
+        nt = cat.nodeType(node_type_name.split("::")[0])
+        return nt
 
     def destroy(self) -> None:
         self._destroyed = True
@@ -873,11 +908,45 @@ def _make_normal_ptg():
 
 
 def _make_copytopoints_ptg():
-    """Copy to Points 2.0 parm template group (subset agents use)."""
+    """Copy to Points 2.0 parm template group (subset agents use).
+    H21 names: the piece-attribute dispatch uses `useidattrib` (toggle) +
+    `idattrib` (attribute name) — NOT pieceattrib/pieceattribname."""
     g = MockParmTemplateGroup()
-    g.append(MockStringParmTemplate("sourcegrp", "Source Group"))
-    g.append(MockStringParmTemplate("targetgrp", "Target Group"))
-    g.append(MockToggleParmTemplate("pack", "Pack Geometry", default=False))
+    g.append(MockStringParmTemplate("sourcegroup", "Source Group"))
+    g.append(MockStringParmTemplate("targetgroup", "Target Points"))
+    g.append(MockToggleParmTemplate("useidattrib", "Piece Attribute", default=False))
+    g.append(MockStringParmTemplate("idattrib", "Piece Attribute", default=""))
+    g.append(MockToggleParmTemplate("pack", "Pack and Instance", default=False))
+    return g
+
+
+def _make_attribfrompieces_ptg():
+    """Attribute from Pieces parm template group (subset). The `pieceattrib`
+    names the source piece attribute (default `name` in H21)."""
+    g = MockParmTemplateGroup()
+    g.append(MockStringParmTemplate("pieceattrib", "Piece Attribute", default="name"))
+    g.append(MockMenuParmTemplate("mode", "Mode",
+                                  ["piece", "patch", "worley"], default=0))
+    g.append(MockIntParmTemplate("seed", "Seed", default=0))
+    return g
+
+
+def _make_pack_ptg():
+    """Pack SOP parm template group (subset). `packbyname` toggles per-name
+    packing; `nameattribute` names the grouping attribute."""
+    g = MockParmTemplateGroup()
+    g.append(MockToggleParmTemplate("packedfragments",
+                                    "Create Packed Fragments", default=True))
+    g.append(MockToggleParmTemplate("packbyname", "Pack By Name", default=False))
+    g.append(MockStringParmTemplate("nameattribute", "Name Attribute", default="name"))
+    return g
+
+
+def _make_connectivity_ptg():
+    """Connectivity SOP parm template group (subset). `attribname` controls
+    the output attribute name (default `class`; we set it to `piece`)."""
+    g = MockParmTemplateGroup()
+    g.append(MockStringParmTemplate("attribname", "Attribute", default="class"))
     return g
 
 
@@ -957,6 +1026,18 @@ class MockHou:
             "copytopoints": MockNodeType(
                 "copytopoints::2.0", "Copy to Points", "Sop", 2, 1,
                 parm_template_group=_make_copytopoints_ptg()),
+            "attribfrompieces": MockNodeType(
+                "attribfrompieces", "Attribute from Pieces", "Sop", 2, 1,
+                parm_template_group=_make_attribfrompieces_ptg()),
+            "pack": MockNodeType(
+                "pack", "Pack", "Sop", 1, 0,
+                parm_template_group=_make_pack_ptg()),
+            "unpack": MockNodeType("unpack", "Unpack", "Sop", 1, 0),
+            "connectivity": MockNodeType(
+                "connectivity", "Connectivity", "Sop", 1, 0,
+                parm_template_group=_make_connectivity_ptg()),
+            "fuse": MockNodeType("fuse", "Fuse", "Sop", 1, 0),
+            "clean": MockNodeType("clean", "Clean", "Sop", 1, 0),
             "normal": MockNodeType(
                 "normal", "Normal", "Sop", 1, 0,
                 parm_template_group=_make_normal_ptg()),

@@ -38,10 +38,26 @@
       ]                                            // (static "position": [x,y,z] numbers are also valid)
     }
   ],
-  "postprocess": [                                // optional SOP Chain after merge
-    {"type": "normal", "params": {"cuspangle": 60}} // parm NAMES are version-specific —
-                                                   // verify with houdini_node_parms("normal")
+  "postprocess": [                                // optional SOP Chain after merge.
+                                                   // Order matters: fuse → clean → normal.
+    // 1. fuse — merge coincident points. ADD THIS whenever the asset has adjacent
+    //    boxes sharing a coplanar face (inset panels, lids, stacked bodies, mullions
+    //    on glass). Without it, those coincident points produce phantom non-manifold
+    //    edges that silently corrupt any downstream Boolean/Sweep/Subdivide.
+    //    No params → use Fuse defaults (safest; the C-station validator enforces H21
+    //    parm names, so only set {"dist": <m>} if you need a non-default tolerance).
+    {"type": "fuse"},
+    // 2. clean — remove non-manifold edges + degenerate faces left after fuse.
+    //    No params → Clean defaults. (H21 parms if needed: fusepts, deldegengeo.)
+    {"type": "clean"},
+    // 3. normal — cusp normals for shading. parm NAMES are version-specific —
+    //    verify with houdini_node_parms("normal").
+    {"type": "normal", "params": {"cuspangle": 60}}
   ],
+  // WHEN TO OMIT fuse+clean: a genuinely single-piece asset (one box, one parametric
+  // surface, one fractal) with no adjacent coplanar geometry has no coincident points
+  // and can use "postprocess": [{"type":"normal",...}] alone. But multi-box assets
+  // (houses, vehicles, furniture) almost always need fuse+clean — add them by default.
   "orientation_asserts": [                        // flows to commit_sandbox's orientation gate
     {"component_id": "wheel_fl", "kind": "radial", "expected_axis": "X",
      "construction_axis": "Y"},                    // local axis the wheel is generated around
@@ -108,3 +124,73 @@ The existing structure gate + orientation gate run on the built OUT automaticall
 Read the build result's `construction_axis_summary` to confirm which components got deterministic axes (`method:"construction"`) and their derived world axes.
 
 For a component with **no anchors** (direct-merge), the world frame is identity, so `construction_axis` and `expected_axis` are usually the same value.
+
+---
+
+## Variant Scatter (变体散布)
+
+`houdini_variant_scatter` builds an asset where **multiple variant geometries** are distributed onto scatter points via a **weighted, seeded** distribution. Use it when a repeated part has several interchangeable styles (3 window designs, 4 tree species, 2 door types) and you want the variation to be controllable + reproducible. The workflow: tag each variant's prims with an integer `variant` index → **Pack By Name** (one packed prim per variant) → emit scatter points with a weighted `variant` assignment (deterministic, seeded) → **Copy to Points 2.0** dispatches by matching the point's `variant` against the packed source's `variant`.
+
+**When to use variant scatter vs single-template Copy-to-Points:**
+- `houdini_build_procedural_asset` + one anchored component = **one template** copied N times (all instances identical, like 6 identical windows).
+- `houdini_variant_scatter` = **N variant templates**, each instance randomly picks one per the weight distribution (6 windows, some style-A, some style-B, …). This is what raises detail from "uniform repetition" to "lived-in variation".
+
+### The recipe schema
+
+```jsonc
+{
+  "asset_name": "window_wall",
+  "variants": [                                  // 2+ variant source geometries
+    {"id": "win_a", "code": "<emit window style A; tag component_id='win_a'>"},
+    {"id": "win_b", "code": "<emit window style B>"},
+    {"id": "win_c", "code": "<emit window style C>"}
+  ],
+  "scatter": {
+    "source": "<python code: emit scatter points with @P, optional @orient/@pscale/@N>",
+    "seed": 42,                                  // integer — reproducible runs
+    "weights": {"win_a": 0.6, "win_b": 0.3, "win_c": 0.1}  // optional; auto-normalized
+  },
+  "postprocess": [                               // same chain as build_procedural_asset
+    {"type": "fuse"}, {"type": "clean"},
+    {"type": "normal", "params": {"cuspangle": 60}}
+  ],
+  "orientation_asserts": [...]                    // per-instance ids are auto-assigned
+}
+```
+
+### Variant code rules
+Each variant's `code` is a single-SOP cook body (same Iron Rules as a recipe component). It MUST:
+1. Declare + tag `component_id` (the variant id, e.g. `win_a`) — used as the *prefix* for per-instance ids.
+2. **NEVER call `createNode`** — the builder owns the network.
+
+The builder wraps each variant's code to additionally tag every prim with an integer `variant` attribute (the variant's index) — you do NOT set this yourself.
+
+### Scatter source rules
+`scatter.source` is python code that emits the target points. It should set `@P` (required) and may set `@orient`/`@pscale`/`@N` (optional, carried through to instances). The builder wraps your code to additionally:
+- assign each point an integer `variant` attribute drawn from the weighted distribution using `seed`,
+- record each point's original number as `edini_scatter_ptnum` (so per-instance ids can be built).
+
+### Per-instance component_id
+Each instance gets `component_id = "{variant_id}_{ptnum}"` (e.g. `win_a_0`, `win_b_3`). This is assigned **after unpacking** (packed primitives only carry point-level attributes). Use these per-instance ids in `orientation_asserts` — but since you can't predict which variant lands on which point, assert on the **variant prefix** is not possible per-instance; instead assert on a representative instance or use `construction_axis` on the variant source geometry.
+
+### Build result (read these before committing)
+- `variants_built`, `n_variants`, `weights`, `seed`, `piece_attribute` (`"variant"`)
+- `structure_advisory` — passes (the pack/attribfrompieces/copytopoints chain is modular)
+- `component_id_check` — confirms each variant prefix produced at least one instance
+- `diagnostics` / `structural_checks` — point/prim counts, bounds
+- `orientation_check` — preview (if asserts declared)
+
+### Commit (separate step)
+```python
+houdini_commit_sandbox(
+    sandbox_root_path="<root_path from build result>",
+    final_name="window_wall",
+    orientation_checks=<recipe.orientation_asserts>,
+)
+```
+
+### Gotchas
+- The `variant` piece attribute is **integer** (never float — Copy to Points silently drops points on a float piece attr).
+- Weights are auto-normalized, so `{"a": 6, "b": 4}` is equivalent to `{"a": 0.6, "b": 0.4}`.
+- Changing `seed` reshuffles which variant lands on which point — fully reproducible across runs with the same seed + same scatter topology.
+- For pipeline stability across upstream topology changes, prefer anchoring scatter points to a persistent `id` attribute rather than relying on `@ptnum` order.
