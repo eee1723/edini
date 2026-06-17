@@ -752,6 +752,70 @@ class TestInspectGeometryHealth(unittest.TestCase):
                     "coincident_points"}
         self.assertEqual(set(r["summary"].keys()), expected)
 
+    # ── Two-tier severity (overall_ok = blocking only) ───────────────────
+    # Regression for the false-positive loop: an open surface (terrain,
+    # single panel, intentional gateway) has open_boundary_edges but no
+    # orphan points or stray curves. overall_ok MUST be True — open boundary
+    # is ADVISORY, not blocking. Previously overall_ok flipped False and
+    # drove agents into rebuild loops over a non-defect.
+
+    def test_overall_ok_driven_only_by_blocking_checks(self):
+        """overall_ok reflects ONLY blocking checks (orphan_points,
+        open_curves). Advisory findings must never flip it False."""
+        from edini.node_utils import inspect_geometry_health
+        node, geo = self._make_node_with_geo("health_open_surface")
+        # A single triangle: 3 open boundary edges (ADVISORY), no orphans,
+        # no stray curves, no non-manifold. overall_ok must be True.
+        self._add_triangle(geo, [(0, 0, 0), (2, 0, 0), (1, 2, 0)])
+        r = inspect_geometry_health(node.path())
+        self.assertTrue(r["overall_ok"],
+                        f"open surface falsely failed: {r['summary']}")
+        self.assertFalse(r["checks"]["open_boundary_edges"]["passed"])
+        self.assertGreater(r["checks"]["open_boundary_edges"]["count"], 0)
+
+    def test_blocking_and_advisory_severity_labels(self):
+        """Each check carries a 'severity' field; blocking vs advisory split
+        matches _HEALTH_BLOCKING_CHECKS / _HEALTH_ADVISORY_CHECKS."""
+        from edini.node_utils import inspect_geometry_health
+        from edini.node_utils import (_HEALTH_BLOCKING_CHECKS,
+                                      _HEALTH_ADVISORY_CHECKS)
+        node, geo = self._make_node_with_geo("health_severity")
+        self._add_triangle(geo, [(0, 0, 0), (1, 0, 0), (0, 1, 0)])
+        r = inspect_geometry_health(node.path())
+        for cname in _HEALTH_BLOCKING_CHECKS:
+            self.assertEqual(r["checks"][cname]["severity"], "blocking",
+                             f"{cname} should be blocking")
+        for cname in _HEALTH_ADVISORY_CHECKS:
+            self.assertEqual(r["checks"][cname]["severity"], "advisory",
+                             f"{cname} should be advisory")
+
+    def test_blocking_checks_listed_in_result(self):
+        """Result exposes blocking_checks / advisory_checks lists so callers
+        can tell which findings gate overall_ok without hardcoding names."""
+        from edini.node_utils import inspect_geometry_health
+        node, geo = self._make_node_with_geo("health_lists")
+        self._add_triangle(geo, [(0, 0, 0), (1, 0, 0), (0, 1, 0)])
+        r = inspect_geometry_health(node.path())
+        self.assertEqual(set(r["blocking_checks"]), {"orphan_points",
+                                                     "open_curves"})
+        self.assertEqual(set(r["advisory_checks"]),
+                         {"degenerate_prims", "nonmanifold_edges",
+                          "open_boundary_edges", "coincident_points"})
+
+    def test_orphan_point_still_blocks(self):
+        """A blocking defect (orphan point) still makes overall_ok False."""
+        from edini.node_utils import inspect_geometry_health
+        node, geo = self._make_node_with_geo("health_blocking")
+        self._add_triangle(geo, [(0, 0, 0), (1, 0, 0), (0, 1, 0)])
+        from tests.mock_hou import MockPoint
+        orphan = MockPoint()
+        orphan.setPosition((5, 5, 5))
+        geo._points.append(orphan)
+        orphan._number = len(geo._points) - 1
+        geo._point_count = len(geo._points)
+        r = inspect_geometry_health(node.path())
+        self.assertFalse(r["overall_ok"])
+
 
 # ===================================================================
 # TestGeometryInventory

@@ -1765,14 +1765,23 @@ def _safe_create_node(parent_path: str, node_type: str, name: str) -> Any:
 
     Uses hou.node(parent).createNode directly (the sandbox already lives under
     /obj/<sandbox>, so we want raw creation, not the /obj-defaulting wrapper).
+
+    After a successful creation the node passes through :func:`_post_create_init`,
+    which is the single harness-level chokepoint for post-creation setup. Today
+    that initializes Copy-to-Points' attribute transfer (resettargetattribs) so
+    per-instance ids/attrs land on every copied prim — without it,
+    build_procedural_asset and any hand-written network_mode script silently
+    lose per-instance ids. Putting it here means every harness-created copytopoints
+    is covered regardless of which build tool created it.
     """
     parent = hou.node(parent_path)
     if parent is None:
         raise RuntimeError(f"Parent node not found: {parent_path}")
+    node = None
     # Try bare name first, then namespace variants — mirrors create_node() in
     # node_utils but returns the node object for in-process use.
     try:
-        return parent.createNode(node_type, name)
+        node = parent.createNode(node_type, name)
     except Exception:
         # Walk namespace variants for e.g. "copytopoints" -> "copytopoints::2.0"
         try:
@@ -1791,12 +1800,48 @@ def _safe_create_node(parent_path: str, node_type: str, name: str) -> Any:
             try:
                 for variant in nt.namespaceOrder():
                     try:
-                        return parent.createNode(variant, name)
+                        node = parent.createNode(variant, name)
+                        break
                     except Exception:
                         continue
             except Exception:
                 continue
-        raise
+            if node is not None:
+                break
+        if node is None:
+            raise
+    _post_create_init(node)
+    return node
+
+
+def _post_create_init(node) -> None:
+    """Harness-level post-creation initialization hook.
+
+    Centralizes per-node-type setup that must happen on EVERY node the harness
+    creates, so individual build tools can't forget it. Best-effort: never raises
+    (a failed init is logged but must not break node creation, which would be
+    worse than a missing attribute transfer).
+
+    Currently initializes Copy-to-Points 2.0's attribute transfer by pressing
+    the ``resettargetattribs`` button — the only sanctioned real-H21 path. See
+    ``manual_resettargetattribs_probe.py`` for the captured mechanism. The
+    shared implementation lives in ``node_utils._init_copytopoints_attribs`` so
+    the harness path and the ``node_utils.create_node`` path (hand-written
+    network_mode scripts) behave identically.
+    """
+    try:
+        type_name = node.type().name().split("::")[0].lower()
+    except Exception:
+        return
+    if type_name == "copytopoints":
+        from edini.node_utils import _init_copytopoints_attribs
+        try:
+            _init_copytopoints_attribs(node)
+        except Exception:
+            # Initialization is best-effort; a failed pressButton must not break
+            # the node creation that just succeeded. The caller already has a
+            # usable node; attribute transfer can be set up manually if needed.
+            pass
 
 
 def _set_parm_safe(node, parm_name: str, value: Any) -> None:
@@ -2537,14 +2582,11 @@ def _setup_copy_apply_attributes(copy_node, attribs: str = "id") -> bool:
         True if the button was found and pressed; False otherwise (caller
         emits a warning so the user can transfer attributes manually).
     """
-    reset = copy_node.parm("resettargetattribs") if hasattr(copy_node, "parm") else None
-    if reset is None:
-        return False
-    try:
-        reset.pressButton()
-        return True
-    except Exception:
-        return False
+    # Delegate to the single shared implementation in node_utils, so the
+    # variant-scatter path, _post_create_init, and node_utils.create_node all
+    # press the same button via one code path.
+    from edini.node_utils import _init_copytopoints_attribs
+    return _init_copytopoints_attribs(copy_node)
 
 
 def _validate_variant_recipe(recipe: Any) -> list[str]:
