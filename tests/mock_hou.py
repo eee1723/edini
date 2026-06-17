@@ -1033,9 +1033,7 @@ class MockHou:
                 "pack", "Pack", "Sop", 1, 0,
                 parm_template_group=_make_pack_ptg()),
             "unpack": MockNodeType("unpack", "Unpack", "Sop", 1, 0),
-            "connectivity": MockNodeType(
-                "connectivity", "Connectivity", "Sop", 1, 0,
-                parm_template_group=_make_connectivity_ptg()),
+            "connectivity": MockNodeType("connectivity", "Connectivity", "Sop", 1, 0),
             "fuse": MockNodeType("fuse", "Fuse", "Sop", 1, 0),
             "clean": MockNodeType("clean", "Clean", "Sop", 1, 0),
             "normal": MockNodeType(

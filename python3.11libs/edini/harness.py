@@ -539,10 +539,10 @@ _MODULAR_NODE_TYPES = {
     "xformpieces", "transformpieces", "instanceto",
     "boolean", "boolean::2.0", "polyextrude", "polyextrude::2.0",
     # Variant-scatter chain: pack(packbyname) builds per-variant packed
-    # prims; unpack restores per-prim geometry so connectivity + idfix can
-    # write per-instance component_id. Copy to Points dispatches by matching
-    # i@variant.
-    "pack", "unpack", "connectivity",
+    # prims; unpack restores per-prim geometry so idfix can write per-instance
+    # component_id. Copy to Points dispatches by matching i@variant and
+    # transfers target-point `id` via Apply Attributes.
+    "pack", "unpack",
 }
 
 # SOP node types that are pure post-processing (don't count toward modularity).
@@ -2566,18 +2566,22 @@ def _variant_idfix_snippet(variant_ids: list[str]) -> str:
     """Generate a single-SOP python cook body that runs AFTER unpacking, and
     overwrites prim component_id per instance.
 
-    After unpack, each instance is a separate connected mesh. The prim-level
-    integer `variant` attribute (tagged on the source variant geometry)
-    survives unpack — it identifies WHICH variant each prim belongs to. A
-    Connectivity SOP (run before this node) stamps each connected piece
-    (instance) with a unique integer `piece` attribute. Combined, these yield
-    a globally-unique component_id `{variant_id}_{piece}`.
+    The prim-level integer `variant` attribute (tagged on the source variant
+    geometry) survives unpack — it identifies WHICH variant each prim belongs
+    to. The integer `id` attribute (set on the scatter points and transferred
+    onto instance points via Copy to Points "Apply Attributes") identifies
+    WHICH instance (copy) the prim belongs to. Combined these yield a
+    globally-unique component_id `{variant_id}_{id}`.
+
+    This is more robust than Connectivity because `id` is identical for all
+    prims of an instance even when the variant is a disconnected mesh
+    (e.g. a window = frame + glass + mullions as separate pieces).
+    Connectivity would assign DIFFERENT piece values to parts of one such
+    instance, corrupting the component_id.
 
     This intentionally does NOT use the `per_copy = total // n_anchors`
     boundary detection of _component_id_overwrite_snippet, because variant
-    sources have differing prim counts. It also does NOT rely on target-point
-    attributes (edini_scatter_ptnum) because Copy to Points does not transfer
-    them onto instance geometry by default.
+    sources have differing prim counts.
     """
     ids_repr = "[" + ", ".join(repr(c) for c in variant_ids) + "]"
     return (
@@ -2585,9 +2589,9 @@ def _variant_idfix_snippet(variant_ids: list[str]) -> str:
         "geo = node.geometry()\n"
         "variant_ids = " + ids_repr + "\n"
         "# `variant` is a PRIM attrib (survives unpack from source tagging).\n"
-        "# `piece` is written by Connectivity onto POINTS (default class).\n"
-        "# We read piece from the prim's first vertex point so it works\n"
-        "# regardless of where Connectivity stores it.\n"
+        "# `id` is a POINT attrib transferred from the target scatter point\n"
+        "# via Copy to Points Apply Attributes — identical for all prims of\n"
+        "# one instance, regardless of variant connectivity.\n"
         "if geo.findPrimAttrib('component_id') is None:\n"
         "    geo.addAttrib(hou.attribType.Prim, 'component_id', '')\n"
         "for prim in geo.prims():\n"
@@ -2596,13 +2600,13 @@ def _variant_idfix_snippet(variant_ids: list[str]) -> str:
         "    except Exception: vidx = 0\n"
         "    if vidx < 0 or vidx >= len(variant_ids):\n"
         "        vidx = 0\n"
-        "    piece = 0\n"
+        "    inst_id = 0\n"
         "    verts = prim.vertices()\n"
         "    if verts:\n"
         "        pt = verts[0].point()\n"
-        "        try: piece = int(pt.attribValue('piece'))\n"
-        "        except Exception: piece = 0\n"
-        "    cid = variant_ids[vidx] + '_' + str(piece)\n"
+        "        try: inst_id = int(pt.attribValue('id'))\n"
+        "        except Exception: inst_id = 0\n"
+        "    cid = variant_ids[vidx] + '_' + str(inst_id)\n"
         "    prim.setAttribValue('component_id', cid)\n"
     )
 
@@ -2643,7 +2647,7 @@ def _variant_scatter_points_code(
         "_seed = " + repr(int(seed)) + "\n"
         "_rng = random.Random(_seed)\n"
         "geo.addAttrib(hou.attribType.Point, '" + _VARIANT_PIECE_ATTR + "', 0)\n"
-        "geo.addAttrib(hou.attribType.Point, 'edini_scatter_ptnum', 0)\n"
+        "geo.addAttrib(hou.attribType.Point, 'id', 0)\n"
         "for idx, pt in enumerate(geo.points()):\n"
         "    r = _rng.random()\n"
         "    chosen = " + repr(n_variants - 1) + "\n"
@@ -2652,7 +2656,7 @@ def _variant_scatter_points_code(
         "            chosen = ti\n"
         "            break\n"
         "    pt.setAttribValue('" + _VARIANT_PIECE_ATTR + "', chosen)\n"
-        "    pt.setAttribValue('edini_scatter_ptnum', idx)\n"
+        "    pt.setAttribValue('id', idx)\n"
     )
 
 
@@ -2794,7 +2798,7 @@ def build_variant_scatter(
         #    `variant` attribute — Copy matches them 1:1.
         copy_node = _safe_create_node(root_path, "copytopoints", "copy_scatter")
         copy_node.setInput(0, pack_node)      # packed variant library (source)
-        copy_node.setInput(1, scatter_sop)    # scatter points (with i@variant)
+        copy_node.setInput(1, scatter_sop)    # scatter points (with i@variant + i@id)
         try:
             copy_node.parm("useidattrib").set(1)   # enable Piece Attribute dispatch
             copy_node.parm("idattrib").set(_VARIANT_PIECE_ATTR)  # match by `variant`
@@ -2803,34 +2807,81 @@ def build_variant_scatter(
                 f"Copy to Points piece-attribute setup failed ({e}); variants "
                 f"may not dispatch correctly. Check copytopoints::2.0 parms.")
 
-        # ── 6. Unpack — so per-prim component_id overwrite is possible ──
+        # Transfer the target-point `id` onto each instance via the "Apply
+        # Attributes" multiparm. This stamps the scatter point's id onto every
+        # point of the copied instance — so every prim of an instance shares
+        # the SAME id, regardless of whether the variant is one connected mesh
+        # or many disconnected pieces (e.g. a window = frame + glass + mullions).
+        # This is more robust than Connectivity, which breaks on non-connected
+        # variants by assigning different piece values to parts of one instance.
+        #
+        # The multiparm folder is "applyattrs#"; its count parm follows Houdini's
+        # "num<folder>" convention. We try several possible count-parm names
+        # (H21's exact internal name varies), then set the first instance.
+        _multiparm_set = False
+        for count_parm in ("numapplyattrs", "numapply", "applyattrsnum"):
+            cp = copy_node.parm(count_parm)
+            if cp is not None:
+                try:
+                    cp.set(1)
+                    _multiparm_set = True
+                    break
+                except Exception:
+                    continue
+        if _multiparm_set:
+            try:
+                copy_node.parm("useapply1").set(1)        # enable this apply entry
+                copy_node.parm("applyto1").set(0)         # apply to points
+                copy_node.parm("applymethod1").set(0)     # copy
+                copy_node.parm("applyattribs1").set("id") # the attribute to transfer
+            except Exception as e:
+                warnings.append(
+                    f"Copy to Points Apply Attributes entry setup failed ({e}); "
+                    f"per-instance id may not transfer.")
+        else:
+            # Fallback: the count parm name is unknown. Use the Houdini API
+            # method that appends a multiparm instance directly.
+            try:
+                ptg = copy_node.parmTemplateGroup()
+                # Find the multiparm folder and grow it by one instance.
+                for entry in ptg.entries():
+                    fname = getattr(entry, "name", None) or ""
+                    if "apply" in fname and "#" in fname:
+                        # This is the multiparm folder; set its instance count.
+                        entry.setNumInstances(1)  # type: ignore[attr-defined]
+                        ptg.replace(entry.name(), entry)
+                        copy_node.setParmTemplateGroup(ptg)
+                        _multiparm_set = True
+                        break
+                if _multiparm_set:
+                    copy_node.parm("useapply1").set(1)
+                    copy_node.parm("applyto1").set(0)
+                    copy_node.parm("applymethod1").set(0)
+                    copy_node.parm("applyattribs1").set("id")
+            except Exception as e:
+                warnings.append(
+                    f"Copy to Points Apply Attributes could not be set up ({e}); "
+                    f"per-instance id will not transfer. idfix falls back to 0.")
+
+        # ── 5. Unpack — so per-prim component_id overwrite is possible ──
         unpack_node = _safe_create_node(root_path, "unpack", "scatter_unpack")
         unpack_node.setInput(0, copy_node)
 
-        # ── 7. Connectivity — stamp each connected instance with a unique
-        #    integer `piece` attribute. Each unpacked copy is a separate
-        #    connected mesh, so this gives every instance a distinct number.
-        #    Runs BEFORE idfix so idfix can build unique component_ids.
-        #    NOTE: this must run BEFORE any fuse in postprocess — instances are
-        #    at different scatter positions so they won't merge, but the
-        #    `piece` attrib must exist when idfix reads it.
-        connect = _safe_create_node(root_path, "connectivity", "scatter_connect")
-        connect.setInput(0, unpack_node)
-        # Connectivity's default attribute name is `class`; we need `piece`
-        # so idfix can read it. Use the real H21 parm name (verified manifest).
-        _set_parm_safe(connect, "attribname", "piece")
-
-        # ── 8. idfix — assign per-instance component_id {variant_id}_{piece} ──
-        # Reads the prim `variant` (which variant) + prim `piece` (which
-        # instance) to build a globally-unique id per instance.
+        # ── 6. idfix — assign per-instance component_id {variant_id}_{id} ──
+        # Reads the prim `variant` (which variant) + the point `id` (which
+        # instance, transferred from the target scatter point via Apply
+        # Attributes) to build a globally-unique id per instance.
+        # NO Connectivity needed — `id` is stamped by Copy to Points and is
+        # identical for all prims of an instance even if the variant is
+        # disconnected (window = frame + glass + mullions).
         idfix_code = _variant_idfix_snippet(variant_ids)
         idfix = _safe_create_node(root_path, "python", "scatter_idfix")
         _set_parm_safe(idfix, "python", idfix_code)
-        idfix.setInput(0, connect)
+        idfix.setInput(0, unpack_node)
 
         last_node = idfix
 
-        # ── 8. Post-processing chain (fuse/clean/normal ...) ──
+        # ── 7. Post-processing chain (fuse/clean/normal ...) ──
         for i, pp in enumerate(postprocess):
             pp_type = pp.get("type")
             pp_params = pp.get("params") or {}

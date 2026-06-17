@@ -1123,28 +1123,29 @@ class TestBuildVariantScatter(unittest.TestCase):
 class TestVariantIdfixSnippet(unittest.TestCase):
     """The idfix code generator is pure string assembly — test it directly."""
 
-    def test_snippet_reads_prim_variant_and_connectivity_piece(self):
+    def test_snippet_reads_prim_variant_and_point_id(self):
         """The variant idfix must NOT use the `per_copy = total // n_anchors`
         boundary detection of _component_id_overwrite_snippet (which assumes a
         single uniform source). Instead it reads the prim-level `variant`
-        attribute (which survives unpack) + the `piece` attribute from a
-        Connectivity SOP (which gives each connected instance a unique number).
-        It must NOT rely on point attributes (edini_scatter_ptnum) because Copy
-        to Points does not transfer target-point attributes onto instances."""
+        attribute (which survives unpack) + the POINT `id` attribute
+        (transferred from the target scatter point via Copy to Points Apply
+        Attributes — identical for all prims of one instance, even if the
+        variant is a disconnected mesh like a window = frame+glass+mullions)."""
         snippet = harness._variant_idfix_snippet(["win_a", "win_b"])
         self.assertIn("variant_ids", snippet)
         self.assertIn("win_a", snippet)
         self.assertIn("win_b", snippet)
-        # Reads variant from the PRIM (survives unpack), not from points.
+        # Reads variant from the PRIM (survives unpack).
         self.assertIn("prim.attribValue('variant')", snippet)
-        # Reads the connectivity `piece` attrib for per-instance uniqueness.
-        self.assertIn("'piece'", snippet)
+        # Reads id from the prim's first vertex POINT (transferred via Apply
+        # Attributes, NOT from Connectivity which breaks on disconnected geo).
+        self.assertIn("pt.attribValue('id')", snippet)
         # Must NOT contain the single-source boundary detection.
         self.assertNotIn("per_copy", snippet)
-        # Must NOT rely on the now-gone point-level scatter ptnum.
-        self.assertNotIn("edini_scatter_ptnum", snippet)
-        # Builds per-instance ids as {variant_id}_{piece}.
-        self.assertIn("str(piece)", snippet)
+        # Must NOT use Connectivity's `piece` (wrong for disconnected variants).
+        self.assertNotIn("'piece'", snippet)
+        # Builds per-instance ids as {variant_id}_{id}.
+        self.assertIn("str(inst_id)", snippet)
 
 
 class TestVariantScatterPointsCode(unittest.TestCase):
@@ -1156,7 +1157,8 @@ class TestVariantScatterPointsCode(unittest.TestCase):
             ["a", "b"], {"a": 1.0, "b": 1.0}, 42, "# USER CODE HERE")
         self.assertIn("# USER CODE HERE", wrapper)
         self.assertIn("variant", wrapper)
-        self.assertIn("edini_scatter_ptnum", wrapper)
+        # Assigns a unique `id` per scatter point (transferred to instances).
+        self.assertIn("'id'", wrapper)
 
     def test_weights_normalized_to_cumulative_thresholds(self):
         """2 variants at 3:1 -> normalized cumulative [0.75, 1.0]."""

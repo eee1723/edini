@@ -94,7 +94,7 @@ scatter.parm("python").set(
     "geo.addAttrib(hou.attribType.Point, 'variant', 0)\n"
     "geo.addAttrib(hou.attribType.Point, 'orient', (0,0,0,1))\n"
     "geo.addAttrib(hou.attribType.Point, 'pscale', 1.0)\n"
-    "geo.addAttrib(hou.attribType.Point, 'edini_scatter_ptnum', 0)\n"
+    "geo.addAttrib(hou.attribType.Point, 'id', 0)\n"
     "rng = random.Random(42)\n"
     "for i in range(6):\n"
     "    pt = geo.createPoint()\n"
@@ -102,40 +102,52 @@ scatter.parm("python").set(
     "    r = rng.random()\n"
     "    v = 0 if r < 0.6 else 1   # 60% box, 40% sphere\n"
     "    pt.setAttribValue('variant', v)\n"
-    "    pt.setAttribValue('edini_scatter_ptnum', i)\n"
+    "    pt.setAttribValue('id', i)\n"
 )
 
 # ════════════════════════════════════════════════════════════════════════
-# STAGE 4 — Copy to Points 2.0 with Piece Attribute dispatch.
+# STAGE 4 — Copy to Points 2.0 with Piece Attribute dispatch + Apply Attributes.
 # Source = packed variants (each carries i@variant). Target = scatter points
-# (each carries i@variant). Copy matches them 1:1.
+# (each carries i@variant + i@id). Copy matches variant 1:1, AND transfers
+# the target point's `id` onto each instance via Apply Attributes.
 # ════════════════════════════════════════════════════════════════════════
 copy = geo.createNode("copytopoints::2.0", "copy_dispatch")
 copy.setInput(0, pack)        # the packed variant library (source)
-copy.setInput(1, scatter)     # the target points (each has @variant)
-# THE CRITICAL PARMS (H21 names — verified against manifest):
-#   useidattrib = "Piece Attribute" toggle (enable dispatch)
-#   idattrib    = the attribute NAME to match on
+copy.setInput(1, scatter)     # the target points (each has @variant + @id)
+# Piece Attribute dispatch
 copy.parm("useidattrib").set(1)
 copy.parm("idattrib").set("variant")
+# Apply Attributes: transfer the target point's `id` onto instance geometry.
+# This stamps `id` onto every point of the copied instance — so all prims of
+# an instance share the SAME id, even if the variant is disconnected (e.g.
+# a window = frame + glass + mullions). This is more robust than Connectivity.
+# H21's multiparm count parm name is uncertain, so try common names.
+_count_set = False
+for _cp_name in ("numapplyattrs", "numapply", "applyattrsnum"):
+    _cp = copy.parm(_cp_name)
+    if _cp is not None:
+        _cp.set(1)
+        _count_set = True
+        break
+if _count_set:
+    copy.parm("useapply1").set(1)
+    copy.parm("applyto1").set(0)         # apply to points
+    copy.parm("applymethod1").set(0)     # copy
+    copy.parm("applyattribs1").set("id")
+else:
+    print("WARNING: could not find Copy to Points multiparm count parm "
+          "(tried numapplyattrs/numapply/applyattrsnum). "
+          "Apply Attributes NOT set up — id won't transfer.")
 
 # ════════════════════════════════════════════════════════════════════════
-# STAGE 5 — Unpack → Connectivity → per-instance component_id
+# STAGE 5 — Unpack → per-instance component_id (NO Connectivity needed)
 # ════════════════════════════════════════════════════════════════════════
 unpack = geo.createNode("unpack", "unpack")
 unpack.setInput(0, copy)
 
-# Connectivity: each connected instance gets a unique integer `piece`.
-# This is how we distinguish instances (Copy to Points does NOT transfer
-# target-point attributes like edini_scatter_ptnum onto instances).
-connect = geo.createNode("connectivity", "connect")
-connect.setInput(0, unpack)
-# Connectivity's default attr name is `class`; set it to `piece`.
-connect.parm("attribname").set("piece")
-
-# idfix: read prim `variant` (which shape) + point `piece` (which instance).
+# idfix: read prim `variant` (which shape) + point `id` (which instance).
 idfix = geo.createNode("python", "idfix")
-idfix.setInput(0, connect)
+idfix.setInput(0, unpack)
 idfix.parm("python").set(
     "node = hou.pwd(); geo = node.geometry()\n"
     "variant_ids = ['box', 'sphere']\n"
@@ -147,13 +159,13 @@ idfix.parm("python").set(
     "    except Exception: vidx = 0\n"
     "    if vidx < 0 or vidx >= len(variant_ids):\n"
     "        vidx = 0\n"
-    "    piece = 0\n"
+    "    inst_id = 0\n"
     "    verts = prim.vertices()\n"
     "    if verts:\n"
     "        pt = verts[0].point()\n"
-    "        try: piece = int(pt.attribValue('piece'))\n"
-    "        except Exception: piece = 0\n"
-    "    cid = variant_ids[vidx] + '_' + str(piece)\n"
+    "        try: inst_id = int(pt.attribValue('id'))\n"
+    "        except Exception: inst_id = 0\n"
+    "    cid = variant_ids[vidx] + '_' + str(inst_id)\n"
     "    prim.setAttribValue('component_id', cid)\n"
 )
 
@@ -178,7 +190,6 @@ chain = [
     ("scatter_points", scatter),
     ("copy_dispatch", copy),
     ("unpack", unpack),
-    ("connect", connect),
     ("idfix", idfix),
     ("OUT", out),
 ]
@@ -227,12 +238,12 @@ else:
     print("\npoint attributes:", pt_attrs)
     print("prim attributes:", prim_attrs)
 
-    # Group prims by component_id and report variant + piece per instance.
-    # NOTE: `variant` and `piece` are PRIM attributes (survive unpack), NOT
-    # point attributes — Copy to Points does not transfer target-point
-    # attributes onto instance geometry.
+    # Group prims by component_id and report variant + id per instance.
+    # `variant` is a PRIM attrib (survives unpack). `id` is a POINT attrib
+    # transferred from the target scatter point via Copy to Points Apply
+    # Attributes — identical for all prims of an instance even if disconnected.
     from collections import defaultdict
-    instances = defaultdict(lambda: {"count": 0, "variant": None, "piece": None})
+    instances = defaultdict(lambda: {"count": 0, "variant": None, "id": None})
     for prim in g.prims():
         try:
             cid = prim.stringAttribValue("component_id")
@@ -240,27 +251,27 @@ else:
             cid = "?"
         rec = instances[cid]
         rec["count"] += 1
-        # Read variant from the PRIM; piece from the prim's first POINT
-        # (Connectivity writes `piece` onto points, not prims).
+        # Read variant from the PRIM.
         if rec["variant"] is None:
             try: rec["variant"] = int(prim.attribValue("variant"))
             except Exception: rec["variant"] = "??"
-        if rec["piece"] is None:
+        # Read id from the prim's first POINT (transferred via Apply Attributes).
+        if rec["id"] is None:
             verts = prim.vertices()
             if verts:
                 pt = verts[0].point()
-                try: rec["piece"] = int(pt.attribValue("piece"))
-                except Exception: rec["piece"] = "??"
+                try: rec["id"] = int(pt.attribValue("id"))
+                except Exception: rec["id"] = "??"
     print("\n── per-instance breakdown ──")
     for cid in sorted(instances):
         rec = instances[cid]
         print(f"  {cid:16s}  prims={rec['count']:3d}  "
-              f"variant={rec['variant']}  piece={rec['piece']}")
+              f"variant={rec['variant']}  id={rec['id']}")
     # Distinct variant values present tells us if dispatch mixed shapes.
     variants_seen = sorted({rec["variant"] for rec in instances.values()
                             if isinstance(rec["variant"], int)})
     print(f"\nvariant values across instances: {variants_seen}")
-    print("(expected both 0 and 1 if piece dispatch worked; "
+    print("(expected both 0 and 1 if dispatch worked; "
           "only [0] means all got box)")
 
 print()
@@ -276,4 +287,4 @@ print("  idfix / OUT          — per-instance component_id assigned")
 print()
 print("If copy_dispatch shows a MIX of boxes and spheres, the workflow works.")
 print("If it shows only ONE shape (or empty), the piece dispatch isn't firing")
-print("— check that attribfrompieces.pieceattrib and copy.idattrib are 'variant'.")
+print("— check copy.useidattrib=1 and copy.idattrib='variant'.")
