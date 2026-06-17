@@ -1,0 +1,48 @@
+// VEX wrangle skeleton. Attribute Wrangle SOP.
+//
+// VEX generated from scratch fails 64% of the time. Mitigate:
+//   1. Set the run-over class FIRST (Points / Prims / Vertices / Detail).
+//   2. One operation per wrangle. 5 transforms -> 5 wrangles in sequence.
+//   3. Validate point counts / attributes / bounds after.
+
+// --- Set Run-Over class explicitly in the wrangle UI before writing logic ---
+// Points      : per-point ops (position, velocity, custom attrs)  <- most common
+// Primitives  : per-face ops (face normals, groups, coloring)
+// Vertices    : per-vertex ops (UV, vertex normals)
+// Detail      : once-per-geo ops (bounding box, totals, global setup)
+
+
+// --- Template patterns (adapt, don't reinvent) ---
+
+// Noise displacement along normal
+@P += normalize(@N) * noise(@P * chf("freq")) * chf("amp");
+
+// Density scatter (cull by ramp)
+if (rand(@ptnum) > chramp("density", fit01(@P.y, 0, 1)))
+    removepoint(0, @ptnum);
+
+// Orient along a direction vector
+p@orient = quaternion(dihedral({0,1,0}, normalize(@vel)));
+
+// Panel lines as darkened color
+if (abs(frac(@P.x * chf("line_freq")) - 0.5) < chf("line_width"))
+    @Cd = {0.2, 0.2, 0.2};
+
+// Canonical orient from a spine (tangent/side/normal frame)
+vector tangent = normalize(@next_P - @P);          // along the spine/axis
+vector side    = normalize(cross(tangent, {0,1,0})); // perpendicular, in-plane
+@N      = cross(side, tangent);                    // true surface normal
+p@orient = quaternion(maketransform(side, @N, tangent));
+
+
+// --- Channel references (expose as UI sliders) ---
+float radius = chf("radius");
+int   count  = chi("count");
+vector offset = chv("offset");
+float profile = chramp("profile", @curveu);   // ramp widget
+
+
+// --- Anchor point emission for Copy-to-Points ---
+// @orient is a quaternion (x,y,z,w), NOT Euler. Identity = (0,0,0,1).
+// @pscale = 1.0 means original source size (no scaling). To scale a component:
+//   @pscale = desired_size / source_geo_size;
