@@ -72,3 +72,49 @@ pt.setAttribValue("pscale", 1.0)  # 1.0 = original size of component
 pt.setAttribValue("component_id", "wheel")
 # Group the anchors: geo.createPointGroup("wheel_anchors").add(pt)
 ```
+
+## Brick / Tile / Rivet Scatter (repeated micro-structure — DO NOT inline-loop)
+For any surface covered by ≥10 copies of a small same-shaped piece (bricks,
+roof tiles, shingles, rivets along a seam, balusters, chain links), build it as
+**one template piece + scatter points + Copy-to-Points**. Never hand-stamp
+these in a `for i in range(N):` loop (see SKILL.md Step 3b).
+
+The whole thing is a 3-node network built via `houdini_build_procedural_asset`
+(one anchored component) or `houdini_run_python_sandbox(network_mode=True)`:
+
+```
+brick_template (python: emit ONE brick, tag component_id="brick")
+        ↑
+brick_anchors (python: emit a point grid with @P, @orient, @pscale)
+        ↓
+copytopoints  →  postprocess(normal)  →  OUT
+```
+
+**Template** (one unit brick, modeled at unit scale so `@pscale` does the sizing):
+```python
+node = hou.pwd(); geo = node.geometry()
+geo.addAttrib(hou.attribType.Prim, "component_id", "")
+# one box ~1×0.5×1 (a brick); pscale on the anchor will size it for real
+# emit a single box, tag every prim component_id="brick"
+```
+
+**Anchors** (a staggered brick-laying grid — the parametric part):
+```python
+node = hou.pwd(); geo = node.geometry()
+rows = hou.ch("rows"); cols = hou.ch("cols")   # expose as spare parms
+bw, bh, bd = hou.ch("brick_w"), hou.ch("brick_h"), hou.ch("brick_d")
+for r in range(rows):
+    # stagger every other row by half a brick (running-bond)
+    x_off = (bw/2) if r % 2 else 0.0
+    for c in range(cols):
+        pt = geo.createPoint()
+        pt.setPosition((c*bw + x_off, r*bh, 0))
+        pt.setAttribValue("orient", (0, 0, 0, 1))     # identity
+        pt.setAttribValue("pscale", 1.0)              # brick already unit-sized
+```
+
+Why this beats a loop: `rows`/`cols`/`brick_w` are spare parms — drag a slider
+and the whole wall rebuilds. The template is one editable brick. The structure
+gate sees a genuinely modular asset. And per-instance ids transfer automatically
+(copytopoints created by the harness auto-presses `resettargetattribs`).
+

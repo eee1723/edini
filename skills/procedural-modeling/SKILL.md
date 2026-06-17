@@ -55,6 +55,27 @@ Code templates for modular wiring: [scripts/python-sop-template.py](scripts/pyth
 
 **Network mode:** `network_mode=true` lets the code run in the sandbox geo **container** so it can `createNode` child SOPs and wire them. `network_mode=false` (default): code is the cook body of ONE `edini_generate` Python SOP — cannot `createNode`. The harness finds your `OUT` node (or the largest `@component_id`-bearing node), cooks it, and runs the structure gate.
 
+### Step 3b — Micro-repetition MUST use Copy-to-Points
+
+Two granularities of repetition, BOTH use Copy-to-Points, never inline generation:
+
+- **Component-level** (towers, windows, wheels, table legs): use `houdini_build_procedural_asset` anchors → copytopoints (covered above).
+- **Micro-repetition inside ONE component** (bricks in a wall, roof tiles, rivets along a seam, balusters in a railing, chain links, scales/shingles, crenellations): if a component contains **≥10 copies of a small, same-shaped piece**, you MUST build it as:
+
+  ```
+  one_piece_python   (emit a SINGLE brick/tile/rivet, tag component_id)
+                                ↑
+  scatter_points_python (emit @P for each placement, +@orient/@pscale/@N)
+                                ↓
+                      copytopoints  →  (postprocess)  →  OUT
+  ```
+
+  **NEVER** hand-stamp these with a Python `for i in range(N):` loop that calls `createPolygon` per piece. The smell test: if your component code has `for ... in range(N):` whose body generates near-identical geometry and N ≥ 10, STOP — refactor to a single template + scatter + copytopoints. A brick tower is ONE brick geometry copied onto a grid of points, not 1500 polygons emitted in a loop.
+
+Why: Copy-to-Points keeps the piece editable (change the brick once → all bricks update), makes counts parametric (`brick_count`), and lets the structure gate see a genuinely modular asset. Inline-loop generation produces a monolithic single-SOP blob that is painful to revise and trips the structure gate.
+
+**Copy-to-Points attribute transfer is automatic.** Any copytopoints node the harness creates (via `houdini_build_procedural_asset` or `houdini_variant_scatter`) auto-presses `resettargetattribs`, so per-instance ids/attributes land correctly — you don't press the button yourself. If you hand-write a `network_mode` script and call `container.createNode("copytopoints")` directly (bypassing the harness), it does NOT get this init: in that case call `edini_create_node(parent, "copytopoints", name)` from `edini.node_utils` instead of raw `createNode`, so the post-creation init still runs.
+
 ## Step 4 — Recipe First
 
 Before writing ANY code, state the recipe (components, parameters, modular anchors, orientation asserts, verification criteria). Template: [scripts/recipe-template.md](scripts/recipe-template.md). Orientation asserts are MANDATORY — they flow into `houdini_verify_orientation`.
@@ -68,18 +89,18 @@ Before writing ANY code, state the recipe (components, parameters, modular ancho
 5. **Check `structure_advisory` immediately** — if `is_monolithic: true`, `houdini_discard_sandbox` and rebuild modular. Do NOT proceed to verification on a monolithic asset.
 6. **Trust sandbox diagnostics** — the result includes `diagnostics` and `structural_checks`; no need for separate inspect calls.
 7. **Add structural detail** — panel lines, seams, secondary components, varied cross-sections. Standards: [references/detail-standards.md](references/detail-standards.md). Then finishing: Normal SOP, optional bevel on render-visible hard edges. Preserve `@component_id`. **If the asset has adjacent boxes sharing a coplanar face (inset panels, lids, stacked bodies, mullions on glass), put `fuse` + `clean` BEFORE `normal` in `postprocess`** — otherwise coincident points produce phantom non-manifold edges that fail Layer-1 health and corrupt downstream Boolean/Sweep. See [references/declarative-builder.md](references/declarative-builder.md).
-8. **Run THREE-LAYER verification** — geometry health → orientation → inventory → visual. Do NOT skip layers; each catches defects the others can't. Layer 1 (health) is mandatory — skipping it lets non-manifold edges / degenerate faces flow into Boolean/Sweep and silently corrupt the result. Full protocol: [references/verification-protocol.md](references/verification-protocol.md).
-9. **Repair loop with TARGETED fixes** — each round addresses a SPECIFIC component_id or a SPECIFIC health-check finding. Never rebuild the whole asset without a named defect. Debug Discipline: [references/verification-protocol.md](references/verification-protocol.md).
-10. **Commit only when all layers pass** — `houdini_commit_sandbox` runs the modular-structure gate then the orientation gate on the REAL output node. If either fails, commit is refused — fix in source and re-run. Don't bypass with `skip_orientation=true` / `skip_structure_check=true` unless you have a documented reason.
+8. **Run TWO-LAYER verification** — geometry health → orientation → inventory. Do NOT skip layers; each catches defects the others can't. Layer 1 (health) is mandatory — its BLOCKING checks (orphan points, stray open curves) must pass. Its ADVISORY checks (non-manifold edges, open boundary edges, degenerate faces, coincident points) are reported but never block — open boundary edges are EXPECTED on open surfaces (terrain, panels, an intentional gateway), so do NOT rebuild to zero them out. Full protocol: [references/verification-protocol.md](references/verification-protocol.md).
+9. **Repair loop with TARGETED fixes** — each round addresses a SPECIFIC component_id or a SPECIFIC BLOCKING health-check finding. Never rebuild the whole asset without a named defect. **Inventory beats pixels** — when `geometry_inventory` says a component exists (prim_count > 0), it exists; never rebuild it because a screenshot looked wrong. Debug Discipline: [references/verification-protocol.md](references/verification-protocol.md).
+10. **(Optional) archive capture, then commit** — `houdini_capture_review` may be called ONCE before commit to save a screenshot for the record; do NOT judge it with a vision model or rebuild from it. Then `houdini_commit_sandbox` runs the modular-structure gate then the orientation gate on the REAL output node. If either fails, commit is refused — fix in source and re-run. Don't bypass with `skip_orientation=true` / `skip_structure_check=true` unless you have a documented reason.
 
 ## Harness Rules
 
 - Use `houdini_run_python_sandbox`, never raw `houdini_run_python`, for asset generation (raw bypasses the sandbox, structure gate, orientation gate, and health check; a failed cook leaves half-built nodes on the live scene).
 - Do not delete a failed node before `houdini_collect_diagnostics`. Diagnose before switching strategy.
 - Do not explore Qt widgets, main windows, viewport internals, or unsupported HOM APIs to capture images. Use `houdini_capture_review` and report clean failure if capture is unavailable.
-- Use `houdini_verify_asset` for structural checks (point count, bounds, attribute presence) before visual verification.
+- Use `houdini_verify_asset` for structural checks (point count, bounds, attribute presence) before orientation verification.
 - Use `houdini_discard_sandbox` to cleanly abort a failed attempt when diagnostics show the approach is fundamentally wrong.
-- **NEVER use `commit_on_success=true` on first sandbox execution.** Always capture and verify visually before committing.
+- **NEVER use `commit_on_success=true` on first sandbox execution.** Always run the two-layer verification (health → orientation → inventory) before committing; a final archive screenshot is optional.
 - For procedural textures, use Copernicus nodes (`copernicus::noise/ramp/math/merge`) over legacy COP2. See [references/methodology.md](references/methodology.md).
 
 ## Thinking Strategy: Divide & Conquer
@@ -95,7 +116,7 @@ Build small procedural components first, then combine. Do not try to generate on
 | When you need… | Read this |
 |---|---|
 | Houdini 21 SOP parameter names | [references/parm-reference.md](references/parm-reference.md) |
-| Full 3-layer verification protocol + Debug Discipline | [references/verification-protocol.md](references/verification-protocol.md) |
+| Full 2-layer verification protocol + Debug Discipline | [references/verification-protocol.md](references/verification-protocol.md) |
 | Declarative Recipe Builder schema + construction axis | [references/declarative-builder.md](references/declarative-builder.md) |
 | Asset-level params + linkage (A2-station) + spare-param install | [references/params-and-linkage.md](references/params-and-linkage.md) |
 | Detail level rating + material group organization | [references/detail-standards.md](references/detail-standards.md) |

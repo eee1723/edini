@@ -1,15 +1,41 @@
-# Three-Layer Verification Protocol
+# Two-Layer Verification Protocol
 
-**Why three layers, not two:** A recurring failure mode was relying on screenshots alone. Vision models cannot reliably see small/thin components (chains, spokes, bolts) at viewport resolution, so they report them as "missing" even when they exist — and the agent wastes iterations rebuilding with no real change. Geometry health checks and per-component inventory data catch what screenshots cannot.
+**Two layers, not three.** A recurring failure mode was the visual layer
+(`houdini_capture_review` + `describe_image`) driving rebuild loops: vision
+models cannot reliably see small/thin components (bricks, chains, bolts) at
+viewport resolution, so they report real geometry as "missing" or "smooth",
+contradicting the geometry inventory — and the agent wastes iterations
+rebuilding geometry that was already correct. **The visual layer is now an
+archive step only, not a verification loop.** Rely on the cheap authoritative
+layers; capture a final screenshot for the record but never let it drive a
+rebuild.
 
 | Layer | Tool | What it catches | Authority | Cost |
 |---|---|---|---|---|
-| **1. Geometry health** | `houdini_inspect_geometry_health` | Orphan points, open/stray curves, degenerate faces, non-manifold edges, holes, coincident points | AUTHORITATIVE — must pass | cheap (no render) |
+| **1. Geometry health** | `houdini_inspect_geometry_health` | orphan points, stray open curves (BLOCKING); degenerate faces, non-manifold edges, open boundary edges, coincident points (ADVISORY) | AUTHORITATIVE — blocking checks must pass | cheap (no render) |
 | **2a. Orientation** | `houdini_verify_orientation` | Wrong axle direction, flipped components, misaligned axes | AUTHORITATIVE — gate | cheap |
 | **2b. Inventory data** | `houdini_geometry_inventory` / the `geometry_inventory` field returned by `capture_review` | Which component_ids exist, their prim counts + relative sizes | AUTHORITATIVE for "is it present?" | cheap |
-| **3. Visual** | `houdini_capture_review` + `describe_image` (+ `houdini_capture_component_detail` for small parts) | Proportions, symmetry, intersection, construction logic | Advisory | expensive (render + vision) |
+| **3. Archive capture** | `houdini_capture_review` (optional, commit-time only) | A saved screenshot of the finished asset | **Archive only — NOT a verification loop** | render |
 
-**Run layers in order.** Cheap authoritative layers first; only escalate to vision when the cheap layers can't resolve a question.
+**Run layers in order.** Cheap authoritative layers first; capture is the last
+step before commit, for the record.
+
+## Two-tier health checks
+
+`houdini_inspect_geometry_health` reports `overall_ok`, which is driven ONLY by
+the BLOCKING checks:
+
+- **BLOCKING (gate `overall_ok` + commit):** `orphan_points`, `open_curves`.
+  These are unambiguous defects — always fix them.
+- **ADVISORY (reported, never block):** `degenerate_prims`, `nonmanifold_edges`,
+  `open_boundary_edges`, `coincident_points`. These are routinely tolerated or
+  EXPECTED. In particular `open_boundary_edges` is normal for open surfaces
+  (terrain, a single panel, an intentional gateway/door opening) — do NOT treat
+  it as a defect.
+
+`overall_ok == True` means the two blocking checks pass. An ADVISORY finding
+with a non-zero count does NOT make `overall_ok` false. If `overall_ok` is
+false, fix the named blocking check only.
 
 ## Mandatory Pre-Commit Sequence
 
@@ -18,64 +44,60 @@
    discard and rebuild modular. Do this BEFORE any verification.
 
 1. houdini_inspect_geometry_health on the OUT node — MANDATORY, not optional.
-   - Fix orphan points (Fuse), stray open curves (Blast), degenerate faces
-     (Clean), non-manifold edges before anything else. These silently break
-     Boolean/Sweep/subdivision downstream.
-   - NOTE: open_boundary_edges is EXPECTED for open surfaces (terrain, a
-     single panel). Only treat it as a defect for assets that should be closed.
+   - overall_ok reflects ONLY the BLOCKING checks (orphan_points, open_curves).
+     If overall_ok is false, fix the named blocking check.
+   - ADVISORY findings (non-manifold edges, open boundary edges, degenerate
+     faces, coincident points) are reported for your awareness but do NOT block.
+     Only act on them if they clearly break a downstream Boolean/Sweep you are
+     about to run. Do NOT rebuild to zero them out.
 
 2. houdini_verify_orientation on the OUT node
    - Pass all checks from the recipe's ORIENTATION ASSERTS section
    - If any check fails, apply the hint quaternion to the SOURCE code and
      re-run the sandbox. Do NOT rotate post-hoc on geometry.
 
-3. houdini_geometry_inventory on the OUT node (or read geometry_inventory
-   from the capture_review result)
+3. houdini_geometry_inventory on the OUT node
    - Confirm every expected component_id is present with prim_count > 0.
-   - Note any component with size_fraction < 0.08 — it is present but SMALL.
-     These will need a component close-up (step 5b) before vision can judge them.
+   - This is the AUTHORITATIVE answer to "is component X present?". prim_count
+     > 0 means it EXISTS — regardless of what any screenshot appears to show.
 
-4. houdini_capture_review (4-view: perspective/top/front/right) → describe_image
-   - The capture now frames each view to the target's bounding box (no more
-     clipped ortho views). It also returns a `geometry_inventory` text block.
-   - Pass the PROCEDURAL_VERIFY_PROMPT to describe_image, AND include the
-     inventory text in your message so the vision model cross-validates.
-   - The vision model CANNOT assess orientation — ignore any orientation
-     claims it makes. Only act on PROPORTIONS, SYMMETRY, INTERSECTION
-     (perspective-confirmed only), STRUCTURAL_DETAIL.
+4. (Optional) houdini_capture_review — ONE final screenshot for the archive,
+   taken just before commit. This is NOT a verification step:
+   - Do NOT call describe_image / analyze_image on it to judge defects.
+   - Do NOT rebuild based on anything you see in the screenshot.
+   - If you are unsure whether a component is correct, re-check the INVENTORY
+     (step 3), not the pixels. Inventory is authoritative; pixels are not.
 
-5. IF vision flags a component as missing/unclear, OR the inventory marks it SMALL:
-   5a. Check the inventory: if the component_id has prim_count > 0, it EXISTS
-       — vision just couldn't see it. Do NOT rebuild it.
-   5b. Run houdini_capture_component_detail on that component_id to get a
-       close-up, then re-judge. This resolves the "exists but too small"
-       ambiguity definitively. Use this tool, NOT a single-view capture_review.
-
-6. Repair loop: fix the SPECIFIC defect → re-verify the SPECIFIC layer →
-   repeat. Up to 3 rounds, then ask the user (see Debug Discipline below).
-
-7. houdini_commit_sandbox — runs the modular-structure gate then the
+5. houdini_commit_sandbox — runs the modular-structure gate then the
    orientation gate as final checks.
 ```
 
 ## Debug Discipline (anti-flail rules)
 
-The single biggest waste in procedural generation is the **blind rebuild loop**: vision reports a vague defect, the agent regenerates the whole asset hoping it improves, the geometry is essentially unchanged, repeat 4×. These rules prevent it:
+The single biggest waste in procedural generation is the **blind rebuild loop**:
+a vague signal ("it looks smooth" / "seems missing") triggers a full regenerate,
+the geometry is essentially unchanged, repeat 4×. These rules prevent it:
 
-1. **Name the defect before fixing.** State exactly which component_id or which health-check field you are fixing. "The chain is missing" is NOT a valid defect statement until you've confirmed via `geometry_inventory` that chain has prim_count == 0. If it has prim_count > 0, the defect is "chain is too small to see" → fix is a close-up capture, not a rebuild.
-2. **One defect per round.** Fix one named thing, re-verify that one thing. Don't bundle 5 changes into one rebuild — you won't know which worked.
-3. **Diff the inventory.** Before and after a repair, compare `geometry_inventory` output. If the component's prim_count/bounds didn't change, your edit didn't take effect — don't re-capture and hope.
-4. **Escalate, don't loop.** If the same defect survives 2 targeted fixes, the approach is wrong — switch backend (VEX↔Python SOP), ask the user, or capture a component detail. Do NOT do a 3rd identical rebuild.
-5. **Rebuild = last resort.** `houdini_discard_sandbox` + full regenerate is only justified when the health check shows fundamental topology breakage (non-manifold, many orphan points) OR orientation is structurally wrong across multiple components.
-
-## The Verification Prompt (for describe_image)
-
-Use the canonical `PROCEDURAL_VERIFY_PROMPT` (single source of truth in `pi-visionizer/src/config.ts`). It instructs the vision model to:
-- cross-reference a `GEOMETRY_INVENTORY` block you provide alongside the image,
-- NOT report small components as "missing" if they appear in the inventory,
-- emit a structured `VERDICT: accept | fix:<list> | closer_capture:<list> | uncertain`.
-
-When you call `describe_image`, paste the `geometry_inventory` text (returned by `capture_review`) into the same message so the vision model can cross-validate. Note: vision CANNOT detect orientation — rely on `houdini_verify_orientation` for that.
+1. **Name the defect before fixing.** State exactly which component_id or which
+   health-check field you are fixing. "The chain is missing" is NOT a valid
+   defect statement until `geometry_inventory` confirms chain has
+   prim_count == 0. If it has prim_count > 0, the component EXISTS — there is
+   no defect to rebuild.
+2. **One defect per round.** Fix one named thing, re-verify that one thing.
+   Don't bundle 5 changes into one rebuild.
+3. **Diff the inventory.** Before and after a repair, compare `geometry_inventory`
+   output. If the component's prim_count/bounds didn't change, your edit didn't
+   take effect — don't rebuild again and hope.
+4. **Escalate, don't loop.** If the same defect survives 2 targeted fixes, the
+   approach is wrong — switch backend (VEX↔Python SOP) or ask the user. Do NOT
+   do a 3rd identical rebuild.
+5. **Rebuild = last resort.** `houdini_discard_sandbox` + full regenerate is
+   only justified when a blocking health check shows fundamental breakage
+   (many orphan points / stray curves) OR orientation is structurally wrong
+   across multiple components.
+6. **Inventory beats pixels.** When the geometry inventory and a screenshot
+   disagree about whether a component exists, the inventory is correct. Never
+   rebuild real geometry (prim_count > 0) because a screenshot looked wrong.
 
 ## Orientation Check Examples
 
@@ -98,7 +120,8 @@ houdini_verify_orientation(
 
 ## Repair Loop for Orientation Failures
 
-When `houdini_verify_orientation` returns a failure, each failed check includes a `hint` field with the exact quaternion to apply:
+When `houdini_verify_orientation` returns a failure, each failed check includes
+a `hint` field with the exact quaternion to apply:
 
 ```python
 # Example failed check output:
@@ -116,18 +139,13 @@ When `houdini_verify_orientation` returns a failure, each failed check includes 
 }
 ```
 
-Fix by applying the hint inside the generator code (don't try to rotate post-hoc on the geometry — fix the source).
+Fix by applying the hint inside the generator code (don't try to rotate
+post-hoc on the geometry — fix the source).
 
-## What counts as defects (visual layer)
-- **Critical**: missing major component, geometry not visible
-- **Major**: obvious proportion error, intersecting parts, no surface detail (level 1-2)
-- **Minor**: slight asymmetry, imperfect edge flow, cosmetic issues
+## Archive Capture (screenshots)
 
-(Note: "wrong orientation" is no longer in this list — it's caught by the programmatic gate, not the visual layer.)
-
-## Capture (Screenshots)
-
-**Use `houdini_capture_review`** for all visual verification:
+**`houdini_capture_review` is an archive tool now, used ONCE before commit.** It
+is no longer part of a defect-judging verification loop:
 ```
 houdini_capture_review(
   filepath="review.png",  # auto-routed to $HIP/Edini_screenshots/<task>/
@@ -137,26 +155,21 @@ houdini_capture_review(
 )
 ```
 
-- **Always pass `target_path`** — frames and isolates the generated asset. Each view (including orthographic top/front/right) is framed to the target's bounding box via `setViewToBoundingBox`, so the COMPLETE model is always visible — no more clipped ortho views.
-- The result includes a `geometry_inventory` text block listing every `component_id` with its prim count and relative size. **Paste this into your describe_image message** so the vision model can cross-validate presence/absence rather than guessing from pixels.
-- Filepath is auto-routed to the session's screenshot folder; AI-supplied basenames are preserved with sequence numbering (`review_001.png`, etc.).
-- If capture returns an error, do not retry or explore alternative capture methods.
-
-**Use `houdini_capture_component_detail`** when a component is present (per inventory) but too small to judge in the whole-asset capture:
-```
-houdini_capture_component_detail(
-  filepath="chain_detail.png",
-  node_path="/obj/asset_name/OUT",
-  component_ids=["chain_top", "chainring", "pedal"],
-  views=["perspective"]   # keep cells large; add "top" for a 2-view sheet
-)
-```
-Each component is framed to its OWN bounding box and captured as a separate cell — this is how you resolve the "exists but too small to see" ambiguity.
+- **Always pass `target_path`** — frames and isolates the generated asset.
+- The result includes a `geometry_inventory` text block. This inventory is
+  AUTHORITATIVE for presence/absence; the pixels are NOT.
+- **Do NOT call `describe_image` / `analyze_image` to judge the capture.** The
+  visual-judgment loop has been removed because vision models repeatedly
+  misjudged small/repeated geometry (e.g. reporting a 3000-prim brick wall as
+  "smooth"), driving wasted rebuilds.
+- If capture returns an error, do not retry or explore alternative capture
+  methods — skip it and proceed to commit (the geometric layers already verified
+  the asset).
 
 ## Verification Tools (cheat-sheet)
 
 | Tool | When to use |
 |---|---|
-| `houdini_inspect_geometry_health` | After sandbox build, before orientation. Catches orphan points, stray open curves, degenerate faces, non-manifold edges, holes, coincident points. Returns `overall_ok` + per-check `fix` recommendations. |
-| `houdini_geometry_inventory` | Confirm every expected `component_id` exists with prim_count > 0. Flag small components (size_fraction < 0.08) that need a close-up. |
-| `houdini_capture_component_detail` | Close-up capture of specific component_ids when they're too small to see in the whole-asset 4-view. |
+| `houdini_inspect_geometry_health` | After sandbox build, before orientation. `overall_ok` reflects only BLOCKING checks (orphan_points, open_curves); the rest are ADVISORY. |
+| `houdini_geometry_inventory` | Confirm every expected `component_id` exists with prim_count > 0. AUTHORITATIVE for presence. |
+| `houdini_capture_review` | ONE archive screenshot before commit. Not a verification loop — do not judge it with a vision model. |

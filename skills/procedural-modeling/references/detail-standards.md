@@ -12,6 +12,21 @@ A procedural asset is NOT complete when it has correct topology. Detail means ST
 - **Functional sub-shapes** — brake calipers, mirror housings, key dish concavity
 - **Construction logic** — visible how the object would be manufactured/assembled
 
+## Repeated micro-structure MUST be instanced (Copy-to-Points), not inlined
+Secondary components and surface treatments that repeat ≥10× (rivets along a
+seam, bricks in a wall, roof tiles, balusters, chain links, scales/shingles,
+crenellations, studs) are real detail — but only when built as **one template
+piece copied onto scatter points**, not hand-stamped in a Python loop. See
+SKILL.md **Step 3b — Micro-repetition MUST use Copy-to-Points**.
+
+- Good: one `rivet` python SOP (single rivet, tagged `component_id="rivet"`) +
+  a scatter-points SOP feeding a copytopoints. Edit the rivet once → all update.
+- Bad: `for i in range(200): emit_rivet_at(offset*i)` inside one Python SOP.
+  This is a monolithic blob, not parametric, and trips the structure gate.
+
+The smell test: `for ... in range(N):` whose body emits near-identical geometry
+with N ≥ 10 → refactor to template + scatter + copytopoints.
+
 ## What does NOT count as detail
 - PolyBevel on all edges (this is finishing, not detail)
 - Subdivide passes (this is smoothing, not detail)

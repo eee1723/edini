@@ -177,6 +177,84 @@ class TestVariantScatterIntegration(_HouFixture):
                          "AFP pieceattrib must be set to 'variant'")
 
 
+class TestSafeCreateNodeAutoInitsCopyToPoints(_HouFixture):
+    """Change 1: _safe_create_node is the global chokepoint — ANY copytopoints
+    it creates must auto-press resettargetattribs, so build_procedural_asset and
+    hand-written network_mode scripts are covered without the caller remembering
+    to call _setup_copy_apply_attributes."""
+
+    def test_copytopoints_gets_resettargetattribs_pressed(self):
+        """A copytopoints created via _safe_create_node has its
+        resettargetattribs button pressed (attribute transfer initialized).
+
+        The mock's pressButton is a no-op (it doesn't simulate the real-H21
+        side-effect of populating the targetattribs multiparm), so we spy on
+        the call itself rather than checking the multiparm count."""
+        obj = self.mock_hou.node("/obj")
+        geo = obj.createNode("geo", "g")
+        # Spy on the button BEFORE creation runs the post-create init.
+        # We pre-create the node type's parm template so the button exists to
+        # spy on; simplest path: build the node, then verify via a re-init spy.
+        copy = geo.createNode("copytopoints", "probe")
+        btn = copy.parm("resettargetattribs")
+        pressed = {"flag": False}
+        orig_press = btn.pressButton
+
+        def spy():
+            pressed["flag"] = True
+            orig_press()
+
+        btn.pressButton = spy
+        # Re-run the post-create init on this node to assert it presses.
+        self.harness._post_create_init(copy)
+        self.assertTrue(pressed["flag"],
+                        "_post_create_init did not press resettargetattribs")
+
+    def test_safe_create_node_init_runs_on_creation(self):
+        """End-to-end: _safe_create_node("copytopoints", ...) presses the
+        button during creation (not just when _post_create_init is called
+        directly). Spied via a node-level button-press counter."""
+        obj = self.mock_hou.node("/obj")
+        geo = obj.createNode("geo", "g")
+        # Track pressButton calls on the to-be-created copy node by wrapping
+        # _init_copytopoints_attribs (the shared impl) — if _safe_create_node
+        # wires it in, this records a press.
+        from edini import node_utils
+        called = {"flag": False}
+        orig = node_utils._init_copytopoints_attribs
+
+        def spy(node):
+            called["flag"] = True
+            return orig(node)
+
+        node_utils._init_copytopoints_attribs = spy
+        try:
+            self.harness._safe_create_node(geo.path(), "copytopoints", "c2")
+        finally:
+            node_utils._init_copytopoints_attribs = orig
+        self.assertTrue(called["flag"],
+                        "_safe_create_node did not run copytopoints init")
+
+    def test_non_copy_node_is_left_alone(self):
+        """Non-copytopoints nodes must NOT be touched by the post-create init."""
+        obj = self.mock_hou.node("/obj")
+        geo = obj.createNode("geo", "g")
+        # A null node has no resettargetattribs; creating it must not error.
+        null = self.harness._safe_create_node(geo.path(), "null", "n")
+        self.assertIsNone(null.parm("resettargetattribs"))
+
+    def test_post_create_init_is_best_effort(self):
+        """If resettargetattribs is missing, _safe_create_node must still return
+        the created node (init failure must not break creation)."""
+        # Build a fake node type with no resettargetattribs button is hard via
+        # the mock; instead exercise _post_create_init directly with a node
+        # whose button is stripped — it must not raise.
+        copy = self._make_copy_node()
+        copy._parms.pop("resettargetattribs", None)
+        # Should complete without raising and return None gracefully.
+        self.harness._post_create_init(copy)
+
+
 # ── recipe code helpers (kept local to avoid cross-module coupling) ────────
 def _variant_geo(cid):
     return (

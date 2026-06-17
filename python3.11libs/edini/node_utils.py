@@ -110,12 +110,46 @@ def _create_with_namespace_fallback(parent, node_type: str, name: str | None):
     return node
 
 
+def _init_copytopoints_attribs(node) -> bool:
+    """Press Copy-to-Points' ``resettargetattribs`` button to initialize the
+    attribute transfer so the target point's attributes (notably ``id``) are
+    stamped onto every copied instance.
+
+    Real-H21 mechanism (verified on 21.0.440): the ``targetattribs`` parm is a
+    multiparm folder starting at 0 entries (no transfer). The
+    ``resettargetattribs`` BUTTON auto-populates it with a default entry that
+    copies every non-transform target-point attribute — which already covers
+    ``id`` (and ``variant``). So pressing the button is sufficient.
+
+    Kept in node_utils (not harness) so both creation paths share one
+    implementation: ``node_utils.create_node`` (hand-written network_mode
+    scripts) and ``harness._post_create_init`` (build_procedural_asset /
+    variant_scatter).
+
+    Best-effort: returns False (never raises) if the button is missing or the
+    press fails — the caller already has a usable node; a missing transfer is
+    preferable to a failed node creation.
+    """
+    try:
+        reset = node.parm("resettargetattribs")
+        if reset is None:
+            return False
+        reset.pressButton()
+        return True
+    except Exception:
+        return False
+
+
 def _apply_tool_presets(node) -> None:
     """Apply post-creation parameter presets from shelf tools matching this node type.
 
     The Tab menu runs shelf tools that often call pressButton() or parm().set()
     after creating the node (e.g. 'resettargetattribs' for copytopoints).
     This function finds matching tools and applies those post-creation actions.
+
+    For Copy-to-Points the shelf-tool path is unreliable across builds, so a
+    hardcoded fallback in :func:`_init_copytopoints_attribs` guarantees the
+    attribute transfer is initialized regardless of shelf availability.
     """
     import re
 
@@ -123,6 +157,14 @@ def _apply_tool_presets(node) -> None:
         node_type_name = node.type().name()  # e.g. 'copytopoints::2.0'
     except Exception:
         return
+
+    # Hardcoded Copy-to-Points init: press resettargetattribs so per-instance
+    # ids/attrs transfer onto every copied prim. This is the only sanctioned
+    # real-H21 path (see harness._setup_copy_apply_attributes). Done here so
+    # node_utils.create_node (used by hand-written network_mode scripts) is
+    # covered identically to the harness path.
+    if node_type_name.split("::")[0].lower() == "copytopoints":
+        _init_copytopoints_attribs(node)
 
     # Build candidate tool name patterns
     # e.g. for 'copytopoints::2.0': 'sop_copytopoints::2.0', 'sop_copytopoints'
@@ -961,6 +1003,17 @@ def _edge_key(a: int, b: int) -> tuple[int, int]:
     return (a, b) if a <= b else (b, a)
 
 
+# Two-tier severity for inspect_geometry_health. BLOCKING checks gate
+# overall_ok (and thus commit); ADVISORY checks are reported but never block.
+_HEALTH_BLOCKING_CHECKS = ("orphan_points", "open_curves")
+_HEALTH_ADVISORY_CHECKS = (
+    "degenerate_prims",
+    "nonmanifold_edges",
+    "open_boundary_edges",
+    "coincident_points",
+)
+
+
 def inspect_geometry_health(
     node_path: str,
     degenerate_area_eps: float = 1e-7,
@@ -984,8 +1037,19 @@ def inspect_geometry_health(
 
     Each finding includes a `fix` recommendation naming the SOP to use.
 
-    Returns {success, node_path, summary, checks: {...}, overall_ok}.
-    `overall_ok` is True only if every check passes.
+    **Two-tier severity** (see _HEALTH_BLOCKING_CHECKS / _HEALTH_ADVISORY_CHECKS):
+      - BLOCKING (gate overall_ok + commit): orphan_points, open_curves.
+        These are unambiguous defects that always warrant a fix.
+      - ADVISORY (reported, never block): degenerate_prims, nonmanifold_edges,
+        open_boundary_edges, coincident_points. These are routinely tolerated
+        or EXPECTED (open_boundary_edges on open surfaces like terrain or an
+        intentional gateway opening). Treating them as blocking produced false
+        ``overall_ok=False`` on clean geometry and drove rebuild loops.
+
+    Returns {success, node_path, summary, checks: {...}, overall_ok,
+    blocking_checks, advisory_checks}. ``overall_ok`` is True only if every
+    BLOCKING check passes; ADVISORY findings never affect it. Each check also
+    carries a ``severity`` field.
     """
     try:
         node = hou.node(node_path)
@@ -1175,7 +1239,25 @@ def inspect_geometry_health(
         "open_boundary_edges": open_boundary_edges,
         "coincident_points": coincident,
     }
-    overall_ok = all(c["passed"] for c in checks.values())
+
+    # Two-tier severity: BLOCKING checks gate commit; ADVISORY checks are
+    # reported but never flip overall_ok. Rationale (from production runs):
+    # non-manifold edges and coincident points are routinely tolerated, and
+    # open_boundary_edges are EXPECTED on open surfaces (terrain, a single
+    # panel, an intentional gateway opening). Treating them as blocking made
+    # overall_ok report false on geometry that was already clean, which drove
+    # agents into rebuild loops over non-defects. Only orphan points and stray
+    # open curves are unambiguous defects that always warrant a fix.
+    for cname in _HEALTH_BLOCKING_CHECKS:
+        if cname in checks:
+            checks[cname]["severity"] = "blocking"
+    for cname in _HEALTH_ADVISORY_CHECKS:
+        if cname in checks:
+            checks[cname]["severity"] = "advisory"
+
+    overall_ok = all(
+        checks[c]["passed"] for c in _HEALTH_BLOCKING_CHECKS if c in checks
+    )
 
     return {
         "success": True,
@@ -1183,6 +1265,8 @@ def inspect_geometry_health(
         "point_count": n_points,
         "prim_count": n_prims,
         "overall_ok": overall_ok,
+        "blocking_checks": [c for c in _HEALTH_BLOCKING_CHECKS if c in checks],
+        "advisory_checks": [c for c in _HEALTH_ADVISORY_CHECKS if c in checks],
         "summary": {
             name: c["count"] for name, c in checks.items()
         },
