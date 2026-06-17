@@ -1020,19 +1020,29 @@ class TestBuildVariantScatter(unittest.TestCase):
         # One python SOP per variant.
         self.assertIn("win_a_python", names)
         self.assertIn("win_b_python", names)
-        # The variant chain: merge → pack(packbyname) → scatter → copytopoints
-        # → unpack → idfix. NOTE: no attribfrompieces — the weighted assignment
-        # lives in the scatter-points Python wrapper, so Copy to Points
-        # dispatches directly by matching the point's `variant` against the
-        # packed source's `variant`.
+        # The variant chain (H21-verified architecture):
+        #   merge(unpacked) → scatter_points → attribfrompieces → copytopoints
+        #   → idfix → OUT
+        # NOTE the changes from the original design (all forced by real-H21
+        # testing, see manual_variant_dispatch_diagnose.py):
+        #   - NO pack node: Copy to Points dispatches on UNPACKED source prims
+        #     by `variant`. Pack By Name HID the variant inside the
+        #     PackedFragment, breaking dispatch.
+        #   - attribfrompieces (scatter_afp) assigns each scatter point a
+        #     `variant` drawn from the source piece library, covering all
+        #     variants even at low point counts (the old weighted-random
+        #     wrapper could starve low-weight variants).
+        #   - NO unpack node: Copy on unpacked source already yields expanded
+        #     geometry.
         self.assertIn("variants_merge", names)
-        self.assertIn("variants_pack", names)
         self.assertIn("scatter_points", names)
+        self.assertIn("scatter_afp", names)
         self.assertIn("copy_scatter", names)
-        self.assertIn("scatter_unpack", names)
         self.assertIn("scatter_idfix", names)
         self.assertIn("OUT", names)
-        self.assertNotIn("attribfrompieces", names)
+        # The removed nodes must NOT be present.
+        self.assertNotIn("variants_pack", names)
+        self.assertNotIn("scatter_unpack", names)
 
     def test_structure_gate_passes_not_monolithic(self):
         """pack/copytopoints are recognized as modular by _MODULAR_NODE_TYPES,
@@ -1046,13 +1056,14 @@ class TestBuildVariantScatter(unittest.TestCase):
         self.assertGreaterEqual(advisory["details"]["modular_node_count"], 1)
 
     def test_weights_normalized_and_reported(self):
-        """Weights are auto-normalized; the response echoes the per-variant
-        weight regardless of sum."""
+        """Weights are echoed verbatim in the response. (They no longer drive
+        the generated scatter code — AFP owns variant assignment now — but are
+        still validated and reported for the caller's benefit.)"""
         recipe = self._minimal_recipe()
         recipe["scatter"]["weights"] = {"win_a": 14, "win_b": 6}
         r = harness.build_variant_scatter(recipe)
         self.assertTrue(r["success"], msg=r.get("error"))
-        # Echoed raw weights (normalization happens in the generated code).
+        # Echoed raw weights.
         self.assertEqual(r["weights"], {"win_a": 14, "win_b": 6})
 
     def test_postprocess_chain_built(self):
@@ -1149,29 +1160,37 @@ class TestVariantIdfixSnippet(unittest.TestCase):
 
 
 class TestVariantScatterPointsCode(unittest.TestCase):
-    """The scatter-points wrapper assigns the `variant` piece attribute per
-    point using a weighted, seeded distribution."""
+    """The scatter-points wrapper numbers points with a per-point `id`.
+
+    NOTE: the wrapper NO LONGER assigns `variant` — that is delegated to the
+    downstream attribfrompieces SOP (verified on real H21; AFP covers all
+    variants reliably even at low point counts, unlike the old weighted-random
+    assignment which could starve low-weight variants). So these tests assert
+    the wrapper's current contract: it emits the user code + a per-point id,
+    and contains NO variant/weights/random logic."""
 
     def test_wrapper_includes_user_code(self):
-        wrapper = harness._variant_scatter_points_code(
-            ["a", "b"], {"a": 1.0, "b": 1.0}, 42, "# USER CODE HERE")
+        wrapper = harness._variant_scatter_points_code("# USER CODE HERE")
         self.assertIn("# USER CODE HERE", wrapper)
-        self.assertIn("variant", wrapper)
         # Assigns a unique `id` per scatter point (transferred to instances).
         self.assertIn("'id'", wrapper)
 
-    def test_weights_normalized_to_cumulative_thresholds(self):
-        """2 variants at 3:1 -> normalized cumulative [0.75, 1.0]."""
-        wrapper = harness._variant_scatter_points_code(
-            ["a", "b"], {"a": 3.0, "b": 1.0}, 0, "")
-        # The first threshold should be ~0.75 (3/4).
-        self.assertIn("0.75", wrapper)
+    def test_wrapper_assigns_per_point_id(self):
+        """The wrapper enumerates points and stamps an integer `id`."""
+        wrapper = harness._variant_scatter_points_code("")
+        self.assertIn("for idx, pt in enumerate(geo.points())", wrapper)
+        self.assertIn("setAttribValue('id', idx)", wrapper)
 
-    def test_seed_threaded_into_rng(self):
-        wrapper = harness._variant_scatter_points_code(
-            ["a"], {}, 123, "")
-        self.assertIn("123", wrapper)
-        self.assertIn("random.Random", wrapper)
+    def test_wrapper_does_not_assign_variant(self):
+        """Variant assignment is owned by attribfrompieces, NOT the wrapper.
+        The wrapper must contain no variant/random/weights logic."""
+        wrapper = harness._variant_scatter_points_code("")
+        self.assertNotIn("random", wrapper,
+                         "wrapper must not roll its own RNG (AFP owns variant)")
+        self.assertNotIn("_thresholds", wrapper,
+                         "wrapper must not compute weight thresholds (AFP owns variant)")
+        # The variant attribute must NOT be set by the wrapper.
+        self.assertNotIn("setAttribValue('variant'", wrapper)
 
 
 if __name__ == "__main__":

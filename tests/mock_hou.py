@@ -167,6 +167,19 @@ class MockToggleParmTemplate(MockParmTemplate):
         self._type_name = "Toggle"
 
 
+class MockButtonParmTemplate(MockParmTemplate):
+    """Mock hou.ButtonParmTemplate — a pressable button parameter.
+
+    The default value is the string '0' to mirror real Houdini button parms
+    (which eval to '0' as a string). type() reports 'Button'.
+    """
+
+    def __init__(self, name: str = "", label: str = ""):
+        super().__init__(name, label)
+        self.default = "0"
+        self._type_name = "Button"
+
+
 class MockStringParmTemplate(MockParmTemplate):
     """Mock hou.StringParmTemplate — string parameter."""
 
@@ -181,11 +194,21 @@ class MockStringParmTemplate(MockParmTemplate):
 
 
 class MockFolderParmTemplate(MockParmTemplate):
-    """Mock hou.FolderParmTemplate — holds child templates."""
+    """Mock hou.FolderParmTemplate — holds child templates.
 
-    def __init__(self, name: str = "", label: str = "", folder_type: int = 0):
+    Doubles as a multiparm folder when ``is_multiparm`` is set: its child
+    templates carry a ``#`` in their name (the per-instance marker), and the
+    folder tracks an instance ``length``. ``setLength``/``setNumInstances``
+    grow/shrink it, mirroring real Houdini's multiparm API (used by
+    harness._setup_copy_apply_attributes tier 3).
+    """
+
+    def __init__(self, name: str = "", label: str = "", folder_type: int = 0,
+                 is_multiparm: bool = False, length: int = 0):
         super().__init__(name, label)
         self.folder_type = folder_type
+        self.is_multiparm = is_multiparm
+        self._length = length
         self._children: list[Any] = []
 
     def addParmTemplate(self, tmpl: Any) -> None:
@@ -193,6 +216,19 @@ class MockFolderParmTemplate(MockParmTemplate):
 
     def parmTemplates(self) -> list[Any]:
         return list(self._children)
+
+    # ── multiparm API (real Houdini folder templates expose these) ────────
+    def length(self) -> int:
+        return self._length
+
+    def setLength(self, n: int) -> None:
+        self._length = int(n)
+
+    def setNumInstances(self, n: int) -> None:
+        self._length = int(n)
+
+    def numInstances(self) -> int:
+        return self._length
 
 
 class MockParmTemplateGroup:
@@ -223,6 +259,20 @@ class MockParmTemplateGroup:
 
     def entries(self) -> list[Any]:
         return list(self._templates)
+
+    def replace(self, old, new) -> None:
+        """Replace a top-level template. ``old`` may be a name (str) or the
+        template object itself, mirroring hou.ParmTemplateGroup.replace."""
+        old_name = old if isinstance(old, str) else None
+        for i, tmpl in enumerate(self._templates):
+            try:
+                tname = tmpl.name()
+            except Exception:
+                tname = ""
+            match = (old_name == tname) if old_name is not None else (tmpl is old)
+            if match:
+                self._templates[i] = new
+                return
 
     def asParmSpecs(self) -> dict[str, dict]:
         """Flatten all templates (recursing folders) to {name: {default,...}}."""
@@ -593,6 +643,12 @@ class MockNode:
         self._errors: list[str] = []
         self._warnings: list[str] = []
         self._geometry = None
+        # Multiparm support: maps a template name with '#' (e.g. 'useapply#')
+        # to its template object, and to the folder count-parm name that
+        # controls how many instances exist. Populated by createNode() from
+        # the node-type PTG; used by parm() for lazy per-instance creation.
+        self._multiparm_templates: dict[str, Any] = {}
+        self._multiparm_count_parm: dict[str, str] = {}
 
     def path(self) -> str:
         return self._path
@@ -636,7 +692,34 @@ class MockNode:
         return result
 
     def parm(self, name: str) -> MockParm | None:
-        return self._parms.get(name)
+        found = self._parms.get(name)
+        if found is not None:
+            return found
+        # Multiparm lazy instantiation: if `name` matches a multiparm template
+        # (e.g. `useapply1` → `useapply#`) and the folder's count parm allows
+        # that instance index, materialize the instance parm on the fly. This
+        # mirrors real Houdini, where setting a multiparm count creates the
+        # per-instance parms automatically, so harness code can set
+        # numapplyattrs=1 then read/write useapply1 etc. under the mock.
+        import re as _re
+        m = _re.match(r"^(.*?)(\d+)$", name)
+        if m:
+            prefix, num = m.group(1), int(m.group(2))
+            tmpl = self._multiparm_templates.get(prefix + "#")
+            if tmpl is not None:
+                count_parm_name = self._multiparm_count_parm.get(prefix + "#")
+                count = 0
+                if count_parm_name and count_parm_name in self._parms:
+                    try:
+                        count = int(self._parms[count_parm_name].eval())
+                    except Exception:
+                        count = 0
+                if 1 <= num <= count:
+                    default = getattr(tmpl, "default", 0)
+                    parm = MockParm(name, default)
+                    self._parms[name] = parm
+                    return parm
+        return None
 
     def parms(self) -> list[MockParm]:
         return list(self._parms.values())
@@ -680,6 +763,27 @@ class MockNode:
                 if nm not in child._parms:
                     default = getattr(tmpl, "default", 0)
                     child._parms[nm] = MockParm(nm, default)
+            # Index multiparm folders: for each folder whose child templates
+            # carry a '#' in their name, bind each child template to the
+            # folder's count parm (num<folderbase>) so parm() can lazily create
+            # per-instance parms when the count is raised.
+            for folder in ntype._ptg._templates:
+                fname = getattr(folder, "name", None)
+                if not (isinstance(fname, str) and fname.endswith("#")):
+                    continue
+                children = []
+                try:
+                    children = folder.parmTemplates()
+                except Exception:
+                    children = []
+                if not children:
+                    continue
+                count_parm = "num" + fname[:-1]
+                for ctmpl in children:
+                    cname = getattr(ctmpl, "name", None)
+                    if isinstance(cname, str) and "#" in cname:
+                        child._multiparm_templates[cname] = ctmpl
+                        child._multiparm_count_parm[cname] = count_parm
         self._children.append(child)
         if MockNode._hou_ref is not None:
             MockNode._hou_ref._nodes[child.path()] = child
@@ -963,15 +1067,31 @@ def _make_normal_ptg():
 
 
 def _make_copytopoints_ptg():
-    """Copy to Points 2.0 parm template group (subset agents use).
-    H21 names: the piece-attribute dispatch uses `useidattrib` (toggle) +
-    `idattrib` (attribute name) — NOT pieceattrib/pieceattribname."""
+    """Copy to Points 2.0 parm template group (H21.0.440 structure).
+
+    Key H21 facts (verified on real 21.0.440, NOT just the manifest):
+      - piece-attribute dispatch uses `useidattrib` (toggle) + `idattrib`
+        (name), and works on UNPACKED source geometry.
+      - There is NO Apply Attributes multiparm folder and NO numapplyattrs
+        count parm on a fresh node (the manifest's useapply#/... templates
+        are latent). Attribute transfer is driven by the `resettargetattribs`
+        BUTTON, which when pressed populates the `targetattribs` multiparm
+        (an int whose value = instance count) with default entries.
+      - `targetattribs` is the count parm (value = number of apply entries).
+
+    The mock records presses of `resettargetattribs` (via MockNode's button
+    tracking) so tests can assert the harness pressed it. The real fill-in
+    of useapply1/etc. is validated in Houdini runtime, not in the mock.
+    """
     g = MockParmTemplateGroup()
     g.append(MockStringParmTemplate("sourcegroup", "Source Group"))
     g.append(MockStringParmTemplate("targetgroup", "Target Points"))
     g.append(MockToggleParmTemplate("useidattrib", "Piece Attribute", default=False))
     g.append(MockStringParmTemplate("idattrib", "Piece Attribute", default=""))
     g.append(MockToggleParmTemplate("pack", "Pack and Instance", default=False))
+    # The real H21 transfer mechanism: a button + its multiparm count parm.
+    g.append(MockButtonParmTemplate("resettargetattribs", "Reset Attributes from Target"))
+    g.append(MockIntParmTemplate("targetattribs", "Attributes from Target", default=0))
     return g
 
 
@@ -1045,6 +1165,7 @@ class MockHou:
     IntParmTemplate = MockIntParmTemplate
     MenuParmTemplate = MockMenuParmTemplate
     ToggleParmTemplate = MockToggleParmTemplate
+    ButtonParmTemplate = MockButtonParmTemplate
     StringParmTemplate = MockStringParmTemplate
     FolderParmTemplate = MockFolderParmTemplate
     ParmTemplateGroup = MockParmTemplateGroup

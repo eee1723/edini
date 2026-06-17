@@ -129,34 +129,75 @@ For a component with **no anchors** (direct-merge), the world frame is identity,
 
 ## Variant Scatter (变体散布)
 
-`houdini_variant_scatter` builds an asset where **multiple variant geometries** are distributed onto scatter points via a **weighted, seeded** distribution. Use it when a repeated part has several interchangeable styles (3 window designs, 4 tree species, 2 door types) and you want the variation to be controllable + reproducible. The workflow: tag each variant's prims with an integer `variant` index → **Pack By Name** (one packed prim per variant) → emit scatter points with a weighted `variant` assignment (deterministic, seeded) → **Copy to Points 2.0** dispatches by matching the point's `variant` against the packed source's `variant`.
+`houdini_variant_scatter` builds an asset where **multiple variant geometries** are distributed onto scatter points. Use it when a repeated part has several interchangeable styles (3 window designs, 4 tree species, 2 door types) and you want the variation to be controllable + reproducible.
+
+**The workflow (Houdini 21 verified architecture):**
+```
+variants (prim `variant` int tagged) → merge (UNPACKED)
+                                          │   scatter_points (emit @P, get i@id) ──┤
+                                          ↓
+                                   attribfrompieces (pieceattrib=variant, seed)
+                                          │   ← draws a `variant` onto each scatter
+                                          │     point from the source piece library
+                                          ↓
+                                   copytopoints 2.0 (useidattrib=1, idattrib=variant)
+                                          │   ← dispatches UNPACKED source prim `variant`
+                                          │     against target point `variant` 1:1
+                                          │   ← resettargetattribs button transfers i@id
+                                          ↓
+                                   idfix → OUT   (no unpack; source already expanded)
+                                   component_id = {variant_id}_{id}
+```
+
+**Why this architecture (all from real-H21 testing):**
+- **No Pack node.** Pack By Name HIDES the prim `variant` inside the PackedFragment, so Copy to Points' piece dispatch can't read it → dispatch collapses. Copy dispatches correctly on **unpacked** source geometry.
+- **attribfrompieces owns variant assignment.** It draws a `variant` onto each scatter point from the source piece library and reliably covers ALL variants even at low point counts (the old weighted-random assignment could starve low-weight variants).
+- **resettargetattribs button transfers `id`.** Real H21 has no Apply Attributes multiparm on a fresh Copy node; pressing the button auto-populates the transfer. You do NOT set this yourself.
 
 **When to use variant scatter vs single-template Copy-to-Points:**
 - `houdini_build_procedural_asset` + one anchored component = **one template** copied N times (all instances identical, like 6 identical windows).
-- `houdini_variant_scatter` = **N variant templates**, each instance randomly picks one per the weight distribution (6 windows, some style-A, some style-B, …). This is what raises detail from "uniform repetition" to "lived-in variation".
+- `houdini_variant_scatter` = **N variant templates**, each instance gets one drawn from the source library per `seed` (6 windows, some style-A, some style-B, …). This is what raises detail from "uniform repetition" to "lived-in variation".
 
-### The recipe schema
+### Tool call parameters
 
 ```jsonc
-{
-  "asset_name": "window_wall",
-  "variants": [                                  // 2+ variant source geometries
-    {"id": "win_a", "code": "<emit window style A; tag component_id='win_a'>"},
-    {"id": "win_b", "code": "<emit window style B>"},
-    {"id": "win_c", "code": "<emit window style C>"}
-  ],
-  "scatter": {
-    "source": "<python code: emit scatter points with @P, optional @orient/@pscale/@N>",
-    "seed": 42,                                  // integer — reproducible runs
-    "weights": {"win_a": 0.6, "win_b": 0.3, "win_c": 0.1}  // optional; auto-normalized
+houdini_variant_scatter({
+  "recipe": {                         // REQUIRED — the recipe object (schema below)
+    "asset_name": "window_wall",      // optional; defaults to "variant_asset"
+    "variants": [                     // REQUIRED — 2+ variant source geometries
+      {"id": "win_a", "code": "<single-SOP cook body emitting window style A>"},
+      {"id": "win_b", "code": "<emit window style B>"},
+      {"id": "win_c", "code": "<emit window style C>"}
+    ],
+    "scatter": {                      // REQUIRED
+      "source": "<python code: emit scatter points with @P, optional @orient/@pscale/@N>",
+      "seed": 42,                     // REQUIRED integer — reproducible runs
+      "weights": {"win_a": 0.6, "win_b": 0.3, "win_c": 0.1}  // OPTIONAL
+    },
+    "postprocess": [                  // OPTIONAL — same chain as build_procedural_asset
+      {"type": "fuse"}, {"type": "clean"},
+      {"type": "normal", "params": {"cuspangle": 60}}
+    ],
+    "orientation_asserts": [...]      // OPTIONAL — per-variant orientation checks
   },
-  "postprocess": [                               // same chain as build_procedural_asset
-    {"type": "fuse"}, {"type": "clean"},
-    {"type": "normal", "params": {"cuspangle": 60}}
-  ],
-  "orientation_asserts": [...]                    // per-instance ids are auto-assigned
-}
+  "sandbox_name": "window_wall",      // OPTIONAL; defaults to asset_name
+  "delete_on_failure": false          // OPTIONAL; default false (preserve on error)
+})
 ```
+
+| Parameter | Required | Type | Notes |
+|---|---|---|---|
+| `recipe` | **yes** | object | The recipe (see schema). |
+| `recipe.variants` | **yes** | list | 2+ objects, each `{id, code}`. `id` non-empty unique string; `code` non-empty string. |
+| `recipe.scatter` | **yes** | object | `{source, seed, weights?}`. |
+| `recipe.scatter.source` | **yes** | string | Python cook body emitting scatter points (`@P` required). |
+| `recipe.scatter.seed` | **yes** | integer | Drives AFP's draw; reproducible across runs. |
+| `recipe.scatter.weights` | no | object | `{variant_id: number}`; validated against known ids; echoed in result (AFP's own distribution is currently uniform — see Gotchas). |
+| `recipe.asset_name` | no | string | Sandbox root name; default `"variant_asset"`. |
+| `recipe.postprocess` | no | list | Same chain semantics as `build_procedural_asset`. |
+| `recipe.orientation_asserts` | no | list | Per-component orientation asserts; evaluated after build. |
+| `sandbox_name` | no | string | Overrides `asset_name` for the sandbox root. |
+| `delete_on_failure` | no | bool | Default `false` — sandbox is preserved on error so you can diagnose. |
 
 ### Variant code rules
 Each variant's `code` is a single-SOP cook body (same Iron Rules as a recipe component). It MUST:
@@ -166,16 +207,14 @@ Each variant's `code` is a single-SOP cook body (same Iron Rules as a recipe com
 The builder wraps each variant's code to additionally tag every prim with an integer `variant` attribute (the variant's index) — you do NOT set this yourself.
 
 ### Scatter source rules
-`scatter.source` is python code that emits the target points. It should set `@P` (required) and may set `@orient`/`@pscale`/`@N` (optional, carried through to instances). The builder wraps your code to additionally:
-- assign each point an integer `variant` attribute drawn from the weighted distribution using `seed`,
-- record each point's original number as `edini_scatter_ptnum` (so per-instance ids can be built).
+`scatter.source` is python code that emits the target points. It should set `@P` (required) and may set `@orient`/`@pscale`/`@N` (optional, carried through to instances). The builder wraps your code to additionally stamp each point with an integer `id` (its point number). **You do NOT assign `variant` here** — that is the job of the downstream `attribfrompieces` SOP.
 
 ### Per-instance component_id
-Each instance gets `component_id = "{variant_id}_{ptnum}"` (e.g. `win_a_0`, `win_b_3`). This is assigned **after unpacking** (packed primitives only carry point-level attributes). Use these per-instance ids in `orientation_asserts` — but since you can't predict which variant lands on which point, assert on the **variant prefix** is not possible per-instance; instead assert on a representative instance or use `construction_axis` on the variant source geometry.
+Each instance gets `component_id = "{variant_id}_{id}"` (e.g. `win_a_0`, `win_b_3`). The `idfix` SOP reads the prim `variant` (which variant, tagged on the source) + the point `id` (which instance, transferred via `resettargetattribs`) to build a globally-unique id. Use these per-instance ids in `orientation_asserts` — but since you can't predict which variant lands on which point, assert on a representative instance or use `construction_axis` on the variant source geometry.
 
 ### Build result (read these before committing)
 - `variants_built`, `n_variants`, `weights`, `seed`, `piece_attribute` (`"variant"`)
-- `structure_advisory` — passes (the pack/attribfrompieces/copytopoints chain is modular)
+- `structure_advisory` — passes (the attribfrompieces/copytopoints chain is modular)
 - `component_id_check` — confirms each variant prefix produced at least one instance
 - `diagnostics` / `structural_checks` — point/prim counts, bounds
 - `orientation_check` — preview (if asserts declared)
@@ -191,6 +230,6 @@ houdini_commit_sandbox(
 
 ### Gotchas
 - The `variant` piece attribute is **integer** (never float — Copy to Points silently drops points on a float piece attr).
-- Weights are auto-normalized, so `{"a": 6, "b": 4}` is equivalent to `{"a": 0.6, "b": 0.4}`.
+- **`weights` are echoed but not yet wired into AFP's distribution** — AFP currently assigns variants uniformly across the source piece library. If you need true weighted distribution, set AFP's `weightattrib`/`weightmethod` manually after build, or contribute the wiring. The `seed` still controls reproducibility.
 - Changing `seed` reshuffles which variant lands on which point — fully reproducible across runs with the same seed + same scatter topology.
 - For pipeline stability across upstream topology changes, prefer anchoring scatter points to a persistent `id` attribute rather than relying on `@ptnum` order.

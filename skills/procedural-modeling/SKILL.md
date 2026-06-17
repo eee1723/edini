@@ -49,7 +49,7 @@ Code templates for modular wiring: [scripts/python-sop-template.py](scripts/pyth
 | Situation | Build path |
 |---|---|
 | Multi-component asset (≥2 components or any repeated/swappable part) | **`houdini_build_procedural_asset`** (declarative recipe) — PREFERRED. Full schema + construction axis: [references/declarative-builder.md](references/declarative-builder.md). Asset-level params + linkage: [references/params-and-linkage.md](references/params-and-linkage.md). |
-| **Repeated part with multiple styles** (windows/doors/trees with N variants, weighted + seeded scatter) | **`houdini_variant_scatter`** — modern packed-primitive + piece-attribute workflow (Attribute from Pieces + Copy to Points). Per-instance `component_id` auto-assigned. Schema: [references/declarative-builder.md](references/declarative-builder.md#variant-scatter-变体散布). |
+| **Repeated part with multiple styles** (windows/doors/trees with N variants, seeded scatter) | **`houdini_variant_scatter`** — `attribfrompieces` + Copy to Points dispatch on UNPACKED source by `variant`. Per-instance `component_id` auto-assigned. Full params + schema: [references/declarative-builder.md](references/declarative-builder.md#variant-scatter-变体散布). |
 | Non-standard topology you can't express as a recipe | `houdini_run_python_sandbox(network_mode=true)` — hand-write the network in the container. |
 | Genuinely single-piece generator (one fractal, one surface) | `houdini_run_python_sandbox` (default single-SOP mode). |
 

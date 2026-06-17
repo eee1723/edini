@@ -49,7 +49,7 @@ VERIFICATION:
 
 ## VARIANT SCATTER RECIPE (for `houdini_variant_scatter`)
 
-Use this template when a repeated part has **multiple styles** (windows/doors/trees) that should be distributed with weighted, seeded randomness. Full schema: [references/declarative-builder.md](../references/declarative-builder.md#variant-scatter-变体散布).
+Use this template when a repeated part has **multiple styles** (windows/doors/trees) that should be distributed with seeded randomness across a source piece library. Full schema: [references/declarative-builder.md](../references/declarative-builder.md#variant-scatter-变体散布).
 
 ```
 RECIPE: [Asset Name]
@@ -63,12 +63,14 @@ VARIANTS (each gets a source geometry + integer variant index, auto-assigned):
 
 SCATTER:
   - source: <python code emitting points with @P, optional @orient/@pscale>
-  - seed: 42                      (integer — reproducible)
-  - weights: {win_a: 0.6, win_b: 0.3, win_c: 0.1}   (auto-normalized)
+  - seed: 42                      (integer — reproducible; drives attribfrompieces)
+  - weights: {win_a: 0.6, win_b: 0.3, win_c: 0.1}   (echoed; see note below)
 
 POSTPROCESS: [fuse, clean, normal(cusp 60°)]
 
-PER-INSTANCE IDS: auto-assigned as {variant_id}_{ptnum} (e.g. win_a_0, win_b_3)
+PER-INSTANCE IDS: auto-assigned as {variant_id}_{id} (e.g. win_a_0, win_b_3)
+  - `variant` is drawn onto each scatter point by attribfrompieces
+  - `id` is the scatter point number, transferred via resettargetattribs
 
 ORIENTATION ASSERTS (declare on variant source geometry via construction_axis):
   - win_a: construction_axis=Z, expected_axis=Z  (window faces +Z in source space)
@@ -79,6 +81,11 @@ VERIFICATION:
   - n_variants: 3
   - structure_advisory.passed: true (attribfrompieces + copytopoints = modular)
   - detail_level: 3-4 (variation across instances = real detail, not repetition)
+
+NOTE: weights are echoed in the result but attribfrompieces currently assigns
+variants uniformly across the source piece library. seed still controls
+reproducibility. For true weighted distribution, set AFP's weightattrib/
+weightmethod manually after build.
 ```
 
 ### When to choose variant scatter over single-template Copy-to-Points

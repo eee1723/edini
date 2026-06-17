@@ -2499,6 +2499,53 @@ def build_procedural_asset(
 # dispatch variants (Houdini 21). Must be int or string — never float.
 _VARIANT_PIECE_ATTR = "variant"
 
+def _setup_copy_apply_attributes(copy_node, attribs: str = "id") -> bool:
+    """Initialize Copy to Points 2.0's attribute transfer so the target
+    point's attributes (notably ``id``) are stamped onto every instance.
+
+    Why this exists: the per-instance ``id`` must be identical for ALL prims of
+    one copied instance — even when the variant is a disconnected mesh (e.g. a
+    window = frame + glass + mullions). Connectivity can't give that (it would
+    assign different piece values to the disconnected parts). Copy to Points'
+    "Attributes from Target" stamps the target point's attribute onto the whole
+    copied piece in one shot, so we use it to carry ``id``.
+
+    Real-H21 mechanism (verified on 21.0.440): the ``targetattribs`` parm is a
+    multiparm Folder whose instance count starts at 0 (no transfer). The
+    ``resettargetattribs`` BUTTON, when pressed, auto-populates the folder with
+    sensible default entries — entry #1 is ``applymethod=0`` (copy) with
+    ``applyattribs='*,^v,^Alpha,^N,^up,^pscale,^scale,^orient,^rot,^pivot,
+    ^trans,^transform'``, which copies every target-point attribute EXCEPT the
+    transform family. That default already includes ``id`` (and ``variant``),
+    so simply pressing the button is sufficient — no per-instance parm
+    manipulation needed.
+
+    The previous implementation tried to grow the multiparm manually via
+    setMultiparmInstanceCount / count-parm probes / PTG folder growth; all
+    three failed on real H21 because the count-parm name is ``targetattribs``
+    (not numapplyattrs) and H21 lacks setMultiparmInstanceCount. The button is
+    Houdini's own sanctioned initialization path. See
+    manual_resettargetattribs_probe.py for the captured structure.
+
+    Args:
+        copy_node: the copytopoints::2.0 node.
+        attribs: unused after the button-press simplification (kept for API
+            compatibility with older callers). The default entry transfers all
+            non-transform attributes, which already covers ``id``.
+
+    Returns:
+        True if the button was found and pressed; False otherwise (caller
+        emits a warning so the user can transfer attributes manually).
+    """
+    reset = copy_node.parm("resettargetattribs") if hasattr(copy_node, "parm") else None
+    if reset is None:
+        return False
+    try:
+        reset.pressButton()
+        return True
+    except Exception:
+        return False
+
 
 def _validate_variant_recipe(recipe: Any) -> list[str]:
     """Validate a variant-scatter recipe. Returns a list of error strings
@@ -2611,51 +2658,34 @@ def _variant_idfix_snippet(variant_ids: list[str]) -> str:
     )
 
 
-def _variant_scatter_points_code(
-    variant_ids: list[str],
-    weights: dict[str, float],
-    seed: int,
-    source_code: str,
-) -> str:
-    """Wrap the user's scatter `source` code with the variant-assignment
-    logic. The user's code emits points (with @P, optionally @orient/@pscale/@N).
-    This wrapper then: (1) numbers the points, (2) assigns each point an integer
-    `variant` attribute drawn from the weighted distribution with the given
-    seed, and (3) records the original point number as `edini_scatter_ptnum`
-    so idfix can build per-instance component_ids.
+def _variant_scatter_points_code(source_code: str) -> str:
+    """Wrap the user's scatter `source` code with a per-point `id` attribute.
 
-    The user's code is executed verbatim first (it does its own geo.clear() and
-    point emission); then this wrapper annotates the resulting points.
+    The user's code emits points (with @P, optionally @orient/@pscale/@N).
+    This wrapper numbers them with an integer point-level `id` attribute so
+    each scatter point has a stable, globally-unique identity that survives
+    the downstream Copy to Points (transferred onto instances via
+    ``resettargetattribs``) and lets idfix build per-instance component_ids.
+
+    NOTE: this wrapper NO LONGER assigns the ``variant`` attribute. Variant
+    assignment is now done by the downstream ``attribfrompieces`` SOP, which
+    draws a `variant` value onto each scatter point from the source piece
+    library (pieceattrib=variant). AFP covers all variants reliably even at
+    low point counts — the old hand-rolled weighted-random assignment could
+    starve low-weight variants (e.g. seed=42 over 8 pts assigned zero points
+    to variant 2). See manual_variant_dispatch_diagnose.py / progress doc.
+
+    The user's code is executed verbatim first (it does its own geo.clear()
+    and point emission); then this wrapper annotates the resulting points.
     """
-    # Build cumulative thresholds from weights (auto-normalized).
-    norm = []
-    total_w = sum(weights.get(vid, 1.0) for vid in variant_ids) or 1.0
-    running = 0.0
-    for vid in variant_ids:
-        running += weights.get(vid, 1.0) / total_w
-        norm.append(repr(round(running, 6)))
-    thresholds = "[" + ", ".join(norm) + "]"
-    n_variants = len(variant_ids)
-
     return (
         "# ── User scatter code (emits points) ──\n"
         + source_code
         + "\n"
-        "# ── Variant assignment (generated wrapper) ──\n"
-        "import random\n"
-        "_thresholds = " + thresholds + "\n"
-        "_seed = " + repr(int(seed)) + "\n"
-        "_rng = random.Random(_seed)\n"
-        "geo.addAttrib(hou.attribType.Point, '" + _VARIANT_PIECE_ATTR + "', 0)\n"
+        "# ── Per-point id (generated wrapper) ──\n"
+        "# `variant` is assigned downstream by attribfrompieces, NOT here.\n"
         "geo.addAttrib(hou.attribType.Point, 'id', 0)\n"
         "for idx, pt in enumerate(geo.points()):\n"
-        "    r = _rng.random()\n"
-        "    chosen = " + repr(n_variants - 1) + "\n"
-        "    for ti, thr in enumerate(_thresholds):\n"
-        "        if r <= thr:\n"
-        "            chosen = ti\n"
-        "            break\n"
-        "    pt.setAttribValue('" + _VARIANT_PIECE_ATTR + "', chosen)\n"
         "    pt.setAttribValue('id', idx)\n"
     )
 
@@ -2760,26 +2790,22 @@ def build_variant_scatter(
         for idx, node in enumerate(variant_nodes):
             variants_merge.setInput(idx, node)
 
-        # Pack By Name on the integer `variant` attribute: one packed prim per
-        # variant index. (Pack's default "Packed Fragments" merges overlapping
-        # geometry into a single prim — observed producing prims=1 — so we must
-        # use packbyname to get per-variant packed prims.)
-        pack_node = _safe_create_node(root_path, "pack", "variants_pack")
-        pack_node.setInput(0, variants_merge)
-        _set_parm_safe(pack_node, "packbyname", 1)
-        _set_parm_safe(pack_node, "nameattribute", _VARIANT_PIECE_ATTR)
+        # variants_merge is used UNPACKED — H21 Copy to Points dispatches on
+        # plain source geometry by matching source prim `variant` against target
+        # point `variant`. (Packing via Pack By Name HIDES the prim `variant`
+        # inside the PackedFragment, making it unreadable to Copy's piece
+        # dispatch — verified broken on 21.0.440. See
+        # manual_variant_dispatch_diagnose.py / manual_attribfrompieces_probe.py.)
 
-        # ── 3. Scatter source — emit target points + assign variant per point ──
-        # The wrapper assigns each scatter point an integer `variant` attribute
-        # drawn from the weighted distribution using `seed` (deterministic +
-        # reproducible), plus `edini_scatter_ptnum` for per-instance uniqueness.
-        # NOTE: Attribute from Pieces is NOT used — it requires TWO inputs and
-        # does its own (non-deterministic-by-default) assignment. Since the
-        # wrapper already assigns `variant` deterministically, we skip AFP and
-        # let Copy to Points dispatch directly by matching the point's `variant`
-        # against the packed source's `variant`.
-        scatter_code = _variant_scatter_points_code(
-            variant_ids, weights, seed, source_code)
+        # ── 3. Scatter source — emit target points + per-point id ───────────
+        # The wrapper NO LONGER assigns `variant` here. Variant assignment is
+        # delegated to the downstream attribfrompieces SOP (step 4), which
+        # draws a `variant` value onto each point from the source piece library
+        # and reliably covers ALL variants even at low point counts. The old
+        # hand-rolled weighted-random assignment could starve low-weight
+        # variants (seed=42 over 8 pts → zero points for variant 2 → win_c
+        # never instanced).
+        scatter_code = _variant_scatter_points_code(source_code)
         scatter_sop = _safe_create_node(root_path, "python", "scatter_points")
         _set_parm_safe(scatter_sop, "python", scatter_code)
         try:
@@ -2791,14 +2817,27 @@ def build_variant_scatter(
             raise RuntimeError(
                 "scatter source cook failed: " + "; ".join(cook_errs))
 
-        # ── 4. Copy to Points (piece attribute dispatches variants) ──
-        #    Houdini 21 Copy to Points 2.0 uses `useidattrib` (the "Piece
-        #    Attribute" toggle) + `idattrib` (the attribute NAME) to dispatch.
-        #    Both the packed source AND the scatter points carry the integer
-        #    `variant` attribute — Copy matches them 1:1.
+        # ── 4. attribfrompieces — give each scatter point a `variant` ───────
+        #    input 0 = target points (scatter), input 1 = source piece library
+        #    (the variant merge). pieceattrib=variant reads the source's per-prim
+        #    `variant` to define the pieces, then assigns each target point a
+        #    `variant` value drawn from that piece set (seed controls the draw).
+        #    This is the H21-sanctioned way to scatter variants by attribute and
+        #    guarantees every variant index present in the source gets instanced.
+        afp_node = _safe_create_node(root_path, "attribfrompieces", "scatter_afp")
+        afp_node.setInput(0, scatter_sop)      # target points
+        afp_node.setInput(1, variants_merge)   # source piece library
+        _set_parm_safe(afp_node, "pieceattrib", _VARIANT_PIECE_ATTR)
+        _set_parm_safe(afp_node, "seed", int(seed))
+
+        # ── 5. Copy to Points (piece attribute dispatches variants) ─────────
+        #    H21 Copy to Points 2.0 uses `useidattrib` (the "Piece Attribute"
+        #    toggle) + `idattrib` (the attribute NAME) to dispatch. The UNPACKED
+        #    source prim `variant` matches the AFP-assigned target point
+        #    `variant` 1:1 — no packing needed.
         copy_node = _safe_create_node(root_path, "copytopoints", "copy_scatter")
-        copy_node.setInput(0, pack_node)      # packed variant library (source)
-        copy_node.setInput(1, scatter_sop)    # scatter points (with i@variant + i@id)
+        copy_node.setInput(0, variants_merge)  # UNPACKED variant library (source)
+        copy_node.setInput(1, afp_node)        # scatter points (with i@variant + i@id)
         try:
             copy_node.parm("useidattrib").set(1)   # enable Piece Attribute dispatch
             copy_node.parm("idattrib").set(_VARIANT_PIECE_ATTR)  # match by `variant`
@@ -2807,77 +2846,29 @@ def build_variant_scatter(
                 f"Copy to Points piece-attribute setup failed ({e}); variants "
                 f"may not dispatch correctly. Check copytopoints::2.0 parms.")
 
-        # Transfer the target-point `id` onto each instance via the "Apply
-        # Attributes" multiparm. This stamps the scatter point's id onto every
-        # point of the copied instance — so every prim of an instance shares
-        # the SAME id, regardless of whether the variant is one connected mesh
-        # or many disconnected pieces (e.g. a window = frame + glass + mullions).
-        # This is more robust than Connectivity, which breaks on non-connected
-        # variants by assigning different piece values to parts of one instance.
-        #
-        # The multiparm folder is "applyattrs#"; its count parm follows Houdini's
-        # "num<folder>" convention. We try several possible count-parm names
-        # (H21's exact internal name varies), then set the first instance.
-        _multiparm_set = False
-        for count_parm in ("numapplyattrs", "numapply", "applyattrsnum"):
-            cp = copy_node.parm(count_parm)
-            if cp is not None:
-                try:
-                    cp.set(1)
-                    _multiparm_set = True
-                    break
-                except Exception:
-                    continue
-        if _multiparm_set:
-            try:
-                copy_node.parm("useapply1").set(1)        # enable this apply entry
-                copy_node.parm("applyto1").set(0)         # apply to points
-                copy_node.parm("applymethod1").set(0)     # copy
-                copy_node.parm("applyattribs1").set("id") # the attribute to transfer
-            except Exception as e:
-                warnings.append(
-                    f"Copy to Points Apply Attributes entry setup failed ({e}); "
-                    f"per-instance id may not transfer.")
-        else:
-            # Fallback: the count parm name is unknown. Use the Houdini API
-            # method that appends a multiparm instance directly.
-            try:
-                ptg = copy_node.parmTemplateGroup()
-                # Find the multiparm folder and grow it by one instance.
-                for entry in ptg.entries():
-                    fname = getattr(entry, "name", None) or ""
-                    if "apply" in fname and "#" in fname:
-                        # This is the multiparm folder; set its instance count.
-                        entry.setNumInstances(1)  # type: ignore[attr-defined]
-                        ptg.replace(entry.name(), entry)
-                        copy_node.setParmTemplateGroup(ptg)
-                        _multiparm_set = True
-                        break
-                if _multiparm_set:
-                    copy_node.parm("useapply1").set(1)
-                    copy_node.parm("applyto1").set(0)
-                    copy_node.parm("applymethod1").set(0)
-                    copy_node.parm("applyattribs1").set("id")
-            except Exception as e:
-                warnings.append(
-                    f"Copy to Points Apply Attributes could not be set up ({e}); "
-                    f"per-instance id will not transfer. idfix falls back to 0.")
+        # Transfer the target-point `id` (and other non-transform attributes)
+        # onto each instance. Real-H21 path: press the `resettargetattribs`
+        # BUTTON, which auto-populates the `targetattribs` multiparm with a
+        # default entry that copies all attributes except the transform family
+        # — already covering `id`. See manual_resettargetattribs_probe.py.
+        if not _setup_copy_apply_attributes(copy_node, attribs="id"):
+            warnings.append(
+                "Copy to Points attribute transfer could not be initialized "
+                "(resettargetattribs button missing); per-instance id may not "
+                "transfer. idfix falls back to id=0.")
 
-        # ── 5. Unpack — so per-prim component_id overwrite is possible ──
-        unpack_node = _safe_create_node(root_path, "unpack", "scatter_unpack")
-        unpack_node.setInput(0, copy_node)
+        # NO Unpack node: Copy on UNPACKED source already yields expanded
+        # geometry, so per-prim component_id overwrite is possible directly.
 
-        # ── 6. idfix — assign per-instance component_id {variant_id}_{id} ──
-        # Reads the prim `variant` (which variant) + the point `id` (which
-        # instance, transferred from the target scatter point via Apply
-        # Attributes) to build a globally-unique id per instance.
-        # NO Connectivity needed — `id` is stamped by Copy to Points and is
-        # identical for all prims of an instance even if the variant is
-        # disconnected (window = frame + glass + mullions).
+        # ── 6. idfix — assign per-instance component_id {variant_id}_{id} ───
+        # Reads the prim `variant` (which variant, tagged on the source prim and
+        # carried through Copy) + the point `id` (which instance, transferred
+        # from the target scatter point via resettargetattribs) to build a
+        # globally-unique id per instance.
         idfix_code = _variant_idfix_snippet(variant_ids)
         idfix = _safe_create_node(root_path, "python", "scatter_idfix")
         _set_parm_safe(idfix, "python", idfix_code)
-        idfix.setInput(0, unpack_node)
+        idfix.setInput(0, copy_node)
 
         last_node = idfix
 
