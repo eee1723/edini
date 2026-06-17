@@ -11,7 +11,10 @@ concrete fix direction.
 
 ---
 
-## Bug 1 — `houdini_capture_component_detail` fails with `bbox build failed` (BLOCKER)
+## Bug 1 — `houdini_capture_component_detail` fails with `bbox build failed` (BLOCKER) ✅ FIXED
+
+**Status:** Fixed 2026-06-17. Root cause confirmed + 2 related defects fixed
+alongside it; regression test added.
 
 **Severity:** HIGH — disables the only sanctioned path for verifying small/hidden parts
 (`verification-protocol.md` step 5b). Without it the agent must fall back to raw
@@ -47,14 +50,36 @@ with no traceback.
 failure is specifically the `BoundingBox`/`Vector3` construction path, not the data.
 
 **Fix direction:**
-- [ ] Reproduce: call `capture_component_detail` on any committed multi-component asset,
-      capture the real exception type/message (remove the bare except locally).
-- [ ] Replace with a robust construction that does not depend on `hou.Vector3` accepting a
-      list — e.g. build the bbox from explicit scalars:
+- [x] Reproduce: mock now exposes `hou.Vector3` / `hou.BoundingBox`, so the
+      exact failing path (`hou.BoundingBox(hou.Vector3(list), ...)`) runs under
+      the test suite. Confirmed the construction was the failure point.
+- [x] Replace with a robust construction that does not depend on `hou.Vector3` accepting a
+      list — builds the bbox from explicit scalars:
       `hou.BoundingBox(mn[0], mn[1], mn[2], mx[0], mx[1], mx[2])` (the 6-float overload).
-- [ ] Surface the real exception in `cell_errors` instead of the generic string so future
-      regressions are diagnosable.
-- [ ] Add a regression test: capture detail on a known-good 2-component asset.
+      `python3.11libs/edini/node_utils.py:2113`.
+- [x] Surface the real exception in `cell_errors` instead of the generic string so future
+      regressions are diagnosable: `f"{cid}: bbox build failed ({type}: {msg})"`.
+- [x] Add a regression test: `tests/test_capture_component_detail.py` — 8 tests covering
+      the 6-float overload, the legacy 2-arg overload, and end-to-end capture on a
+      known-good 2-component (body + knob) asset (the case named in this bug).
+
+### Related defects fixed in the same pass
+
+These were uncovered *by* the regression test and are direct enablers of
+"capture produces a usable output file" — both pre-existing, both latent on
+real Houdini (where Pillow is normally importable so the concat path succeeds):
+
+1. **Unguarded `viewport.settings()` call** (`node_utils.py:2060`) sat *outside*
+   its try/except, so any viewport-API hiccup aborted the whole capture at the
+   "get_viewer" stage with a traceback. Moved inside the best-effort shading
+   block.
+2. **Concat-fallback copied a temp file *after* deleting it**
+   (`capture_review` ~line 1875 and `capture_component_detail` ~line 2167).
+   When `_concat_images_grid` failed (e.g. Pillow unavailable/ABI-incompatible),
+   the fallback `shutil.copy(captured[0], filepath)` ran after the tmp-cleanup
+   loop had already removed `captured[0]`, so the fallback was a silent no-op
+   and capture returned "Output not created". Reordered: copy fallback first,
+   then delete tmps. Affects BOTH capture functions.
 
 ---
 

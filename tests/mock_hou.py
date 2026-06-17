@@ -402,15 +402,63 @@ class MockPrimType:
         return str(v) if v is not None else ""
 
 
+class MockVector3:
+    """Mock hou.Vector3. Accepts the same constructor shapes real hou does:
+    3 scalars, a 3-tuple/list, or another Vector3. Read-only indexing."""
+
+    def __init__(self, *args):
+        if len(args) == 3:
+            self._v = (float(args[0]), float(args[1]), float(args[2]))
+        elif len(args) == 1:
+            a = args[0]
+            # Unpack any 3-element sequence (tuple, list, Vector3).
+            self._v = (float(a[0]), float(a[1]), float(a[2]))
+        else:
+            raise TypeError(
+                f"MockVector3 expected 1 or 3 args, got {len(args)}")
+
+    def __getitem__(self, i):
+        return self._v[i]
+
+    def __len__(self):
+        return 3
+
+    def __iter__(self):
+        return iter(self._v)
+
+    def __repr__(self):
+        return f"MockVector3{self._v}"
+
+
 class MockBoundingBox:
-    def __init__(self, bounds: tuple[float, float, float, float, float, float]):
-        self._bounds = bounds
+    """Mock hou.BoundingBox. Supports BOTH constructor overloads used in the
+    codebase:
+      - BoundingBox(min_seq, max_seq)   # 2 Vector3 / list / tuple args
+      - BoundingBox(x0,y0,z0, x1,y1,z1)  # 6 scalars (the robust form)
+    Mirrors real hou.BoundingBox semantics on H21."""
+
+    def __init__(self, *args):
+        if len(args) == 6:
+            self._bounds = tuple(float(a) for a in args)
+        elif len(args) == 2:
+            mn = args[0]
+            mx = args[1]
+            self._bounds = (
+                float(mn[0]), float(mn[1]), float(mn[2]),
+                float(mx[0]), float(mx[1]), float(mx[2]),
+            )
+        else:
+            raise TypeError(
+                f"MockBoundingBox expected 2 or 6 args, got {len(args)}")
 
     def minvec(self):
-        return (self._bounds[0], self._bounds[2], self._bounds[4])
+        return (self._bounds[0], self._bounds[1], self._bounds[2])
 
     def maxvec(self):
-        return (self._bounds[1], self._bounds[3], self._bounds[5])
+        return (self._bounds[3], self._bounds[4], self._bounds[5])
+
+    def __repr__(self):
+        return f"MockBoundingBox{self._bounds}"
 
 
 class MockGeometry:
@@ -494,7 +542,14 @@ class MockGeometry:
         b = self.intrinsicValue("bounds")
         if b is None:
             return None
-        return MockBoundingBox(b)
+        # intrinsic "bounds" is interleaved (xmin,xmax,ymin,ymax,zmin,zmax);
+        # hou.BoundingBox / MockBoundingBox store component-major
+        # (xmin,ymin,zmin,xmax,ymax,zmax). Convert here so minvec()/maxvec()
+        # on the mock match real hou semantics.
+        return MockBoundingBox(
+            b[0], b[2], b[4],   # xmin, ymin, zmin
+            b[1], b[3], b[5],   # xmax, ymax, zmax
+        )
 
     def pointAttribs(self):
         return [MockAttrib("P")]
@@ -972,6 +1027,12 @@ class MockHou:
         pass
 
     MockGeometry = MockGeometry
+
+    # Vector3 / BoundingBox — exposed as hou.Vector3 / hou.BoundingBox so
+    # code paths that build bboxes (e.g. capture_component_detail) are
+    # exercisable under the mock. See procedural-modeling-bugs.md Bug 1.
+    Vector3 = MockVector3
+    BoundingBox = MockBoundingBox
 
     # Sentinel: node_utils._node_parms_live checks this to skip the live
     # fallback path under the mock (so tests don't pretend Houdini is online).

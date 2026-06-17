@@ -1874,6 +1874,17 @@ def capture_review(
 
         concat_ok = _concat_images_grid(captured, filepath, columns, resolution)
 
+        # If concatenation failed, keep the first capture as a fallback.
+        # MUST happen before the tmp cleanup below — otherwise the file we
+        # want to copy has already been removed and the fallback is a no-op.
+        if not concat_ok:
+            if captured and os.path.exists(captured[0]):
+                import shutil
+                try:
+                    shutil.copy(captured[0], filepath)
+                except Exception:
+                    pass
+
         # Clean up temp files
         for tmp_path in captured:
             try:
@@ -1881,12 +1892,6 @@ def capture_review(
                     os.remove(tmp_path)
             except Exception:
                 pass
-
-        if not concat_ok:
-            # If concatenation failed, keep the first capture as fallback
-            if captured and os.path.exists(captured[0]):
-                import shutil
-                shutil.copy(captured[0], filepath)
 
         if os.path.exists(filepath):
             size_kb = round(os.path.getsize(filepath) / 1024, 1)
@@ -2056,9 +2061,13 @@ def capture_component_detail(
         viewport = viewer.curViewport()
         _restore_view_type = viewport.type() if hasattr(viewport, "type") else None
 
-        # Shading
-        vp_settings = viewport.settings()
+        # Shading. The whole block is best-effort: viewport.settings() and
+        # the display-set API are H21 UI plumbing that must never abort a
+        # capture. (An unguarded viewport.settings() call here previously
+        # turned a shading-setup hiccup into a full capture failure at the
+        # "get_viewer" stage — see procedural-modeling-bugs.md Bug 1.)
         try:
+            vp_settings = viewport.settings()
             shading_map = {
                 "smooth": hou.glShadingType.Smooth,
                 "smooth_wire": hou.glShadingType.SmoothWire,
@@ -2110,14 +2119,23 @@ def capture_component_detail(
                 cell_errors.append(f"{cid}: no bounds")
                 continue
 
-            # Build a hou.BoundingBox for this component and frame to it
+            # Build a hou.BoundingBox for this component and frame to it.
+            # Use the 6-scalar overload — `hou.BoundingBox(min, max)` with
+            # `hou.Vector3(list)` is finicky on H21 about the sequence type it
+            # unpacks (historically raised on a plain list, swallowed by the
+            # old bare `except` as the opaque "bbox build failed"). Passing
+            # explicit floats sidesteps Vector3 entirely and is the documented
+            # constructor signature. See procedural-modeling-bugs.md Bug 1.
             try:
+                mn = bnds["min"]
+                mx = bnds["max"]
                 bbox = hou.BoundingBox(
-                    hou.Vector3(bnds["min"]),
-                    hou.Vector3(bnds["max"]),
+                    float(mn[0]), float(mn[1]), float(mn[2]),
+                    float(mx[0]), float(mx[1]), float(mx[2]),
                 )
-            except Exception:
-                cell_errors.append(f"{cid}: bbox build failed")
+            except Exception as _bex:
+                cell_errors.append(
+                    f"{cid}: bbox build failed ({type(_bex).__name__}: {_bex})")
                 continue
 
             for view_name in views:
@@ -2153,15 +2171,21 @@ def capture_component_detail(
 
         columns = len(views)
         concat_ok = _concat_images_grid(captured, filepath, columns, resolution)
+        # If concatenation failed, keep the first capture as a fallback.
+        # MUST happen before the tmp cleanup below — otherwise the file we
+        # want to copy has already been removed and the fallback is a no-op.
+        if not concat_ok and captured and _os.path.exists(captured[0]):
+            import shutil
+            try:
+                shutil.copy(captured[0], filepath)
+            except Exception:
+                pass
         for tmp in captured:
             try:
                 if _os.path.exists(tmp) and tmp != filepath:
                     _os.remove(tmp)
             except Exception:
                 pass
-        if not concat_ok and captured and _os.path.exists(captured[0]):
-            import shutil
-            shutil.copy(captured[0], filepath)
 
         if not _os.path.exists(filepath):
             return {"success": False, "error": f"Output not created: {filepath}",

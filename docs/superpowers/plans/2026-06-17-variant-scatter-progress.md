@@ -94,5 +94,6 @@ scatter points (i@variant weighted+seeded, i@id unique) ──┘     ↓  + App
 3. **Tool template idea 1 (sweep tube)** — curve + cross-section → tube/beam.
 4. **Tool template idea 3 (attribute presets)** — VEX wrangle snippets for
    pscale/orient/N/up/id/Cd.
-5. **Bug 1 (capture_component_detail bbox build failed)** — the validation
-   pipeline's load-bearing wall.
+5. ~~**Bug 1 (capture_component_detail bbox build failed)**~~ — ✅ DONE 2026-06-17.
+   See `2026-06-17-procedural-modeling-bugs.md` Bug 1 (fixed: 6-float bbox
+   overload + 2 enabler defects + 8 regression tests).
