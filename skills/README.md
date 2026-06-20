@@ -43,5 +43,16 @@ Instructions for the agent...
 
 ## Current skills
 
-- `procedural-modeling` — Houdini procedural modeling workflow guidance for VEX, Python SOPs, algorithmic geometry, and parametric generation.
-- `grill-me` — Local project skill for review/critique workflows.
+### Pipeline skills (in workflow order)
+
+- `edini-brainstorm` — Design router for Houdini procedural asset creation. Ask clarifying questions, decompose components, produce design spec.
+- `procedural-modeling` — Lightweight pipeline router. Determines which phase you're in and loads the correct specialized skill.
+- `recipe-authoring` — Writing valid procedural asset Recipes. Param three-state system, anchor design, pre-flight checklist (A1-A6).
+- `component-building` — Building individual components with `build_component`. Backend red lines, VEX rules, template usage, repair discipline.
+- `assembly-wiring` — Assembling verified components. Anchor mounting, CTP configuration, postprocess chains, Workspace fallback.
+- `verification` — Two-layer verification protocol (health + orientation + inventory), debug discipline.
+- `parametric-testing` — Parameter boundary testing before commit. Test scenarios, intersection detection, constraint verification.
+
+### Utility skills
+
+- `grill-me` — Interview the user relentlessly about a plan or design until reaching shared understanding.
