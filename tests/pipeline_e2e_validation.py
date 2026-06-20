@@ -173,52 +173,30 @@ section("Phase B+C: Build Simple Asset")
 from edini.harness import build_procedural_asset, commit_sandbox, discard_sandbox
 import hou
 
-# Test recipe: a simple box + anchored pillar (Python backend)
+# Test recipe: native_chain box + anchored pillar (Python backend)
 simple_recipe = {
     "asset_name": "validation_test",
     "components": [
         {
             "id": "base_box",
-            "code": (
-                "node = hou.pwd()\n"
-                "geo = node.geometry()\n"
-                "geo.addAttrib(hou.attribType.Prim, 'component_id', '')\n"
-                "# Create a box using points and polygons\n"
-                "sx, sy, sz = 2.0, 0.5, 1.0\n"
-                "pts = []\n"
-                "for x in (-sx/2, sx/2):\n"
-                "    for y in (-sy/2, sy/2):\n"
-                "        for z in (-sz/2, sz/2):\n"
-                "            p = geo.createPoint(); p.setPosition((x, y, z))\n"
-                "            pts.append(p)\n"
-                "# 6 faces\n"
-                "faces = [(0,1,3,2),(4,5,7,6),(0,1,5,4),(2,3,7,6),(0,2,6,4),(1,3,7,5)]\n"
-                "for f in faces:\n"
-                "    poly = geo.createPolygon()\n"
-                "    for idx in f: poly.addVertex(pts[idx])\n"
-                "    poly.setAttribValue('component_id', 'base_box')\n"
-            )
+            "backend": "native_chain",
+            "nodes": [
+                {"type": "box", "params": {"sizex": 2, "sizey": 0.5, "sizez": 1}},
+                {"type": "attribcreate", "name": "tag",
+                 "params": {"name1": "component_id", "class1": "primitive",
+                            "type1": "string", "string1": "base_box"}}
+            ]
         },
         {
             "id": "pillar",
-            "code": (
-                "import math\n"
-                "node = hou.pwd()\n"
-                "geo = node.geometry()\n"
-                "geo.addAttrib(hou.attribType.Prim, 'component_id', '')\n"
-                "r, h, n_seg = 0.15, 0.3, 16\n"
-                "bot, top = [], []\n"
-                "for i in range(n_seg):\n"
-                "    a = 2*math.pi*i/n_seg\n"
-                "    p = geo.createPoint(); p.setPosition((r*math.cos(a), 0, r*math.sin(a))); bot.append(p)\n"
-                "    p = geo.createPoint(); p.setPosition((r*math.cos(a), h, r*math.sin(a))); top.append(p)\n"
-                "for i in range(n_seg):\n"
-                "    ni = (i+1)%n_seg\n"
-                "    poly = geo.createPolygon()\n"
-                "    poly.addVertex(bot[i]); poly.addVertex(bot[ni])\n"
-                "    poly.addVertex(top[ni]); poly.addVertex(top[i])\n"
-                "    poly.setAttribValue('component_id', 'pillar')\n"
-            ),
+            "backend": "native_chain",
+            "nodes": [
+                {"type": "tube", "params": {"rad": [0.15, 0.15], "height": 0.3,
+                                             "rows": 3, "cols": 16}},
+                {"type": "attribcreate", "name": "tag",
+                 "params": {"name1": "component_id", "class1": "primitive",
+                            "type1": "string", "string1": "pillar"}}
+            ],
             "anchors": [
                 {"position": [0, 0.5, 0], "orient": [0, 0, 0, 1],
                  "pscale": 1.0, "component_id": "pillar_center"}

@@ -2065,6 +2065,147 @@ def _direct_component_world_axis_snippet(
     )
 
 
+# ═══════════════════════════════════════════════════════════════
+#  Component builders (backend-aware)
+# ═══════════════════════════════════════════════════════════════
+
+
+def _build_python_component(
+    root_path: str,
+    comp: dict,
+    cid: str,
+    world_axis_by_cid: dict,
+    anchors: list,
+) -> Any:
+    """Build a Python-backend component. Returns the cooked python SOP."""
+    code = comp.get("code", "")
+    py_sop = _safe_create_node(root_path, "python", f"{cid}_python")
+    effective_code = code
+    if not anchors and cid in world_axis_by_cid:
+        effective_code = code + _direct_component_world_axis_snippet(
+            world_axis_by_cid[cid])
+    _set_parm_safe(py_sop, "python", effective_code)
+    return py_sop
+
+
+def _build_native_chain_component(
+    root_path: str,
+    comp: dict,
+    cid: str,
+    world_axis_by_cid: dict,
+    anchors: list,
+) -> Any:
+    """Build a native_chain component from its node list.
+
+    Creates a chain of native SOPs (box/tube/torus/attribcreate/...)
+    wired input-0 to previous. The last node drives the component output.
+    Returns the last node in the chain.
+    """
+    nodes = comp.get("nodes") or []
+    if not nodes:
+        raise RuntimeError(f"native_chain component '{cid}' has no nodes")
+
+    prev = None
+    last_node = None
+    for ni, node_spec in enumerate(nodes):
+        ntype = node_spec.get("type", "")
+        nname = node_spec.get("name", f"{cid}_n{ni}")
+        if not ntype:
+            raise RuntimeError(
+                f"native_chain component '{cid}' node[{ni}] missing 'type'")
+        # Resolve alias: transform→xform, polybevel→polybevel::3.0
+        from edini.parm_catalog import ParmCatalog, NODE_ALIASES
+        canonical = NODE_ALIASES.get(ntype, ntype)
+        try:
+            node = _safe_create_node(root_path, canonical, nname)
+        except Exception as e:
+            raise RuntimeError(
+                f"native_chain component '{cid}' node[{ni}] "
+                f"'{canonical}' create failed: {e}")
+        if prev is not None:
+            node.setInput(0, prev)
+        # Set parameters
+        params = node_spec.get("params") or {}
+        for pname, pvalue in params.items():
+            try:
+                _set_parm_safe(node, pname, pvalue)
+            except Exception as e:
+                raise RuntimeError(
+                    f"native_chain component '{cid}' node[{ni}] "
+                    f"parm '{pname}={pvalue}': {e}")
+        prev = node
+        last_node = node
+
+    return last_node
+
+
+def _build_vex_skeleton_component(
+    root_path: str,
+    comp: dict,
+    cid: str,
+    world_axis_by_cid: dict,
+    anchors: list,
+    param_values: dict[str, float],
+) -> Any:
+    """Build a vex_skeleton component: wrangle (Detail, VEX) → form_node.
+
+    The VEX code emits skeletons (polylines with @pscale).
+    The form_node (sweep::2.0 or polyextrude::2.0) closes the geometry.
+    Returns the form_node.
+    """
+    code = comp.get("code", "")
+    form = comp.get("form_node")
+    if not form:
+        raise RuntimeError(
+            f"vex_skeleton component '{cid}' requires form_node")
+    fn_type = form.get("type", "sweep::2.0")
+    from edini.parm_catalog import NODE_ALIASES
+    canonical_fn = NODE_ALIASES.get(fn_type, fn_type)
+
+    # ── Wrangle (Detail mode) ──
+    wr_name = f"{cid}_wrangle"
+    wr = _safe_create_node(root_path, "attribwrangle", wr_name)
+    wr.parm("class").set(2)  # Detail mode
+    # Inject VEX code (auto-prepend vexlib includes if needed)
+    vex_code = code
+    if "#include" not in code and ("make_polyline" in code or "make_circle" in code):
+        vex_code = (
+            "#include <vexlib/skeleton.vfl>\n"
+            "#include <vexlib/sections.vfl>\n" + code
+        )
+    # Install spare parms on the wrangle for ch() access in VEX
+    reads = comp.get("reads") or []
+    for pname in reads:
+        if pname in param_values:
+            try:
+                ptg = wr.parmTemplateGroup()
+                if not ptg.find(pname):
+                    t = hou.FloatParmTemplate(pname, pname, 1,
+                        (param_values[pname],), 0, 100)
+                    ptg.append(t)
+                    wr.setParmTemplateGroup(ptg)
+                # Set expression to read from container
+                wr.parm(pname).setExpression(f'ch("../../{pname}")')
+            except Exception:
+                pass  # non-fatal — VEX will read default value
+    _set_parm_safe(wr, "snippet", vex_code)
+
+    # ── Form node (sweep or polyextrude) ──
+    fn_name = f"{cid}_form"
+    fn = _safe_create_node(root_path, canonical_fn, fn_name)
+    fn.setInput(0, wr)
+    fn_params = form.get("params") or {}
+    for pname, pvalue in fn_params.items():
+        _set_parm_safe(fn, pname, pvalue)
+
+    return fn
+
+
+# ═══════════════════════════════════════════════════════════════
+#  build_procedural_asset (main entry point)
+# ═══════════════════════════════════════════════════════════════
+
+
 def build_procedural_asset(
     recipe: dict,
     *,
@@ -2275,32 +2416,41 @@ def build_procedural_asset(
 
         for comp in components:
             cid = comp["id"]
-            code = comp.get("code", "")
+            backend = comp.get("backend", "python")
             anchors = comp.get("anchors") or []
 
-            py_name = f"{cid}_python"
+            # ── Build component geometry (backend-dependent) ──
+            out_sop = None  # the node whose geometry enters CTP or merge
             try:
-                py_sop = _safe_create_node(root_path, "python", py_name)
+                if backend == "native_chain":
+                    out_sop = _build_native_chain_component(
+                        root_path, comp, cid, world_axis_by_cid, anchors)
+                elif backend == "vex_skeleton":
+                    out_sop = _build_vex_skeleton_component(
+                        root_path, comp, cid, world_axis_by_cid, anchors,
+                        param_values)
+                else:  # python (default)
+                    out_sop = _build_python_component(
+                        root_path, comp, cid, world_axis_by_cid, anchors)
             except Exception as e:
                 errors_runtime.append(
-                    f"component '{cid}': failed to create python SOP: {e}")
+                    f"component '{cid}' ({backend}): {e}")
+                import traceback as _tb
+                errors_runtime.append(_tb.format_exc())
                 continue
-            # B-station: for direct-merge components that declare a construction
-            # axis, append a tag suffix so every prim carries edini_world_axis.
-            # (Stamped components get the tag via idfix instead, per-instance.)
-            effective_code = code
-            if not anchors and cid in world_axis_by_cid:
-                effective_code = code + _direct_component_world_axis_snippet(
-                    world_axis_by_cid[cid])
-            _set_parm_safe(py_sop, "python", effective_code)
+
+            if out_sop is None:
+                errors_runtime.append(
+                    f"component '{cid}': no output node produced")
+                continue
+
             # Cook the component immediately so a per-component error surfaces
-            # with a clear attribution (and geometry exists for wiring in the
-            # mock; real Houdini would lazy-cook, but explicit is safer).
+            # with a clear attribution.
             try:
-                py_sop.cook(force=True)
-                py_errs = list(py_sop.errors() or [])
-                if py_errs:
-                    raise RuntimeError("; ".join(py_errs))
+                out_sop.cook(force=True)
+                cook_errs = list(out_sop.errors() or [])
+                if cook_errs:
+                    raise RuntimeError("; ".join(cook_errs))
             except Exception as e:
                 errors_runtime.append(f"component '{cid}' cook failed: {e}")
                 continue
@@ -2331,7 +2481,7 @@ def build_procedural_asset(
                 # copytopoints: in0 = component geometry, in1 = anchor points
                 copy_name = f"copy_{cid}"
                 copy_node = _safe_create_node(root_path, "copytopoints", copy_name)
-                copy_node.setInput(0, py_sop)
+                copy_node.setInput(0, out_sop)
                 copy_node.setInput(1, anc_sop)
 
                 # id-overwrite python SOP: gives each instance its anchor
@@ -2367,7 +2517,7 @@ def build_procedural_asset(
                 stamped.append((cid, ow_sop, anchor_ids))
             else:
                 # ── direct: component geometry straight into merge ──
-                comp_nodes.append(py_sop)
+                comp_nodes.append(out_sop)
 
         if not comp_nodes:
             errors_runtime.append("no component output nodes were built")
