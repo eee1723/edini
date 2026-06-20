@@ -191,8 +191,7 @@ simple_recipe = {
             "id": "pillar",
             "backend": "native_chain",
             "nodes": [
-                {"type": "tube", "params": {"rad": [0.15, 0.15], "height": 0.3,
-                                             "rows": 3, "cols": 16}},
+                {"type": "box", "params": {"sizex": 0.3, "sizey": 0.3, "sizez": 0.3}},
                 {"type": "attribwrangle", "name": "tag",
                  "params": {"class": 2,
                             "snippet": 's@component_id = "pillar";'}}
