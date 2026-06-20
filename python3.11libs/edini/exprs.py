@@ -210,3 +210,34 @@ def evaluate_tuple(
                 raise ExprError(f"{what}[{i}] is non-finite: {val}")
             out.append(val)
     return tuple(out)
+
+
+# ── Reference extraction for dependency graph (Phase A6) ──────────
+
+import re as _re
+
+_REF_RE = _re.compile(r'([a-zA-Z_]\w*)')
+
+_BUILTIN_NAMES: set[str] = {
+    "sin", "cos", "tan", "abs", "min", "max", "sqrt", "pow",
+    "radians", "degrees", "pi", "e", "tau", "and", "or", "not",
+    "if", "else", "True", "False", "None",
+}
+
+
+def extract_refs(expr: str) -> list[str]:
+    """Extract parameter references from a safe expression string.
+
+    Examples:
+        extract_refs("wheel_radius - bb_drop") -> ["bb_drop", "wheel_radius"]
+        extract_refs("sin(radians(seat_angle)) + frame_scale * 0.5")
+            -> ["frame_scale", "seat_angle"]
+
+    Built-in function names and numeric literals are excluded.
+    """
+    refs: set[str] = set()
+    for m in _REF_RE.finditer(expr):
+        name = m.group(1)
+        if name not in _BUILTIN_NAMES and not name[0].isdigit():
+            refs.add(name)
+    return sorted(refs)

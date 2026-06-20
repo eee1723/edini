@@ -3138,3 +3138,36 @@ def _generate_and_save_catalog(output_path: str) -> dict:
     sop_count = sum(1 for _ in raw.get("Sop", {}))
     return {"sop_count": sop_count, "version": raw.get("houdini_version")}
 
+
+def validate_recipe_tool(
+    recipe: dict,
+    catalog_path: str | None = None,
+) -> dict[str, Any]:
+    """Tool wrapper for Phase A validation.
+
+    Args:
+        recipe: The recipe dict to validate.
+        catalog_path: Path to parm-catalog.json. Defaults to
+                      <edini>/python3.11libs/edini/data/parm-catalog.json
+    Returns:
+        ValidationReport dict with success, passed, errors, etc.
+    """
+    import os
+
+    if catalog_path is None:
+        catalog_path = os.path.join(
+            os.path.dirname(__file__), "data", "parm-catalog.json"
+        )
+    if not os.path.exists(catalog_path):
+        return {
+            "success": False,
+            "error": (
+                "Parm catalog not found. Run dump_parm_catalog() first, "
+                "or pass catalog_path to an existing catalog."
+            ),
+        }
+    from edini.recipe_validator import validate_recipe as _validate
+    result = _validate(recipe, catalog_path)
+    result["success"] = True
+    return result
+

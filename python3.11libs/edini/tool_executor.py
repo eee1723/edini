@@ -30,6 +30,7 @@ from edini.harness import (
     build_procedural_asset,
     build_variant_scatter,
     dump_parm_catalog,
+    validate_recipe_tool,
 )
 
 # Knowledge and eval handlers (available only in Houdini runtime)
@@ -206,6 +207,10 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
         query=kw.get("query", ""),
         category=kw.get("category", ""),
         limit=kw.get("limit", 10),
+    ),
+    "validate_recipe": lambda **kw: validate_recipe_tool(
+        kw["recipe"],
+        catalog_path=kw.get("catalog_path"),
     ),
     "dump_parm_catalog": lambda **kw: dump_parm_catalog(
         output_path=kw.get("output_path"),
