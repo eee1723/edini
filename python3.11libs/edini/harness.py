@@ -2542,8 +2542,10 @@ def build_procedural_asset(
 
         # ── 3. Post-processing chain ──
         if last_node is not None:
+            from edini.parm_catalog import NODE_ALIASES
             for i, pp in enumerate(postprocess):
                 pp_type = pp["type"]
+                pp_type = NODE_ALIASES.get(pp_type, pp_type)  # resolve alias
                 pp_params = pp.get("params") or {}
                 pp_name = f"post_{i}_{pp_type}"
                 try:
