@@ -24,7 +24,7 @@ In your `build_procedural_asset` recipe, reference a template like:
   "nodes": [
     {"type": "tube", "params": {"rad": [0.03, 0.03], "height": 0.06, "rows": 3, "cols": 16}},
     {"type": "fuse", "params": {}},
-    {"type": "attribwrangle", "params": {"class": 2, "snippet": "s@component_id = \"hub\";"}}
+    {"type": "attribwrangle", "params": {"class": 1, "snippet": "s@component_id = \"hub\";"}}
   ]
 }
 ```
@@ -43,7 +43,7 @@ Never hand-write the geometry in Python when a native SOP template exists.
   "nodes": [
     {"type": "tube", "params": {"rad": [0.025, 0.025], "height": 0.06, "rows": 3, "cols": 16}},
     {"type": "fuse", "params": {"dist": 0.0001}},
-    {"type": "attribwrangle", "params": {"class": 2, "snippet": "s@component_id = \"hub\";"}}
+    {"type": "attribwrangle", "params": {"class": 1, "snippet": "s@component_id = \"hub\";"}}
   ]
 }
 ```
@@ -59,7 +59,7 @@ Never hand-write the geometry in Python when a native SOP template exists.
   "anchors": [/* scatter wrangle fills these */],
   "nodes": [
     {"type": "tube", "params": {"rad": [0.001, 0.001], "height": 0.34, "rows": 2, "cols": 8}},
-    {"type": "attribwrangle", "params": {"class": 2, "snippet": "s@component_id = \"spoke\";"}}
+    {"type": "attribwrangle", "params": {"class": 1, "snippet": "s@component_id = \"spoke\";"}}
   ]
 }
 ```
@@ -76,7 +76,7 @@ Never hand-write the geometry in Python when a native SOP template exists.
     {"type": "box", "params": {"sizex": 0.06, "sizey": 0.01, "sizez": 0.03}},
     {"type": "polybevel", "params": {"offset": 0.003}},
     {"type": "fuse", "params": {"dist": 0.0001}},
-    {"type": "attribwrangle", "params": {"class": 2, "snippet": "s@component_id = \"pedal\";"}}
+    {"type": "attribwrangle", "params": {"class": 1, "snippet": "s@component_id = \"pedal\";"}}
   ]
 }
 ```
@@ -91,7 +91,7 @@ Never hand-write the geometry in Python when a native SOP template exists.
   "backend": "native_chain",
   "nodes": [
     {"type": "torus", "params": {"radscale": 0.08, "rows": 3, "cols": 48, "type": "poly"}},
-    {"type": "attribwrangle", "params": {"class": 2, "snippet": "s@component_id = \"chainring\";"}}
+    {"type": "attribwrangle", "params": {"class": 1, "snippet": "s@component_id = \"chainring\";"}}
   ]
 }
 ```
@@ -125,7 +125,7 @@ Pair with `make_gear_profile()` in a `vex_skeleton` component for toothed disc:
   "backend": "native_chain",
   "nodes": [
     {"type": "box", "params": {"sizex": 0.006, "sizey": 0.002, "sizez": 0.012}},
-    {"type": "attribwrangle", "params": {"class": 2, "snippet": "s@component_id = \"chain_link\";"}}
+    {"type": "attribwrangle", "params": {"class": 1, "snippet": "s@component_id = \"chain_link\";"}}
   ]
 }
 ```
@@ -141,7 +141,7 @@ Pair with `make_gear_profile()` in a `vex_skeleton` component for toothed disc:
   "nodes": [
     {"type": "tube", "params": {"rad": [0.018, 0.022], "height": 0.07, "rows": 4, "cols": 20}},
     {"type": "fuse", "params": {"dist": 0.0001}},
-    {"type": "attribwrangle", "params": {"class": 2, "snippet": "s@component_id = \"bb_shell\";"}}
+    {"type": "attribwrangle", "params": {"class": 1, "snippet": "s@component_id = \"bb_shell\";"}}
   ]
 }
 ```
@@ -157,7 +157,7 @@ Pair with `make_gear_profile()` in a `vex_skeleton` component for toothed disc:
   "nodes": [
     {"type": "box", "params": {"sizex": 0.02, "sizey": 0.025, "sizez": 0.01}},
     {"type": "polybevel", "params": {"offset": 0.002}},
-    {"type": "attribwrangle", "params": {"class": 2, "snippet": "s@component_id = \"brake_caliper\";"}}
+    {"type": "attribwrangle", "params": {"class": 1, "snippet": "s@component_id = \"brake_caliper\";"}}
   ]
 }
 ```
@@ -190,7 +190,7 @@ Pair with `make_gear_profile()` in a `vex_skeleton` component for toothed disc:
   "nodes": [
     {"type": "box", "params": {"sizex": 0.08, "sizey": 0.012, "sizez": 0.27}},
     {"type": "polybevel", "params": {"offset": 0.008}},
-    {"type": "attribwrangle", "params": {"class": 2, "snippet": "s@component_id = \"saddle\";"}}
+    {"type": "attribwrangle", "params": {"class": 1, "snippet": "s@component_id = \"saddle\";"}}
   ]
 }
 ```
