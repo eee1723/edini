@@ -31,6 +31,7 @@ from edini.harness import (
     build_variant_scatter,
     dump_parm_catalog,
     validate_recipe_tool,
+    build_component_tool,
 )
 
 # Knowledge and eval handlers (available only in Houdini runtime)
@@ -210,6 +211,12 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     ),
     "validate_recipe": lambda **kw: validate_recipe_tool(
         kw["recipe"],
+        catalog_path=kw.get("catalog_path"),
+    ),
+    "build_component": lambda **kw: build_component_tool(
+        kw["recipe"],
+        kw["component_id"],
+        kw["sandbox_root_path"],
         catalog_path=kw.get("catalog_path"),
     ),
     "dump_parm_catalog": lambda **kw: dump_parm_catalog(

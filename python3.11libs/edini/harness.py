@@ -3171,3 +3171,23 @@ def validate_recipe_tool(
     result["success"] = True
     return result
 
+
+def build_component_tool(
+    recipe: dict,
+    component_id: str,
+    sandbox_root_path: str,
+    catalog_path: str | None = None,
+) -> dict[str, Any]:
+    """Tool wrapper for Phase B: build a single component.
+
+    Args:
+        recipe: The full recipe dict.
+        component_id: Which component to build.
+        sandbox_root_path: e.g. "/obj/edini_sandbox_..."
+        catalog_path: Path to parm-catalog.json (optional).
+    Returns:
+        ComponentBuildResult as dict.
+    """
+    from edini.component_builder import build_component as _build
+    return _build(recipe, component_id, sandbox_root_path, catalog_path)
+
