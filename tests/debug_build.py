@@ -19,11 +19,14 @@ base = {
 }
 
 tests = [
-    ("+fuse", {"postprocess": [{"type": "fuse"}]}),
-    ("+fuse+clean", {"postprocess": [{"type": "fuse"}, {"type": "clean"}]}),
-    ("+fuse+clean+normal", {"postprocess": [{"type": "fuse"}, {"type": "clean"}, {"type": "normal", "params": {"cuspangle": 60}}]}),
-    ("+construction_axis", {"orientation_asserts": [
+    ("fuse", {"postprocess": [{"type": "fuse"}]}),
+    ("fuse+clean", {"postprocess": [{"type": "fuse"}, {"type": "clean"}]}),
+    ("fuse+clean+normal", {"postprocess": [{"type": "fuse"}, {"type": "clean"}, {"type": "normal", "params": {"cuspangle": 60}}]}),
+    ("caxis_anchored", {"orientation_asserts": [
         {"component_id": "copied", "kind": "planar", "expected_axis": "Y", "signed": True, "construction_axis": "Y"}
+    ]}),
+    ("caxis_direct", {"orientation_asserts": [
+        {"component_id": "b1", "kind": "planar", "expected_axis": "Y", "signed": True, "construction_axis": "Y"}
     ]}),
 ]
 
@@ -31,4 +34,5 @@ for label, extra in tests:
     recipe = {**base, **extra}
     r = build_procedural_asset(recipe)
     ok = r.get("success")
-    print(f"{label:25s}: {'PASS' if ok else 'FAIL: '+str(r.get('error',''))[:150]}")
+    err = str(r.get("error",""))[:150] if not ok else ""
+    print(f"{label:25s}: {'PASS' if ok else 'FAIL: '+err}")
