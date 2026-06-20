@@ -2275,7 +2275,7 @@ def build_procedural_asset(
 
         for comp in components:
             cid = comp["id"]
-            code = comp["code"]
+            code = comp.get("code", "")
             anchors = comp.get("anchors") or []
 
             py_name = f"{cid}_python"
