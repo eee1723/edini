@@ -19,24 +19,6 @@ async function forwardTool(toolName: string, params: Record<string, unknown>) {
   };
 }
 
-export const houdiniRunPython = {
-  name: "houdini_run_python",
-  label: "Run Houdini Python",
-  description:
-    "Execute arbitrary Python code in the Houdini environment. This is not sandboxed; prefer dedicated tools or houdini_run_python_sandbox when available.",
-  promptSnippet: "Run Python code in Houdini",
-  promptGuidelines: [
-    "Use houdini_run_python only when dedicated tools and the sandbox cannot accomplish the task.",
-    "For procedural modeling, prefer houdini_run_python_sandbox so failed cooks preserve diagnostics and do not overwrite live scene nodes.",
-  ],
-  parameters: Type.Object({
-    code: Type.String({ description: "Python code to execute" }),
-  }),
-  async execute(_toolCallId: string, params: { code: string }) {
-    return forwardTool("houdini_run_python", params);
-  },
-};
-
 export const houdiniRunVex = {
   name: "houdini_run_vex",
   label: "Run VEX Code",
@@ -96,7 +78,6 @@ export const houdiniGetHdaInfo = {
 };
 
 export const scriptTools = [
-  houdiniRunPython,
   houdiniRunVex,
   houdiniCreateHda,
   houdiniGetHdaInfo,
