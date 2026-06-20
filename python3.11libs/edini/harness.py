@@ -2010,6 +2010,7 @@ def _component_id_overwrite_snippet(
     header = (
         "node = hou.pwd()\n"
         "geo = node.geometry()\n"
+        "geo.addAttrib(hou.attribType.Prim, 'component_id', '')\n"
         "anchor_ids = " + ids_repr + "\n"
         "world_axes = " + axes_repr + "\n"
         "n_anchors = len(anchor_ids)\n"

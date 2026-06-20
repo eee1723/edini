@@ -181,14 +181,20 @@ simple_recipe = {
             "id": "base_box",
             "backend": "native_chain",
             "nodes": [
-                {"type": "box", "params": {"sizex": 2, "sizey": 0.5, "sizez": 1}}
+                {"type": "box", "params": {"sizex": 2, "sizey": 0.5, "sizez": 1}},
+                {"type": "attribwrangle",
+                 "params": {"class": 2,
+                            "snippet": "s@component_id = 'base_box';"}}
             ]
         },
         {
             "id": "pillar",
             "backend": "native_chain",
             "nodes": [
-                {"type": "box", "params": {"sizex": 0.3, "sizey": 0.3, "sizez": 0.3}}
+                {"type": "box", "params": {"sizex": 0.3, "sizey": 0.3, "sizez": 0.3}},
+                {"type": "attribwrangle",
+                 "params": {"class": 2,
+                            "snippet": "s@component_id = 'pillar';"}}
             ],
             "anchors": [
                 {"position": [0, 0.5, 0], "orient": [0, 0, 0, 1],
