@@ -319,7 +319,21 @@ def build_component(
         )
         result.cache_path = cache_dir
 
-        return result.to_dict()
+        # ── Persist to component cache ──
+        result_dict = result.to_dict()
+        if result_dict["status"] == "passed":
+            try:
+                from edini.component_cache import ComponentCache, recipe_hash
+                cache = ComponentCache(
+                    os.path.dirname(result_dict.get("cache_path", "") or ".")
+                )
+                cache.save(component_id, result_dict, recipe_hash(recipe))
+            except Exception as exc:
+                # Cache write failure is non-fatal — the build succeeded,
+                # but the component won't be available for incremental reuse.
+                result_dict["_cache_warning"] = str(exc)
+
+        return result_dict
 
     except Exception as e:
         result.status = "failed"
