@@ -19,12 +19,13 @@ def _get_catalog(catalog_path: str | None) -> Any:
         try:
             from edini.parm_catalog import ParmCatalog as PC
             _ParmCatalog = PC
-        except ImportError:
+        except Exception:
             return None
     if _ParmCatalog and catalog_path:
         try:
             return _ParmCatalog.load(catalog_path)
         except Exception:
+            _ParmCatalog = None  # reset — catalog might be broken
             return None
     return None
 
