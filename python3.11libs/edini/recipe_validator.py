@@ -16,10 +16,16 @@ def _get_catalog(catalog_path: str | None) -> Any:
     """Lazy-load ParmCatalog. Returns None if not available."""
     global _ParmCatalog
     if _ParmCatalog is None and catalog_path:
-        from edini.parm_catalog import ParmCatalog as PC
-        _ParmCatalog = PC
+        try:
+            from edini.parm_catalog import ParmCatalog as PC
+            _ParmCatalog = PC
+        except ImportError:
+            return None
     if _ParmCatalog and catalog_path:
-        return _ParmCatalog.load(catalog_path)
+        try:
+            return _ParmCatalog.load(catalog_path)
+        except Exception:
+            return None
     return None
 
 # ── Constants ───────────────────────────────────────────────

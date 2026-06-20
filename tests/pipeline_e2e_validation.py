@@ -13,16 +13,18 @@ sys.path.insert(0, os.path.join(EDINI_ROOT, "python3.11libs"))
 
 PASS = 0
 FAIL = 0
-_results = []
 
 def check(name: str, condition: bool, detail: str = ""):
     global PASS, FAIL
     if condition:
         PASS += 1
-        _results.append(f"  [PASS] {name}")
+        print(f"  [PASS] {name}")
     else:
         FAIL += 1
-        _results.append(f"  [FAIL] {name} — {detail}")
+        msg = f"  [FAIL] {name}"
+        if detail:
+            msg += f" -- {str(detail)[:300]}"
+        print(msg)
 
 def section(title: str):
     print(f"\n{'='*60}")
@@ -33,9 +35,6 @@ def report():
     print(f"\n{'='*60}")
     print(f"  RESULTS: {PASS} passed, {FAIL} failed")
     print(f"{'='*60}")
-    for r in _results:
-        print(r)
-    print()
 
 # ═══════════════════════════════════════════════════════════
 #  PHASE 0: PARM CATALOG
