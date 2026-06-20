@@ -98,33 +98,42 @@ class ParmCatalog:
                 # nt.parmTemplates() returns the factory defaults —
                 # the same metadata houdini_node_parms returned previously.
                 for pt in nt.parmTemplates():
-                    # Skip folder/separator/button templates — they have no value
-                    ptype = pt.type().name
+                    try:
+                        ptype = pt.type().name
+                    except Exception:
+                        continue
+                    # Skip folder/separator/button templates
                     if ptype in ("FolderSet", "Folder", "Separator", "ButtonStrip",
-                                 "Label", "Button"):
+                                 "Label", "Button", ""):
                         continue
                     try:
                         default_val = pt.defaultValue()
-                        # Some parm types return methods or other non-serializable objects
-                        if callable(default_val) and not isinstance(default_val, (int, float, str, bool, list, tuple, dict)):
+                        if callable(default_val) and not isinstance(default_val, (int, float, str, bool, list, tuple, dict, type(None))):
                             default_val = None
-                    except (AttributeError, TypeError):
+                    except Exception:
                         default_val = None
-                    # Convert to JSON-serializable
+                    # Ensure JSON-serializable
+                    if default_val is not None:
+                        try:
+                            json.dumps(default_val)
+                        except (TypeError, ValueError, OverflowError):
+                            default_val = str(default_val)
                     try:
-                        json.dumps(default_val)
-                    except (TypeError, ValueError):
-                        default_val = repr(default_val) if default_val is not None else None
+                        label = pt.label()
+                    except Exception:
+                        label = ""
                     pdef = {
                         "type": ptype,
-                        "label": pt.label(),
+                        "label": label,
                         "default": default_val,
                     }
                     if ptype == "Menu":
-                        # Collect menu item labels
-                        pdef["menu_items"] = [
-                            mi.label() for mi in (pt.menuItems() or [])
-                        ]
+                        try:
+                            pdef["menu_items"] = [
+                                mi.label() for mi in (pt.menuItems() or [])
+                            ]
+                        except Exception:
+                            pdef["menu_items"] = []
                     entry["parms"][pt.name()] = pdef
                 sops[nt.name()] = entry
         return {
