@@ -1,12 +1,12 @@
 # Declarative Recipe Builder
 
-`houdini_build_procedural_asset` is the **preferred path** for any multi-component asset (vehicles, furniture, anything with swappable/repeated parts). You submit a JSON **recipe** and the harness **deterministically** assembles the modular network — you never write `createNode`/`setInput`/`blockpath`/wiring. This eliminates the whole class of imperative-Houdini-API errors that dominate failed procedural runs.
+`build_procedural_asset` is the **preferred path** for any multi-component asset (vehicles, furniture, anything with swappable/repeated parts). You submit a JSON **recipe** and the harness **deterministically** assembles the modular network — you never write `createNode`/`setInput`/`blockpath`/wiring. This eliminates the whole class of imperative-Houdini-API errors that dominate failed procedural runs.
 
 **When to use which build path:**
 
 | Situation | Tool |
 |---|---|
-| Multi-component asset (body + wheels/handles/legs via Copy-to-Points) | **`houdini_build_procedural_asset`** (this section) — PREFERRED |
+| Multi-component asset (body + wheels/handles/legs via Copy-to-Points) | **`build_procedural_asset`** (this section) — PREFERRED |
 | Non-standard topology you can't express as a recipe | `houdini_run_python_sandbox(network_mode=true)` (hand-write the network) |
 | Genuinely single-piece generator (one fractal, one surface) | `houdini_run_python_sandbox` (default single-SOP mode) |
 
@@ -51,7 +51,7 @@
     //    No params → Clean defaults. (H21 parms if needed: fusepts, deldegengeo.)
     {"type": "clean"},
     // 3. normal — cusp normals for shading. parm NAMES are version-specific —
-    //    verify with houdini_node_parms("normal").
+    //    verify with query_parms("normal").
     {"type": "normal", "params": {"cuspangle": 60}}
   ],
   // WHEN TO OMIT fuse+clean: a genuinely single-piece asset (one box, one parametric
@@ -81,7 +81,7 @@ The builder **post-checks** `component_id` presence on the cooked OUT and report
 - `position`: world-space `[x, y, z]` where the stamp lands.
 - `orient`: quaternion `[x, y, z, w]` (NOT Euler). Identity = `[0,0,0,1]`.
 - `pscale`: `1.0` = source geometry at original size. Model stamped components at **unit scale** and set `pscale` to real size (cleanest), or model at real scale and use `1.0`.
-- `component_id` (per anchor): the **per-instance** id (e.g. `wheel_fl`). The builder overwrites each stamped instance's prim `component_id` with this, so `houdini_verify_orientation` can PCA each instance separately.
+- `component_id` (per anchor): the **per-instance** id (e.g. `wheel_fl`). The builder overwrites each stamped instance's prim `component_id` with this, so `verify_orientation` can PCA each instance separately.
 
 ## What the builder assembles (deterministic — you don't write this)
 ```
@@ -94,7 +94,7 @@ The builder **post-checks** `component_id` presence on the cooked OUT and report
 ```
 
 ## Build result (read these before committing)
-The `houdini_build_procedural_asset` result includes:
+The `build_procedural_asset` result includes:
 - `components_built`, `anchors_built` — what actually got built.
 - `component_id_check` — `{missing: [...], ok: [...]}`. **Fix any `missing` before committing** (orientation checks will fail for missing ids).
 - `structure_advisory` — should be `passed: true` (the builder's Copy-to-Points network is inherently modular, so the monolithic gate never trips).
@@ -103,7 +103,7 @@ The `houdini_build_procedural_asset` result includes:
 
 ## Commit (separate step)
 ```python
-houdini_commit_sandbox(
+commit_sandbox(
     sandbox_root_path="<root_path from build result>",
     final_name="bicycle",
     orientation_checks=<recipe.orientation_asserts>,
@@ -155,7 +155,7 @@ variants (prim `variant` int tagged) → merge (UNPACKED)
 - **resettargetattribs button transfers `id`.** Real H21 has no Apply Attributes multiparm on a fresh Copy node; pressing the button auto-populates the transfer. You do NOT set this yourself.
 
 **When to use variant scatter vs single-template Copy-to-Points:**
-- `houdini_build_procedural_asset` + one anchored component = **one template** copied N times (all instances identical, like 6 identical windows).
+- `build_procedural_asset` + one anchored component = **one template** copied N times (all instances identical, like 6 identical windows).
 - `houdini_variant_scatter` = **N variant templates**, each instance gets one drawn from the source library per `seed` (6 windows, some style-A, some style-B, …). This is what raises detail from "uniform repetition" to "lived-in variation".
 
 ### Tool call parameters
@@ -221,7 +221,7 @@ Each instance gets `component_id = "{variant_id}_{id}"` (e.g. `win_a_0`, `win_b_
 
 ### Commit (separate step)
 ```python
-houdini_commit_sandbox(
+commit_sandbox(
     sandbox_root_path="<root_path from build result>",
     final_name="window_wall",
     orientation_checks=<recipe.orientation_asserts>,

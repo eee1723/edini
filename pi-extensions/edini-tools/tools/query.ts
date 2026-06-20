@@ -49,8 +49,8 @@ export const houdiniGetHelp = {
   },
 };
 
-export const houdiniNodeParms = {
-  name: "houdini_node_parms",
+export const queryNodeParms = {
+  name: "query_parms",
   label: "Query Node Type Parameters",
   description:
     "Look up the authoritative parameter list (names/types/menu tokens/defaults) for a Houdini node TYPE (e.g. 'normal', 'attribpromote', 'copytopoints'). " +
@@ -72,7 +72,7 @@ export const houdiniNodeParms = {
     _toolCallId: string,
     params: { node_type: string; category?: string }
   ) {
-    return forwardTool("houdini_node_parms", params);
+    return forwardTool("query_parms", params);
   },
 };
 
@@ -104,8 +104,8 @@ export const houdiniInspectGeo = {
   },
 };
 
-export const houdiniGeometryInventory = {
-  name: "houdini_geometry_inventory",
+export const geometryInventory = {
+  name: "geometry_inventory",
   label: "Geometry Component Inventory",
   description:
     "List every distinct @component_id on a node's geometry with its prim/point counts, bounds, and relative size (size_fraction). " +
@@ -128,12 +128,12 @@ export const houdiniGeometryInventory = {
     _toolCallId: string,
     params: { node_path: string; max_components?: number }
   ) {
-    return forwardTool("houdini_geometry_inventory", params);
+    return forwardTool("geometry_inventory", params);
   },
 };
 
-export const houdiniInspectGeometryHealth = {
-  name: "houdini_inspect_geometry_health",
+export const inspectGeometryHealth = {
+  name: "inspect_health",
   label: "Inspect Geometry Health",
   description:
     "Check a SOP node's geometry for orphan points, open/stray curves, degenerate faces, non-manifold edges, open boundary edges, and coincident points. " +
@@ -161,16 +161,16 @@ export const houdiniInspectGeometryHealth = {
       coincident_eps?: number;
     }
   ) {
-    return forwardTool("houdini_inspect_geometry_health", params);
+    return forwardTool("inspect_health", params);
   },
 };
 
 export const queryTools = [
   houdiniSearchNodes,
   houdiniGetHelp,
-  houdiniNodeParms,
+  queryNodeParms,
   houdiniGetNodeInfo,
   houdiniInspectGeo,
-  houdiniGeometryInventory,
-  houdiniInspectGeometryHealth,
+  geometryInventory,
+  inspectGeometryHealth,
 ];

@@ -20,7 +20,7 @@ PARAMETERS (minimum 5):
 MODULAR ANCHORS (for Copy-to-Points):
   - anchor_name: count, purpose (e.g., "wheel_mount: 4, wheel placement positions")
 
-ORIENTATION ASSERTS (consumed by houdini_verify_orientation — MANDATORY):
+ORIENTATION ASSERTS (consumed by verify_orientation — MANDATORY):
   - wheel_fl:        kind=radial,     expected_axis=X  (axle horizontal across bike)
   - wheel_fr:        kind=radial,     expected_axis=X
   - wheel_rl:        kind=radial,     expected_axis=X
@@ -89,5 +89,5 @@ weightmethod manually after build.
 ```
 
 ### When to choose variant scatter over single-template Copy-to-Points
-- **Single template** (`houdini_build_procedural_asset` + one anchored component): all N instances identical. Use when the repeated part has ONE canonical form (e.g. 4 identical bike wheels).
+- **Single template** (`build_procedural_asset` + one anchored component): all N instances identical. Use when the repeated part has ONE canonical form (e.g. 4 identical bike wheels).
 - **Variant scatter** (`houdini_variant_scatter`): N instances each pick from M styles. Use when the repeated part has multiple interchangeable forms (windows, trees, debris) — this is what breaks the "procedural repetition" feel and lifts detail to Level 3+.

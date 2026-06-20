@@ -6,7 +6,7 @@ Distilled from production practice (Horikawa, Entagma, Knipping, SideFX, CGWiki)
 - **1 Houdini unit = 1 meter.** Many SOP/sim defaults assume this. Always emit geometry at real-world meter scale. A bicycle wheel is ~0.35m radius, not 35.
 
 ## Boolean hygiene
-- **Clean before Boolean.** Non-manifold edges and degenerate faces on either input produce garbage output. Run `houdini_inspect_geometry_health` and fix before any Boolean/Sweep that cuts the body.
+- **Clean before Boolean.** Non-manifold edges and degenerate faces on either input produce garbage output. Run `inspect_health` and fix before any Boolean/Sweep that cuts the body.
 - **Subdivide AFTER Boolean produces artifacts.** If you need clean topology, VDB-remesh instead, or order PolyExtrude/Bevel before the boolean.
 
 ## Orientation VEX recipe (canonical)

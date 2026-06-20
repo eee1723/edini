@@ -1,0 +1,155 @@
+// attribs.vfl — VEX attribute-writing utility functions.
+// All functions can run Over: Detail or Over: Points depending on context.
+// These are helpers for stamping orient/scale/component_id on scatter points
+// or generated geometry.
+
+// ── set_orient_from_tangent ────────────────────────────────────────────
+// Compute a stable orient quaternion from a tangent direction + up vector.
+// Suitable for Copy-to-Points: the stamped piece's local Y axis maps to
+// the target @up, and local Z maps to the target tangent.
+//
+// Run Over: Points or Detail.
+//
+//   geohandle      — geometry handle
+//   ptnum          — point to write @orient to
+//   tangent        — forward direction (maps to local +Z of the source)
+//   up             — up vector (maps to local +Y of the source; default {0,1,0})
+//
+// Example (on a curve with @P and @next_P):
+//   vector tangent = normalize(@opinput1_next_P - @P);
+//   set_orient_from_tangent(0, @ptnum, tangent, {0,1,0});
+void set_orient_from_tangent(const int geohandle;
+                             const int ptnum;
+                             const vector tangent;
+                             const vector up)
+{
+    vector side = normalize(cross(up, tangent));
+    vector n     = cross(tangent, side);
+    // side=X, n=Y, tangent=Z → maketransform builds a rotation matrix
+    // then quaternion() extracts the orient
+    matrix3 m = maketransform(side, n, tangent);
+    vector4 q = quaternion(m);
+    setpointattrib(geohandle, "orient", ptnum, q);
+}
+
+// ── set_component_id_by_range ──────────────────────────────────────────
+// Assign component_id to primitives whose centroid falls within a box range.
+// Run Over: Detail.
+//
+//   geohandle      — geometry handle (0 in Detail mode)
+//   component_id   — string to assign
+//   range_min      — min corner of the bounding box filter
+//   range_max      — max corner of the bounding box filter
+//
+// Example (stair steps — each step has Y between a range):
+//   set_component_id_by_range(0, "step_3",
+//       {0, 3*chf("riser")-0.01, -10},
+//       {10, 4*chf("riser")+0.01, 10});
+int set_component_id_by_range(const int geohandle;
+                              const string component_id;
+                              const vector range_min;
+                              const vector range_max)
+{
+    int count = 0;
+    int nprims = nprimitives(geohandle);
+    addattrib(geohandle, "prim", "component_id", "");
+    for (int i = 0; i < nprims; i++)
+    {
+        vector cen = prim(geohandle, "P", i);  // centroid
+        if (cen.x >= range_min.x && cen.x <= range_max.x &&
+            cen.y >= range_min.y && cen.y <= range_max.y &&
+            cen.z >= range_min.z && cen.z <= range_max.z)
+        {
+            setprimattrib(geohandle, "component_id", i, component_id);
+            count++;
+        }
+    }
+    return count;
+}
+
+// ── set_component_id_by_index ──────────────────────────────────────────
+// Assign per-prim component_id using an integer pattern (e.g. "step_0".."step_N").
+// Run Over: Detail. Assigns to all primitives in order.
+//
+//   geohandle      — geometry handle (0 in Detail mode)
+//   prefix         — string prefix (e.g. "step_")
+//   start          — first index (usually 0)
+//   prims_per_id   — how many consecutive prims get the same id
+//
+// Example (one step = 12 faces → prims_per_id=12):
+//   set_component_id_by_index(0, "step_", 0, 12);
+int set_component_id_by_index(const int geohandle;
+                              const string prefix;
+                              const int start;
+                              const int prims_per_id)
+{
+    int count = 0;
+    int nprims = nprimitives(geohandle);
+    addattrib(geohandle, "prim", "component_id", "");
+    for (int i = 0; i < nprims; i++)
+    {
+        int idx = start + i / max(prims_per_id, 1);
+        string cid = sprintf("%s%d", prefix, idx);
+        setprimattrib(geohandle, "component_id", i, cid);
+        count++;
+    }
+    return count;
+}
+
+// ── set_scale_along_curve ──────────────────────────────────────────────
+// Write @pscale on points, driven by a ramp along @curveu (0..1).
+// Run Over: Points (reads @curveu on each point).
+//
+//   geohandle      — geometry handle
+//   ptnum          — point number
+//   base_scale     — minimum pscale (at curveu=0)
+//   peak_scale     — maximum pscale (at curveu=0.5)
+//   ramp_mode      — 0=triangle (peak at 0.5), 1=linear rise, 2=linear fall
+//
+// Example (bulging tube):
+//   set_scale_along_curve(0, @ptnum, 0.5, 1.2, 0);
+void set_scale_along_curve(const int geohandle;
+                           const int ptnum;
+                           const float base_scale;
+                           const float peak_scale;
+                           const int ramp_mode)
+{
+    float u = point(geohandle, "curveu", ptnum);
+    float t;
+    if (ramp_mode == 0)   // triangle: peak at center
+        t = 1.0 - abs(u - 0.5) * 2.0;
+    else if (ramp_mode == 1)  // linear rise
+        t = u;
+    else  // linear fall (2+)
+        t = 1.0 - u;
+    float s = base_scale + (peak_scale - base_scale) * t;
+    setpointattrib(geohandle, "pscale", ptnum, s);
+}
+
+// ── set_instance_attrs ─────────────────────────────────────────────────
+// Write the standard Copy-to-Points attributes (@orient, @pscale, @N, @up)
+// on a point, given a local-to-world transform.
+// Run Over: Points or Detail.
+//
+//   geohandle      — geometry handle
+//   ptnum          — point number
+//   position       — world position
+//   forward        — direction the instance faces (local +Z)
+//   up             — up direction (local +Y)
+//   scale          — uniform scale (pscale)
+void set_instance_attrs(const int geohandle;
+                        const int ptnum;
+                        const vector position;
+                        const vector forward;
+                        const vector up;
+                        const float scale)
+{
+    vector side = normalize(cross(up, forward));
+    vector n    = normalize(cross(forward, side));
+    matrix3 m = maketransform(side, n, forward);
+    setpointattrib(geohandle, "P",       ptnum, position);
+    setpointattrib(geohandle, "orient",  ptnum, quaternion(m));
+    setpointattrib(geohandle, "pscale",  ptnum, scale);
+    setpointattrib(geohandle, "N",       ptnum, forward);
+    setpointattrib(geohandle, "up",      ptnum, up);
+}

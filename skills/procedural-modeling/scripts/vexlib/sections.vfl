@@ -1,0 +1,229 @@
+// sections.vfl — VEX cross-section / profile generation functions.
+// All functions run Over: Detail (Numbers). They produce CLOSED polylines
+// (contours) that downstream native SOPs (Sweep/PolyExtrude) use as
+// cross-sections or base profiles.
+//
+// IRON RULES:
+//   1. Run Over: Detail.
+//   2. Never produce polygons here — return point_ids[] for downstream.
+//   3. All sizing reads from ch() — parametric, HDA-safe.
+
+// ── make_rect_section ──────────────────────────────────────────────────
+// Emit a rectangular closed polyline (4 points).
+// Use as: Sweep input-1 (cross-section for a beam/pillar) OR PolyExtrude
+// base profile (extrude into a solid block).
+//
+//   geohandle      — geometry handle (always 0)
+//   width          — X-axis extent
+//   height         — Y-axis extent (or Z, depending on plane)
+//   plane          — "XY" | "XZ" | "YZ" — which plane the rectangle lies in
+//
+// Example (beam cross-section in XZ plane):
+//   int prof[] = make_rect_section(0, chf("beam_w"), chf("beam_h"), "XZ");
+int[] make_rect_section(const int geohandle;
+                        const float width;
+                        const float height;
+                        const string plane)
+{
+    float hw = width * 0.5;
+    float hh = height * 0.5;
+    vector corners[];
+    if (plane == "XZ")
+    {
+        corners = array(
+            set(-hw, 0, -hh),
+            set( hw, 0, -hh),
+            set( hw, 0,  hh),
+            set(-hw, 0,  hh)
+        );
+    }
+    else if (plane == "YZ")
+    {
+        corners = array(
+            set(0, -hh, -hw),
+            set(0, -hh,  hw),
+            set(0,  hh,  hw),
+            set(0,  hh, -hw)
+        );
+    }
+    else // XY (default)
+    {
+        corners = array(
+            set(-hw, -hh, 0),
+            set( hw, -hh, 0),
+            set( hw,  hh, 0),
+            set(-hw,  hh, 0)
+        );
+    }
+    return make_closed_polyline(geohandle, corners);
+}
+
+// ── make_circle_section ────────────────────────────────────────────────
+// Emit a regular N-gon closed polyline (approximates a circle).
+// Use as: Sweep input-1 (cross-section for a round pipe/pillar).
+//
+//   geohandle      — geometry handle (always 0)
+//   radius         — radius of the circle
+//   sides          — number of sides (4=square, 6=hex, 12+=smooth circle)
+//   plane          — "XY" | "XZ" | "YZ"
+//   offset         — center position (default {0,0,0})
+//
+// Example (round pillar section in XZ plane):
+//   int prof[] = make_circle_section(0, chf("radius"), chi("sides"), "XZ", {0,0,0});
+int[] make_circle_section(const int geohandle;
+                          const float radius;
+                          const int sides;
+                          const string plane;
+                          const vector offset)
+{
+    vector pts[];
+    int n = max(sides, 3);
+    for (int i = 0; i < n; i++)
+    {
+        float angle = float(i) / float(n) * 2.0 * M_PI;
+        float x = radius * cos(angle);
+        float y = radius * sin(angle);
+        vector p;
+        if (plane == "XZ")
+            p = set(x, 0, y);
+        else if (plane == "YZ")
+            p = set(0, x, y);
+        else // XY
+            p = set(x, y, 0);
+        append(pts, p + offset);
+    }
+    return make_closed_polyline(geohandle, pts);
+}
+
+// ── make_tapered_section ───────────────────────────────────────────────
+// Emit a regular N-gon closed polyline with variable radius (cone/taper).
+// Each vertex can have its own radius along the loop.
+// Use as: Sweep input-1 for a variable-cross-section tube.
+//
+//   geohandle      — geometry handle (always 0)
+//   radii[]        — radius per side (must match sides count)
+//   plane          — "XY" | "XZ" | "YZ"
+//   offset         — center position
+//
+// Example (star-like section):
+//   float r[] = array(0.5, 0.8, 0.5, 0.8, 0.5, 0.8);
+//   int prof[] = make_tapered_section(0, r, "XZ", {0,0,0});
+int[] make_tapered_section(const int geohandle;
+                           const float radii[];
+                           const string plane;
+                           const vector offset)
+{
+    vector pts[];
+    int n = len(radii);
+    if (n < 3) return array();
+    for (int i = 0; i < n; i++)
+    {
+        float angle = float(i) / float(n) * 2.0 * M_PI;
+        float r = radii[i];
+        float x = r * cos(angle);
+        float y = r * sin(angle);
+        vector p;
+        if (plane == "XZ")
+            p = set(x, 0, y);
+        else if (plane == "YZ")
+            p = set(0, x, y);
+        else // XY
+            p = set(x, y, 0);
+        append(pts, p + offset);
+    }
+    return make_closed_polyline(geohandle, pts);
+}
+
+// ── make_gear_profile ─────────────────────────────────────────────────
+// Emit a toothed gear/chainring profile (closed polyline).
+// Alternates outer_r (tooth tip) and inner_r (tooth valley) vertices.
+// Use with polyextrude::2.0 to extrude into a 3D gear disc.
+//
+//   geohandle      — geometry handle (always 0)
+//   teeth          — number of teeth (produces teeth*2 vertices)
+//   outer_r        — radius at tooth tips
+//   inner_r        — radius at tooth valleys
+//   plane          — "XY" | "XZ" | "YZ"
+//   offset         — center position
+//
+// Example (42-tooth chainring):
+//   int prof[] = make_gear_profile(0, chi("teeth"), chf("outer_r"), chf("inner_r"), "XZ", {0,0,0});
+int[] make_gear_profile(const int geohandle;
+                        const int teeth;
+                        const float outer_r;
+                        const float inner_r;
+                        const string plane;
+                        const vector offset)
+{
+    vector pts[];
+    int n = teeth * 2;  // each tooth = one tip + one valley
+    if (n < 6) return array();
+    for (int i = 0; i < n; i++)
+    {
+        float angle = float(i) / float(n) * 2.0 * M_PI;
+        float r = (i % 2 == 0) ? outer_r : inner_r;
+        float x = r * cos(angle);
+        float y = r * sin(angle);
+        vector p;
+        if (plane == "XZ")
+            p = set(x, 0, y);
+        else if (plane == "YZ")
+            p = set(0, x, y);
+        else // XY
+            p = set(x, y, 0);
+        append(pts, p + offset);
+    }
+    return make_closed_polyline(geohandle, pts);
+}
+
+// ── make_arc_path ──────────────────────────────────────────────────────
+// Emit a circular arc path (open polyline). Use as a Sweep spine for curved
+// beams, arched windows, etc.
+//
+//   geohandle      — geometry handle (always 0)
+//   n              — number of sample points
+//   radius         — arc radius
+//   start_angle    — starting angle in degrees
+//   end_angle      — ending angle in degrees
+//   plane          — "XY" | "XZ" | "YZ"
+//   offset         — center position
+//
+// Example (arch from 0° to 180°):
+//   int path[] = make_arc_path(0, 50, chf("radius"), 0, 180, "XY", {0,chf("rise"),0});
+int[] make_arc_path(const int geohandle;
+                    const int n;
+                    const float radius;
+                    const float start_angle;
+                    const float end_angle;
+                    const string plane;
+                    const vector offset)
+{
+    int result[] = array();
+    if (n < 2) return result;
+    for (int i = 0; i < n; i++)
+    {
+        float t = float(i) / float(n - 1);
+        float angle_deg = start_angle + t * (end_angle - start_angle);
+        float angle_rad = radians(angle_deg);
+        float x = radius * cos(angle_rad);
+        float y = radius * sin(angle_rad);
+        vector p;
+        if (plane == "XZ")
+            p = set(x, 0, y);
+        else if (plane == "YZ")
+            p = set(0, x, y);
+        else // XY
+            p = set(x, y, 0);
+        int pt = addpoint(geohandle, p + offset);
+        setpointattrib(geohandle, "curveu", pt, t);
+        setpointattrib(geohandle, "pscale", pt, 1.0);
+        append(result, pt);
+    }
+    // Single continuous polyline
+    int prim = addprim(geohandle, "polyline");
+    for (int i = 0; i < len(result); i++)
+    {
+        addvertex(geohandle, prim, result[i]);
+    }
+    return result;
+}

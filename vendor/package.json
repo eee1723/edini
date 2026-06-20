@@ -1,0 +1,9 @@
+{
+  "name": "edini-vendor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Vendored runtime dependencies for Edini (Pi coding agent). Bundled so end-users need no system Node/npm.",
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.79.8"
+  }
+}

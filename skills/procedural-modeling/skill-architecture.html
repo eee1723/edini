@@ -1,0 +1,1352 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Edini Procedural Modeling Skill · 架构全景图</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --orange: #d2991d;
+    --red: #f85149;
+    --purple: #a371f7;
+    --teal: #39d353;
+    --pink: #db61a2;
+    --cyan: #79c0ff;
+  }
+  * { margin:0; padding:0; box-sizing:border-box }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.7;
+    padding: 0;
+  }
+
+  /* ── Header ── */
+  .hero {
+    background: linear-gradient(135deg, #0d1117 0%, #1a2332 50%, #0d1117 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 60px 40px 50px;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+  }
+  .hero::before {
+    content: ""; position: absolute; inset: 0;
+    background: radial-gradient(ellipse at 20% 50%, rgba(88,166,255,0.08) 0%, transparent 60%),
+                radial-gradient(ellipse at 75% 30%, rgba(163,113,247,0.06) 0%, transparent 50%);
+  }
+  .hero h1 {
+    font-size: 2.8em; font-weight: 800; color: #fff; position: relative;
+    letter-spacing: -0.02em;
+  }
+  .hero h1 span { color: var(--accent) }
+  .hero .subtitle {
+    color: var(--muted); font-size: 1.15em; margin-top: 12px; position: relative;
+    max-width: 700px; margin-left: auto; margin-right: auto;
+  }
+  .hero .badges {
+    margin-top: 20px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;
+    position: relative;
+  }
+  .badge {
+    padding: 5px 14px; border-radius: 20px; font-size: 0.85em; font-weight: 600;
+    border: 1px solid var(--border);
+  }
+  .badge.vex { color: var(--teal); border-color: var(--teal); background: rgba(57,211,83,0.08) }
+  .badge.py  { color: var(--accent); border-color: var(--accent); background: rgba(88,166,255,0.08) }
+  .badge.harness { color: var(--orange); border-color: var(--orange); background: rgba(210,153,29,0.08) }
+  .badge.tools { color: var(--purple); border-color: var(--purple); background: rgba(163,113,247,0.08) }
+
+  /* ── Layout ── */
+  .container { max-width: 1200px; margin: 0 auto; padding: 0 32px }
+  section { padding: 48px 0; border-bottom: 1px solid var(--border) }
+  section:last-child { border: none }
+  h2 {
+    font-size: 1.8em; font-weight: 700; margin-bottom: 8px; color: #fff;
+    display: flex; align-items: center; gap: 10px;
+  }
+  h2 .tag {
+    font-size: 0.45em; padding: 3px 10px; border-radius: 6px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.06em;
+  }
+  .tag.router { background: rgba(88,166,255,0.15); color: var(--accent) }
+  .tag.lib    { background: rgba(57,211,83,0.15); color: var(--teal) }
+  .tag.ref    { background: rgba(163,113,247,0.15); color: var(--purple) }
+  .tag.harness{ background: rgba(210,153,29,0.15); color: var(--orange) }
+  .tag.tools  { background: rgba(219,97,162,0.15); color: var(--pink) }
+  .tag.sop    { background: rgba(121,192,255,0.15); color: var(--cyan) }
+  .section-desc { color: var(--muted); font-size: 1.05em; margin-bottom: 24px }
+
+  /* ── Cards ── */
+  .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px }
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 22px 24px; transition: border-color 0.2s;
+  }
+  .card:hover { border-color: var(--accent) }
+  .card h3 { font-size: 1.15em; font-weight: 700; color: #fff; margin-bottom: 6px }
+  .card .path { color: var(--muted); font-size: 0.8em; font-family: "SF Mono", Consolas, monospace; margin-bottom: 10px }
+  .card .design { color: var(--muted); font-size: 0.92em; margin-bottom: 10px; line-height: 1.6 }
+  .card .prompt {
+    background: #0d1117; border: 1px solid var(--border); border-radius: 6px;
+    padding: 12px 14px; font-size: 0.85em; line-height: 1.5;
+    white-space: pre-wrap; color: var(--text); margin-top: 8px;
+    font-family: "SF Mono", Consolas, monospace;
+    max-height: 300px; overflow-y: auto;
+  }
+  .card .prompt::-webkit-scrollbar { width: 5px }
+  .card .prompt::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px }
+
+  /* ── Architecture diagram ── */
+  .arch-diagram {
+    display: flex; flex-direction: column; gap: 12px; margin: 32px 0;
+    font-family: "SF Mono", Consolas, monospace; font-size: 0.88em;
+  }
+  .arch-layer {
+    display: flex; align-items: stretch; gap: 0; border-radius: 8px; overflow: hidden;
+    border: 1px solid var(--border);
+  }
+  .arch-label {
+    width: 180px; flex-shrink: 0; padding: 16px 18px; display: flex; align-items: center;
+    font-weight: 700; font-size: 0.95em;
+  }
+  .arch-content {
+    flex: 1; padding: 16px 20px; display: flex; align-items: center;
+    flex-wrap: wrap; gap: 8px;
+  }
+  .arch-pill {
+    padding: 4px 12px; border-radius: 14px; font-size: 0.85em; font-weight: 600;
+    white-space: nowrap;
+  }
+  .layer-3 .arch-label { background: rgba(88,166,255,0.12); color: var(--accent) }
+  .layer-2 .arch-label { background: rgba(210,153,29,0.12); color: var(--orange) }
+  .layer-1 .arch-label { background: rgba(57,211,83,0.12); color: var(--teal) }
+
+  /* ── Function table ── */
+  .fn-table { width: 100%; border-collapse: collapse; font-size: 0.9em; margin: 16px 0 }
+  .fn-table th {
+    text-align: left; padding: 10px 14px; background: var(--surface);
+    border-bottom: 1px solid var(--border); color: var(--accent); font-weight: 700;
+    font-size: 0.85em; text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .fn-table td { padding: 10px 14px; border-bottom: 1px solid var(--border); vertical-align: top }
+  .fn-table tr:hover td { background: rgba(88,166,255,0.03) }
+  .fn-table .sig { font-family: "SF Mono", Consolas, monospace; font-size: 0.82em; color: var(--teal) }
+  .fn-table .desc { color: var(--muted); font-size: 0.85em; line-height: 1.5 }
+
+  /* ── Tool list ── */
+  .tool-list { display: grid; gap: 10px }
+  .tool-item {
+    display: flex; align-items: flex-start; gap: 14px; padding: 14px 18px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  }
+  .tool-item .icon { font-size: 1.3em; flex-shrink: 0; width: 28px; text-align: center }
+  .tool-item .meta { flex: 1 }
+  .tool-item .tool-name { font-weight: 700; color: #fff; font-family: "SF Mono", Consolas, monospace }
+  .tool-item .tool-desc { color: var(--muted); font-size: 0.85em; margin-top: 2px }
+  .tool-item .tool-prompt {
+    margin-top: 6px; padding: 8px 12px; background: #0d1117; border-radius: 5px;
+    font-size: 0.82em; color: var(--text); border: 1px solid var(--border);
+  }
+
+  /* ── Iron rules ── */
+  .rule-box {
+    background: rgba(248,81,73,0.06); border: 1px solid rgba(248,81,73,0.25);
+    border-radius: 10px; padding: 20px 24px; margin: 16px 0;
+  }
+  .rule-box h4 { color: var(--red); font-size: 1.05em; margin-bottom: 6px }
+  .rule-box p { color: var(--muted); font-size: 0.92em; line-height: 1.6 }
+
+  /* ── Responsive ── */
+  @media (max-width: 768px) {
+    .hero h1 { font-size: 1.8em }
+    .card-grid { grid-template-columns: 1fr }
+    .arch-layer { flex-direction: column }
+    .arch-label { width: 100% }
+  }
+
+  /* ── TOC ── */
+  .toc {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 24px 28px; margin-bottom: 32px;
+  }
+  .toc h3 { font-size: 1.1em; color: #fff; margin-bottom: 12px }
+  .toc a { color: var(--accent); text-decoration: none; font-size: 0.95em; display: block; padding: 4px 0 }
+  .toc a:hover { text-decoration: underline }
+
+  /* ── Decision flow ── */
+  .flow {
+    display: flex; flex-direction: column; gap: 8px; margin: 20px 0;
+    font-family: "SF Mono", Consolas, monospace; font-size: 0.85em;
+  }
+  .flow-node {
+    display: flex; align-items: center; gap: 14px; padding: 12px 18px;
+    border-radius: 8px; border: 1px solid var(--border); background: var(--surface);
+  }
+  .flow-node .arrow { color: var(--muted) }
+  .flow-label { font-weight: 700; color: #fff; min-width: 100px }
+  .flow-desc { color: var(--muted); flex: 1 }
+  .flow-choice { color: var(--accent); font-weight: 600 }
+</style>
+</head>
+<body>
+
+<!-- ═══════════ HERO ═══════════ -->
+<div class="hero">
+  <h1>Edini <span>Procedural Modeling</span> Skill</h1>
+  <p class="subtitle">
+    VEX 骨架 + 原生 SOP 成形 + Copy-to-Points 布局 · 三层分离架构 · 封闭性由构造保证
+  </p>
+  <div class="badges">
+    <span class="badge vex">VEXlib 14 函数</span>
+    <span class="badge py">Python SOP 兜底</span>
+    <span class="badge harness">Builder 确定性装配</span>
+    <span class="badge tools">30+ Houdini 工具</span>
+  </div>
+</div>
+
+<!-- ═══════════ MAIN ═══════════ -->
+<div class="container">
+
+  <!-- TOC -->
+  <div class="toc" style="margin-top:32px">
+    <h3>📑 目录</h3>
+    <a href="#arch">1. 三层架构总览</a>
+    <a href="#router">2. 决策路由器（SKILL.md）</a>
+    <a href="#iron">3. 四大铁律</a>
+    <a href="#vexlib">4. VEXlib 函数库</a>
+    <a href="#recipes">5. 节点配方（vexlib → SOP）</a>
+    <a href="#builder">6. 声明式构建器（Builder）</a>
+    <a href="#verify">7. 两层验证协议</a>
+    <a href="#tools">8. 工具注册全景</a>
+    <a href="#refs">9. 参考文档体系</a>
+    <a href="#harness">10. Harness 基础设施</a>
+  </div>
+
+  <!-- ═══════════ 1. ARCH ═══════════ -->
+  <section id="arch">
+    <h2><span class="tag router">架构</span> 三层分离架构</h2>
+    <p class="section-desc">分层职责，各司其职。VEX/Python 只生成骨架（点/线/属性），封闭性由原生节点保证，LLM 调用预制函数而非手写几何。</p>
+
+    <div class="arch-diagram">
+      <div class="arch-layer layer-3">
+        <div class="arch-label">🎯 第3层<br><small>布局与关联层</small></div>
+        <div class="arch-content">
+          <span class="arch-pill" style="background:rgba(88,166,255,0.15);color:var(--accent)">Copy-to-Points 实例布局</span>
+          <span class="arch-pill" style="background:rgba(88,166,255,0.15);color:var(--accent)">@orient / @scale / @component_id</span>
+          <span class="arch-pill" style="background:rgba(88,166,255,0.15);color:var(--accent)">参数关联 ch() 驱动</span>
+          <span class="arch-pill" style="background:rgba(88,166,255,0.15);color:var(--accent)">变体散布 variant_scatter</span>
+          <span style="color:var(--muted);font-size:0.85em;margin-left:8px">← edini 主战场</span>
+        </div>
+      </div>
+      <div class="arch-layer layer-2">
+        <div class="arch-label">🔧 第2层<br><small>节点配方模板层</small></div>
+        <div class="arch-content">
+          <span class="arch-pill" style="background:rgba(210,153,29,0.15);color:var(--orange)">sweep_tube(path, section)</span>
+          <span class="arch-pill" style="background:rgba(210,153,29,0.15);color:var(--orange)">extrude_solid(profile, depth)</span>
+          <span class="arch-pill" style="background:rgba(210,153,29,0.15);color:var(--orange)">copy_layout(template, anchors)</span>
+          <span class="arch-pill" style="background:rgba(210,153,29,0.15);color:var(--orange)">Sweep endcaptype=1</span>
+          <span class="arch-pill" style="background:rgba(210,153,29,0.15);color:var(--orange)">PolyExtrude output_back=1</span>
+        </div>
+      </div>
+      <div class="arch-layer layer-1">
+        <div class="arch-label">💎 第1层<br><small>VEX/Python 骨架函数库</small></div>
+        <div class="arch-content">
+          <span class="arch-pill" style="background:rgba(57,211,83,0.15);color:var(--teal)">make_polyline / make_helix / make_grid</span>
+          <span class="arch-pill" style="background:rgba(57,211,83,0.15);color:var(--teal)">make_rect_section / make_circle_section</span>
+          <span class="arch-pill" style="background:rgba(57,211,83,0.15);color:var(--teal)">set_orient_from_tangent</span>
+          <span class="arch-pill" style="background:rgba(57,211,83,0.15);color:var(--teal)">全部 Run Over=Detail</span>
+          <span class="arch-pill" style="background:rgba(57,211,83,0.15);color:var(--teal)">全部 ch() 参数化</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card-grid" style="margin-top:20px">
+      <div class="card">
+        <h3>🎯 设计原则 1：分层职责</h3>
+        <div class="design">
+          <strong>VEX/Python</strong> 只生成骨架（点序列、闭合轮廓、点属性）。<br>
+          <strong>原生节点</strong> 保证封闭性（Sweep endcaptype、PolyExtrude output_back、Cap）。<br>
+          <strong>LLM</strong> 调用预制函数而非手写脚手架代码。<br>
+          <strong>CTP</strong> 实例化组件，可独立替换。
+        </div>
+      </div>
+      <div class="card">
+        <h3>🎯 设计原则 2：封闭性由构造保证</h3>
+        <div class="design">
+          手写 createPolygon 需要每个面的 winding 都正确——LLM 不可靠。<br>
+          一个闭合曲线 + <code>polyextrude::2.0(output_back=1)</code> → 自动生成正确的封闭体。<br>
+          一个路径 + 截面 + <code>sweep::2.0(endcaptype=1)</code> → 自动封端。<br>
+          <strong>让 SOP 做它擅长的事；让 LLM 做它擅长的事。</strong>
+        </div>
+      </div>
+      <div class="card">
+        <h3>🎯 设计原则 3：确定性优先</h3>
+        <div class="design">
+          每个 vexlib 函数都是测试过的、有明确输入输出的"积木"。<br>
+          LLM 调积木，不现场烧砖。<br>
+          向后兼容：旧 recipe 继续工作，新字段可选。<br>
+          Builder 确定性装配网络——agent 只写组件代码，从不写 createNode/wiring。
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ 2. ROUTER ═══════════ -->
+  <section id="router">
+    <h2><span class="tag router">路由</span> 决策路由器</h2>
+    <p class="section-desc">SKILL.md 的核心职责：在 LLM 开始写任何代码之前，将任务路由到正确的后端和构建路径。</p>
+
+    <div class="card-grid">
+      <div class="card">
+        <h3>Step 1 — 选择后端</h3>
+        <div class="path">SKILL.md § Step 1</div>
+        <div class="design">
+          默认首选 VEX 骨架 + Sweep/PolyExtrude，而不是 Python SOP 手写几何。<br>
+          这是从楼梯实验数据中得出的关键结论：<br>
+          Python SOP 手写 createPolygon → 系统性封闭失败（nm=48+）。<br>
+          VEX 骨架 + Sweep → 封闭性由 SOP 保证，零失败。
+        </div>
+        <div class="prompt"># 🧭 后端选择决策流
+
+✅ 【默认首选】VEX 骨架 + Sweep/PolyExtrude（vexlib）
+  适用：管、梁、柱、楼梯、墙、栏杆、框架
+  → 任何"路径+截面"或"轮廓+拉伸"可表达的形体
+
+⚠️ 【备选】Python SOP 手写几何
+  仅当形体无法用路径+截面或轮廓+拉伸表达时
+  如：复杂分支拓扑、递归结构、文件IO、HDA逻辑
+  如果发现自己在写 createPolygon + winding 表 → 立即重构
+
+🔧 【后处理】VEX wrangle（逐元素）
+  噪声位移、方向随机化、属性驱动散布、变形
+
+📦 【辅助】原生节点链
+  仅后处理：PolyBevel、Subdivide、Normal、Fuse、Clean</div>
+      </div>
+
+      <div class="card">
+        <h3>Step 3a — 选择构建路径</h3>
+        <div class="path">SKILL.md § Step 3a</div>
+        <div class="design">
+          根据组件数量和类型自动路由到正确的工具：<br>
+          多组件 → Builder Recipe<br>
+          多变体 → Variant Scatter<br>
+          路径+截面 → VEXlib + network_mode<br>
+          单件生成器 → 单SOP沙盒
+        </div>
+        <div class="prompt"># 🛠️ 构建路径决策表
+
+多组件资产（≥2组件或有可替换/重复部件）
+  → houdini_build_procedural_asset（声明式食谱）★首选
+
+重复部件有多个样式（N种窗户/门/树，种子散布）
+  → houdini_variant_scatter（attribfrompieces + Copy按variant分发）
+
+路径+截面或轮廓+拉伸形体（管、梁、楼梯、柱）
+  → VEX vexlib 函数 + network_mode 或 recipe 中的原生SOP
+  → 查阅 scripts/vexlib/README.md（函数目录）
+  → 查阅 scripts/vexlib-usage.md（配套节点配方）
+
+无法用食谱表达的非标准拓扑
+  → houdini_run_python_sandbox(network_mode=true)
+
+真正的单件生成器（一个分形、一个曲面）
+  → houdini_run_python_sandbox（默认单SOP模式）</div>
+      </div>
+
+      <div class="card">
+        <h3>Step 3b — 微观重复必须用 CTP</h3>
+        <div class="path">SKILL.md § Step 3b</div>
+        <div class="design">
+          两种粒度的重复，都必须用 Copy-to-Points，禁止内联生成：<br>
+          <strong>组件级</strong>（塔、窗、轮、桌腿）→ Builder anchors → CTP<br>
+          <strong>微观重复</strong>（砖、瓦、铆钉、栏杆柱）→ 一个模板 + 散布点 + CTP<br>
+          检测气味：<code>for ... in range(N)</code> 且 N ≥ 10 → 必须重构
+        </div>
+        <div class="prompt"># 🔁 微观重复铁律
+
+如果你在一个组件里发现：
+  for i in range(N):    # N >= 10
+      # 生成几乎相同的几何体
+
+立即停止，重构为：
+  ┌─────────────────┐
+  │ 一个模板Python SOP │  ← 单个砖/瓦/铆钉，标记component_id
+  └────────┬────────┘
+           ↑
+  ┌────────┴────────┐
+  │ 散布点Python SOP  │  ← 输出@P + @orient/@pscale/@N
+  └────────┬────────┘
+           ↓
+  copytopoints → postprocess(normal) → OUT
+
+为什么不内联循环：
+  ✓ 编辑模板一次 → 所有实例更新
+  ✓ 数量参数化（brick_count 滑块）
+  ✓ 结构门看到真正的模块化资产
+  ✗ 内联循环 = 单体 blob，难以修改，触发结构门</div>
+      </div>
+
+      <div class="card">
+        <h3>Step 4 — 食谱先行</h3>
+        <div class="path">SKILL.md § Step 4 · recipe-template.md</div>
+        <div class="design">
+          写任何代码之前，先声明食谱：组件清单、参数、模块化锚点、方向断言、验证标准。<br>
+          方向断言是强制性的——流向 <code>houdini_verify_orientation</code>。
+        </div>
+        <div class="prompt"># 📋 食谱模板（写代码之前先填）
+
+RECIPE: [资产名称]
+TYPE: mechanical | organic | architectural | natural
+BACKEND: vex_skeleton | python_sop | native_chain | variant_scatter | hybrid
+
+COMPONENTS（每个有 @component_id，方向验证必需）：
+  - component_id="tower_fl": 前左塔楼（elongated, 可替换）
+  - component_id="wall_n":   北墙（planar）
+  - component_id="gate":     大门（elongated）
+  - ...
+
+PARAMETERS（最少 5 个）：
+  - castle_size:  float [5, 30] = 14 — 城堡整体尺寸
+  - tower_radius: float [0.5, 5] = 2.0 — 塔楼半径
+  - wall_height:  float [2, 20] = 8 — 城墙高度
+  - ...
+
+MODULAR ANCHORS（供 Copy-to-Points）：
+  - tower_anchors: 4, 塔楼放置位置
+  - battlement_anchors: N, 城垛放置位置
+
+ORIENTATION ASSERTS（强制，流向 verify_orientation）：
+  - tower_fl: kind=elongated, expected_axis=Y, construction_axis=Y
+  - wall_n:   kind=planar,    expected_axis=Z, construction_axis=Z
+  ...
+
+DETAIL PLAN:
+  - 后处理: fuse → clean → normal(cusp 60°)
+  - 表面细节: 砖缝纹理 / 城垛 / 旗帜 / 门铰链
+
+VERIFICATION:
+  - min_points: 500
+  - expected_components: [tower_fl, tower_fr, tower_rl, tower_rr, wall_n, wall_s, wall_e, wall_w, gate, battlement_*]
+  - detail_level: 3-4（不接受 1-2）
+  - orientation: 所有断言必须通过才能提交</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ 3. IRON RULES ═══════════ -->
+  <section id="iron">
+    <h2><span class="tag sop">铁律</span> 四大铁律</h2>
+    <p class="section-desc">这些规则在 SKILL.md 中说一次，全文档引用。LLM 不得重新推导。</p>
+
+    <div class="rule-box">
+      <h4>🔴 铁律 1：Python SOP cook body 内禁止 createNode</h4>
+      <p>cook body 调用 hou.node(...).createNode(...) 会重新进入 cook 求值 → 无限递归。cook body 只能在自己的 geo 上 createPoint/createPolygon/addAttrib。要构建网络，使用 network_mode=true（代码在容器中运行，不是 cook 内）。</p>
+    </div>
+    <div class="rule-box">
+      <h4>🔴 铁律 2：用 houdini_node_parms(type) 查询参数名</h4>
+      <p>参数名在 Houdini 版本间漂移。Normal SOP 的尖角参数是 cuspangle 不是 cangle/cusp。构建 harness 硬校验 postprocess 参数名——猜错的名字是构建期错误，不是静默丢失。</p>
+    </div>
+    <div class="rule-box">
+      <h4>🔴 铁律 3：每个几何部件必须标记 @component_id</h4>
+      <p>创建几何之前声明：geo.addAttrib(hou.attribType.Prim, "component_id", "")。每个部件的每个多边形上：poly.setAttribValue("component_id", "&lt;id>")。没有它，verify_orientation 无法运行，commit_sandbox 拒绝提交。</p>
+    </div>
+    <div class="rule-box">
+      <h4>🔴 铁律 4：封闭性由构造保证，不靠手写 winding ★新</h4>
+      <p>手写的 createPolygon 需要推理每个面的顶点顺序——LLM 不擅长。一个闭合轮廓 + polyextrude::2.0(output_back=1) 或 路径+截面 + sweep::2.0(endcaptype=1) 由 SOP 自动保证封闭。始终优先选择 SOP 保证的路径。如果必须手写多边形，用 add_box 辅助函数（已提供经过验证的 winding 表）。</p>
+    </div>
+  </section>
+
+  <!-- ═══════════ 4. VEXLIB ═══════════ -->
+  <section id="vexlib">
+    <h2><span class="tag lib">函数库</span> VEXlib — 14 个骨架函数</h2>
+    <p class="section-desc">全部 Run Over: Detail · 全部 ch() 参数化 · 只产出点/线/属性，不产出封闭体</p>
+
+    <h3 style="color:var(--teal);margin-top:24px">📐 skeleton.vfl — 骨架生成（5 函数）</h3>
+    <table class="fn-table">
+      <tr><th>函数</th><th>签名</th><th>产出</th><th>典型场景</th></tr>
+      <tr>
+        <td style="color:#fff;font-weight:700">make_polyline</td>
+        <td class="sig">(geohandle; positions[])</td>
+        <td>开放折线 + curveu</td>
+        <td class="desc">楼梯路径、框架脊柱、任意采样路径</td>
+      </tr>
+      <tr>
+        <td style="color:#fff;font-weight:700">make_closed_polyline</td>
+        <td class="sig">(geohandle; positions[])</td>
+        <td>闭合折线（首尾相连）</td>
+        <td class="desc">PolyExtrude 拉伸用的闭合轮廓</td>
+      </tr>
+      <tr>
+        <td style="color:#fff;font-weight:700">make_helix</td>
+        <td class="sig">(geohandle; n; r; h; turns)</td>
+        <td>螺旋路径 + curveu</td>
+        <td class="desc">旋转楼梯、弹簧、螺纹</td>
+      </tr>
+      <tr>
+        <td style="color:#fff;font-weight:700">make_stair_path</td>
+        <td class="sig">(geohandle; n; tread; riser; start; dir)</td>
+        <td>阶梯路径（踏板+竖板）</td>
+        <td class="desc">程序化楼梯的 Sweep 脊柱</td>
+      </tr>
+      <tr>
+        <td style="color:#fff;font-weight:700">make_grid</td>
+        <td class="sig">(geohandle; rows; cols; sx; sy; stagger; origin; plane)</td>
+        <td>2D 网格点阵列</td>
+        <td class="desc">砖墙、地砖、铆钉散布网格</td>
+      </tr>
+    </table>
+
+    <h3 style="color:var(--teal);margin-top:24px">📐 sections.vfl — 截面生成（4 函数）</h3>
+    <table class="fn-table">
+      <tr><th>函数</th><th>签名</th><th>产出</th><th>典型场景</th></tr>
+      <tr>
+        <td style="color:#fff;font-weight:700">make_rect_section</td>
+        <td class="sig">(geohandle; w; h; plane)</td>
+        <td>矩形闭合轮廓</td>
+        <td class="desc">梁/柱/板的 PolyExtrude 截面</td>
+      </tr>
+      <tr>
+        <td style="color:#fff;font-weight:700">make_circle_section</td>
+        <td class="sig">(geohandle; r; sides; plane; offset)</td>
+        <td>正N边形闭合轮廓</td>
+        <td class="desc">圆管/圆柱的 Sweep/PolyExtrude 截面</td>
+      </tr>
+      <tr>
+        <td style="color:#fff;font-weight:700">make_tapered_section</td>
+        <td class="sig">(geohandle; radii[]; plane; offset)</td>
+        <td>变半径N边形</td>
+        <td class="desc">星形截面、锥台轮廓</td>
+      </tr>
+      <tr>
+        <td style="color:#fff;font-weight:700">make_arc_path</td>
+        <td class="sig">(geohandle; n; r; start_deg; end_deg; plane; offset)</td>
+        <td>圆弧开放折线</td>
+        <td class="desc">拱形窗框、弯梁的 Sweep 脊柱</td>
+      </tr>
+    </table>
+
+    <h3 style="color:var(--teal);margin-top:24px">📐 attribs.vfl — 属性写入（5 函数）</h3>
+    <table class="fn-table">
+      <tr><th>函数</th><th>签名</th><th>功能</th><th>典型场景</th></tr>
+      <tr>
+        <td style="color:#fff;font-weight:700">set_orient_from_tangent</td>
+        <td class="sig">(geohandle; ptnum; tangent; up)</td>
+        <td>切线→@orient 四元数</td>
+        <td class="desc">Copy-to-Points 散布点的方向计算</td>
+      </tr>
+      <tr>
+        <td style="color:#fff;font-weight:700">set_component_id_by_range</td>
+        <td class="sig">(geohandle; cid; min; max)</td>
+        <td>按质心包围盒批量设 id</td>
+        <td class="desc">楼梯：每个踏步的 Y 范围不同 → 自动分配 step_0..step_N</td>
+      </tr>
+      <tr>
+        <td style="color:#fff;font-weight:700">set_component_id_by_index</td>
+        <td class="sig">(geohandle; prefix; start; per_id)</td>
+        <td>按序号分配 id</td>
+        <td class="desc">统一划分：每 prims_per_id 个面一个 id</td>
+      </tr>
+      <tr>
+        <td style="color:#fff;font-weight:700">set_scale_along_curve</td>
+        <td class="sig">(geohandle; ptnum; base; peak; mode)</td>
+        <td>沿 @curveu 渐变 @pscale</td>
+        <td class="desc">中间鼓起的管道、渐细的塔尖</td>
+      </tr>
+      <tr>
+        <td style="color:#fff;font-weight:700">set_instance_attrs</td>
+        <td class="sig">(geohandle; ptnum; P; fwd; up; scale)</td>
+        <td>一次性写入所有 CTP 属性</td>
+        <td class="desc">@P + @orient + @pscale + @N + @up</td>
+      </tr>
+    </table>
+  </section>
+
+  <!-- ═══════════ 5. NODE RECIPES ═══════════ -->
+  <section id="recipes">
+    <h2><span class="tag lib">配方</span> 节点配方 · vexlib → 封闭体</h2>
+    <p class="section-desc">每个 vexlib 函数配一套确定性节点配方。模式：骨架（vexlib）→ 封闭（原生SOP）→ 输出。</p>
+
+    <div class="card-grid">
+      <div class="card">
+        <h3>🔹 楼梯：make_stair_path → Sweep</h3>
+        <div class="path">vexlib-usage.md § make_stair_path</div>
+        <div class="design">
+          <strong>路径 wrangle:</strong> make_stair_path(0, steps, tread, riser, {0,0,0}, {1,0,0})<br>
+          <strong>截面 wrangle:</strong> make_rect_section(0, width, riser, "XZ")<br>
+          <strong>Sweep 2.0:</strong> input0=路径, input1=截面, surface=ribbon<br>
+          → 自动产出阶梯表面，每一步一个面
+        </div>
+        <div class="prompt"># 🪜 程序化楼梯 — 推荐工作流
+
+1. 先查 parm: houdini_node_parms("sweep")
+2. Recipe（BACKEND=vex_skeleton）:
+   COMPONENTS: step 模板 + 路径 wrangle + sweep
+3. 路径 wrangle（Detail 模式）:
+   #include <vexlib/skeleton.vfl>
+   int path[] = make_stair_path(0, chi("steps"),
+       chf("tread"), chf("riser"), {0,0,0}, {1,0,0});
+4. 截面 wrangle（Detail 模式）:
+   #include <vexlib/sections.vfl>
+   int prof[] = make_rect_section(0, chf("width"),
+       chf("riser"), "XZ");
+5. sweep: input0=路径 wrangle, input1=截面 wrangle
+   parms: surface=ribbon, endcaptype=0
+6. postprocess: fuse, clean, normal(cusp 60°)
+7. component_id: 用 set_component_id_by_range 分配 step_0..step_N
+8. 验证: health → orientation → inventory → commit</div>
+      </div>
+
+      <div class="card">
+        <h3>🔹 管道：make_polyline + make_circle_section → Sweep</h3>
+        <div class="path">vexlib-usage.md § make_polyline</div>
+        <div class="design">
+          <strong>路径 wrangle:</strong> 参数化定义曲线点位，make_polyline(0, pts)<br>
+          <strong>截面 wrangle:</strong> make_circle_section(0, pipe_r, 16, "XY")<br>
+          <strong>Sweep 2.0:</strong> input0=路径, input1=截面, surface=tube, endcaptype=1<br>
+          → endcaptype=1 封两端 → 完全封闭管道
+        </div>
+        <div class="prompt"># 🔧 参数化管道
+
+wrangle_path（Detail 模式）:
+  #include <vexlib/skeleton.vfl>
+  vector pts[] = ... // 参数化生成曲线路径
+  int pids[] = make_polyline(0, pts);
+
+wrangle_section（Detail 模式）:
+  #include <vexlib/sections.vfl>
+  int prof[] = make_circle_section(0, chf("pipe_r"), 16, "XY", {0,0,0});
+
+sweep:
+  input0 = wrangle_path   ← 路径（脊柱）
+  input1 = wrangle_section ← 截面
+  endcaptype = 1  ← 封两端
+
+⚠️ 常见错误:
+  - Sweep 输入顺序反了 → 截面变成路径，路径变成截面
+  - Run Over 不是 Detail → 几何成倍复制</div>
+      </div>
+
+      <div class="card">
+        <h3>🔹 柱/梁：make_rect_section → PolyExtrude</h3>
+        <div class="path">vexlib-usage.md § make_rect_section</div>
+        <div class="design">
+          <strong>轮廓 wrangle:</strong> make_rect_section(0, w, h, "XY") → 闭合矩形<br>
+          <strong>PolyExtrude 2.0:</strong> input0=轮廓, dist=ch("length"), output_back=1<br>
+          → output_back=1 产出背面 → 完整的 6 面挤出棱柱
+        </div>
+        <div class="prompt"># 🏛️ 参数化柱/梁
+
+wrangle（Detail 模式）:
+  #include <vexlib/sections.vfl>
+  int prof[] = make_rect_section(0, chf("width"),
+      chf("height"), "XY");
+  @component_id = "beam";
+
+polyextrude:
+  input0 = wrangle
+  dist = chi("length")  或 ch("length")
+  output_back = 1  ← 关键：产出背面 → 封闭体
+
+同样的模式适用于：
+  make_circle_section → PolyExtrude → 圆柱
+  make_tapered_section → PolyExtrude → 锥台</div>
+      </div>
+
+      <div class="card">
+        <h3>🔹 砖墙：make_grid → Copy-to-Points</h3>
+        <div class="path">vexlib-usage.md § make_grid</div>
+        <div class="design">
+          <strong>模板 SOP:</strong> 单个砖块（单位尺寸），tag component_id="brick"<br>
+          <strong>散布 wrangle:</strong> make_grid(0, rows, cols, bw, bh, stagger=true, ...)<br>
+          <strong>CTP 2.0:</strong> input0=模板, input1=散布点 → 交错砌法砖墙
+        </div>
+        <div class="prompt"># 🧱 参数化砖墙（交错砌法）
+
+模板（单SOP，一个砖块）：
+  node = hou.pwd(); geo = node.geometry()
+  geo.addAttrib(hou.attribType.Prim, "component_id", "")
+  add_box(geo, (0,0,0), (bw,bh,bd), "brick", "brick_mat")
+
+散布 wrangle（Detail 模式）：
+  #include <vexlib/skeleton.vfl>
+  #include <vexlib/attribs.vfl>
+  int pts[] = make_grid(0, chi("rows"), chi("cols"),
+      chf("brick_w"), chf("brick_h"), 1, {0,0,0}, "XZ");
+  // stagger=1 → 每隔一行偏移半个砖宽（交错砌法）
+
+copytopoints:
+  input0 = 模板输出
+  input1 = 散布点输出
+
+参数化亮点：
+  rows/cols/brick_w 都是 ch() → 自动生成 UI 滑块
+  改模板一次 → 整面墙更新
+  结构门看到的是真正的模块化资产</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ 6. BUILDER ═══════════ -->
+  <section id="builder">
+    <h2><span class="tag harness">构建</span> 声明式构建器（Builder）</h2>
+    <p class="section-desc">houdini_build_procedural_asset 确定性装配网络——agent 只写组件代码，从不写 createNode/wiring。消除了整个 Houdini API 命令式错误类别。</p>
+
+    <div class="card-grid">
+      <div class="card">
+        <h3>Recipe Schema（组件声明）</h3>
+        <div class="path">declarative-builder.md</div>
+        <div class="design">
+          每个组件的 <code>code</code> 是单 SOP cook body。Builder 自动创建 Python SOP → 注入代码 → 创建锚点生成器 → CTP → merge → postprocess → OUT。<br>
+          <strong>agent 只写几何生成代码。</strong>
+        </div>
+        <div class="prompt"># 📦 组件代码规则
+
+每个组件的 code 是单独 Python SOP 的 cook body：
+  1. 读自己的几何：node = hou.pwd(); geo = node.geometry()
+  2. 创建几何之前声明属性：
+     geo.addAttrib(hou.attribType.Prim, "component_id", "")
+  3. 每个面标记：
+     poly.setAttribValue("component_id", "<id>")
+  4. 禁止调用 createNode → builder 拥有网络所有权
+
+Builder 自动做的事（agent 不写）:
+  ┌─────────────┐
+  │ <id>_python │ ← 你的代码
+  └──────┬──────┘
+  ┌──────┴──────┐
+  │ <id>_anchors│ ← builder 生成锚点
+  └──────┬──────┘
+         ↓
+  copy_<id> (copytopoints::2.0) ← 自动接线
+         ↓
+  <id>_idfix (覆盖 component_id)
+         ↓
+  merge_all → postprocess... → OUT
+
+builder 后检查 component_id 存在性，
+报告缺失的 id（component_id_check.missing）。</div>
+      </div>
+      <div class="card">
+        <h3>Anchor + 参数关联</h3>
+        <div class="path">params-and-linkage.md</div>
+        <div class="design">
+          锚点支持 position_expr 表达式：<code>"wheelbase/2"</code> 引用资产级参数。<br>
+          表达式引擎是安全沙盒——只允许算术和数学函数白名单。<br>
+          <strong>构建时求值，组件形状保持动态（ch() 驱动）。</strong>
+        </div>
+        <div class="prompt"># 🔗 参数关联提示词
+
+资产级参数声明（在 recipe 顶层）：
+  "params": {
+    "wheelbase": {"default": 1.0, "min": 0.5, "max": 2.0},
+    "wheel_r":   {"default": 0.35}
+  }
+
+组件代码中读取（相对通道引用）：
+  wheelbase = hou.ch('../wheelbase')  # 往上一级 = sandbox root
+  wheel_r   = hou.ch('../wheel_r')
+
+锚点位置用表达式（构建时求值）：
+  "position_expr": ["wheelbase/2", "wheel_r", "-0.55"]
+
+支持的表达式语法：
+  参数名、算术（+ - * / % **）、一元 -、
+  数学函数白名单（sin cos sqrt abs min max ...）、
+  常量 pi/e/tau。
+  其他全部拒绝——这是安全沙盒，不是 Python eval。
+
+修改参数 → 自动重新 cook 所有依赖组件（通道依赖）。</div>
+      </div>
+      <div class="card">
+        <h3>Variant Scatter（变体散布）</h3>
+        <div class="path">declarative-builder.md § Variant Scatter</div>
+        <div class="design">
+          Houdini 21 验证过的架构：<br>
+          无 Pack 节点（Copy 在解包源上按 prim variant 属性分发）<br>
+          attribfrompieces 分配 variant 到散布点<br>
+          resettargetattribs 按钮转移 per-instance id
+        </div>
+        <div class="prompt"># 🎲 变体散布提示词
+
+何时使用（不是单模板 CTP）：
+  重复部件有 2+ 种可互换样式（3种窗户、4种树、2种门）
+  → 打破"程序化重复"感 → 提升细节到 Level 3+
+
+工作流（H21 验证）：
+  variants（prim variant int 标签）→ merge（不解包）
+  scatter_points（只输出 @P，给 i@id）
+  attribfrompieces（pieceattrib=variant, seed）
+  copytopoints 2.0（useidattrib=1, idattrib=variant）
+  resettargetattribs 按钮转移 i@id
+  idfix → OUT
+  component_id = {variant_id}_{id}
+
+为什么这样架构（H21 实测结论）：
+  ✗ Pack By Name 会将 variant 隐藏在 PackedFragment 内
+    → Copy 的 piece 分发无法读取 → 分发塌陷
+  ✓ 不解包源 → Copy 正确按 prim variant 分发
+  ✓ attribfrompieces 可靠覆盖所有 variant（低点数也覆盖）
+  ✓ resettargetattribs 按钮自动填充转移（无需手设多重参数）
+
+seed 控制可复现性 —— 同一 seed + 同一散布拓扑
+→ 跨运行产生相同 variant 分布。</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ 7. VERIFICATION ═══════════ -->
+  <section id="verify">
+    <h2><span class="tag sop">验证</span> 两层验证协议</h2>
+    <p class="section-desc">两层权威验证，不依赖视觉判断。截图仅存档，不做验证回路。</p>
+
+    <div class="card-grid">
+      <div class="card">
+        <h3>Layer 1：几何健康</h3>
+        <div class="path">houdini_inspect_geometry_health</div>
+        <div class="design">
+          <strong>阻塞（门控 overall_ok + commit）：</strong>orphan_points, open_curves<br>
+          <strong>建议（报告但不阻塞）：</strong>degenerate_prims, nonmanifold_edges, open_boundary_edges, coincident_points<br>
+          仅修复阻塞检查；建议检查按需处理。
+        </div>
+        <div class="prompt"># 🏥 几何健康检查提示词
+
+MANDATORY — 方向/视觉验证之前必须运行。
+跳过它会让非流形边/退化面流入 Boolean/Sweep 并静默破坏结果。
+
+overall_ok 反映仅阻塞检查（orphan_points, open_curves）。
+overall_ok=False → 必须修复指定的阻塞检查。
+建议检查（non-manifold/边界边/退化）不阻塞——
+但 non-manifold > prim_count 的 20% 暗示结构性重叠，
+需要在源头修复（inset/offset 间隙或 Boolean union）。
+
+open_boundary_edges > 0 是开放曲面的预期结果
+（地形、单面板、有意开口）——不要试图清零。</div>
+      </div>
+      <div class="card">
+        <h3>Layer 2a：方向验证（权威门）</h3>
+        <div class="path">houdini_verify_orientation</div>
+        <div class="design">
+          每个方向断言：component_id + kind (radial/elongated/planar) + expected_axis<br>
+          <strong>首选用 construction_axis</strong>（确定性，绕开 PCA 估计）。<br>
+          失败 → 在组件源代码中应用 hint 四元数，不在几何上后旋转。
+        </div>
+        <div class="prompt"># 🧭 方向验证提示词
+
+每个组件一个断言：
+  - component_id: 匹配 @component_id 值
+  - kind: radial（轮/齿轮）| elongated（管/梁/塔）| planar（板/面板）
+  - expected_axis: X/Y/Z/-X/-Y/-Z
+
+首选（B-station）：加 construction_axis
+  construction_axis 是组件生成围绕的局部空间轴。
+  构建器从锚点 @orient 四元数确定性推导世界轴——
+  纯代数，不采样，不 PCA。
+  构建器也会捕获自洽错误：如果你声明的 construction_axis +
+  锚点 orient + expected_axis 互相矛盾，构建在 cook 之前拒绝。
+
+⚠️ Bug 6 已知：细长圆柱体（塔）用 kind=radial
+  会被误判 90°。塔和柱用 kind=elongated，
+  或者设置 construction_axis 绕开 PCA。
+
+失败时的修复：
+  hint 字段包含精确的四元数——
+  在生成器代码内部应用，不在几何上后旋转。</div>
+      </div>
+      <div class="card">
+        <h3>Layer 2b：组件清单（权威存在性）</h3>
+        <div class="path">houdini_geometry_inventory</div>
+        <div class="design">
+          列出每个 @component_id：prim/point 计数、包围盒、相对大小。<br>
+          <strong>prim_count > 0 → 组件存在</strong>，无论截图看起来怎样。<br>
+          size_fraction < 0.08 → 太小需要近景捕获。
+        </div>
+        <div class="prompt"># 📊 清单是权威的
+
+判断"组件 X 是否存在"时：
+  ✓ prim_count > 0 → 存在。不要重建。
+  ✗ 截图看起来空 → 忽略。清单是权威的，像素不是。
+
+标记为 SMALL 的组件（size_fraction < 0.08）：
+  存在但太小，在全资产视图中无法判断。
+  用 houdini_capture_component_detail 做近景捕获。
+
+修理前后对比清单：
+  如果组件的 prim_count/包围盒没变，
+  你的修改没生效——不要再次重建并期望不同结果。
+
+Debug Discipline 反无效循环规则：
+  1. 修复前先命名缺陷（指定 component_id 或健康检查字段）
+  2. 每轮只修一个东西
+  3. 对比清单前后差异
+  4. 同样缺陷存活 2 次针对性修复 → 方法错了 → 换后端或问用户
+  5. 重建是最后手段（仅当阻塞性健康检查显示根本性损坏）</div>
+      </div>
+      <div class="card">
+        <h3>强制提交序列</h3>
+        <div class="path">verification-protocol.md</div>
+        <div class="design">
+          0. 检查 structure_advisory → 单体则丢弃重建<br>
+          1. inspect_geometry_health → 修复阻塞<br>
+          2. verify_orientation → 全部通过<br>
+          3. geometry_inventory → 确认所有组件存在<br>
+          4. (可选) capture_review → 仅存档<br>
+          5. commit_sandbox → 最终门控
+        </div>
+        <div class="prompt"># 📋 提交前强制序列
+
+0. 检查 structure_advisory（run_python_sandbox 返回）
+   → is_monolithic=true → 丢弃，重建为模块化
+
+1. houdini_inspect_geometry_health(OUT) — 强制，不可跳过
+   → overall_ok 仅反映阻塞检查
+   → 修复阻塞项；建议项按需处理
+
+2. houdini_verify_orientation(OUT, checks=recipe的ORIENTATION_ASSERTS)
+   → 全部通过才能继续
+   → 失败 → 在源代码中应用 hint 四元数 → 重新运行沙盒
+
+3. houdini_geometry_inventory(OUT)
+   → 确认所有预期 component_id 存在且 prim_count > 0
+   → 权威存在性答案
+
+4. (可选) houdini_capture_review — 仅用于存档截屏
+   → 不要对截屏调用 describe_image 来判断缺陷
+   → 不要基于截屏内容重建
+   → 不确定组件是否正确 → 重新检查清单（步骤3）
+
+5. houdini_commit_sandbox(root_path, name, orientation_checks=...)
+   → 运行模块化结构门 + 方向门作为最终检查
+   → 不要用 skip_orientation/skip_structure 绕过</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ 8. TOOLS ═══════════ -->
+  <section id="tools">
+    <h2><span class="tag tools">工具</span> 工具注册全景（30+ 工具）</h2>
+    <p class="section-desc">TypeScript 端（pi-extensions/edini-tools）注册 → 通过 JSON-RPC 转发到 Houdini Python 端执行。</p>
+
+    <div class="card-grid">
+      <div class="card">
+        <h3>🎯 Harness 工具（生成/验证/提交）</h3>
+        <div class="design">
+          程序化建模核心工具链。所有生成走沙盒，验证分两层，提交走门控。
+        </div>
+        <div class="prompt"># 🎯 Harness 工具提示词
+
+houdini_run_python_sandbox — 沙盒执行 Python
+  默认单 SOP 模式；network_mode=true 构建多节点网络
+  提示词：禁止 createNode 在 cook body 内
+         network_mode 用于任何多组件模块化资产
+         首次执行绝不设 commit_on_success=true
+         用 houdini_node_parms 查参数名，不猜
+
+houdini_build_procedural_asset — 声明式食谱构建 ★首选
+  用于多组件资产（任何有可替换/重复部件的资产）
+  提示词：只写组件几何代码，不写网络接线
+         每个组件代码必须声明 component_id 后再建几何
+         带锚点的组件自动走 CTP；无锚点直接入 merge
+         用 construction_axis 做确定性方向验证
+         构建器不提交——之后单独调 commit_sandbox
+
+houdini_variant_scatter — 多变体散布 ★新注册
+  用于 2+ 种可互换样式的重复部件
+  提示词：打破"程序化重复"感
+         attribfrompieces 负责 variant 分配
+         Copy 在不解包源上按 variant 分发
+         seed 控制可复现性
+
+houdini_verify_orientation — 方向验证（权威门）
+  提示词：每个检查需要 component_id + kind + expected_axis
+         construction_axis 是首选确定性路径
+         失败时在源代码中应用 hint 四元数
+
+houdini_commit_sandbox — 提交沙盒
+  提示词：方向全部通过 + 健康阻塞全部通过 才能调
+         3 次修复失败 → 问用户，不强行提交
+
+houdini_discard_sandbox — 丢弃沙盒
+
+houdini_collect_diagnostics — 收集诊断
+  提示词：失败 cook/空白输出/意外结果后使用
+         沙盒执行结果中已含诊断，单独调用仅用于非沙盒节点
+
+houdini_capture_review — 截屏存档 ★仅存档
+  提示词：提交前调一次存档用——不是缺陷判断验证回路
+         不要对截屏调 describe_image 判断缺陷
+         视觉判断回路已移除（视觉模型反复误判小/重复几何）
+         截屏报错 → 跳过直接提交
+
+houdini_capture_component_detail — 组件近景截屏
+  提示词：清单显示 size_fraction < 0.08 的组件用这个
+         每个组件框在自己的包围盒内</div>
+      </div>
+
+      <div class="card">
+        <h3>🔍 Query 工具（搜索/检查/清单）</h3>
+        <div class="design">
+          信息检索和几何检查。不修改场景，可随时调用。
+        </div>
+        <div class="prompt"># 🔍 Query 工具提示词
+
+houdini_search_nodes — 按关键词搜索节点类型
+  提示词：创建效果前先用它找可用节点类型
+
+houdini_get_help — 获取节点帮助文档
+
+houdini_node_parms — 查询节点类型参数名 ★关键
+  提示词：写 recipe postprocess 参数之前必须查——不靠记忆
+         返回每个参数的 name/type/label/default/menu_items
+         source='manifest'=固定目录（快，离线）
+         source='live'=查询运行中的 Houdini
+
+houdini_get_node — 获取节点详细信息
+
+houdini_inspect_geo — 检查 SOP 节点几何（点/面/属性）
+
+houdini_geometry_inventory — 组件清单 ★权威
+  提示词：prim_count > 0 → 组件存在——截图不能否定
+         size_fraction < 0.08 标记为 SMALL
+
+houdini_inspect_geometry_health — 几何健康检查 ★强制
+  提示词：方向/视觉验证前必须运行
+         overall_ok 仅反映阻塞检查
+         建议检查报告但不阻塞</div>
+      </div>
+
+      <div class="card">
+        <h3>📜 Script 工具（Python/VEX/HDA）</h3>
+        <div class="design">脚本执行和资产管理。沙盒外执行，谨慎使用。</div>
+        <div class="prompt"># 📜 Script 工具提示词
+
+houdini_run_python — 在 Houdini 环境中执行 Python
+  提示词：仅当专用工具和沙盒无法完成任务时使用
+         程序化建模优先用 sandbox
+
+houdini_run_vex — 创建临时 VEX wrangle 执行代码
+
+houdini_create_hda — 从节点创建数字资产
+
+houdini_get_hda_info — 获取 HDA 定义信息</div>
+      </div>
+
+      <div class="card">
+        <h3>🎬 Scene 工具（场景/节点操作）</h3>
+        <div class="design">13 个场景操作工具。节点创建、参数设置、网络截图等。</div>
+        <div class="prompt"># 🎬 Scene 工具提示词
+
+houdini_get_scene_info — 获取场景概览
+  提示词：任务开始时了解当前场景结构
+
+houdini_create_node / houdini_delete_node — 创建/删除节点
+
+houdini_connect_nodes — 连接节点
+
+houdini_set_param / houdini_set_params_batch — 设置参数
+  提示词：同一节点设 3+ 参数时用 batch——快得多
+
+houdini_get_param — 读取参数值
+
+houdini_list_nodes — 列出节点
+
+houdini_layout_nodes — 自动布局节点图
+  提示词：创建/连接节点后用它整理网络
+
+houdini_get_selection — 获取用户选中节点
+  提示词：用户说"这个节点"时用它找到所指
+
+houdini_check_errors — 检查节点错误
+  提示词：用户报告异常行为时，先扫描错误再动手
+
+houdini_set_display_flag — 设置显示标志
+  提示词：创建/修改几何后，设最终输出节点为显示
+
+houdini_capture_network — 截屏节点网络图
+  提示词：用于文档或确认连接正确</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ 9. REFS ═══════════ -->
+  <section id="refs">
+    <h2><span class="tag ref">参考</span> 参考文档体系</h2>
+    <p class="section-desc">8 个 references + 6 个 scripts——按需加载，路径相对于 skill 目录。</p>
+
+    <div class="card-grid">
+      <div class="card">
+        <h3>📖 declarative-builder.md</h3>
+        <div class="design">
+          <strong>设计逻辑：</strong>将多组件资产的装配过程从"命令式 Houdini API"改为"声明式 JSON 食谱"。Builder 确定性组装网络，消除 createNode/setInput/wiring 错误。<br>
+          <strong>涵盖：</strong>Recipe schema、组件代码规则、锚点语义、Construction Axis、Variant Scatter 完整架构 + 参数表。
+        </div>
+        <div class="prompt"># 设计意图
+
+消除一整类 Houdini API 命令式错误。
+Agent 只写几何生成逻辑（createPoint/createPolygon/addAttrib），
+网络接线由 builder 确定性完成。
+
+Variant Scatter 部分包含 H21 实测验证的完整架构：
+  不解包源 → attribfrompieces 分配 variant → Copy 分发 → resettargetattribs 转移 id</div>
+      </div>
+      <div class="card">
+        <h3>📖 verification-protocol.md</h3>
+        <div class="design">
+          <strong>设计逻辑：</strong>从三层验证（视觉+方向+清单）精简为两层权威验证（健康+方向+清单）。视觉层从验证回路降级为仅存档。<br>
+          <strong>涵盖：</strong>两层健康检查（阻塞/建议）、强制提交序列、Debug Discipline 反无效循环 6 条规则。
+        </div>
+        <div class="prompt"># 设计意图
+
+视觉模型反复误判小/重复几何（如将 3000-prim 砖墙报为"光滑"），
+驱动浪费的无效重建 → 视觉层从验证回路剔除。
+
+两层权威验证：
+  第1层：几何健康（便宜，不渲染）
+  第2a层：方向（权威门）
+  第2b层：清单数据（权威存在性）
+  第3层：截屏存档（提交前一次，不判断缺陷）
+
+Inventory beats pixels——当清单和截屏对"组件是否存在"有分歧，
+清单是正确的。永远不要因为截屏看起来不对而重建真实几何（prim_count > 0）。</div>
+      </div>
+      <div class="card">
+        <h3>📖 methodology.md</h3>
+        <div class="design">
+          <strong>设计逻辑：</strong>从生产实践（Horikawa, Entagma, Knipping, SideFX, CGWiki）提炼的方法论默认值。<br>
+          <strong>已更新：</strong>VEX Guidelines 头句改为"VEX is the PREFERRED skeleton generator"——移除了旧版"64% 失败率"和"2次失败切 Python"。
+        </div>
+        <div class="prompt"># 方法论总览
+
+单位约定：1 Houdini 单位 = 1 米
+
+布尔卫生：布尔之前要 Clean。非流形边/退化面
+  在任一输入上会产生垃圾输出。
+
+方向 VEX 配方（规范）：
+  tangent = normalize(next_P - P);
+  side = normalize(cross(tangent, up));
+  @N = cross(side, tangent);
+  p@orient = quaternion(maketransform(side, @N, tangent));
+
+标准分解按资产类型：
+  Vehicle → 轮廓曲线 + Sweep + CTP 轮子 → Boolean 面板开孔
+  Furniture → 脊柱 + 截面轮廓 → Sweep/Skin → CTP 腿/横撑
+  Architecture → 足迹曲线 → extrude → CTP 窗户/门套件 → Boolean 开口
+  Organic → L-system → VDB smooth/remesh → 属性散布细节</div>
+      </div>
+      <div class="card">
+        <h3>📖 其他参考文档</h3>
+        <div class="design">
+          <strong>params-and-linkage.md：</strong>A2-station 资产级参数关联。position_expr 安全表达式引擎（仅算术+数学函数白名单）。构建时求值，组件形状保持 ch() 动态。<br><br>
+          <strong>detail-standards.md：</strong>细节等级 1-4。真正细节是结构复杂度（分离部件、面板线、二级组件、变截面），不是表面处理（PolyBevel + Subdivide 不算细节）。微观重复必须用 CTP 实例化。<br><br>
+          <strong>pitfalls.md：</strong>6 个常见陷阱——pscale 语义、属性名冲突、CTP 组表达式语法、节点销毁级联、属性创建顺序、字符串安全。<br><br>
+          <strong>parm-reference.md：</strong>H21 SOP 参数速查表——Line/Circle/PolyBevel/Subdivide/Transform/PolyExtrude/AttribPromote/Blast/ForEach/Sweep/CTP/Merge/Normal/Boolean。但权威来源始终是 houdini_node_parms(type) 工具。
+        </div>
+      </div>
+    </div>
+
+    <div class="card-grid" style="margin-top:16px">
+      <div class="card">
+        <h3>📜 recipe-template.md</h3>
+        <div class="design">
+          <strong>设计逻辑：</strong>写代码前先填食谱。5 种 backend、方向断言类型表（含 Bug 6 修正：塔/柱用 elongated 或 construction_axis）、变体散布子模板。
+        </div>
+        <div class="prompt"># 食谱后端类型
+
+python_sop — 组件代码是 Python SOP cook body（原始默认）
+vex_skeleton — 组件代码是 VEX detail wrangle，
+  产出骨架（点+折线），由下游 Sweep/PolyExtrude 封闭
+  ★首选路径+截面形体
+native_chain — 无代码；组件是纯原生 SOP 链
+variant_scatter — 使用 houdini_variant_scatter
+hybrid — Python SOP + VEX 后处理 wrangle</div>
+      </div>
+      <div class="card">
+        <h3>📜 python-sop-template.py</h3>
+        <div class="design">
+          <strong>设计逻辑：</strong>Python SOP 的规范骨架——仅兜底。包含 add_box 辅助函数（已验证的向外 winding 表）、spare parm 幂等安装模式、network_mode 块注释。<br>
+          <strong>定位调整：</strong>主路由不再引用，仅在"无法用 vexlib 表达"时使用。
+        </div>
+      </div>
+      <div class="card">
+        <h3>📜 vex-wrangle-template.vfl</h3>
+        <div class="design">
+          <strong>设计逻辑：</strong>VEX wrangle 的模板模式——噪声位移、密度散布、方向四元数、面板线、规范 orient frame。<br>
+          <strong>定位：</strong>后处理 VEX 的参考模板（不是骨架生成——骨架生成走 vexlib）。
+        </div>
+      </div>
+      <div class="card">
+        <h3>📜 patterns.md</h3>
+        <div class="design">
+          <strong>7 种可复用程序化模式：</strong>截面蒙皮、径向阵列、轮廓曲线+Sweep、面板线/缝、Boolean 减法开孔、基于组的装配、锚点生成。<br>
+          砖/瓦/铆钉散布模式（强调 CTP 实例化，禁止内联循环）。
+        </div>
+        <div class="prompt"># 内联循环检测气味
+
+如果你在组件代码中看到：
+  for i in range(N):    # N >= 10
+      # 生成几乎相同的几何体
+
+立即停止，重构为：
+  ┌─────────────┐
+  │ 一个模板 SOP │ ← 单个砖/瓦/铆钉，标记 component_id
+  └──────┬──────┘
+         ↑
+  ┌──────┴──────┐
+  │ 散布点 SOP   │ ← 输出 @P + @orient/@pscale/@N
+  └──────┬──────┘
+         ↓
+  copytopoints → postprocess(normal) → OUT</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ 10. HARNESS ═══════════ -->
+  <section id="harness">
+    <h2><span class="tag harness">基础</span> Harness 基础设施</h2>
+    <p class="section-desc">Python 端核心引擎——沙盒管理、结构门控、构建器、VEX 动态分类。</p>
+
+    <div class="card-grid">
+      <div class="card">
+        <h3>沙盒生命周期</h3>
+        <div class="path">harness.py: _create_sandbox_root / commit / discard</div>
+        <div class="design">
+          每个程序化任务在命名空间隔离的沙盒中执行。<br>
+          构建失败 → 保留沙盒供诊断。<br>
+          验证通过 → 显式提交到最终名称。<br>
+          放弃 → 干净丢弃。
+        </div>
+        <div class="prompt"># 🏗️ 沙盒管理模式
+
+创建：/obj/edini_sandbox_{job_id}_{name}
+  - geo 容器内建网络
+  - IN 和 OUT null 节点
+  - 可选 asset-level params 安装
+
+执行：Python 代码在容器（network_mode）或
+  子 Python SOP（单 SOP 模式）中运行
+
+诊断：自动收集——错误/几何/参数/节点上下文
+  - 沙盒结果含 diagnostics + structural_checks
+  - 不需要单独调 collect_diagnostics
+
+提交：houdini_commit_sandbox(root_path, final_name)
+  - 运行模块化结构门
+  - 运行方向门
+  - 移到最终名称，清理沙盒
+
+丢弃：houdini_discard_sandbox(root_path)
+  - 销毁整个沙盒子树</div>
+      </div>
+      <div class="card">
+        <h3>模块化结构门</h3>
+        <div class="path">harness.py: _check_modular_structure</div>
+        <div class="design">
+          <strong>检测单体：</strong>≥3 个不同 component_id 全部来自单独 Python SOP + 无模块化节点。<br>
+          <strong>动态 VEX 分类（新）：</strong>_is_generative_wrangle() 检测 VEX 代码中是否有 addpoint/addprim——有则算 MODULAR，无则算 POSTPROCESS。<br>
+          <strong>更新：</strong>attribfrompieces 加入 MODULAR；pack/unpack 移除。
+        </div>
+        <div class="prompt"># 🔬 结构门判定逻辑
+
+MODULAR 节点类型（有任一即认为模块化）：
+  copytopoints, copy, sweep, skin, rails,
+  foreach, xformpieces, instanceto,
+  boolean, polyextrude, attribfrompieces
+
+POSTPROCESS 节点（不计入模块化）：
+  normal, polybevel, subdivide, facet,
+  clean, null, merge, blast, group,
+  attribpromote, attribcreate, transform,
+  display, output, out, edini_generate
+
+attribwrangle 动态分类（新）：
+  含 addpoint/addprim/addvertex/removepoint → 生成型 → MODULAR
+  仅读写属性 → 后处理型 → POSTPROCESS
+
+单体判定条件：
+  ✓ distinct_component_ids >= 3
+  ✓ 所有 component_id 几何来自单独 Python SOP
+  ✓ no modular nodes
+  → is_monolithic = true → commit 拒绝</div>
+      </div>
+      <div class="card">
+        <h3>声明式构建器引擎</h3>
+        <div class="path">harness.py: build_procedural_asset</div>
+        <div class="design">
+          验证 recipe → 安装资产级参数 → 逐个创建组件 SOP → 注入代码 → 创建锚点生成器 → CTP → merge → postprocess → OUT。<br>
+          <strong>Construction Axis 预检查：</strong>构建前确定性验证——若 construction_axis + 锚点 orient + expected_axis 矛盾，构建在 cook 前拒绝。
+        </div>
+        <div class="prompt"># 🏭 构建器引擎内部
+
+_validate_recipe → 检查 schema 正确性
+_install_spare_params → 在 sandbox root 上安装资产级参数
+对于每个组件：
+  _safe_create_node(root, "python", py_name)
+  _set_parm_safe(py_sop, "python", comp_code)
+  → 如果组件有锚点：
+    _create_anchor_generator → 产出锚点 + @orient/@pscale
+    _safe_create_node(root, "copytopoints", copy_name)
+    → 接线，创建 idfix 覆盖 component_id
+  → 如果组件无锚点：
+    直接入 merge
+_apply_postprocess → 按序创建: fuse → clean → normal...
+_create_output → null "OUT"，设显示标志
+
+构建结果包含：
+  components_built, anchors_built
+  component_id_check {missing, ok}
+  structure_advisory（模块化网络始终 passed）
+  orientation_check（预览，仅供参考）
+  construction_axis_summary
+  diagnostics, structural_checks</div>
+      </div>
+      <div class="card">
+        <h3>Variant Scatter 引擎</h3>
+        <div class="path">harness.py: build_variant_scatter</div>
+        <div class="design">
+          H21 实测重写后的架构：<br>
+          每个 variant → Python SOP（包装注入 variant 整数标签）→ merge（不解包）<br>
+          散布源 → Python SOP（只输出 @P + id）<br>
+          attribfrompieces → 在散布点上抽 variant<br>
+          CTP → 按 variant 分发不解包源 → resettargetattribs 转移 id<br>
+          idfix → component_id = {variant_id}_{id}
+        </div>
+        <div class="prompt"># 🎲 Variant Scatter 引擎——H21 实测结论
+
+原设计（已废弃）：
+  pack(packbyname) + 手写加权随机 + "Apply Attributes"多重参数
+  → H21 实测：全部三个假设被推翻
+
+重写后架构（H21 验证）：
+  1. 无 Pack 节点 — Copy 在不解包源上分发
+     Pack By Name 将 variant 隐藏在 PackedFragment 内
+     → Copy 的 piece 分发无法读取 → 分发塌陷
+  2. attribfrompieces 拥有 variant 分配权
+     从源片段库中为每个散布点抽取 variant
+     可靠覆盖所有 variant（低点数也覆盖）
+  3. resettargetattribs 按钮转移 id
+     真实 H21 没有 Apply Attributes 多重参数
+     按钮自动填充 targetattribs 转移
+
+每实例 component_id = {variant_id}_{id}
+  variant: prim 属性（哪个变体，在源上标记）
+  id: 散布点编号，通过 resettargetattribs 转移</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <div style="text-align:center;padding:40px 0;color:var(--muted);font-size:0.85em">
+    Edini Procedural Modeling Skill · Architecture v2 · 2026-06-19
+  </div>
+
+</div>
+</body>
+</html>

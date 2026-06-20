@@ -127,8 +127,8 @@ export const houdiniVerifyAsset = {
   },
 };
 
-export const houdiniVerifyOrientation = {
-  name: "houdini_verify_orientation",
+export const verifyOrientationTool = {
+  name: "verify_orientation",
   label: "Verify Component Orientations",
   description:
     "Programmatically verify per-component axis orientations via PCA on point positions. " +
@@ -194,12 +194,12 @@ export const houdiniVerifyOrientation = {
       }>;
     }
   ) {
-    return forwardTool("houdini_verify_orientation", params);
+    return forwardTool("verify_orientation", params);
   },
 };
 
-export const houdiniCommitSandbox = {
-  name: "houdini_commit_sandbox",
+export const commitSandboxTool = {
+  name: "commit_sandbox",
   label: "Commit Houdini Sandbox",
   description:
     "Commit a verified procedural sandbox into the live Houdini scene with a final node name. " +
@@ -265,12 +265,12 @@ export const houdiniCommitSandbox = {
       skip_orientation?: boolean;
     }
   ) {
-    return forwardTool("houdini_commit_sandbox", params);
+    return forwardTool("commit_sandbox", params);
   },
 };
 
-export const houdiniDiscardSandbox = {
-  name: "houdini_discard_sandbox",
+export const discardSandboxTool = {
+  name: "discard_sandbox",
   label: "Discard Houdini Sandbox",
   description: "Discard a procedural sandbox after it is no longer needed.",
   promptSnippet: "Discard a Houdini procedural sandbox",
@@ -278,12 +278,12 @@ export const houdiniDiscardSandbox = {
     sandbox_root_path: Type.String({ description: "Full path of the sandbox root node" }),
   }),
   async execute(_toolCallId: string, params: { sandbox_root_path: string }) {
-    return forwardTool("houdini_discard_sandbox", params);
+    return forwardTool("discard_sandbox", params);
   },
 };
 
-export const houdiniBuildProceduralAsset = {
-  name: "houdini_build_procedural_asset",
+export const buildProceduralAssetTool = {
+  name: "build_procedural_asset",
   label: "Build Procedural Asset (Declarative Recipe)",
   description:
     "Build a modular procedural asset from a declarative JSON recipe. The harness deterministically assembles the multi-node network (component python SOPs -> anchor generators -> Copy-to-Points -> merge -> postprocess -> OUT), cooks it, and runs the structure/orientation gate previews. The agent authors only per-component geometry code — never createNode/wiring/blockpath. This is the PREFERRED path for any multi-component asset.",
@@ -319,12 +319,12 @@ export const houdiniBuildProceduralAsset = {
       delete_on_failure?: boolean;
     }
   ) {
-    return forwardTool("houdini_build_procedural_asset", params);
+    return forwardTool("build_procedural_asset", params);
   },
 };
 
-export const houdiniCaptureReview = {
-  name: "houdini_capture_review",
+export const captureReviewTool = {
+  name: "capture_review",
   label: "Capture Procedural Review",
   description:
     "Capture a multi-view, multi-frame review contact sheet for procedural assets. " +
@@ -385,7 +385,7 @@ export const houdiniCaptureReview = {
       home_target?: boolean;
     }
   ) {
-    return forwardTool("houdini_capture_review", params);
+    return forwardTool("capture_review", params);
   },
 };
 
@@ -440,14 +440,89 @@ export const houdiniCaptureComponentDetail = {
   },
 };
 
+export const validateRecipeTool = {
+  name: "validate_recipe",
+  label: "Validate Procedural Asset Recipe",
+  description:
+    "Phase A: validate a procedural asset recipe without any Houdini operations. " +
+    "Checks A1-A6 (schema, parm names, node types, VEX lint, construction axes, dependency graph). " +
+    "Catches parm-name typos and invalid node types before any cook — zero Houdini cost.",
+  promptSnippet: "Validate a procedural asset recipe before building",
+  parameters: Type.Object({
+    recipe: Type.Record(Type.String(), Type.Unknown(), {
+      description: "The recipe JSON object to validate.",
+    }),
+    catalog_path: Type.Optional(
+      Type.String({ description: "Path to parm-catalog.json. Auto-detected if omitted." })
+    ),
+  }),
+  async execute(_toolCallId: string, params: { recipe: Record<string,unknown>; catalog_path?: string }) {
+    return forwardTool("validate_recipe", params);
+  },
+};
+
+export const buildComponentTool = {
+  name: "build_component",
+  label: "Build Single Component",
+  description:
+    "Phase B: build a single component inside the sandbox. Cooks, verifies geometry health, " +
+    "confirms @component_id tagging.",
+  promptSnippet: "Build a single procedural component",
+  parameters: Type.Object({
+    recipe: Type.Record(Type.String(), Type.Unknown()),
+    component_id: Type.String(),
+    sandbox_root_path: Type.String(),
+    catalog_path: Type.Optional(Type.String()),
+  }),
+  async execute(_toolCallId: string, params: { recipe: Record<string,unknown>; component_id: string; sandbox_root_path: string; catalog_path?: string }) {
+    return forwardTool("build_component", params);
+  },
+};
+
+export const assembleComponentsTool = {
+  name: "assemble_components",
+  label: "Assemble Components",
+  description:
+    "Phase C: assemble all passed components into the final asset with anchors, CTP, merge, and postprocess.",
+  promptSnippet: "Assemble verified components into final asset",
+  parameters: Type.Object({
+    recipe: Type.Record(Type.String(), Type.Unknown()),
+    sandbox_root_path: Type.String(),
+    cache_root: Type.String(),
+  }),
+  async execute(_toolCallId: string, params: { recipe: Record<string,unknown>; sandbox_root_path: string; cache_root: string }) {
+    return forwardTool("assemble_components", params);
+  },
+};
+
+export const dumpParmCatalogTool = {
+  name: "dump_parm_catalog",
+  label: "Generate Parm Catalog",
+  description:
+    "Generate the Houdini parameter catalog from the installed Houdini version. " +
+    "Call once per session before using validate_recipe or build_procedural_asset.",
+  promptSnippet: "Generate the Houdini parameter catalog",
+  parameters: Type.Object({
+    output_path: Type.Optional(Type.String()),
+    force: Type.Optional(Type.Boolean({ description: "Regenerate even if cached. Default false." })),
+  }),
+  async execute(_toolCallId: string, params: { output_path?: string; force?: boolean }) {
+    return forwardTool("dump_parm_catalog", params);
+  },
+};
+
 export const harnessTools = [
   houdiniCollectDiagnostics,
   houdiniRunPythonSandbox,
   houdiniVerifyAsset,
-  houdiniVerifyOrientation,
-  houdiniCommitSandbox,
-  houdiniDiscardSandbox,
-  houdiniBuildProceduralAsset,
-  houdiniCaptureReview,
+  verifyOrientationTool,
+  commitSandboxTool,
+  discardSandboxTool,
+  buildProceduralAssetTool,
+  captureReviewTool,
   houdiniCaptureComponentDetail,
+  validateRecipeTool,
+  buildComponentTool,
+  assembleComponentsTool,
+  dumpParmCatalogTool,
 ];

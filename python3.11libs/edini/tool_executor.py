@@ -108,7 +108,7 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     ),
     "houdini_search_nodes": lambda **kw: search_nodes(kw["keyword"]),
     "houdini_get_help": lambda **kw: get_help(kw["node_type_name"]),
-    "houdini_node_parms": lambda **kw: node_parms(
+    "query_parms": lambda **kw: node_parms(
         kw["node_type"], category=kw.get("category", "Sop")),
     "houdini_inspect_geo": lambda **kw: inspect_geometry(kw["node_path"]),
     "houdini_run_vex": lambda **kw: run_vex(
@@ -119,7 +119,7 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
         kw["node_path"], kw["hda_name"], kw.get("hda_label", ""),
     ),
     "houdini_get_hda_info": lambda **kw: get_hda_info(kw["hda_name"]),
-    "houdini_capture_review": lambda **kw: capture_review(
+    "capture_review": lambda **kw: capture_review(
         screenshots.relocate_filepath(
             kw["filepath"], screenshots.current_session(), default_prefix="review"
         ),
@@ -142,16 +142,16 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
         node_path=kw.get("node_path"),
     ),
     "houdini_set_display_flag": lambda **kw: set_display_flag(kw["node_path"]),
-    "houdini_verify_orientation": lambda **kw: verify_orientation(
+    "verify_orientation": lambda **kw: verify_orientation(
         kw["node_path"],
         kw.get("checks", []),
     ),
-    "houdini_inspect_geometry_health": lambda **kw: inspect_geometry_health(
+    "inspect_health": lambda **kw: inspect_geometry_health(
         kw["node_path"],
         degenerate_area_eps=kw.get("degenerate_area_eps", 1e-7),
         coincident_eps=kw.get("coincident_eps", 1e-6),
     ),
-    "houdini_geometry_inventory": lambda **kw: geometry_inventory(
+    "geometry_inventory": lambda **kw: geometry_inventory(
         kw["node_path"],
         max_components=kw.get("max_components", 60),
     ),
@@ -183,7 +183,7 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
         kw["node_path"],
         expected=kw.get("expected", {}),
     ),
-    "houdini_commit_sandbox": lambda **kw: commit_sandbox(
+    "commit_sandbox": lambda **kw: commit_sandbox(
         kw["sandbox_root_path"],
         kw["final_name"],
         replace_existing=kw.get("replace_existing", False),
@@ -191,10 +191,10 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
         skip_orientation=kw.get("skip_orientation", False),
         skip_structure_check=kw.get("skip_structure_check", False),
     ),
-    "houdini_discard_sandbox": lambda **kw: discard_sandbox(
+    "discard_sandbox": lambda **kw: discard_sandbox(
         kw["sandbox_root_path"],
     ),
-    "houdini_build_procedural_asset": lambda **kw: build_procedural_asset(
+    "build_procedural_asset": lambda **kw: build_procedural_asset(
         kw["recipe"],
         sandbox_name=kw.get("sandbox_name"),
         delete_on_failure=kw.get("delete_on_failure", False),
@@ -231,67 +231,10 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     "edini_get_eval_stats": lambda **kw: _edini_get_eval_stats(
         period=kw.get("period", 10),
     ),
-
-    # ── Canonical (new) names — aliases resolve to these ──
-    "query_parms": lambda **kw: node_parms(
-        kw["node_type"], category=kw.get("category", "Sop")),
-    "capture_review": lambda **kw: capture_review(
-        screenshots.relocate_filepath(
-            kw["filepath"], screenshots.current_session(), default_prefix="review"
-        ),
-        target_path=kw.get("target_path"),
-        views=kw.get("views"),
-        frames=kw.get("frames"),
-        columns=kw.get("columns", 0),
-        shading_mode=kw.get("shading_mode", "smooth"),
-        home_target=kw.get("home_target", True),
-        resolution=kw.get("resolution"),
-    ),
-    "verify_orientation": lambda **kw: verify_orientation(
-        kw["node_path"],
-        kw.get("checks", []),
-    ),
-    "inspect_health": lambda **kw: inspect_geometry_health(
-        kw["node_path"],
-        degenerate_area_eps=kw.get("degenerate_area_eps", 1e-7),
-        coincident_eps=kw.get("coincident_eps", 1e-6),
-    ),
-    "geometry_inventory": lambda **kw: geometry_inventory(
-        kw["node_path"],
-        max_components=kw.get("max_components", 60),
-    ),
-    "commit_sandbox": lambda **kw: commit_sandbox(
-        kw["sandbox_root_path"],
-        kw["final_name"],
-        replace_existing=kw.get("replace_existing", False),
-        orientation_checks=kw.get("orientation_checks"),
-        skip_orientation=kw.get("skip_orientation", False),
-        skip_structure_check=kw.get("skip_structure_check", False),
-    ),
-    "discard_sandbox": lambda **kw: discard_sandbox(
-        kw["sandbox_root_path"],
-    ),
-    "build_procedural_asset": lambda **kw: build_procedural_asset(
-        kw["recipe"],
-        sandbox_name=kw.get("sandbox_name"),
-        delete_on_failure=kw.get("delete_on_failure", False),
-    ),
 }
 
 
-# Tool aliases map OLD → NEW names. Both names must be registered in TOOL_HANDLERS.
-# After resolving the alias, the dispatch code looks up the NEW name in TOOL_HANDLERS.
-# So every NEW name in this table MUST have a corresponding entry in TOOL_HANDLERS.
-TOOL_ALIASES: dict[str, str] = {
-    "houdini_verify_orientation":      "verify_orientation",
-    "houdini_inspect_geometry_health":  "inspect_health",
-    "houdini_geometry_inventory":      "geometry_inventory",
-    "houdini_commit_sandbox":          "commit_sandbox",
-    "houdini_discard_sandbox":         "discard_sandbox",
-    "houdini_capture_review":          "capture_review",
-    "houdini_node_parms":              "query_parms",
-    "houdini_build_procedural_asset":  "build_procedural_asset",
-}
+
 
 
 class _ToolHandler(BaseHTTPRequestHandler):
@@ -309,10 +252,6 @@ class _ToolHandler(BaseHTTPRequestHandler):
 
             tool_name = request.get("tool")
             params = request.get("params", {})
-
-            # Resolve old (deprecated) names to new canonical names
-            if tool_name in TOOL_ALIASES:
-                tool_name = TOOL_ALIASES[tool_name]
 
             if tool_name not in TOOL_HANDLERS:
                 self._send_json({"success": False, "error": f"Unknown tool: {tool_name}"})

@@ -1,7 +1,7 @@
 # Two-Layer Verification Protocol
 
 **Two layers, not three.** A recurring failure mode was the visual layer
-(`houdini_capture_review` + `describe_image`) driving rebuild loops: vision
+(`capture_review` + `describe_image`) driving rebuild loops: vision
 models cannot reliably see small/thin components (bricks, chains, bolts) at
 viewport resolution, so they report real geometry as "missing" or "smooth",
 contradicting the geometry inventory — and the agent wastes iterations
@@ -12,17 +12,17 @@ rebuild.
 
 | Layer | Tool | What it catches | Authority | Cost |
 |---|---|---|---|---|
-| **1. Geometry health** | `houdini_inspect_geometry_health` | orphan points, stray open curves (BLOCKING); degenerate faces, non-manifold edges, open boundary edges, coincident points (ADVISORY) | AUTHORITATIVE — blocking checks must pass | cheap (no render) |
-| **2a. Orientation** | `houdini_verify_orientation` | Wrong axle direction, flipped components, misaligned axes | AUTHORITATIVE — gate | cheap |
-| **2b. Inventory data** | `houdini_geometry_inventory` / the `geometry_inventory` field returned by `capture_review` | Which component_ids exist, their prim counts + relative sizes | AUTHORITATIVE for "is it present?" | cheap |
-| **3. Archive capture** | `houdini_capture_review` (optional, commit-time only) | A saved screenshot of the finished asset | **Archive only — NOT a verification loop** | render |
+| **1. Geometry health** | `inspect_health` | orphan points, stray open curves (BLOCKING); degenerate faces, non-manifold edges, open boundary edges, coincident points (ADVISORY) | AUTHORITATIVE — blocking checks must pass | cheap (no render) |
+| **2a. Orientation** | `verify_orientation` | Wrong axle direction, flipped components, misaligned axes | AUTHORITATIVE — gate | cheap |
+| **2b. Inventory data** | `geometry_inventory` / the `geometry_inventory` field returned by `capture_review` | Which component_ids exist, their prim counts + relative sizes | AUTHORITATIVE for "is it present?" | cheap |
+| **3. Archive capture** | `capture_review` (optional, commit-time only) | A saved screenshot of the finished asset | **Archive only — NOT a verification loop** | render |
 
 **Run layers in order.** Cheap authoritative layers first; capture is the last
 step before commit, for the record.
 
 ## Two-tier health checks
 
-`houdini_inspect_geometry_health` reports `overall_ok`, which is driven ONLY by
+`inspect_health` reports `overall_ok`, which is driven ONLY by
 the BLOCKING checks:
 
 - **BLOCKING (gate `overall_ok` + commit):** `orphan_points`, `open_curves`.
@@ -43,7 +43,7 @@ false, fix the named blocking check only.
 0. CHECK structure_advisory (returned by run_python_sandbox) — if is_monolithic,
    discard and rebuild modular. Do this BEFORE any verification.
 
-1. houdini_inspect_geometry_health on the OUT node — MANDATORY, not optional.
+1. inspect_health on the OUT node — MANDATORY, not optional.
    - overall_ok reflects ONLY the BLOCKING checks (orphan_points, open_curves).
      If overall_ok is false, fix the named blocking check.
    - ADVISORY findings (non-manifold edges, open boundary edges, degenerate
@@ -51,24 +51,24 @@ false, fix the named blocking check only.
      Only act on them if they clearly break a downstream Boolean/Sweep you are
      about to run. Do NOT rebuild to zero them out.
 
-2. houdini_verify_orientation on the OUT node
+2. verify_orientation on the OUT node
    - Pass all checks from the recipe's ORIENTATION ASSERTS section
    - If any check fails, apply the hint quaternion to the SOURCE code and
      re-run the sandbox. Do NOT rotate post-hoc on geometry.
 
-3. houdini_geometry_inventory on the OUT node
+3. geometry_inventory on the OUT node
    - Confirm every expected component_id is present with prim_count > 0.
    - This is the AUTHORITATIVE answer to "is component X present?". prim_count
      > 0 means it EXISTS — regardless of what any screenshot appears to show.
 
-4. (Optional) houdini_capture_review — ONE final screenshot for the archive,
+4. (Optional) capture_review — ONE final screenshot for the archive,
    taken just before commit. This is NOT a verification step:
    - Do NOT call describe_image / analyze_image on it to judge defects.
    - Do NOT rebuild based on anything you see in the screenshot.
    - If you are unsure whether a component is correct, re-check the INVENTORY
      (step 3), not the pixels. Inventory is authoritative; pixels are not.
 
-5. houdini_commit_sandbox — runs the modular-structure gate then the
+5. commit_sandbox — runs the modular-structure gate then the
    orientation gate as final checks.
 ```
 
@@ -91,7 +91,7 @@ the geometry is essentially unchanged, repeat 4×. These rules prevent it:
 4. **Escalate, don't loop.** If the same defect survives 2 targeted fixes, the
    approach is wrong — switch backend (VEX↔Python SOP) or ask the user. Do NOT
    do a 3rd identical rebuild.
-5. **Rebuild = last resort.** `houdini_discard_sandbox` + full regenerate is
+5. **Rebuild = last resort.** `discard_sandbox` + full regenerate is
    only justified when a blocking health check shows fundamental breakage
    (many orphan points / stray curves) OR orientation is structurally wrong
    across multiple components.
@@ -103,7 +103,7 @@ the geometry is essentially unchanged, repeat 4×. These rules prevent it:
 
 ```python
 # Wheel: axle should be horizontal (along X for a bike facing +Z)
-houdini_verify_orientation(
+verify_orientation(
     node_path="/obj/edini_sandbox_.../edini_generate",
     checks=[
         {"component_id": "wheel_fl", "kind": "radial", "expected_axis": "X"},
@@ -120,7 +120,7 @@ houdini_verify_orientation(
 
 ## Repair Loop for Orientation Failures
 
-When `houdini_verify_orientation` returns a failure, each failed check includes
+When `verify_orientation` returns a failure, each failed check includes
 a `hint` field with the exact quaternion to apply:
 
 ```python
@@ -144,10 +144,10 @@ post-hoc on the geometry — fix the source).
 
 ## Archive Capture (screenshots)
 
-**`houdini_capture_review` is an archive tool now, used ONCE before commit.** It
+**`capture_review` is an archive tool now, used ONCE before commit.** It
 is no longer part of a defect-judging verification loop:
 ```
-houdini_capture_review(
+capture_review(
   filepath="review.png",  # auto-routed to $HIP/Edini_screenshots/<task>/
   target_path="/obj/asset_name/OUT",
   views=["perspective", "top", "front", "right"],
@@ -170,6 +170,6 @@ houdini_capture_review(
 
 | Tool | When to use |
 |---|---|
-| `houdini_inspect_geometry_health` | After sandbox build, before orientation. `overall_ok` reflects only BLOCKING checks (orphan_points, open_curves); the rest are ADVISORY. |
-| `houdini_geometry_inventory` | Confirm every expected `component_id` exists with prim_count > 0. AUTHORITATIVE for presence. |
-| `houdini_capture_review` | ONE archive screenshot before commit. Not a verification loop — do not judge it with a vision model. |
+| `inspect_health` | After sandbox build, before orientation. `overall_ok` reflects only BLOCKING checks (orphan_points, open_curves); the rest are ADVISORY. |
+| `geometry_inventory` | Confirm every expected `component_id` exists with prim_count > 0. AUTHORITATIVE for presence. |
+| `capture_review` | ONE archive screenshot before commit. Not a verification loop — do not judge it with a vision model. |

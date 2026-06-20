@@ -1,6 +1,6 @@
 # Houdini 21 SOP Parameter Reference
 
-Node parameter names differ from older versions. **The authoritative source is `houdini_node_parms(type)`** — the tables below are a quick reference only and can go stale; always verify against the tool before writing a recipe.
+Node parameter names differ from older versions. **The authoritative source is `query_parms(type)`** — the tables below are a quick reference only and can go stale; always verify against the tool before writing a recipe.
 
 The build harness also hard-validates `postprocess` parm names against a catalogue generated against the real Houdini install, so a guessed name is a build-time error, not a silent miss.
 
@@ -95,7 +95,7 @@ Gotcha: if you create block_begin and block_end separately, `blockpath` is empty
 No parms. Just `merge.setInput(0, a); merge.setInput(1, b); ...` (up to ~50 inputs).
 
 ### Normal SOP
-> Parm names below may be version-specific — **verify with `houdini_node_parms("normal")`** before writing a recipe.
+> Parm names below may be version-specific — **verify with `query_parms("normal")`** before writing a recipe.
 | Purpose | Parm name | Type / menu |
 |---------|-----------|------|
 | Cusp angle | `cuspangle` | float (degrees, 0-180) |
@@ -106,7 +106,7 @@ No parms. Just `merge.setInput(0, a); merge.setInput(1, b); ...` (up to ~50 inpu
 |---------|-----------|------|
 | Operation (subtract/union/intersect) | `subtract`/`union`/`intersect` | bool flags (set the one you want to 1) |
 
-### Fallback probe (only if `houdini_node_parms` is unavailable)
+### Fallback probe (only if `query_parms` is unavailable)
 ```python
 n = container.createNode("nodetype", "_probe")
 for p in n.parms():
