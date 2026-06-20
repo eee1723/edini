@@ -1318,7 +1318,9 @@ def _validate_recipe(recipe: Any) -> list[str]:
         else:
             seen_ids.add(cid)
         if not isinstance(comp.get("code"), str) or not comp["code"].strip():
-            errors.append(f"components[{i}].code must be a non-empty string")
+            # native_chain backend uses nodes[] not code
+            if comp.get("backend") != "native_chain":
+                errors.append(f"components[{i}].code must be a non-empty string")
 
         # reads: optional list of param names this component references
         # (via hou.ch in its code). Validated against declared params so a typo

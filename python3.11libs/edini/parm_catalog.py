@@ -105,8 +105,16 @@ class ParmCatalog:
                         continue
                     try:
                         default_val = pt.defaultValue()
+                        # Some parm types return methods or other non-serializable objects
+                        if callable(default_val) and not isinstance(default_val, (int, float, str, bool, list, tuple, dict)):
+                            default_val = None
                     except (AttributeError, TypeError):
                         default_val = None
+                    # Convert to JSON-serializable
+                    try:
+                        json.dumps(default_val)
+                    except (TypeError, ValueError):
+                        default_val = repr(default_val) if default_val is not None else None
                     pdef = {
                         "type": ptype,
                         "label": pt.label(),
