@@ -98,12 +98,21 @@ class ParmCatalog:
                 # nt.parmTemplates() returns the factory defaults —
                 # the same metadata houdini_node_parms returned previously.
                 for pt in nt.parmTemplates():
+                    # Skip folder/separator/button templates — they have no value
+                    ptype = pt.type().name
+                    if ptype in ("FolderSet", "Folder", "Separator", "ButtonStrip",
+                                 "Label", "Button"):
+                        continue
+                    try:
+                        default_val = pt.defaultValue()
+                    except (AttributeError, TypeError):
+                        default_val = None
                     pdef = {
-                        "type": pt.type().name,  # "Float", "Int", "String", "Menu", "Toggle"
+                        "type": ptype,
                         "label": pt.label(),
-                        "default": pt.defaultValue(),
+                        "default": default_val,
                     }
-                    if pt.type().name == "Menu":
+                    if ptype == "Menu":
                         # Collect menu item labels
                         pdef["menu_items"] = [
                             mi.label() for mi in (pt.menuItems() or [])
