@@ -5,10 +5,16 @@ Run in Houdini Python Shell (Window > Python Shell).
 Tests all 4 phases of the pipeline without Agent involvement.
 """
 
-import json, os, sys, traceback
+import json, os, sys, traceback, importlib
 
-# ── Setup ──────────────────────────────────────────────────
+# ── Force-reload Edini modules (bypass Houdini's module cache) ──
 EDINI_ROOT = r"Z:\EEE_Project\Edini"
+for mod_name in list(sys.modules.keys()):
+    if mod_name.startswith("edini."):
+        del sys.modules[mod_name]
+if "edini" in sys.modules:
+    del sys.modules["edini"]
+
 sys.path.insert(0, os.path.join(EDINI_ROOT, "python3.11libs"))
 
 PASS = 0
