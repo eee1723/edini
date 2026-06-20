@@ -2126,13 +2126,21 @@ def _build_native_chain_component(
             node.setInput(0, prev)
         # Set parameters
         params = node_spec.get("params") or {}
-        for pname, pvalue in params.items():
-            try:
-                _set_parm_safe(node, pname, pvalue)
-            except Exception as e:
-                raise RuntimeError(
-                    f"native_chain component '{cid}' node[{ni}] "
-                    f"parm '{pname}={pvalue}': {e}")
+        # attribwrangle special handling: 'class' sets run-over mode,
+        # 'snippet' sets the VEX code
+        if canonical == "attribwrangle":
+            if "class" in params:
+                node.parm("class").set(params["class"])
+            if "snippet" in params:
+                node.parm("snippet").set(params["snippet"])
+        else:
+            for pname, pvalue in params.items():
+                try:
+                    _set_parm_safe(node, pname, pvalue)
+                except Exception as e:
+                    raise RuntimeError(
+                        f"native_chain component '{cid}' node[{ni}] "
+                        f"parm '{pname}={pvalue}': {e}")
         prev = node
         last_node = node
 
