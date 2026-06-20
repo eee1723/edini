@@ -29,6 +29,7 @@ from edini.harness import (
     discard_sandbox,
     build_procedural_asset,
     build_variant_scatter,
+    dump_parm_catalog,
 )
 
 # Knowledge and eval handlers (available only in Houdini runtime)
@@ -205,6 +206,10 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
         query=kw.get("query", ""),
         category=kw.get("category", ""),
         limit=kw.get("limit", 10),
+    ),
+    "dump_parm_catalog": lambda **kw: dump_parm_catalog(
+        output_path=kw.get("output_path"),
+        force=kw.get("force", False),
     ),
     "edini_get_eval_stats": lambda **kw: _edini_get_eval_stats(
         period=kw.get("period", 10),

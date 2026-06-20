@@ -3080,3 +3080,61 @@ def build_variant_scatter(
             "deleted": deleted,
         }
 
+
+# ── Parm Catalog ────────────────────────────────────────────
+
+def dump_parm_catalog(
+    output_path: str | None = None,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Generate (or load cached) the Houdini parm catalog.
+
+    Called once per session/project. Phase A validation uses this catalog
+    as ground truth — no cook required.
+
+    Args:
+        output_path: Where to write the catalog JSON. Defaults to
+                     <edini>/python3.11libs/edini/data/parm-catalog.json
+        force: If True, regenerate even if cached catalog exists.
+    Returns:
+        {"success": true, "path": "...", "sop_count": N, "version": "21.0.440"}
+    """
+    import json
+    import os
+
+    if output_path is None:
+        output_path = os.path.join(
+            os.path.dirname(__file__), "data", "parm-catalog.json"
+        )
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    if not force and os.path.exists(output_path):
+        existing = _try_load_catalog(output_path)
+        if existing:
+            return {"success": True, "path": output_path, "regenerated": False, **existing}
+
+    catalog = _generate_and_save_catalog(output_path)
+    return {"success": True, "path": output_path, "regenerated": True, **catalog}
+
+
+def _try_load_catalog(path: str) -> dict | None:
+    import json
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        sop_count = sum(1 for _ in data.get("Sop", {}))
+        return {"sop_count": sop_count, "version": data.get("houdini_version")}
+    except Exception:
+        return None
+
+
+def _generate_and_save_catalog(output_path: str) -> dict:
+    import json
+    from edini.parm_catalog import ParmCatalog
+
+    raw = ParmCatalog.generate_catalog()
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(raw, f, indent=2, ensure_ascii=False)
+    sop_count = sum(1 for _ in raw.get("Sop", {}))
+    return {"sop_count": sop_count, "version": raw.get("houdini_version")}
+
