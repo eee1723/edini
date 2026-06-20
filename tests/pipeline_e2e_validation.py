@@ -181,20 +181,14 @@ simple_recipe = {
             "id": "base_box",
             "backend": "native_chain",
             "nodes": [
-                {"type": "box", "params": {"sizex": 2, "sizey": 0.5, "sizez": 1}},
-                {"type": "attribwrangle",
-                 "params": {"class": 2,
-                            "snippet": "s@component_id = 'base_box';"}}
+                {"type": "box", "params": {"sizex": 2, "sizey": 0.5, "sizez": 1}}
             ]
         },
         {
             "id": "pillar",
             "backend": "native_chain",
             "nodes": [
-                {"type": "box", "params": {"sizex": 0.3, "sizey": 0.3, "sizez": 0.3}},
-                {"type": "attribwrangle",
-                 "params": {"class": 2,
-                            "snippet": "s@component_id = 'pillar';"}}
+                {"type": "box", "params": {"sizex": 0.3, "sizey": 0.3, "sizez": 0.3}}
             ],
             "anchors": [
                 {"position": [0, 0.5, 0], "orient": [0, 0, 0, 1],
@@ -219,7 +213,13 @@ simple_recipe = {
 try:
     result = build_procedural_asset(simple_recipe)
     check("B1 build_procedural_asset success", result.get("success", False),
-          result.get("error", ""))
+          result.get("error", "")[:300])
+    # Print detailed errors if any
+    if not result.get("success"):
+        diag = result.get("diagnostics", {})
+        if diag.get("node_errors"):
+            for e in diag["node_errors"]:
+                print(f"  node_error: {str(e)[:200]}")
     sandbox_root = result.get("root_path", "")
     out_node = result.get("output_node", "")
     check("B2 output_node exists", bool(out_node), out_node)
