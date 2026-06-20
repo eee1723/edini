@@ -1,8 +1,0 @@
-{
-  "houdini_version": "21.0.440",
-  "Sop": {
-    "DJA::mx_source_attributes::1.14": {
-      "internal_name": "DJA::mx_source_attributes::1.14",
-      "parms": {
-        "viz_attribs": {
-          "type": 

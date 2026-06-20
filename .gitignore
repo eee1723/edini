@@ -18,3 +18,4 @@ nul
 
 # Worktrees
 .worktrees/
+python3.11libs/edini/data/parm-catalog.json
