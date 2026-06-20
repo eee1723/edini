@@ -4,21 +4,14 @@ Copy-paste these `native_chain` recipes into your Builder recipe. Each produces
 one geometric piece with `component_id` already tagged. Combine via CTP anchors
 or direct merge.
 
-## ⛔ H21 PARM VERIFICATION — READ FIRST
+## H21 NOTE
 
-**These templates were written against Houdini 21.0.440. Parm names can change between versions.**
-Two known H21 traps that produce build-time errors:
+All templates use `attribwrangle` (Detail mode) for component_id tagging.
+`attribcreate` menu items are version-specific and error-prone in H21.
+`attribwrangle` with `s@component_id = "..."` is simpler and reliable.
 
-1. **`attribcreate` menu items** — `class1` and `type1` values are version-specific menu strings.
-   Testing on H21.0.440 confirmed: using `"prim"`/`"string"` produces `Invalid menu item` errors.
-   **ALWAYS verify with `query_parms("attribcreate")` before using any template that sets these.**
-
-2. **`torus` parm names** — The `rad` parm from older Houdini does NOT exist in H21.
-   The torus template below uses `query_parms`-verified H21 parms.
-   **If you change torus sizing, verify the parm names first.**
-
-**Rule:** Before copy-pasting any template that sets parms on `tube`, `torus`, or `attribcreate`,
-run `query_parms(node_type)` and confirm every parm name exists.
+Always verify parm names with `query_parms(type)` before using a template
+with unfamiliar SOP types.
 
 ## How to use
 
@@ -31,7 +24,7 @@ In your `build_procedural_asset` recipe, reference a template like:
   "nodes": [
     {"type": "tube", "params": {"rad": [0.03, 0.03], "height": 0.06, "rows": 3, "cols": 16}},
     {"type": "fuse", "params": {}},
-    {"type": "attribcreate", "name": "tag_hub", "params": {"name1": "component_id", "class1": "primitive", "type1": "string", "string1": "hub"}}
+    {"type": "attribwrangle", "params": {"class": 2, "snippet": "s@component_id = \"hub\";"}}
   ]
 }
 ```
@@ -50,8 +43,7 @@ Never hand-write the geometry in Python when a native SOP template exists.
   "nodes": [
     {"type": "tube", "params": {"rad": [0.025, 0.025], "height": 0.06, "rows": 3, "cols": 16}},
     {"type": "fuse", "params": {"dist": 0.0001}},
-    {"type": "attribcreate", "name": "tag",
-     "params": {"name1": "component_id", "class1": "primitive", "type1": "string", "string1": "hub"}}
+    {"type": "attribwrangle", "params": {"class": 2, "snippet": "s@component_id = \"hub\";"}}
   ]
 }
 ```
@@ -67,8 +59,7 @@ Never hand-write the geometry in Python when a native SOP template exists.
   "anchors": [/* scatter wrangle fills these */],
   "nodes": [
     {"type": "tube", "params": {"rad": [0.001, 0.001], "height": 0.34, "rows": 2, "cols": 8}},
-    {"type": "attribcreate", "name": "tag",
-     "params": {"name1": "component_id", "class1": "primitive", "type1": "string", "string1": "spoke"}}
+    {"type": "attribwrangle", "params": {"class": 2, "snippet": "s@component_id = \"spoke\";"}}
   ]
 }
 ```
@@ -85,8 +76,7 @@ Never hand-write the geometry in Python when a native SOP template exists.
     {"type": "box", "params": {"sizex": 0.06, "sizey": 0.01, "sizez": 0.03}},
     {"type": "polybevel", "params": {"offset": 0.003}},
     {"type": "fuse", "params": {"dist": 0.0001}},
-    {"type": "attribcreate", "name": "tag",
-     "params": {"name1": "component_id", "class1": "primitive", "type1": "string", "string1": "pedal"}}
+    {"type": "attribwrangle", "params": {"class": 2, "snippet": "s@component_id = \"pedal\";"}}
   ]
 }
 ```
@@ -95,17 +85,13 @@ Never hand-write the geometry in Python when a native SOP template exists.
 
 ## Chainring Disc (flattened torus, no teeth)
 
-> ⚠️ **H21 verified**: `rad` parm does NOT exist. Use `radscale` for radius scaling
-> and set the torus orientation via `orient`. Verify with `query_parms("torus")`.
-
 ```jsonc
 {
   "id": "chainring",
   "backend": "native_chain",
   "nodes": [
     {"type": "torus", "params": {"radscale": 0.08, "rows": 3, "cols": 48, "type": "poly"}},
-    {"type": "attribcreate", "name": "tag",
-     "params": {"name1": "component_id", "class1": "primitive", "type1": "string", "string1": "chainring"}}
+    {"type": "attribwrangle", "params": {"class": 2, "snippet": "s@component_id = \"chainring\";"}}
   ]
 }
 ```
@@ -139,8 +125,7 @@ Pair with `make_gear_profile()` in a `vex_skeleton` component for toothed disc:
   "backend": "native_chain",
   "nodes": [
     {"type": "box", "params": {"sizex": 0.006, "sizey": 0.002, "sizez": 0.012}},
-    {"type": "attribcreate", "name": "tag",
-     "params": {"name1": "component_id", "class1": "primitive", "type1": "string", "string1": "chain_link"}}
+    {"type": "attribwrangle", "params": {"class": 2, "snippet": "s@component_id = \"chain_link\";"}}
   ]
 }
 ```
@@ -156,8 +141,7 @@ Pair with `make_gear_profile()` in a `vex_skeleton` component for toothed disc:
   "nodes": [
     {"type": "tube", "params": {"rad": [0.018, 0.022], "height": 0.07, "rows": 4, "cols": 20}},
     {"type": "fuse", "params": {"dist": 0.0001}},
-    {"type": "attribcreate", "name": "tag",
-     "params": {"name1": "component_id", "class1": "primitive", "type1": "string", "string1": "bb_shell"}}
+    {"type": "attribwrangle", "params": {"class": 2, "snippet": "s@component_id = \"bb_shell\";"}}
   ]
 }
 ```
@@ -173,8 +157,7 @@ Pair with `make_gear_profile()` in a `vex_skeleton` component for toothed disc:
   "nodes": [
     {"type": "box", "params": {"sizex": 0.02, "sizey": 0.025, "sizez": 0.01}},
     {"type": "polybevel", "params": {"offset": 0.002}},
-    {"type": "attribcreate", "name": "tag",
-     "params": {"name1": "component_id", "class1": "primitive", "type1": "string", "string1": "brake_caliper"}}
+    {"type": "attribwrangle", "params": {"class": 2, "snippet": "s@component_id = \"brake_caliper\";"}}
   ]
 }
 ```
@@ -207,8 +190,7 @@ Pair with `make_gear_profile()` in a `vex_skeleton` component for toothed disc:
   "nodes": [
     {"type": "box", "params": {"sizex": 0.08, "sizey": 0.012, "sizez": 0.27}},
     {"type": "polybevel", "params": {"offset": 0.008}},
-    {"type": "attribcreate", "name": "tag",
-     "params": {"name1": "component_id", "class1": "primitive", "type1": "string", "string1": "saddle"}}
+    {"type": "attribwrangle", "params": {"class": 2, "snippet": "s@component_id = \"saddle\";"}}
   ]
 }
 ```

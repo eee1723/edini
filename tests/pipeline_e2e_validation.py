@@ -182,9 +182,9 @@ simple_recipe = {
             "backend": "native_chain",
             "nodes": [
                 {"type": "box", "params": {"sizex": 2, "sizey": 0.5, "sizez": 1}},
-                {"type": "attribcreate", "name": "tag",
-                 "params": {"name1": "component_id", "class1": "primitive",
-                            "type1": "string", "string1": "base_box"}}
+                {"type": "attribwrangle", "name": "tag",
+                 "params": {"class": 2,
+                            "snippet": 's@component_id = "base_box";'}}
             ]
         },
         {
@@ -193,9 +193,9 @@ simple_recipe = {
             "nodes": [
                 {"type": "tube", "params": {"rad": [0.15, 0.15], "height": 0.3,
                                              "rows": 3, "cols": 16}},
-                {"type": "attribcreate", "name": "tag",
-                 "params": {"name1": "component_id", "class1": "primitive",
-                            "type1": "string", "string1": "pillar"}}
+                {"type": "attribwrangle", "name": "tag",
+                 "params": {"class": 2,
+                            "snippet": 's@component_id = "pillar";'}}
             ],
             "anchors": [
                 {"position": [0, 0.5, 0], "orient": [0, 0, 0, 1],
