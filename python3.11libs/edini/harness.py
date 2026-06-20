@@ -2105,6 +2105,43 @@ def build_procedural_asset(
     components = recipe.get("components", [])
     orientation_asserts = recipe.get("orientation_asserts") or []
 
+    # ── Phase A: Enhanced validation (A1-A6, parm catalog cross-check) ──
+    # Runs the new pipeline validator if the parm catalog is available.
+    # Catches parm-name typos, invalid node types, VEX syntax issues, and
+    # dependency graph errors BEFORE any Houdini operations. Missing catalog
+    # is not a failure — the existing build logic still runs as fallback.
+    phase_a_report = None
+    try:
+        from edini.recipe_validator import validate_recipe as phase_a_validate
+        import os as _os
+        catalog_path = _os.path.join(
+            os.path.dirname(__file__), "data", "parm-catalog.json")
+        if _os.path.exists(catalog_path):
+            phase_a_report = phase_a_validate(recipe, catalog_path)
+            if not phase_a_report["passed"]:
+                return {
+                    "success": False,
+                    "execution_mode": EXECUTION_MODE_LIVE,
+                    "build_mode": "recipe",
+                    "error": (
+                        "Phase A validation failed — "
+                        f"{phase_a_report['error_count']} blocking error(s). "
+                        "See phase_a_report.errors for details."
+                    ),
+                    "phase_a_report": phase_a_report,
+                    "preserved": False,
+                    "deleted": False,
+                }
+            # Phase A passed — carry report forward for diagnostics
+    except ImportError:
+        pass  # recipe_validator not available — skip Phase A, use existing checks
+    except Exception as e:
+        # Non-fatal: Phase A is an enhancement, not a hard gate unless it
+        # explicitly found blocking errors. Unhandled exceptions here degrade
+        # gracefully to the existing validation path.
+        import traceback as _tb
+        phase_a_report = {"exception": str(e), "traceback": _tb.format_exc()}
+
     # ── Construction-axis consistency pre-check (B-station) ──
     # Deterministically verify that every construction_axis declaration agrees
     # with its anchor @orient + expected_axis BEFORE building anything. A
@@ -2464,6 +2501,14 @@ def build_procedural_asset(
                 response["structure_advisory"] = struct_check
         except Exception as e:
             response["structure_advisory_error"] = str(e)
+
+        # Phase A validation report (if available — informational, already passed)
+        if phase_a_report is not None:
+            response["phase_a_validation"] = {
+                "passed": True,
+                "stages": phase_a_report.get("stages", {}),
+                "warning_count": phase_a_report.get("warning_count", 0),
+            }
 
         # orientation preview (advisory only — commit enforces it as a hard gate).
         # Run against the gate target (the component_id-bearing node), not the
