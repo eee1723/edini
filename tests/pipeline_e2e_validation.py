@@ -45,18 +45,16 @@ from edini.parm_catalog import ParmCatalog
 
 catalog_path = os.path.join(EDINI_ROOT, "python3.11libs", "edini", "data", "parm-catalog.json")
 
-# 0.1 — Generate catalog (skip if already exists)
+# 0.1 — Generate catalog (force regenerate to pick up code fixes)
 try:
-    if not os.path.exists(catalog_path):
-        raw = ParmCatalog.generate_catalog()
-        os.makedirs(os.path.dirname(catalog_path), exist_ok=True)
-        with open(catalog_path, "w", encoding="utf-8") as f:
-            json.dump(raw, f, indent=2, ensure_ascii=False)
-    check("0.1 Catalog ready", os.path.exists(catalog_path), 
-          f"{catalog_path} exists")
+    raw = ParmCatalog.generate_catalog()
+    os.makedirs(os.path.dirname(catalog_path), exist_ok=True)
+    with open(catalog_path, "w", encoding="utf-8") as f:
+        json.dump(raw, f, indent=2, ensure_ascii=False)
+    sop_count = len(raw.get("Sop", {}))
+    check("0.1 Catalog generated", sop_count > 100, f"{sop_count} SOP types")
 except Exception as e:
-    check("0.1 Catalog ready", os.path.exists(catalog_path), 
-          f"using pre-generated catalog; regeneration failed: {str(e)[:100]}")
+    check("0.1 Catalog generated", False, str(e)[:150])
 
 # 0.2 — Load catalog
 try:
