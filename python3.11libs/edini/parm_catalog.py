@@ -136,10 +136,27 @@ class ParmCatalog:
                             pdef["menu_items"] = []
                     entry["parms"][pt.name()] = pdef
                 sops[nt.name()] = entry
-        return {
+        return ParmCatalog._sanitize({
             "houdini_version": hou.applicationVersionString(),
             "Sop": sops,
-        }
+        })
+
+    @staticmethod
+    def _sanitize(obj: Any) -> Any:
+        """Recursively convert non-JSON-serializable values to strings."""
+        if obj is None or isinstance(obj, (bool, int, float, str)):
+            return obj
+        if isinstance(obj, (list, tuple)):
+            return [ParmCatalog._sanitize(v) for v in obj]
+        if isinstance(obj, dict):
+            return {str(k): ParmCatalog._sanitize(v) for k, v in obj.items()}
+        if callable(obj):
+            return str(obj)
+        try:
+            json.dumps(obj)
+            return obj
+        except (TypeError, ValueError, OverflowError):
+            return str(obj)
 
 
 def _closest_match(name: str, candidates: set[str]) -> str | None:
