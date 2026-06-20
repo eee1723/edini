@@ -18,6 +18,8 @@ CATALOG_PATH = os.path.join(
 NODE_ALIASES = {
     "transform": "xform",
     "polybevel": "polybevel::3.0",
+    "fuse": "fuse::2.0",
+    "clean": "clean::2.0",
 }
 
 
