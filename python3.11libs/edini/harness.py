@@ -2116,6 +2116,12 @@ def build_procedural_asset(
         import os as _os
         catalog_path = _os.path.join(
             os.path.dirname(__file__), "data", "parm-catalog.json")
+        # Auto-generate catalog on first use if missing
+        if not _os.path.exists(catalog_path):
+            try:
+                _generate_and_save_catalog(catalog_path)
+            except Exception:
+                pass  # can't generate — skip Phase A gracefully
         if _os.path.exists(catalog_path):
             phase_a_report = phase_a_validate(recipe, catalog_path)
             if not phase_a_report["passed"]:

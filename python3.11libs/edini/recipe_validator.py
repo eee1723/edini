@@ -8,7 +8,19 @@ import math
 import re
 from typing import Any
 
-from edini.parm_catalog import ParmCatalog
+# ParmCatalog is imported lazily — it requires hou module (Houdini runtime).
+# A1, A4, A5, A6 stages run without it; A2/A3 need the catalog.
+_ParmCatalog: Any = None
+
+def _get_catalog(catalog_path: str | None) -> Any:
+    """Lazy-load ParmCatalog. Returns None if not available."""
+    global _ParmCatalog
+    if _ParmCatalog is None and catalog_path:
+        from edini.parm_catalog import ParmCatalog as PC
+        _ParmCatalog = PC
+    if _ParmCatalog and catalog_path:
+        return _ParmCatalog.load(catalog_path)
+    return None
 
 # ── Constants ───────────────────────────────────────────────
 
@@ -162,8 +174,10 @@ def _validate_a1_schema(recipe: dict) -> list[dict]:
 #  A2 — Parm Name Cross-Validation
 # ═══════════════════════════════════════════════════════════════
 
-def _validate_a2_parm_names(recipe: dict, catalog: ParmCatalog) -> list[dict]:
+def _validate_a2_parm_names(recipe: dict, catalog: Any) -> list[dict]:
     """Cross-check all SOP parm names against the catalog."""
+    if catalog is None:
+        return []
     errors: list[dict] = []
 
     for i, comp in enumerate(recipe.get("components", [])):
@@ -213,8 +227,10 @@ def _validate_a2_parm_names(recipe: dict, catalog: ParmCatalog) -> list[dict]:
 #  A3 — Node Type Validation
 # ═══════════════════════════════════════════════════════════════
 
-def _validate_a3_node_types(recipe: dict, catalog: ParmCatalog) -> list[dict]:
+def _validate_a3_node_types(recipe: dict, catalog: Any) -> list[dict]:
     """Verify all node type names exist in the catalog (or have an alias)."""
+    if catalog is None:
+        return []
     errors: list[dict] = []
 
     for i, comp in enumerate(recipe.get("components", [])):
@@ -270,6 +286,11 @@ _VEX_BLOCKING_PATTERNS = [
         "A4_VEX_POLY",
         re.compile(r'addprim\s*\(\s*(?:\w+\s*,\s*)?\s*"poly"\s*\)'),
         "Manually creating poly prim in VEX is forbidden. Emit skeletons (polylines) only; form_node (Sweep/PolyExtrude) closes the geometry.",
+    ),
+    (
+        "A4_VEX_FUNCTION",
+        re.compile(r'^\s*(?:void|int\[\]|float\[\]|vector\[\]|string\[\]|matrix)\s+\w+\s*\(', re.MULTILINE),
+        "Function definitions (including 'void xxx()') are not supported in VEX wrangle snippets. Causes 'unexpected identifier' compiler error. Use inline code blocks { ... } instead of functions.",
     ),
 ]
 
@@ -542,7 +563,7 @@ def validate_recipe(
         dependency_graph: dict | None — param DAG (if params declared)
         component_manifest: list — {component_id, backend} for every component
     """
-    catalog = ParmCatalog.load(catalog_path) if catalog_path else None
+    catalog = _get_catalog(catalog_path) if catalog_path else None
 
     all_errors: list[dict] = []
 

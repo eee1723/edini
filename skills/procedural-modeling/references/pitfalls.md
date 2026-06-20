@@ -2,6 +2,47 @@
 
 Mistakes that waste 30-50% of procedural generation time. Avoid them.
 
+## VEX channel reference syntax
+
+**VEX `ch()` functions take plain string parm names — NOT Python-style `%` formatting.**
+
+```vex
+// ❌ WRONG — %radius% is Python-string thinking
+float r = chf("%radius%");
+
+// ✅ CORRECT — plain string
+float r = chf("radius");
+```
+
+## VEX function definitions in wrangles
+
+**VEX wrangles do NOT support `void`/`int[]`/`float[]` function definitions inside the snippet.**
+Writing `void make_tube(vector pts[]; float r) { ... }` causes:
+`Syntax error, unexpected identifier, expecting integer constant or float constant.`
+
+✅ Use inline code blocks `{ ... }` instead of named functions.
+
+## Node type name mismatches (H21)
+
+| ❌ Wrong | ✅ Correct |
+|---|---|
+| `transform` | `xform` |
+| `polybevel` | `polybevel::3.0` |
+
+## attribcreate menu item names (H21)
+
+```jsonc
+// ❌ WRONG — H21 rejects these
+{"class1": "prim", "type1": "string"}
+
+// ✅ CORRECT for H21
+{"class1": "primitive", "type1": "string"}
+```
+
+## Spare parms on non-wrangle nodes
+
+Adding spare parameters to `xform`, `tube`, `torus` etc. via `add_float_parm()` is fragile — these nodes already have their own parameter templates. For parameter linkage across network_mode builds, install shared params on the sandbox CONTAINER and use `ch("../../param")` expressions on child nodes.
+
 ## pscale semantics in Copy-to-Points
 - `@pscale = 1.0` means **original size** of the source geometry (no scaling)
 - `@pscale = wheel_radius` does NOT give you a wheel of that radius — it SCALES by that factor
