@@ -3191,3 +3191,21 @@ def build_component_tool(
     from edini.component_builder import build_component as _build
     return _build(recipe, component_id, sandbox_root_path, catalog_path)
 
+
+def assemble_components_tool(
+    recipe: dict,
+    sandbox_root_path: str,
+    cache_root: str,
+) -> dict[str, Any]:
+    """Tool wrapper for Phase C: assemble all passed components.
+
+    Args:
+        recipe: The full recipe dict (for component list + postprocess).
+        sandbox_root_path: e.g. "/obj/edini_sandbox_..."
+        cache_root: Path to component_cache directory.
+    Returns:
+        AssemblyResult dict.
+    """
+    from edini.assembly_engine import assemble_components as _assemble
+    return _assemble(recipe, sandbox_root_path, cache_root)
+
