@@ -14,7 +14,7 @@ from edini.node_utils import (
     get_scene_info,  create_node, delete_node, connect_nodes,
     set_param, set_params_batch, get_param, list_nodes, get_node_info, layout_nodes,
     search_nodes, get_help, inspect_geometry,
-    run_python, run_vex, create_hda, get_hda_info,
+    run_vex, create_hda, get_hda_info,
     capture_review, capture_network, capture_component_detail,
     get_selection, check_errors, set_display_flag,
     verify_orientation, inspect_geometry_health, geometry_inventory,
@@ -111,7 +111,6 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     "houdini_node_parms": lambda **kw: node_parms(
         kw["node_type"], category=kw.get("category", "Sop")),
     "houdini_inspect_geo": lambda **kw: inspect_geometry(kw["node_path"]),
-    "houdini_run_python": lambda **kw: run_python(kw["code"]),
     "houdini_run_vex": lambda **kw: run_vex(
         code=kw["code"], node_path=kw.get("node_path"),
         attrib_name=kw.get("attrib_name", "result"),
@@ -235,6 +234,18 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
 }
 
 
+TOOL_ALIASES: dict[str, str] = {
+    "houdini_verify_orientation":     "verify_orientation",
+    "houdini_inspect_geometry_health": "inspect_health",
+    "houdini_geometry_inventory":     "geometry_inventory",
+    "houdini_commit_sandbox":         "commit_sandbox",
+    "houdini_discard_sandbox":        "discard_sandbox",
+    "houdini_capture_review":         "capture_review",
+    "houdini_node_parms":             "query_parms",
+    "houdini_build_procedural_asset": "build_procedural_asset",
+}
+
+
 class _ToolHandler(BaseHTTPRequestHandler):
     """HTTP request handler for tool execution."""
 
@@ -250,6 +261,10 @@ class _ToolHandler(BaseHTTPRequestHandler):
 
             tool_name = request.get("tool")
             params = request.get("params", {})
+
+            # Resolve old (deprecated) names to new canonical names
+            if tool_name in TOOL_ALIASES:
+                tool_name = TOOL_ALIASES[tool_name]
 
             if tool_name not in TOOL_HANDLERS:
                 self._send_json({"success": False, "error": f"Unknown tool: {tool_name}"})
