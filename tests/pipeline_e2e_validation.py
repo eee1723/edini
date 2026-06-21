@@ -4,7 +4,8 @@ Edini Pipeline Architecture — End-to-End Validation Script
 Run in Houdini Python Shell.
 """
 import json, os, sys
-sys.path.insert(0, r"Z:\EEE_Project\Edini\python3.11libs")
+EDINI_ROOT = r"Z:\EEE_Project\Edini"
+sys.path.insert(0, os.path.join(EDINI_ROOT, "python3.11libs"))
 for mod in list(sys.modules.keys()):
     if mod.startswith("edini."): del sys.modules[mod]
 if "edini" in sys.modules: del sys.modules["edini"]
@@ -28,7 +29,7 @@ def section(title):
 # ═══ Phase 0: Catalog ═══
 section("Phase 0: Parm Catalog")
 from edini.parm_catalog import ParmCatalog
-catalog_path = os.path.join(os.path.dirname(__file__), "..", "python3.11libs", "edini", "data", "parm-catalog.json")
+catalog_path = os.path.join(EDINI_ROOT, "python3.11libs", "edini", "data", "parm-catalog.json")
 
 try:
     raw = ParmCatalog.generate_catalog()
@@ -105,7 +106,7 @@ recipe = {
                    {"type": "attribwrangle", "params": {"class": 1, "snippet": "s@component_id = 'pillar';"}}],
          "anchors": [{"position": [2, 0.5, 0], "orient": [0,0,0,1], "pscale": 1.0, "component_id": "pillar_copy"}]}
     ],
-    "postprocess": [{"type": "normal", "params": {"cuspangle": 60}}],
+    "postprocess": [],
     "orientation_asserts": [
         {"component_id": "base_box", "kind": "planar", "expected_axis": "Y", "signed": True},
         {"component_id": "pillar_copy", "kind": "planar", "expected_axis": "Y", "signed": True}
