@@ -23,8 +23,14 @@ export const houdiniRunVex = {
   name: "houdini_run_vex",
   label: "Run VEX Code",
   description:
-    "Execute VEX code by creating a temporary Attribute Wrangle node in /obj.",
+    "Execute VEX code by creating a temporary Attribute Wrangle node in /obj. " +
+    "WARNING: this tool is NOT sandboxed — it creates a live node in /obj directly. " +
+    "Prefer houdini_run_python_sandbox for all procedural asset work. Only use this for quick VEX diagnostics.",
   promptSnippet: "Run VEX code in a temporary Attribute Wrangle",
+  promptGuidelines: [
+    "This tool is NOT sandboxed. It creates a live node in /obj directly. Prefer houdini_run_python_sandbox for all procedural asset work.",
+    "Only use houdini_run_vex for quick diagnostics or debugging VEX code snippets.",
+  ],
   parameters: Type.Object({
     code: Type.String({ description: "VEX snippet to run" }),
     node_path: Type.Optional(

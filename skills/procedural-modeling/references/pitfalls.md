@@ -2,6 +2,50 @@
 
 Mistakes that waste 30-50% of procedural generation time. Avoid them.
 
+## Python `hou.ch()` must use `../` prefix
+
+Params are installed on the sandbox root (one level ABOVE component SOPs).
+`hou.ch("param")` looks on the current node itself — always fail.
+
+```python
+# ❌ WRONG — looks for param on current Python SOP (doesn't exist)
+fs = hou.ch('frame_scale')
+
+# ✅ CORRECT — one level up to sandbox root where params live
+fs = hou.ch('../frame_scale')
+```
+
+## VEX `ch()` on vex_skeleton wrangles
+
+The builder auto-installs spare parms on wrangle nodes. The expression
+for each spare parm is `ch("../param_name")` — reading from the sandbox
+root one level up. Your VEX code just calls `ch("param_name")` directly.
+
+```vex
+// ✅ CORRECT — the spare parm resolves to ch("../param") behind the scenes
+float r = ch("tube_od") / 2.0;
+```
+
+## vex_skeleton: use addprim("poly") not "polyline" for PolyExtrude
+
+PolyExtrude only extrudes polygon FACES, not curves. For the single-wrangle
+profile mode, create the face with `addprim(0, "poly")`:
+
+```vex
+// ✅ CORRECT
+int prim = addprim(0, "poly");  // polygon face — PolyExtrude works
+// ❌ WRONG
+int prim = addprim(0, "polyline");  // curve — PolyExtrude gives zero result
+```
+
+For dual-wrangle Sweep mode, the path IS `"polyline"` and the cross-section
+IS `"polyline"` (Sweep closes them automatically).
+
+## H21 parm names: outputback NOT output_back
+
+Houdini 21 PolyExtrude uses `outputback` (no underscore), not `output_back`.
+Always verify with `query_parms("polyextrude")` before setting parms.
+
 ## VEX channel reference syntax
 
 **VEX `ch()` functions take plain string parm names — NOT Python-style `%` formatting.**

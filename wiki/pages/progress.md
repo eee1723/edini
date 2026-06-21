@@ -1,10 +1,19 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-16 &nbsp;|&nbsp; 第三十阶段：Harness 两 Bug 修复（参数挂载 + degenerate 误报）✅ 真实 Houdini 验证 &nbsp;|&nbsp; 规划：Normal SOP 参数适配 → C 站节点参数 DB → D 站黄金范例 → E 站数值代理
+> 最后更新：2026-06-21 &nbsp;|&nbsp; 第三十二阶段：vex_skeleton Sweep · 派生参数 · add_parm 工具 ✅ &nbsp;|&nbsp; 规划：完整自行车端到端演示
 
 ## 总览看板
 
 <div class="phase-grid">
+
+<div class="phase-card">
+  <div class="phase-card-header">
+    <span class="phase-card-title">🔧 三阶段管道架构</span>
+    <span class="status-tag status-done">完成</span>
+  </div>
+  <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:100%"></div></div>
+  <div class="phase-card-detail">Phase A → B → C（验证→构建→组装）。参数三态。4 新工具。8 别名。H21 hython 53/53 + mock 425/425。parm_catalog 自动生成。recipe_validator 6 层检查。</div>
+</div>
 
 <div class="phase-card">
   <div class="phase-card-header">
@@ -75,69 +84,56 @@
     <span class="status-tag status-done">完成</span>
   </div>
   <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:100%"></div></div>
-  <div class="phase-card-detail">✅ Mock Hou 模块（MockNode/MockParm/MockNodeType/MockCategory）· ✅ 105+ 单元测试（node_utils 48 + config 24 + knowledge_store 33）· ✅ 全部 22 handler 脱机测试 · ⬜ 集成测试 · ⬜ 端到端测试</div>
-</div>
-
-# 🚀 开发进度
-
-> 最后更新：2026-06-16 &nbsp;|&nbsp; 第三十阶段：Harness 两 Bug 修复（参数挂载 + degenerate 误报）✅ 真实 Houdini 验证 &nbsp;|&nbsp; 规划：Normal SOP 参数适配 → C 站节点参数 DB → D 站黄金范例 → E 站数值代理
-
-## 总览看板
-
-<div class="phase-grid">
-
-<div class="phase-card">
-  <div class="phase-card-header">
-    <span class="phase-card-title">🌐 多模型 & 多模态</span>
-    <span class="status-tag status-done">完成</span>
-  </div>
-  <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:100%"></div></div>
-  <div class="phase-card-detail">✅ DeepSeek V4 Pro/V3/R1 · ✅ Anthropic Claude · ✅ Viewport 截图（Houdini 20 flipbook 单帧 + frameRange([1.0,1.0]) 修复）· ✅ pi-visionizer 视觉代理（Qwen-VL Max）· ✅ 全渠道图片输入（截图/拖拽/粘贴/文件选择 + 右键菜单）· ✅ 附件预览栏（真实缩略图，最多5张）· ✅ 视觉描述气泡（可折叠、查看原图、错误变体）· ✅ AI 工具主动读图（describe_image）· ✅ 识别中状态提示（🔍 正在识别图片…）· ✅ 时间线缩略图卡片（96×68 点击查看原图、原始文件名保留）· ✅ 图片缓存持久化（edini_images/ 目录，切换对话可回看）· ✅ 视觉描述持久化（descriptions.json 缓存，历史气泡渲染）· ✅ Defer 缓存写入 · ✅ 视觉模型配置管道修复（get_pi_env 注入 VISIONIZER_PROVIDER/MODEL_ID，会话路径自动获取）· ✅ 临时文件路径过滤 · ✅ describe_image 友好报错 · ✅ 生产环境日志清理</div>
-</div>
-
-<div class="phase-card">
-  <div class="phase-card-header">
-    <span class="phase-card-title">🧠 知识沉淀系统</span>
-    <span class="status-tag status-done">完成</span>
-  </div>
-  <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:100%"></div></div>
-  <div class="phase-card-detail">✅ 两层架构（铁律 rules.json ≤20条 + 知识库 entries.json）· ✅ 对话结束 AI 反思 → 用户确认（面板内 ✓✕）· ✅ 铁律自动注入 system prompt · ✅ 管理弹窗（双标签增删改搜索）· ✅ Settings Knowledge 标签页 · ✅ 类型可切换（铁律↔知识）· ✅ 只提取会重复犯的错</div>
-</div>
-
-</div>
-
-<div class="phase-card">
-  <div class="phase-card-header">
-    <span class="phase-card-title">📐 评估系统</span>
-    <span class="status-tag status-done">完成</span>
-  </div>
-  <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:100%"></div></div>
-  <div class="phase-card-detail">✅ 5 维度评估管道（3 确定性 + 2 LLM-as-Judge）· ✅ SQLite 评估仓库（sessions/tool_calls/judge_logs/daily_aggregates）· ✅ LogParser 从 Pi JSONL 解析会话 · ✅ 增量评估（只评未评分的会话）· ✅ EvalDashboard UI（概览卡片 + 趋势图 + 会话列表）· ✅ AgentEval 工具（edini_get_eval_stats 自省）· ✅ 后台自动评估 · ✅ 8 个真实 Houdini 会话实测通过 · ✅ Wiki 设计理念文档 · ✅ 纯确定性评估(force_no_judge)跑通16会话 / LLM Judge可选 / ⚡ Re-evaluate按钮</div>
+  <div class="phase-card-detail">✅ Mock Hou 模块 · ✅ 478 测试（mock 425 + Houdini hython 53）· ✅ 三阶段管道完整覆盖 · ⬜ Edini GUI 全链路测试</div>
 </div>
 
 <div class="phase-card">
   <div class="phase-card-header">
     <span class="phase-card-title">🛠️ Skill 系统</span>
-    <span class="status-tag status-active">进行中</span>
+    <span class="status-tag status-done">完成</span>
   </div>
-  <div class="progress-bar-bg"><div class="progress-bar-fill progress-active" style="width:40%"></div></div>
-  <div class="phase-card-detail">✅ Skill 目录自动发现（--no-skills + --skill 逐目录加载）· ✅ procedural-modeling Skill（程序化建模指导：VEX/Python 选型、run-over class、分而治之、模板模式、失败切换策略）· ✅ grill-me Skill（追问式设计审查）· ⬜ houdini_search_knowledge Skill · ⬜ Skill 使用效果追踪 · ⬜ 自动 Skill 提取</div>
+  <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:100%"></div></div>
+  <div class="phase-card-detail">✅ 1 路由器 + 5 专用技能（recipe-authoring/component-building/assembly-wiring/verification/parametric-testing）· ✅ edini-brainstorm · ✅ grill-me · ✅ 技能自动发现</div>
 </div>
 
 </div>
 
 <div class="timeline">
 
-### Procedural Harness Phase C-D: 模块化门 + Network Mode + 声明式 Builder
+### 第三十一阶段：三阶段管道架构 + H21 完整验证
 
-- **模块化结构硬门**（`_check_modular_structure`）：commit_sandbox 拒绝单体资产（≥3 个 component_id 全来自单个 Python SOP、无 copytopoints/sweep/foreach）。`_select_gate_target` 修正：不再被空的 dispatcher Python SOP 误导，优先选 component_id-bearing、prim 数最多的节点。
-- **朝向门**（`verify_orientation`）：PCA 按组件检测轮轴/长轴/法线方向，commit 时硬关卡。vision 不再评朝向。
-- **三层验证协议**：geometry health → orientation → inventory/data → visual。每层各自抓不同缺陷。
-- **network_mode sandbox**（`run_python_sandbox(network_mode=True)`）：代码跑在 sandbox geo 容器里，可直接 `createNode` 子 SOP 建多节点模块化网络，不再触发 cook 内 createNode 的无限递归。`_resolve_output_node` 自动发现 OUT。
-- **声明式 Recipe Builder**（`build_procedural_asset`）：agent 提交 JSON recipe（组件清单 + anchor + 每组件纯几何 python 代码），harness 确定性建网（组件 SOP → anchor 生成器 → Copy-to-Points → idfix → merge → postprocess → OUT）→ cook → 跑 structure/orientation 门 → 返回诊断。agent 永不写 createNode/wiring/blockpath。真实 Houdini 验证：Copy-to-Points stamping + idfix 逐实例 component_id 覆盖正确。
-- **验证工具补全**：`houdini_geometry_inventory` / `houdini_inspect_geometry_health` / `houdini_capture_component_detail` 之前只在 Python 注册、未暴露 TS schema（实测 agent 被迫退回 raw python），现已补全。
-- **测试隔离修复**：`test_error_surfacing` 无条件覆盖 `sys.modules["hou"]` orphan 了其它文件的 `edini.harness.hou`，改为幂等安装。
-- 316 测试通过。
+- **三阶段管道**：Phase A (recipe_validator: A1-A6 六层检查) → Phase B (component_builder: 3 backend) → Phase C (assembly_engine: CTP+anchor 活通道)。全 pipeline 通过 `build_procedural_asset` 内部串联，向后兼容。
+- **参数目录自动生成**（`parm_catalog.py`）：扫描已安装 Houdini 的所有 SOP 类型（1651 个），缓存到 `parm-catalog.json`。Phase A 用目录做 parm 名/节点类型的地面真相——零 cook 验证。包含别名解析（transform→xform, fuse→fuse::2.0）。
+- **工具面重组**：移除 `houdini_run_python`，新增 4 工具（`validate_recipe`/`build_component`/`assemble_components`/`dump_parm_catalog`）。8 个工具重命名（`houdini_verify_orientation`→`verify_orientation` 等）+ `_TOOL_ALIASES` 向后兼容。
+- **Skill 体系重组**：`procedural-modeling` 改为轻量路由器（~80 行），按管道阶段分发到 5 个专用技能。
+- **H21 hython 完整验证**：53/53 全过（Phase 0: 11 + Phase A: 20 + Phase B+C: 13 + Commit: 5 + Cleanup: 2）。三个 backend（native_chain/python/vex_skeleton）全部通过。network_mode sandbox 通过。
+- **7 个 H21 兼容 bug 修复**：`.name`→`.name()` 类型序列化、`menuItems()` 返回字符串非对象、`_set_parm_safe` 添加 `parmTuple` 多分量参数支持、`params:{}` 空对象处理、`addAttrib` 重复创建防护、`A4_VEX_NO_DETAIL` 严重级别 WARNING、`attribwrangle.class=2`→`"detail"`。
+- 478 测试通过（425 mock + 53 Houdini hython）。
+
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-21</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第三十一阶段：三阶段管道架构实现 + H21 hython 全验证</span>
+      <span class="status-tag status-done">完成</span>
+    </div>
+    <div class="timeline-summary">① 三阶段管道全部落地：`parm_catalog.py`→`recipe_validator.py`(A1-A6)→`component_builder.py`(3 backend)→`component_cache.py`→`assembly_engine.py`。`build_procedural_asset` 内部串联全管道。② H21 hython 53/53 通过：Phase 0(11) + A(20) + B+C(13) + Commit(5)。native_chain/python/vex_skeleton 三 backend 全过。③ 7 个 H21 兼容 bug 修复：`.name`→`.name()` / `menuItems()` 字符串 / `parmTuple` 多分量 / `params:{}` 空处理 / `findPrimAttrib` 防护 / `A4_VEX_NO_DETAIL_WARNING` / `class="detail"`。④ 478 测试通过（425 mock + 53 hython）。</div>
+  </div>
+</div>
+
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-21</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第三十二阶段：vex_skeleton 双 wrangle Sweep + 派生参数系统 + add_parm 工具</span>
+      <span class="status-tag status-done">完成</span>
+    </div>
+    <div class="timeline-summary">① 根因分析：车架 8/8 组件全用 Python 手写管材（add_tube()），违反"管材用 vex_skeleton"铁律。根因 = vex_skeleton 的 `_build_vex_skeleton_component` 有两个阻塞缺陷：(a) wrangle spare parm expr 用 `../../` 而非 `../`（同一作用域 bug 再次出现，session 日志 3 轮修复佐证），(b) form_node params 只支持静态值，不支持 ch() 通道表达式。② 修复 A：form_node params 检测字符串含 `ch(` 则调 `setExpression()` 而非 `set()` → 管长可参数化。③ 修复 B：wrangle spare parm expr 从 `ch("../../param")` 改为 `ch("../param")`。④ 修复 C：PolyExtrude 需要 polygon face 而非 polyline → VEX 用 `addprim(0,"poly")` 创建封闭面。⑤ 修复 D：PolyExtrude/Sweep 剥离 component_id 属性 → 在 form_node 后加 `attribwrangle` 重新打标。⑥ **架构突破**：扩展 `_build_vex_skeleton_component` 支持双 wrangle Sweep 模式（`section_code` 字段）。路径 wrangle + 截面 wrangle → Sweep 自动垂直对齐 → 完美封闭管材（endcaptype=1）。⑦ **派生参数系统**：实现 `_evaluate_derived_params`，params 支持 `kind: "derived"` + `from` 表达式。拓扑排序求值，16 个派生坐标一次计算、全部组件共享。⑧ **add_parm 工具**：`add_parm(node_path, name, default, min, max, label)` 一键创建 spare float 参数，返回 channel_path。⑨ **最终效果**：车架从 0% vex → **75% vex**（6 vex_skeleton + 1 native_chain + 1 python），Python 占比从 94%→12%。成功构建完整公路自行车车架（8 组件 273 点 185 面），保存可操作 .hip 文件。⑩ **文档更新**：declarative-builder.md（vex_skeleton 双模式、派生参数）、params-and-linkage.md（三态体系、add_parm）、pitfalls.md（hou.ch ../ 路径、poly vs polyline、outputback 命名）、wiki tools/progress/procedural-harness 同步更新。</div>
+    <div class="timeline-tags">
+      <span>三阶段管道</span><span>A1-A6验证</span><span>parm_catalog</span><span>工具重组</span><span>H21 hython</span><span>parmTuple</span><span>478测试</span>
+    </div>
+  </div>
+</div>
 
 <div class="timeline-item timeline-done">
   <div class="timeline-date">2026-06-16</div>

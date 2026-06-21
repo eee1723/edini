@@ -371,7 +371,8 @@ class TestGetPiCommand(unittest.TestCase):
         self.assertIn("procedural-modeling", skill_names)
 
         proc = next(s for s in caps["skills"] if s["name"] == "procedural-modeling")
-        self.assertIn("程序化建模", proc["description"])
+        # Task 8: skill description updated to English
+        self.assertIn("procedural", proc["description"].lower())
 
     def test_root_pi_package_manifest_declares_edini_capabilities(self):
         """Root package.json groups Edini extensions and project skills."""

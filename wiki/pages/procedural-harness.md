@@ -1,6 +1,6 @@
 # 🧪 Procedural Harness
 
-> 最后更新：2026-06-16 ｜ 状态：模块化门 + 朝向门 + network_mode + 声明式 Builder + 构造轴（B 站）+ Harness 两 Bug 修复（参数挂载/degenerate 误报，真实 Houdini 验证）已落地 ｜ 目标：让程序化建模先进入可诊断、可验证、可回滚的沙盒流程，并从"约束执行"转向"能力放大"。
+> 最后更新：2026-06-21 ｜ 状态：三阶段管道架构（Phase A→B→C）完整落地 + H21 hython 53/53 全验证 ｜ 目标：零 cook 验证 → 逐组件构建 → 活通道组装。
 
 ## 这批解决了什么
 
@@ -74,13 +74,20 @@ Procedural Harness 是 Edini 给 Houdini 程序化建模加上的一层执行护
 | 区域 | 文件 |
 |------|------|
 | Harness 实现（sandbox/gates/builder） | `python3.11libs/edini/harness.py` |
+| 参数目录自动生成 | `python3.11libs/edini/parm_catalog.py` |
+| Phase A 验证引擎 | `python3.11libs/edini/recipe_validator.py` |
+| Phase B 组件构建器 | `python3.11libs/edini/component_builder.py` |
+| 组件缓存 | `python3.11libs/edini/component_cache.py` |
+| Phase C 组装引擎 | `python3.11libs/edini/assembly_engine.py` |
 | Tool executor 注册 | `python3.11libs/edini/tool_executor.py` |
 | 节点/几何工具 | `python3.11libs/edini/node_utils.py` |
+| 表达式引擎 | `python3.11libs/edini/exprs.py` |
 | 朝向数学 | `python3.11libs/edini/orientation_math.py` |
 | Pi tool schema（harness） | `pi-extensions/edini-tools/tools/harness.ts` |
 | Pi tool schema（query/inventory/health） | `pi-extensions/edini-tools/tools/query.ts` |
 | Pi tool index | `pi-extensions/edini-tools/index.ts` |
 | Skill 指南 | `skills/procedural-modeling/SKILL.md` |
+| Houdini 运行时测试 | `tests/houdini_runtime_test.py` |
 | Builder 实测文档 | `docs/BUILDER_FIRST_TEST.md`、`docs/BUILDER_SECOND_TEST.md` |
 | 单测 | `tests/test_procedural_harness.py`、`tests/test_build_procedural_asset.py`、`tests/test_tool_executor_harness.py`、`tests/test_pi_harness_tools.py`、`tests/test_verify_orientation.py` |
 
@@ -103,40 +110,53 @@ Procedural Harness 是 Edini 给 Houdini 程序化建模加上的一层执行护
 
 ## 验证状态
 
-最近 A/B 站 + 第三十阶段两 Bug 修复交付后的验证结果：
-
 ```text
-python -m pytest（全量，忽略 manual_* 依赖真实 Houdini 的测试）
-382 passed
+python -m pytest（mock，忽略 PySide6 + 需要 Houdini 的测试）
+425 passed
 
-第三十阶段 mock 验证：
-- _install_spare_params 成功路径：installed=True，参数真实落到 root 的 _parms 并 evalParm 可读
-- _install_spare_params 降级路径：API 缺失时 installed=False 但默认值仍返回（_NoTemplate 模拟）
-- inspect_geometry_health：面积 2e-4 合法 fan-cap 三角形不被误报（count==0），共线三角仍标记
+Houdini 21.0.440 hython（tests/houdini_runtime_test.py）
+53 passed, 0 failed
 
-真实 Houdini 21.0.440 端到端验证（tests/manual_verify_fixes.py，13/13 全过）：
-- pre-flight：组件代码 isolation cook 抓真实 traceback（解决 Houdini node.errors() 泛化问题）
-- Fix A：5 个参数全部 installed=true、eval() 等于默认值、edini_params 文件夹在 root 接口
-- Fix B：degenerate count==1（仅共线三角），合法小三角实测 measuredarea=2e-4 不误报
+总计：478 测试通过
 
-真实自行车 build 实证（修复前 vs 修复后）：
-- params_summary 5/5 installed=true（之前全 false）
-- degenerate_prims: 0（之前 1228，逼 agent 花 3 轮思考自证误报）
-- build 轮次 3→2，discard 2→1，输出 token -41%
+Phase 0 (Parm Catalog)：11/11
+  - 目录生成（1651 SOP 类型）、加载、别名解析（transform→xform 等）
+  - H21 参数名验证（torus.rad 存在、torus.radscale 不存在）
 
-A/B 站历史验证（docs/BUILDER_FIRST_TEST.md / BUILDER_SECOND_TEST.md）：
-- 第一阶段（单组件）：builder 基础设施全过（sandbox/cook/component_id/structure gate）
-- 第二阶段（二组件 + Copy-to-Points）：idfix 逐实例 component_id 覆盖正确
-  inventory 实扫 OUT：frame:6, wheel_fl:1, wheel_rr:1，40 点 8 prim
+Phase A (Recipe Validation)：20/20
+  - A1 Schema · A2 Parm 名交叉验证（含目录）· A3 节点类型
+  - A4 VEX Lint（% / addprim poly / 函数定义 / addpoint 缺 Detail / ch() 引用）
+  - A5 构造轴一致性 · A6 依赖图（循环/悬空/孤立）
+
+Phase B+C (Build + Verify)：13/13
+  - native_chain 构建（box + attribwrangle + component_id 标记）
+  - python 后端构建（createPoint/createPolygon）
+  - vex_skeleton 后端构建（wrangle→sweep tube）
+  - 几何健康 · 朝向验证（PCA+construction_axis）· 几何清单
+
+Commit：5/5
+  - commit_sandbox（朝向门+结构门）· 已提交标志 · final_path
+
+Cleanup：2/2
+  - discard_sandbox · 节点清理
+
+network_mode sandbox：✅
+build_variant_scatter：⚠️ 功能正常但 warnings 收集逻辑需修复
+
+三个 backend 全部通过：
+  - native_chain：盒子 + wrangle 标记 component_id → merge → OUT
+  - python：createPoint + createPolygon + addAttrib + setAttribValue + addVertex
+  - vex_skeleton：attribwrangle(Detail) 发射骨架 + sweep::2.0(tube) 封闭几何
 ```
 
-## 后续规划（ABCDE 五站 + 第三十阶段遗留）
+## 后续规划
 
-| 站 | 内容 | 状态 | 依赖 |
-|---|---|---|---|
-| A | 声明式 Recipe Builder | ✅ 完成 | — |
-| B | 构造轴替代 PCA（construction_axis + edini_world_axis 烘焙 + build 时一致性预检） | ✅ 完成 | A |
-| 30 | Harness 两 Bug 修复（参数挂载 read-merge + degenerate 用 measuredarea）| ✅ 完成（真实 Houdini 验证）| — |
-| C | 节点参数 DB（`houdini_node_parms` 查询工具 + manifest 生成端 + `_validate_recipe` 参数名校验）| ✅ 完成（真实 H21.0.440 manifest 入库，1076 SOP，端到端验证 cuspangle 参数名联动）| 独立 |
-| D | 黄金范例检索（recipe 格式的验证过资产模板） | ⬜ | A |
-| E | 数值代理（轮廓圆度/对称性/silhouette IoU） | ⬜ | 独立 |
+| 站 | 内容 | 状态 |
+|---|---|---|
+| A | 声明式 Recipe Builder | ✅ 完成 |
+| B | 构造轴替代 PCA | ✅ 完成 |
+| C | 节点参数 DB + parm catalog | ✅ 完成（H21 hython 验证）|
+| Phase A/B/C | 三阶段管道架构 | ✅ 完成（478 测试）|
+| D | 黄金范例检索 | ⬜ |
+| E | 数值代理 | ⬜ |
+| — | Edini GUI 全链路验证（截图/RPC） | ⬜ |

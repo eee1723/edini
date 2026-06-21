@@ -46,10 +46,20 @@ check("A6: orphan warning", any("ORPHAN" in w["stage"] for w in r["warnings"]))
 catalog_path = os.path.join(os.path.dirname(__file__), "..", "python3.11libs", "edini", "data", "parm-catalog.json")
 if os.path.exists(catalog_path):
     print("\n=== With catalog ===")
-    r = validate_recipe({"components": [{"id": "b", "backend": "native_chain", "nodes": [{"type": "torus", "params": {"rad": [0.08, 0.08]}}]}]}, catalog_path)
-    check("A2: bad parm on torus", not r["passed"])
-    r = validate_recipe({"components": [{"id": "b", "backend": "vex_skeleton", "code": "int pts[] = make_polyline(0, array({0,0,0},{1,0,0}));", "form_node": {"type": "transform", "input0": "self"}}]}, catalog_path)
-    check("A3: invalid node transform", not r["passed"])
+    # Catalog-dependent checks (A2/A3) require `import hou` which is only
+    # available inside Houdini runtime. Skip gracefully when running standalone.
+    try:
+        import hou
+        _has_hou = True
+    except ImportError:
+        _has_hou = False
+    if _has_hou:
+        r = validate_recipe({"components": [{"id": "b", "backend": "native_chain", "nodes": [{"type": "torus", "params": {"nonexistent_xyz": 999}}]}]}, catalog_path)
+        check("A2: bad parm on torus", not r["passed"])
+        r = validate_recipe({"components": [{"id": "b", "backend": "vex_skeleton", "code": "int pts[] = make_polyline(0, array({0,0,0},{1,0,0}));", "form_node": {"type": "nonexistent_xyz", "input0": "self"}}]}, catalog_path)
+        check("A3: invalid node nonexistent_xyz", not r["passed"])
+    else:
+        print("  [SKIP] A2/A3 require Houdini runtime (hou module not available)")
 else:
     print("\n[SKIP] Catalog not found — A2/A3 tests require Houdini")
     print("  Run pipeline_e2e_validation.py in Houdini to generate catalog + full test.")

@@ -142,7 +142,7 @@ def _build_vex_skeleton(
         + code
     )
     wr.parm("snippet").set(full_code)
-    wr.parm("class").set(2)  # 2 = Detail mode
+    wr.parm("class").set("detail")  # H21: detail=0, use string token
 
     # form_node (Sweep / PolyExtrude)
     fn_type: str = form.get("type", "sweep::2.0")

@@ -99,11 +99,11 @@ recipe = {
     "asset_name": "validation_test",
     "components": [
         {"id": "base_box", "backend": "native_chain",
-         "nodes": [{"type": "box", "params": {"sizex": 2, "sizey": 0.5, "sizez": 1}},
-                   {"type": "attribwrangle", "params": {"class": 1, "snippet": "s@component_id = 'base_box';"}}]},
+         "nodes": [{"type": "box", "params": {"size": [2, 0.5, 1]}},
+                   {"type": "attribwrangle", "params": {"class": "primitive", "snippet": "s@component_id = 'base_box';"}}]},
         {"id": "pillar", "backend": "native_chain",
-         "nodes": [{"type": "box", "params": {"sizex": 0.3, "sizey": 0.3, "sizez": 0.3}},
-                   {"type": "attribwrangle", "params": {"class": 1, "snippet": "s@component_id = 'pillar';"}}],
+         "nodes": [{"type": "box", "params": {"size": [0.3, 0.3, 0.3]}},
+                   {"type": "attribwrangle", "params": {"class": "primitive", "snippet": "s@component_id = 'pillar';"}}],
          "anchors": [{"position": [2, 0.5, 0], "orient": [0,0,0,1], "pscale": 1.0, "component_id": "pillar_copy"}]}
     ],
     "postprocess": [],

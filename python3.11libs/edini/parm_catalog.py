@@ -101,7 +101,7 @@ class ParmCatalog:
                 # the same metadata houdini_node_parms returned previously.
                 for pt in nt.parmTemplates():
                     try:
-                        ptype = pt.type().name
+                        ptype = pt.type().name()
                     except Exception:
                         continue
                     # Skip folder/separator/button templates
@@ -131,9 +131,7 @@ class ParmCatalog:
                     }
                     if ptype == "Menu":
                         try:
-                            pdef["menu_items"] = [
-                                mi.label() for mi in (pt.menuItems() or [])
-                            ]
+                            pdef["menu_items"] = list(pt.menuItems() or [])
                         except Exception:
                             pdef["menu_items"] = []
                     entry["parms"][pt.name()] = pdef

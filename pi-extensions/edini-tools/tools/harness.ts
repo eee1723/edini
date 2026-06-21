@@ -58,9 +58,10 @@ export const houdiniRunPythonSandbox = {
     "Two modes: single-SOP (default) for code that emits geometry from one Python SOP, and network_mode for building a multi-node modular network (body_generate + copytopoints + merge + OUT).",
   promptSnippet: "Run Python code in a Houdini procedural sandbox",
   promptGuidelines: [
-    "ALWAYS use houdini_run_python_sandbox for initial procedural asset generation instead of raw houdini_run_python.",
+    "⚠️ DO NOT use this for multi-component assets with tubes, paths, hubs, or repeated parts. Use build_procedural_asset (declarative recipe) instead — it is the PREFERRED and CORRECT path for vehicles, furniture, bicycles, and any asset with swappable/repeated components. This tool is ONLY for non-standard topology that truly CANNOT be expressed as a recipe (fractal surfaces, generative art, one-off organic shapes). If you can decompose the asset into component_ids + anchors + postprocess, you MUST use build_procedural_asset.",
     "Single-SOP mode (network_mode=false, default): the code runs as the cook body of ONE edini_generate Python SOP. It MUST NOT call createNode() on child SOPs — doing so triggers Houdini's 'Infinite recursion in evaluation' guard. Only emit geometry via node.geometry().createPoint()/createPolygon() on the cooking node.",
-    "Network mode (network_mode=true): use this for ANY multi-component modular asset (bicycle, vehicle, furniture with swappable parts). The code runs in the sandbox geo CONTAINER, so it can build a multi-node network: container.createNode('python','body_generate'), container.createNode('copytopoints',...), container.createNode('merge'), container.createNode('null','OUT'). This is the ONLY mode that lets modular assets pass the commit structure/orientation gates through the sandbox instead of raw houdini_run_python.",
+    "Network mode (network_mode=true): use this ONLY when build_procedural_asset's recipe system genuinely cannot express the network topology. The code runs in the sandbox geo CONTAINER, so it can build a multi-node network: container.createNode('python','body_generate'), container.createNode('copytopoints',...), container.createNode('merge'), container.createNode('null','OUT').",
+    "If you are building a bicycle, vehicle, furniture, or any asset with tubes, hubs, wheels, spokes, or repeated parts, STOP — you MUST use build_procedural_asset with a recipe. Do NOT use network_mode for these assets.",
     "In network mode, use the injected `sandbox_root` variable (the geo container) or hou.node(sandbox_root_path) to create children, and end with a null/merge node named 'OUT' (or pass output_node_name). The harness auto-finds OUT, cooks it, and runs diagnostics on it.",
     "The sandbox result includes diagnostics and structural_checks (has_geometry, point_count, bounds_nonzero) — no need for separate inspect_geo or check_errors calls.",
     "Do not delete a failed sandbox before reviewing the diagnostics in the result.",
@@ -513,16 +514,16 @@ export const dumpParmCatalogTool = {
 
 export const harnessTools = [
   houdiniCollectDiagnostics,
+  buildProceduralAssetTool,
+  validateRecipeTool,
+  buildComponentTool,
+  assembleComponentsTool,
   houdiniRunPythonSandbox,
   houdiniVerifyAsset,
   verifyOrientationTool,
   commitSandboxTool,
   discardSandboxTool,
-  buildProceduralAssetTool,
   captureReviewTool,
   houdiniCaptureComponentDetail,
-  validateRecipeTool,
-  buildComponentTool,
-  assembleComponentsTool,
   dumpParmCatalogTool,
 ];

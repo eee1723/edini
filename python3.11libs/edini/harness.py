@@ -1281,9 +1281,9 @@ def _validate_recipe(recipe: Any) -> list[str]:
     param_names: set[str] = set()
     params = recipe.get("params")
     if params is not None:
-        if not isinstance(params, dict) or not params:
-            errors.append("recipe.params must be a non-empty object if present")
-        else:
+        if not isinstance(params, dict):
+            errors.append("recipe.params must be an object if present")
+        elif params:  # non-empty dict → validate entries
             for pname, pspec in params.items():
                 if not isinstance(pname, str) or not pname.strip():
                     errors.append(f"recipe.params key {pname!r} must be a non-empty string")
@@ -1295,10 +1295,17 @@ def _validate_recipe(recipe: Any) -> list[str]:
                 if not isinstance(pspec, dict):
                     errors.append(f"recipe.params[{pname!r}] must be an object")
                     continue
-                if "default" not in pspec or not isinstance(pspec["default"], (int, float)) \
-                        or isinstance(pspec["default"], bool):
-                    errors.append(
-                        f"recipe.params[{pname!r}].default must be a number")
+                kind = pspec.get("kind", "primary")
+                if kind != "derived":
+                    if "default" not in pspec or not isinstance(pspec["default"], (int, float)) \
+                            or isinstance(pspec["default"], bool):
+                        errors.append(
+                            f"recipe.params[{pname!r}].default must be a number")
+                else:
+                    if "from" not in pspec or not isinstance(pspec["from"], str) \
+                            or not pspec["from"].strip():
+                        errors.append(
+                            f"recipe.params[{pname!r}] (derived) requires 'from' expression")
                 for bound in ("min", "max"):
                     if bound in pspec and (not isinstance(pspec[bound], (int, float))
                                            or isinstance(pspec[bound], bool)):
@@ -1652,6 +1659,9 @@ def _install_spare_params(
         return result
     templates: list[Any] = []
     for name, spec in params_spec.items():
+        # Skip derived params — they are evaluated separately
+        if spec.get("kind") == "derived":
+            continue
         default = float(spec.get("default", 0.0))
         mn = spec.get("min")
         mx = spec.get("max")
@@ -1696,6 +1706,205 @@ def _install_spare_params(
             for name in result:
                 result[name]["installed"] = True
     return result
+
+
+def _evaluate_derived_params(
+    root: Any,
+    params_spec: dict[str, dict],
+    param_values: dict[str, float],
+    param_install: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Evaluate derived (kind: "derived") params and install as spare parms.
+
+    Derived params reference primary (or earlier derived) values via a
+    "from" expression, e.g.::
+
+        "seat_top_x": {"kind": "derived",
+                        "from": "seat_length * cos(radians(st_angle))"}
+
+    Evaluated in dependency order (topological sort).  The result is
+    installed as a spare float parm on the sandbox root so component
+    code reads it with hou.ch("../seat_top_x") — computed once, shared.
+
+    Returns {derived_values, errors, warnings, param_install}.
+    """
+    from collections import deque
+    import hou as _hou
+
+    derived_values: dict[str, float] = {}
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    # Separate derived from primary
+    derived_specs: dict[str, dict] = {}
+    for name, spec in params_spec.items():
+        kind = spec.get("kind", "primary")
+        if kind == "derived":
+            derived_specs[name] = spec
+
+    if not derived_specs:
+        return {"derived_values": {}, "errors": [], "warnings": [],
+                "param_install": param_install}
+
+    # Build dependency graph
+    graph: dict[str, list[str]] = {}  # name -> [dependencies]
+    for name, spec in derived_specs.items():
+        from_expr = spec.get("from", "")
+        if not from_expr:
+            errors.append(f"derived param '{name}' has no 'from' expression")
+            continue
+        try:
+            from edini.exprs import extract_refs
+            deps = extract_refs(from_expr)
+        except Exception:
+            deps = []
+        graph[name] = [d for d in deps if d in derived_specs]
+
+    # Topological sort (Kahn)
+    in_degree: dict[str, int] = {n: len(deps) for n, deps in graph.items()}
+    queue: deque[str] = deque(n for n, d in in_degree.items() if d == 0)
+    order: list[str] = []
+    while queue:
+        node = queue.popleft()
+        order.append(node)
+        for other, deps in graph.items():
+            if node in deps:
+                in_degree[other] -= 1
+                if in_degree[other] == 0:
+                    queue.append(other)
+
+    if len(order) != len(graph):
+        remaining = [n for n in graph if n not in order]
+        errors.append(f"derived param cycle detected among: {remaining}")
+        return {"derived_values": {}, "errors": errors, "warnings": [],
+                "param_install": param_install}
+
+    # Evaluate in topological order, installing each result
+    eval_bindings = dict(param_values)  # mutable dict fed to exprs.evaluate
+    for name in order:
+        spec = derived_specs[name]
+        from_expr = spec["from"]
+        try:
+            from edini.exprs import evaluate as eval_expr
+            value = eval_expr(from_expr, eval_bindings)
+        except Exception as e:
+            errors.append(f"derived param '{name}': cannot evaluate '{from_expr}': {e}")
+            continue
+        derived_values[name] = value
+        eval_bindings[name] = value
+
+        # Install as spare parm on root
+        label = spec.get("label", name)
+        try:
+            tmpl = _build_float_parm_template(_hou, name, label, value, -1000.0, 1000.0)
+            installed = _install_params_via_template_group(root, _hou, [tmpl])
+            if not installed:
+                try:
+                    grp = _hou.ParmTemplateGroup()
+                    grp.appendToFolder("Spare", tmpl)
+                    root.setSpareParmGroup(grp)
+                    installed = True
+                except Exception:
+                    pass
+            param_install[name] = {
+                "value": value,
+                "channel_path": f"{root.path()}/{name}",
+                "label": label,
+                "installed": installed,
+            }
+        except Exception as e:
+            warnings.append(f"derived param '{name}' spare parm install failed: {e}")
+            param_install[name] = {
+                "value": value,
+                "channel_path": f"{root.path()}/{name}",
+                "label": label,
+                "installed": False,
+            }
+
+    return {
+        "derived_values": derived_values,
+        "errors": errors,
+        "warnings": warnings,
+        "param_install": param_install,
+    }
+
+
+def add_parm(
+    node_path: str,
+    name: str,
+    type: str = "float",
+    default: float = 0.0,
+    min: float = 0.0,
+    max: float = 10.0,
+    label: str = "",
+) -> dict[str, Any]:
+    """Add a spare parameter to any Houdini node.
+
+    Creates a FloatParmTemplate on the target node using the H21-compatible
+    read-merge pattern. Returns the channel path so component code can
+    reference it via hou.ch().
+
+    Args:
+        node_path: Absolute path like "/obj/road_bike_phase1"
+        name: Parameter name (e.g. "wheel_radius")
+        type: "float" (only float supported currently)
+        default: Default value
+        min: Minimum slider value
+        max: Maximum slider value
+        label: UI label (defaults to name)
+
+    Returns:
+        {"success": True, "channel_path": "/obj/.../wheel_radius",
+         "node_path": "...", "parm_name": "...", "value": 0.5}
+    """
+    import hou as _hou
+    node = _hou.node(node_path)
+    if node is None:
+        return {"success": False, "error": f"Node not found: {node_path}"}
+    if not name or not name.strip():
+        return {"success": False, "error": "name must be a non-empty string"}
+    name = name.strip()
+    lbl = label.strip() if label else name
+    try:
+        # Check if parm already exists
+        existing = node.parm(name)
+        if existing is not None:
+            return {
+                "success": True,
+                "already_exists": True,
+                "node_path": node_path,
+                "parm_name": name,
+                "channel_path": f"{node_path}/{name}",
+                "value": existing.eval(),
+            }
+        # Build template
+        tmpl = _build_float_parm_template(_hou, name, lbl, float(default), float(min), float(max))
+        installed = _install_params_via_template_group(node, _hou, [tmpl])
+        if not installed:
+            # Fall back to legacy spare parm group
+            try:
+                grp = _hou.ParmTemplateGroup()
+                grp.appendToFolder("Spare", tmpl)
+                node.setSpareParmGroup(grp)
+                installed = True
+            except Exception:
+                pass
+        if not installed:
+            return {"success": False, "error": f"Could not install parm '{name}' on {node_path}"}
+        # Set expression to None (use raw value)
+        p = node.parm(name)
+        if p is not None:
+            p.set(float(default))
+        return {
+            "success": True,
+            "node_path": node_path,
+            "parm_name": name,
+            "channel_path": f"{node_path}/{name}",
+            "value": float(default),
+            "label": lbl,
+        }
+    except Exception as e:
+        return {"success": False, "error": f"add_parm('{name}') failed: {e}"}
 
 
 def _resolve_anchor_exprs(
@@ -1847,7 +2056,19 @@ def _post_create_init(node) -> None:
 
 
 def _set_parm_safe(node, parm_name: str, value: Any) -> None:
-    """Set a parm, raising a clear error if the parm is missing."""
+    """Set a parm, raising a clear error if the parm is missing.
+
+    For multi-component values (list/tuple), uses ``parmTuple`` which
+    decomposes to individual sub-parms (e.g. ``size`` → ``sizex/sizey/sizez``
+    on box nodes). Single values use ``parm`` directly.
+    """
+    # Multi-component path (e.g. "size": [2, 0.5, 1] on box)
+    if isinstance(value, (list, tuple)) and len(value) > 1:
+        ptuple = node.parmTuple(parm_name)
+        if ptuple is not None:
+            ptuple.set(tuple(float(v) for v in value))
+            return
+    # Single-value path (also the fallback for single-element lists)
     parm = node.parm(parm_name)
     if parm is None:
         raise RuntimeError(
@@ -2010,7 +2231,8 @@ def _component_id_overwrite_snippet(
     header = (
         "node = hou.pwd()\n"
         "geo = node.geometry()\n"
-        "geo.addAttrib(hou.attribType.Prim, 'component_id', '')\n"
+        "if geo.findPrimAttrib('component_id') is None:\n"
+        "    geo.addAttrib(hou.attribType.Prim, 'component_id', '')\n"
         "anchor_ids = " + ids_repr + "\n"
         "world_axes = " + axes_repr + "\n"
         "n_anchors = len(anchor_ids)\n"
@@ -2156,58 +2378,106 @@ def _build_vex_skeleton_component(
     anchors: list,
     param_values: dict[str, float],
 ) -> Any:
-    """Build a vex_skeleton component: wrangle (Detail, VEX) → form_node.
+    """Build a vex_skeleton component.
+
+    Single-wrangle mode (no section_code):
+      wrangle (profile) → form_node (polyextrude::2.0 by default)
+
+    Dual-wrangle mode (section_code present):
+      wrangle_path ──┐
+                      ├→ sweep::2.0 (endcaptype=1) → tag
+      wrangle_section ┘
 
     The VEX code emits skeletons (polylines with @pscale).
-    The form_node (sweep::2.0 or polyextrude::2.0) closes the geometry.
-    Returns the form_node.
+    The form_node closes the geometry.
+    Returns the tag node.
     """
     code = comp.get("code", "")
+    section_code = comp.get("section_code", "")
     form = comp.get("form_node")
     if not form:
         raise RuntimeError(
             f"vex_skeleton component '{cid}' requires form_node")
-    fn_type = form.get("type", "sweep::2.0")
+    fn_type = form.get("type", "polyextrude::2.0")
     from edini.parm_catalog import NODE_ALIASES
     canonical_fn = NODE_ALIASES.get(fn_type, fn_type)
 
-    # ── Wrangle (Detail mode) ──
-    wr_name = f"{cid}_wrangle"
-    wr = _safe_create_node(root_path, "attribwrangle", wr_name)
-    wr.parm("class").set(2)  # Detail mode
-    # Inject VEX code (auto-prepend vexlib includes if needed)
-    vex_code = code
-    if "#include" not in code and ("make_polyline" in code or "make_circle" in code):
-        vex_code = (
-            "#include <vexlib/skeleton.vfl>\n"
-            "#include <vexlib/sections.vfl>\n" + code
-        )
-    # Install spare parms on the wrangle for ch() access in VEX
     reads = comp.get("reads") or []
-    for pname in reads:
-        if pname in param_values:
-            try:
-                ptg = wr.parmTemplateGroup()
-                if not ptg.find(pname):
-                    t = hou.FloatParmTemplate(pname, pname, 1,
-                        (param_values[pname],), 0, 100)
-                    ptg.append(t)
-                    wr.setParmTemplateGroup(ptg)
-                # Set expression to read from container
-                wr.parm(pname).setExpression(f'ch("../../{pname}")')
-            except Exception:
-                pass  # non-fatal — VEX will read default value
-    _set_parm_safe(wr, "snippet", vex_code)
 
-    # ── Form node (sweep or polyextrude) ──
-    fn_name = f"{cid}_form"
-    fn = _safe_create_node(root_path, canonical_fn, fn_name)
-    fn.setInput(0, wr)
+    # ── Helper: create a wrangle with spare parms ──
+    def _make_wrangle(name, vex_code, extra_reads=None):
+        wr = _safe_create_node(root_path, "attribwrangle", name)
+        wr.parm("class").set("detail")
+        if "#include" not in vex_code and ("make_polyline" in vex_code or "make_circle" in vex_code):
+            vex_code = (
+                "#include <vexlib/skeleton.vfl>\n"
+                "#include <vexlib/sections.vfl>\n" + vex_code
+            )
+        all_reads = reads + (extra_reads or [])
+        for pname in all_reads:
+            if pname in param_values:
+                try:
+                    ptg = wr.parmTemplateGroup()
+                    if not ptg.find(pname):
+                        t = hou.FloatParmTemplate(pname, pname, 1,
+                            (param_values[pname],), 0, 100)
+                        ptg.append(t)
+                        wr.setParmTemplateGroup(ptg)
+                    wr.parm(pname).setExpression(f'ch("../{pname}")')
+                except Exception:
+                    pass
+        _set_parm_safe(wr, "snippet", vex_code)
+        return wr
+
+    # ── Dual-wrangle mode: path + section → Sweep ──
+    if section_code:
+        wr_path = _make_wrangle(f"{cid}_path", code)
+        wr_section = _make_wrangle(f"{cid}_section", section_code)
+
+        fn_name = f"{cid}_sweep"
+        fn = _safe_create_node(root_path, canonical_fn, fn_name)
+        fn.setInput(0, wr_path)
+        fn.setInput(1, wr_section)
+        fn_params = form.get("params") or {}
+        for pname, pvalue in fn_params.items():
+            if isinstance(pvalue, str) and ('ch(' in pvalue or 'chf(' in pvalue):
+                try:
+                    fn.parm(pname).setExpression(pvalue)
+                except Exception:
+                    _set_parm_safe(fn, pname, pvalue)
+            else:
+                _set_parm_safe(fn, pname, pvalue)
+
+        # component_id tag
+        tag_name = f"{cid}_tag"
+        tag = _safe_create_node(root_path, "attribwrangle", tag_name)
+        tag.setInput(0, fn)
+        tag.parm("class").set("primitive")
+        tag.parm("snippet").set(f's@component_id = "{cid}";')
+        return tag
+
+    # ── Single-wrangle mode: profile → PolyExtrude ──
+    wr = _make_wrangle(f"{cid}_wrangle", code)
     fn_params = form.get("params") or {}
     for pname, pvalue in fn_params.items():
-        _set_parm_safe(fn, pname, pvalue)
+        # Support ch() channel expressions for parametric dimensions.
+        if isinstance(pvalue, str) and ('ch(' in pvalue or 'chf(' in pvalue):
+            try:
+                fn.parm(pname).setExpression(pvalue)
+            except Exception:
+                _set_parm_safe(fn, pname, pvalue)
+        else:
+            _set_parm_safe(fn, pname, pvalue)
 
-    return fn
+    # ── component_id tag (PolyExtrude/Sweep strip prim attrs from source) ──
+    tag_name = f"{cid}_tag"
+    tag = _safe_create_node(root_path, "attribwrangle", tag_name)
+    tag.setInput(0, fn)
+    # Use attribwrangle (prim mode) to re-tag component_id
+    tag.parm("class").set("primitive")
+    tag.parm("snippet").set(f's@component_id = "{cid}";')
+
+    return tag
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -2376,6 +2646,24 @@ def build_procedural_asset(
                                 "component channel refs may not bind")
                 param_values = {n: float(spec.get("default", 0.0))
                                 for n, spec in params_spec.items()}
+
+        # ── A2-station (continued): evaluate derived params ──
+        # Primary params are installed.  Derived params declare a "from"
+        # expression that references primary (or earlier derived) values.
+        # Evaluate in dependency order (topological sort via Kahn) and
+        # install each derived value as a spare parm too, so component
+        # code reads them via hou.ch("../seat_top_x") just like primaries.
+        if params_spec:
+            derived_report = _evaluate_derived_params(
+                root, params_spec, param_values, param_install)
+            if derived_report.get("errors"):
+                errors_runtime.extend(derived_report["errors"])
+            if derived_report.get("warnings"):
+                warnings.extend(derived_report["warnings"])
+            # Refresh param_values with derived results for anchor expression eval
+            for n, v in derived_report.get("derived_values", {}).items():
+                param_values[n] = v
+            param_install = derived_report.get("param_install", param_install)
 
 
         # ── 1. Build one python SOP per component ──

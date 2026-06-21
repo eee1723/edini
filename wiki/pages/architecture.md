@@ -1,6 +1,6 @@
 # 🏗️ 架构地图：Edini 智能体完整框架
 
-<span class="badge badge-done">稳定</span> 最后更新：2026-06-07 · 21 工具 · 3 扩展 · 33 测试通过 · 上下文自动注入<br>
+<span class="badge badge-done">稳定</span> 最后更新：2026-06-21 · 30+ 工具 · 4 扩展 · 478 测试通过 · 三阶段管道 · 上下文自动注入<br>
 <small>本页是智能体架构的**权威参考**，任何变更必须同步更新。</small>
 
 <div style="display: flex; align-items: center; gap: 8px; margin: 12px 0 0; font-size: 13px; color: var(--text-muted);">
@@ -29,8 +29,8 @@ function switchLang(lang) {
 <div class="cards">
 <div class="card">
   <div class="card-title">Houdini 工具</div>
-  <div class="card-value">21</div>
-  <small>13 场景 + 4 查询 + 4 脚本/HDA</small>
+  <div class="card-value">30+</div>
+  <small>13 场景 + 5 查询 + 3 脚本/HDA + 11 Harness</small>
 </div>
 <div class="card">
   <div class="card-title">Pi 扩展</div>
@@ -54,8 +54,8 @@ function switchLang(lang) {
 </div>
 <div class="card">
   <div class="card-title">测试</div>
-  <div class="card-value">33</div>
-  <small>全部通过</small>
+  <div class="card-value">478</div>
+  <small>425 mock + 53 Houdini hython</small>
 </div>
 </div>
 

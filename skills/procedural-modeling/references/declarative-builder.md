@@ -77,6 +77,119 @@ Each component's `code` is a **single Python SOP cook body**. It MUST:
 
 The builder **post-checks** `component_id` presence on the cooked OUT and reports any missing ids in `component_id_check.missing`.
 
+## Backend: `vex_skeleton` (tube / pipe / bar geometry)
+
+For tube/pipe/path geometry, use `backend: "vex_skeleton"` instead of Python.
+The VEX code emits **skeletons only** (polylines, never closed polygons).
+The `form_node` closes the geometry via PolyExtrude or Sweep.
+
+### Single-wrangle mode (profile → PolyExtrude)
+
+Create a closed face profile in VEX. The form_node extrudes it.
+The `dist` parm supports **channel expressions** for parametric length:
+
+```jsonc
+{
+  "id": "pillar",
+  "backend": "vex_skeleton",
+  "code": "float r = ch(\"radius\")/2.0; int sides=16; int pts[];\nfor(int i=0;i<sides;i++){float a=2.0*M_PI*float(i)/float(sides);int pt=addpoint(0,set(r*cos(a),r*sin(a),0));push(pts,pt);}\nint prim=addprim(0,\"poly\");for(int i=0;i<len(pts);i++)addvertex(0,prim,pts[i]);",
+  "form_node": {
+    "type": "polyextrude::2.0",
+    "params": {"dist": "ch('../length')", "outputback": 1, "divs": 2}
+  },
+  "reads": ["radius", "length"]
+}
+```
+
+**IMPORTANT:** Use `addprim(0, "poly")` to create a polygon FACE, not `"polyline"`.
+PolyExtrude extrudes faces, not curves. The `ch('../param')` expression in
+form_node params reads from the sandbox root (one level up).
+
+### Dual-wrangle mode (path + section → Sweep) — PREFERRED for tubes
+
+For tubes between two 3D points, use the dual-wrangle Sweep pattern.
+Add a `section_code` field containing VEX for the cross-section profile.
+The `code` field defines the backbone path. The form_node is `sweep::2.0`:
+
+```jsonc
+{
+  "id": "frame_tube",
+  "backend": "vex_skeleton",
+  "code": "float x1=ch(\"end_x\");float y1=ch(\"end_y\");int p0=addpoint(0,set(0,0,0));int p1=addpoint(0,set(x1,y1,0));int prim=addprim(0,\"polyline\");addvertex(0,prim,p0);addvertex(0,prim,p1);",
+  "section_code": "float r=ch(\"tube_od\")/2.0;int n=16;int pts[];for(int i=0;i<n;i++){float a=2.0*M_PI*float(i)/float(n);int pt=addpoint(0,set(r*cos(a),0,r*sin(a)));push(pts,pt);}int pr=addprim(0,\"polyline\");for(int i=0;i<len(pts);i++)addvertex(0,pr,pts[i]);addvertex(0,pr,pts[0]);",
+  "form_node": {"type": "sweep::2.0", "params": {"surfacetype": 2, "endcaptype": 1}},
+  "reads": ["end_x", "end_y", "tube_od"]
+}
+```
+
+- `code` = path wrangle (Detail mode): creates a polyline from start to end.
+  Use `ch("param")` to read spared parms (auto-installed from `reads`).
+- `section_code` = cross-section wrangle: creates a closed polyline in the
+  XZ plane. Sweep automatically rotates it perpendicular to the path.
+- `form_node.type` = `"sweep::2.0"` with `surfacetype=2` (tube) and
+  `endcaptype=1` (cap both ends) for a perfectly closed pipe.
+- For twin tubes (chain stays, seat stays), create TWO polylines in `code`.
+
+This pattern produces **perfect closed tube geometry** with correct normals —
+no vertex winding errors, no open boundaries. It is the preferred method for
+ALL tube/pipe/frame components.
+
+## Backend: `native_chain` (simple shapes)
+
+For cylinders, boxes, hubs, pedals — combine native Houdini SOPs:
+
+```jsonc
+{
+  "id": "hub",
+  "backend": "native_chain",
+  "nodes": [
+    {"type": "tube", "params": {"rad": [0.025, 0.025], "height": 0.06, "rows": 3, "cols": 16}},
+    {"type": "fuse", "params": {"dist": 0.0001}},
+    {"type": "attribwrangle", "params": {"class": 1, "snippet": "s@component_id = \"hub\";"}}
+  ]
+}
+```
+
+- `nodes` is an ordered chain of SOPs, wired input-0 to previous.
+- The last node's output enters the merge or CTP chain.
+- `attribwrangle` with `s@component_id` tags all prims.
+
+## Derived Parameters (computed once, shared globally)
+
+Params can be `"kind": "derived"` — their value is computed from an expression
+referencing primary (or earlier derived) params. The expression is evaluated ONCE
+at build time and installed as a spare parm, so ALL components read the same
+pre-computed value via `hou.ch("../derived_name")`:
+
+```jsonc
+"params": {
+  "wheel_r":      {"default": 0.35, "kind": "primary"},
+  "bb_drop":      {"default": 0.07, "kind": "primary"},
+  "bb_height":    {"kind": "derived", "from": "wheel_r - bb_drop"},
+  "seat_top_x":   {"kind": "derived", "from": "0.52 * cos(radians(st_angle))"}
+}
+```
+
+- Primary params need `default` (and optionally `min`/`max` for sliders).
+- Derived params need `from` (a safe expression referencing other params).
+- The expression engine supports: arithmetic `+ - * / % **`, `sin cos tan sqrt abs min max atan2 radians degrees`, constants `pi e tau`.
+- Dependency graph is validated: cycles are rejected, orphans are warned.
+- ALL components read derived params via `hou.ch("../param")` — one
+  computation, N consumers, zero redundancy.
+
+## `add_parm` tool — quick parameter creation
+
+Add a new parameter to any node at runtime (Houdini Python Shell):
+
+```python
+from edini.harness import add_parm
+add_parm("/obj/my_asset", "crank_len", default=0.17, min=0.15, max=0.20, label="Crank Length")
+# => {"success": True, "channel_path": "/obj/my_asset/crank_len", "value": 0.17}
+```
+
+- Creates a spare float parameter on the target node.
+- Returns the channel path for immediate use in `hou.ch()`.
+
 ## Anchor semantics
 - `position`: world-space `[x, y, z]` where the stamp lands.
 - `orient`: quaternion `[x, y, z, w]` (NOT Euler). Identity = `[0,0,0,1]`.

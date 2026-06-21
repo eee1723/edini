@@ -303,7 +303,7 @@ _VEX_BLOCKING_PATTERNS = [
 
 _VEX_WARNING_PATTERNS = [
     (
-        "A4_VEX_NO_DETAIL",
+        "A4_VEX_NO_DETAIL_WARNING",
         re.compile(r'addpoint\b'),
         "Code contains addpoint() but no '// Run Over: Detail' marker. If this runs in Point mode, geometry explodes by N².",
     ),
@@ -553,6 +553,115 @@ def _validate_a6_dependency_graph(recipe: dict) -> tuple[list[dict], dict | None
 
 
 # ═══════════════════════════════════════════════════════════════
+#  A7 — Backend Appropriateness (Heuristic)
+# ═══════════════════════════════════════════════════════════════
+
+# Patterns in Python code that indicate the wrong backend was chosen
+_TUBE_PATTERNS = [
+    # math.cos/math.sin in a loop with createPoint/createPolygon → tube/cylinder code
+    # that should use vex_skeleton or native_chain
+    re.compile(r'for\s+\w+\s+in\s+range.*?math\.(?:cos|sin)', re.DOTALL),
+]
+
+_SIMPLE_SOLID_PATTERNS = [
+    # for loop creating quads via createPolygon + createPoint pattern
+    # → simple geometric shape that should use native_chain template
+    re.compile(r'createPolygon\s*\(\s*\)\s*;', re.DOTALL),
+]
+
+_LOOP_GEOMETRY_PATTERNS = [
+    # for i in range(N) creating geometry inside → likely repeated part
+    # that should use CTP
+    re.compile(r'for\s+\w+\s+in\s+range\s*\([^)]+\)\s*:.*?(?:createPolygon|createPoint|addVertex)', re.DOTALL),
+]
+
+# Geometry type hints from component_id naming conventions
+_TUBE_COMPONENT_NAMES = re.compile(r'(tube|fork|handlebar|stem|seatpost|cable|pipe|bar|rail|beam)', re.IGNORECASE)
+_SIMPLE_COMPONENT_NAMES = re.compile(r'(hub|pedal|brake|crank|cassette|chainring|gear|disc|cylinder|box|spoke)', re.IGNORECASE)
+
+
+def _validate_a7_backend_appropriateness(recipe: dict) -> list[dict]:
+    """Heuristic check: detect Python components that should use vex_skeleton or native_chain.
+
+    This is NOT a hard compiler check — it is a heuristic. But it catches the
+    most common violation: building tubes/hubs/bicycle frames entirely in Python.
+    """
+    errors: list[dict] = []
+
+    total_python = 0
+    total_components = 0
+
+    for i, comp in enumerate(recipe.get("components", [])):
+        cid = comp.get("id", f"@index_{i}")
+        backend = comp.get("backend", "python")
+        code = comp.get("code", "")
+        loc: dict[str, Any] = {"component_index": i, "component_id": cid, "backend": backend}
+        total_components += 1
+
+        if backend != "python" or not code:
+            continue
+
+        total_python += 1
+
+        # ── Check 1: Component name suggests tube → should be vex_skeleton ──
+        if _TUBE_COMPONENT_NAMES.search(cid):
+            errors.append(_error(
+                "A7_BACKEND_WARNING",
+                f"Component '{cid}' name suggests tube/pipe/bar geometry. "
+                f"Tube geometry MUST use vex_skeleton, not python. "
+                f"See component-building skill: Backend 红线.",
+                {**loc, "hint": "Use vex_skeleton backend for this component"}
+            ))
+
+        # ── Check 2: Component name suggests simple solid → should be native_chain ──
+        if _SIMPLE_COMPONENT_NAMES.search(cid):
+            errors.append(_error(
+                "A7_BACKEND_WARNING",
+                f"Component '{cid}' name suggests simple geometric shape (hub/brake/pedal/etc). "
+                f"Simple geometry MUST use native_chain templates, not python. "
+                f"See prebuilt-templates.md for ready-to-use templates.",
+                {**loc, "hint": "Use native_chain backend with a prebuilt template for this component"}
+            ))
+
+        # ── Check 3: Code contains math.cos/sin in a loop → tube-like generation ──
+        for pattern in _TUBE_PATTERNS:
+            if pattern.search(code):
+                errors.append(_error(
+                    "A7_BACKEND_WARNING",
+                    f"Component '{cid}' code contains math.cos/math.sin in a loop — "
+                    f"likely generating tube/cylinder geometry by hand. "
+                    f"Tube/path geometry MUST use vex_skeleton + sweep::2.0. "
+                    f"Simple cylinders/hubs MUST use native_chain (tube SOP template).",
+                    {**loc, "hint": "Replace Python loop with vex_skeleton (tube) or native_chain template (hub/cylinder)"}
+                ))
+
+        # ── Check 4: Code has for-loop generating geometry → repeated part ──
+        for pattern in _LOOP_GEOMETRY_PATTERNS:
+            if pattern.search(code):
+                errors.append(_error(
+                    "A7_BACKEND_WARNING",
+                    f"Component '{cid}' code contains a loop that generates geometry — "
+                    f"likely a repeated part that should use CTP (Copy-to-Points). "
+                    f"Repeated geometry ≥2 copies MUST use native_chain template + CTP anchors, "
+                    f"not Python for-loops.",
+                    {**loc, "hint": "Use native_chain template + CTP anchors instead of for-loop"}
+                ))
+
+    # ── Global Python gate: >20% python components → warning ──
+    if total_components > 0 and total_python / total_components > 0.2:
+        errors.append(_error(
+            "A7_PYTHON_GATE_WARNING",
+            f"{total_python}/{total_components} components ({total_python/total_components:.0%}) use python backend. "
+            f"The iron law allows python for at most 20% of components (organic surfaces only). "
+            f"Review: can any python components be converted to vex_skeleton (tubes) or native_chain (simple shapes)?",
+            {"python_count": total_python, "total_count": total_components,
+             "python_ratio": round(total_python / total_components, 2)}
+        ))
+
+    return errors
+
+
+# ═══════════════════════════════════════════════════════════════
 #  Main entry point
 # ═══════════════════════════════════════════════════════════════
 
@@ -590,6 +699,8 @@ def validate_recipe(
 
     dep_errors, dep_graph = _validate_a6_dependency_graph(recipe)
     all_errors.extend(dep_errors)
+
+    all_errors.extend(_validate_a7_backend_appropriateness(recipe))
 
     # ── Summarize ──
     blocking = [e for e in all_errors if e["severity"] == "BLOCKING"]

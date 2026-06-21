@@ -236,7 +236,39 @@ _on_pi_session_switched → 设置session_path → flush(写入!) → 清零pend
 ## 参考
 
 - [架构地图](architecture.html) — 了解系统边界避免踩坑
-- [工具清单](tools.html) — 16 个工具的正确使用方式
+- [工具清单](tools.html) — 30+ 个工具的正确使用方式
+
+### H21 parm 参数名变更（2026-06-21 验证）
+
+- **分类**: Houdini 操作 / H21 兼容
+- **优先级**: 高
+- **状态**: 已修复
+
+H21 多个 SOP 节点的参数命名与旧版不同：
+- `box` 用 `sizex/sizey/sizez`（独立 Float）而非单 `size` 向量；parmTemplate 层面有 `size`(Float,3-comp) 但 `node.parm("size")` 返回 None，必须用 `parmTuple("size")` 或单独设 `sizex/sizey/sizez`
+- `xform` 用 `t`（3-float translate）而非 `tx/ty/tz`
+- `attribwrangle.class` menu 排序变化：H21 = detail(0)/primitive(1)/point(2)/vertex(3)/number(4)。旧硬编码 `class=2` 误选中 point 模式而非 detail
+- `sweep::2.0` 默认 `surfaceshape=input` 需要 input-1 横截面几何体；设为 `tube` 才自动生成管状横截面
+- `circle` 用 `radx/rady` 而非 `rad`
+**解决**：`_set_parm_safe` 自动检测多分量值走 `parmTuple`；VEX wrangle 改用字符串 token `"detail"`；sweep recipe 加 `surfaceshape: "tube"`。Phase A 参数目录校验在 cook 前拦截不存在的参数名。
+
+### menuItems() 返回字符串列表而非对象（H21）
+
+- **分类**: Houdini API
+- **优先级**: 中
+- **状态**: 已修复
+
+`pt.menuItems()` 在 H21 返回 `tuple[str]`，不是对象列表。旧代码调 `mi.label()` 出错被静默吞掉，导致菜单项列表为空。
+**解决**：直接用 `list(pt.menuItems() or [])`。
+
+### parmTemplateType.name 不含括号
+
+- **分类**: Houdini API
+- **优先级**: 高
+- **状态**: 已修复
+
+`pt.type().name` 返回 bound method 对象而非类型名字符串。正确调用是 `pt.type().name()`。
+此 bug 导致参数目录中所有 type 字段存储为 `<bound method EnumValue.name of parmTemplateType.Float>` 而非 `"Float"`，Menu 验证完全失效。
 
 ### Python createNode 不会应用 Tab 菜单预设
 

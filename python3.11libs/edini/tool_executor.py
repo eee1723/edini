@@ -33,6 +33,7 @@ from edini.harness import (
     validate_recipe_tool,
     build_component_tool,
     assemble_components_tool,
+    add_parm,
 )
 
 # Knowledge and eval handlers (available only in Houdini runtime)
@@ -231,7 +232,35 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     "edini_get_eval_stats": lambda **kw: _edini_get_eval_stats(
         period=kw.get("period", 10),
     ),
+    "add_parm": lambda **kw: add_parm(
+        node_path=kw["node_path"],
+        name=kw["name"],
+        type=kw.get("type", "float"),
+        default=kw.get("default", 0.0),
+        min=kw.get("min", 0.0),
+        max=kw.get("max", 10.0),
+        label=kw.get("label", ""),
+    ),
 }
+
+# Backward-compatibility tool aliases (pre-Task-7 rename).
+# Old names map to new canonical handlers so existing Pi extension configs
+# and scripts don't break after the tool-surface cleanup.
+_TOOL_ALIASES: dict[str, str] = {
+    "houdini_build_procedural_asset": "build_procedural_asset",
+    "houdini_commit_sandbox": "commit_sandbox",
+    "houdini_discard_sandbox": "discard_sandbox",
+    "houdini_verify_orientation": "verify_orientation",
+    "houdini_capture_review": "capture_review",
+    "houdini_node_parms": "query_parms",
+    "houdini_inspect_geometry_health": "inspect_health",
+    "houdini_geometry_inventory": "geometry_inventory",
+}
+
+# Patch aliases into the handler table so dispatch works transparently.
+for _alias, _target in _TOOL_ALIASES.items():
+    if _target in TOOL_HANDLERS:
+        TOOL_HANDLERS[_alias] = TOOL_HANDLERS[_target]
 
 
 

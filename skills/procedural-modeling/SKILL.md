@@ -8,6 +8,24 @@ license: MIT
 
 轻量路由。不包含规则，只判断当前阶段并指向正确的专用技能。
 
+## ⛔ 强制门控（构建路径硬性规则）
+
+多组件程序化资产（车辆、家具、自行车、机械装置等）**严禁**使用
+`houdini_run_python_sandbox(network_mode=true)`。必须走声明式 Recipe 管道：
+
+```
+build_procedural_asset(recipe)  ← 唯一正确入口
+  → validate_recipe → build_component → assemble_components → commit_sandbox
+```
+
+`houdini_run_python_sandbox` 仅允许以下场景：
+- **单 SOP 模式**（默认）：真正的单体生成器（一个分形、一个参数曲面）
+- **network_mode**：仅在 recipe 框架**确实无法表达**的非标准拓扑时可用，
+  且必须在代码注释中说明「为何 recipe 无法表达」
+
+**如果你在构建一个有多组件、可替换件、管材、轮毂、辐条、
+或任何重复 ≥2 次的元素的资产：STOP — 你必须用 `build_procedural_asset`。**
+
 ## 管道阶段判断
 
 ```
