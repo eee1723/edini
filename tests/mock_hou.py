@@ -34,6 +34,19 @@ class MockParm:
     def set(self, value: Any) -> None:
         self._value = value
 
+    def setExpression(self, expr: str, language: Any = None) -> None:
+        """Mock of hou.Parm.setExpression — records the expression string.
+
+        Real Houdini evaluates the expression on cook; the mock just stores it
+        so unit tests can verify a channel reference (e.g. ch("../wheel_r"))
+        was wired. Many builder paths call setExpression inside try/except,
+        so without this the unit tests would pass even when the expression
+        fails to install."""
+        self._expression = expr
+
+    def expression(self) -> str:
+        return getattr(self, "_expression", "")
+
     def pressButton(self) -> None:
         pass
 
@@ -657,6 +670,15 @@ class MockNode:
         return self._name
 
     def setName(self, name: str, unique_name: bool = False) -> None:
+        # Mirror real Houdini's node-name validation: names may only contain
+        # letters, digits, underscores. :: and . are illegal. This makes
+        # dynamic-naming bugs (e.g. postprocess node names built from a type
+        # string like "fuse::2.0") fail in unit tests, not only under hython.
+        import re as _re
+        if not isinstance(name, str) or not _re.fullmatch(r"[A-Za-z0-9_]+", name):
+            raise MockNode._hou_ref.InvalidNodeName(
+                f"Invalid node name: {name!r}. Houdini node names may only "
+                f"contain letters, digits, and underscores.")
         old_paths = {node: node._path for node in self.allSubChildren()}
         self._name = name
 
@@ -738,6 +760,16 @@ class MockNode:
             node._outputs.append(self)
 
     def createNode(self, node_type_name: str, node_name: str | None = None) -> MockNode:
+        # When an explicit node_name is supplied it must be a legal Houdini
+        # node name (letters/digits/underscores only). Type names may legally
+        # contain :: (e.g. "fuse::2.0" is a valid type), and Houdini sanitizes
+        # the default name itself when node_name is None — so we only validate
+        # the explicit case, mirroring real Houdini's behaviour.
+        import re as _re
+        if node_name is not None and not _re.fullmatch(r"[A-Za-z0-9_]+", node_name):
+            raise MockNode._hou_ref.InvalidNodeName(
+                f"Invalid node name: {node_name!r}. Houdini node names may only "
+                f"contain letters, digits, and underscores.")
         actual_name = node_name or node_type_name
         child_path = f"{self._path}/{actual_name}"
         child = MockNode(child_path, actual_name, node_type_name, parent=self)
@@ -1066,6 +1098,25 @@ def _make_normal_ptg():
     return g
 
 
+def _make_sweep_ptg():
+    """Sweep 2.0 parm template group (subset relevant to the builder).
+
+    The builder forces ``surfaceshape=0`` when a section_code is present
+    (dual-wrangle mode), because any non-zero surfaceshape (1=roundtube,
+    2=extrude) makes Sweep ignore the second-input cross-section. Exposing
+    ``surfaceshape`` as a mock parm lets unit tests verify the enforcement.
+    Also includes ``surfacetype`` and ``endcaptype`` used by recipes."""
+    g = MockParmTemplateGroup()
+    g.append(MockMenuParmTemplate("surfaceshape", "Surface Shape",
+                                  ["splines", "roundtube", "extrude"],
+                                  default=0))
+    g.append(MockMenuParmTemplate("surfacetype", "Surface Type",
+                                  ["interpolating", "noninterp"], default=2))
+    g.append(MockMenuParmTemplate("endcaptype", "End Caps",
+                                  ["noends", "onend", "bothends"], default=1))
+    return g
+
+
 def _make_copytopoints_ptg():
     """Copy to Points 2.0 parm template group (H21.0.440 structure).
 
@@ -1221,6 +1272,9 @@ class MockHou:
             "normal": MockNodeType(
                 "normal", "Normal", "Sop", 1, 0,
                 parm_template_group=_make_normal_ptg()),
+            "sweep": MockNodeType(
+                "sweep::2.0", "Sweep", "Sop", 2, 1,
+                parm_template_group=_make_sweep_ptg()),
         })
         obj_cat = MockCategory("Object", {
             "geo": MockNodeType("geo", "Geometry", "Object", 1, 0),
@@ -1306,6 +1360,14 @@ class MockHou:
         return self._HDA(self._hda_definitions)
 
     class OperationFailed(Exception):
+        pass
+
+    class InvalidNodeName(Exception):
+        """Mock of hou.InvalidNodeName — raised by setName/createNode on
+        illegal node names (containing ::, ., etc). Mirrors real Houdini's
+        node-name validation so dynamic-naming bugs (e.g. postprocess node
+        named ``post_0_fuse::2.0``) surface in unit tests instead of only
+        under real hython."""
         pass
 
 

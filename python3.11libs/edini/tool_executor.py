@@ -28,6 +28,7 @@ from edini.harness import (
     commit_sandbox,
     discard_sandbox,
     build_procedural_asset,
+    rebuild_component,
     build_variant_scatter,
     dump_parm_catalog,
     validate_recipe_tool,
@@ -197,6 +198,11 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
         kw["recipe"],
         sandbox_name=kw.get("sandbox_name"),
         delete_on_failure=kw.get("delete_on_failure", False),
+    ),
+    "rebuild_component": lambda **kw: rebuild_component(
+        kw["sandbox_root_path"],
+        kw["component_id"],
+        kw["component_spec"],
     ),
     "houdini_variant_scatter": lambda **kw: build_variant_scatter(
         kw["recipe"],

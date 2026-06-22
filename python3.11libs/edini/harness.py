@@ -16,6 +16,13 @@ import hou
 EXECUTION_MODE_LIVE = "live_sandbox"
 
 
+# Dual-wrangle sweep (section_code present) forces surfaceshape=0. When the
+# recipe explicitly set a non-zero surfaceshape, the conflicting cid is
+# recorded here so build_procedural_asset can turn it into a warning. Reset
+# at the start of each build.
+_SWEEP_SURFACESHAPE_CONFLICTS: list[str] = []
+
+
 def make_job_id(label: str = "job") -> str:
     safe = re.sub(r"[^A-Za-z0-9_]+", "_", label).strip("_").lower() or "job"
     stamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1754,6 +1761,41 @@ def _validate_recipe(recipe: Any) -> list[str]:
     return errors
 
 
+def _validate_recipe_warnings(recipe: Any) -> list[str]:
+    """Return non-blocking recipe warnings (separate from _validate_recipe's
+    blocking errors).
+
+    Currently checks:
+    - python-backend components without a ``justification`` field. Python is
+      the last-resort backend (for NURBS / subdivision surfaces with no SOP
+      equivalent); simple geometry should use native_chain or vex_skeleton.
+      A component using python must declare a ``justification`` string
+      explaining why SOP cannot express the geometry, or get a warning guiding
+      the author to the right backend.
+    """
+    warnings: list[str] = []
+    if not isinstance(recipe, dict):
+        return warnings
+    components = recipe.get("components")
+    if not isinstance(components, list):
+        return warnings
+    for i, comp in enumerate(components):
+        if not isinstance(comp, dict):
+            continue
+        if comp.get("backend", "python") == "python":
+            just = comp.get("justification")
+            if not isinstance(just, str) or not just.strip():
+                warnings.append(
+                    f"components[{i}] ('{comp.get('id', '?')}') uses the python "
+                    f"backend without a 'justification' field. Python is the "
+                    f"last-resort backend (for NURBS/subdivision surfaces with "
+                    f"no SOP equivalent); simple geometry should use "
+                    f"native_chain or vex_skeleton. Add a 'justification' "
+                    f"string explaining why SOP cannot express this geometry "
+                    f"to silence this warning.")
+    return warnings
+
+
 def _anchor_generator_code(anchors: list[dict], component_id: str) -> str:
     """Generate a single-SOP python cook body that emits the given anchor points.
 
@@ -1907,12 +1949,25 @@ def _install_params_via_template_group(
 def _install_spare_params(
     root: Any,
     params_spec: dict[str, dict],
+    derived_values: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Install asset-level params on the sandbox root (A2-station).
+    """Install asset-level params (primary + derived) on the sandbox root.
 
-    Each entry in params_spec is {name: {default, min?, max?, label?}}. The
-    parms land on the sandbox root (the /obj/<sandbox> geo container), so a
-    component python SOP reads them via hou.ch("../<name>") — it sits ONE
+    All params are collected into ONE template batch and installed in a single
+    ``_install_params_via_template_group`` call, producing a single
+    ``edini_params`` folder. (Previously each derived param was installed in
+    its own folder, making the parameter UI unusable — N derived = N folders.)
+
+    Args:
+        root: sandbox root geo container
+        params_spec: {name: {default?, min?, max?, label?, kind?, from?}}.
+            Primary params (kind != "derived") need a default.
+        derived_values: pre-computed derived values
+            {name: {value, label, min, max}} from ``_evaluate_derived_params``.
+            None or {} means no derived params.
+
+    Each parm lands on the sandbox root (the /obj/<sandbox> geo container), so
+    a component python SOP reads them via hou.ch("../<name>") — it sits ONE
     level below the root, so `..` resolves to the root and changing any one
     parm re-cooks every dependent component (true linkage).
 
@@ -1927,12 +1982,13 @@ def _install_spare_params(
     Returns {name: {"value", "channel_path", "label?", "installed"}}.
     """
     import hou as _hou
+    derived_values = derived_values or {}
     result: dict[str, dict[str, Any]] = {}
-    if not params_spec:
+    if not params_spec and not derived_values:
         return result
     templates: list[Any] = []
+    # Primary params (skip derived — handled below from derived_values).
     for name, spec in params_spec.items():
-        # Skip derived params — they are evaluated separately
         if spec.get("kind") == "derived":
             continue
         default = float(spec.get("default", 0.0))
@@ -1954,6 +2010,25 @@ def _install_spare_params(
             "channel_path": f"{root.path()}/{name}",
             "label": label if label != name else None,
             "installed": False,  # set True only if a group install succeeds
+        }
+    # Derived params — merged into the SAME template batch so a single
+    # setParmTemplateGroup call produces one edini_params folder for all.
+    for name, dspec in derived_values.items():
+        value = float(dspec.get("value", 0.0))
+        label = dspec.get("label", name)
+        min_v = float(dspec.get("min", -1000.0))
+        max_v = float(dspec.get("max", 1000.0))
+        try:
+            tmpl = _build_float_parm_template(
+                _hou, name, label, value, min_v, max_v)
+            templates.append(tmpl)
+        except Exception:
+            pass
+        result[name] = {
+            "value": value,
+            "channel_path": f"{root.path()}/{name}",
+            "label": label if label != name else None,
+            "installed": False,
         }
     if templates:
         installed = False
@@ -1982,12 +2057,10 @@ def _install_spare_params(
 
 
 def _evaluate_derived_params(
-    root: Any,
     params_spec: dict[str, dict],
-    param_values: dict[str, float],
-    param_install: dict[str, dict[str, Any]],
+    primary_values: dict[str, float],
 ) -> dict[str, Any]:
-    """Evaluate derived (kind: "derived") params and install as spare parms.
+    """Compute derived (kind: "derived") param values (pure — no install).
 
     Derived params reference primary (or earlier derived) values via a
     "from" expression, e.g.::
@@ -1995,32 +2068,29 @@ def _evaluate_derived_params(
         "seat_top_x": {"kind": "derived",
                         "from": "seat_length * cos(radians(st_angle))"}
 
-    Evaluated in dependency order (topological sort).  The result is
-    installed as a spare float parm on the sandbox root so component
-    code reads it with hou.ch("../seat_top_x") — computed once, shared.
+    Evaluated in dependency order (topological sort via Kahn). The result is
+    returned to the caller, which installs ALL params (primary + derived) in
+    a single ``_install_spare_params`` call — producing ONE edini_params
+    folder rather than one folder per derived param (the previous bug).
 
-    Returns {derived_values, errors, warnings, param_install}.
+    Returns {"derived_values": {name: {value, label, min, max}}, "errors": [...]}.
     """
     from collections import deque
-    import hou as _hou
 
-    derived_values: dict[str, float] = {}
+    derived_values: dict[str, dict[str, Any]] = {}
     errors: list[str] = []
-    warnings: list[str] = []
 
     # Separate derived from primary
     derived_specs: dict[str, dict] = {}
     for name, spec in params_spec.items():
-        kind = spec.get("kind", "primary")
-        if kind == "derived":
+        if spec.get("kind", "primary") == "derived":
             derived_specs[name] = spec
-
     if not derived_specs:
-        return {"derived_values": {}, "errors": [], "warnings": [],
-                "param_install": param_install}
+        return {"derived_values": {}, "errors": []}
 
-    # Build dependency graph
-    graph: dict[str, list[str]] = {}  # name -> [dependencies]
+    # Build dependency graph (only derived->derived edges; primary refs are
+    # already in primary_values)
+    graph: dict[str, list[str]] = {}
     for name, spec in derived_specs.items():
         from_expr = spec.get("from", "")
         if not from_expr:
@@ -2034,7 +2104,7 @@ def _evaluate_derived_params(
         graph[name] = [d for d in deps if d in derived_specs]
 
     # Topological sort (Kahn)
-    in_degree: dict[str, int] = {n: len(deps) for n, deps in graph.items()}
+    in_degree: dict[str, int] = {n: len(d) for n, d in graph.items()}
     queue: deque[str] = deque(n for n, d in in_degree.items() if d == 0)
     order: list[str] = []
     while queue:
@@ -2045,15 +2115,13 @@ def _evaluate_derived_params(
                 in_degree[other] -= 1
                 if in_degree[other] == 0:
                     queue.append(other)
-
     if len(order) != len(graph):
         remaining = [n for n in graph if n not in order]
         errors.append(f"derived param cycle detected among: {remaining}")
-        return {"derived_values": {}, "errors": errors, "warnings": [],
-                "param_install": param_install}
+        return {"derived_values": {}, "errors": errors}
 
-    # Evaluate in topological order, installing each result
-    eval_bindings = dict(param_values)  # mutable dict fed to exprs.evaluate
+    # Evaluate in topological order — pure computation, no install.
+    eval_bindings = dict(primary_values)
     for name in order:
         spec = derived_specs[name]
         from_expr = spec["from"]
@@ -2063,43 +2131,14 @@ def _evaluate_derived_params(
         except Exception as e:
             errors.append(f"derived param '{name}': cannot evaluate '{from_expr}': {e}")
             continue
-        derived_values[name] = value
         eval_bindings[name] = value
-
-        # Install as spare parm on root
-        label = spec.get("label", name)
-        try:
-            tmpl = _build_float_parm_template(_hou, name, label, value, -1000.0, 1000.0)
-            installed = _install_params_via_template_group(root, _hou, [tmpl])
-            if not installed:
-                try:
-                    grp = _hou.ParmTemplateGroup()
-                    grp.appendToFolder("Spare", tmpl)
-                    root.setSpareParmGroup(grp)
-                    installed = True
-                except Exception:
-                    pass
-            param_install[name] = {
-                "value": value,
-                "channel_path": f"{root.path()}/{name}",
-                "label": label,
-                "installed": installed,
-            }
-        except Exception as e:
-            warnings.append(f"derived param '{name}' spare parm install failed: {e}")
-            param_install[name] = {
-                "value": value,
-                "channel_path": f"{root.path()}/{name}",
-                "label": label,
-                "installed": False,
-            }
-
-    return {
-        "derived_values": derived_values,
-        "errors": errors,
-        "warnings": warnings,
-        "param_install": param_install,
-    }
+        derived_values[name] = {
+            "value": value,
+            "label": spec.get("label", name),
+            "min": spec.get("min", -1000.0),
+            "max": spec.get("max", 1000.0),
+        }
+    return {"derived_values": derived_values, "errors": errors}
 
 
 def add_parm(
@@ -2242,6 +2281,20 @@ def _resolve_anchor_exprs(
 
         resolved.append(out)
     return resolved, errors
+
+
+def _sanitize_node_name(type_str: str) -> str:
+    """Sanitize a node type name into a legal Houdini node name.
+
+    Houdini node names may only contain [A-Za-z0-9_]. Postprocess types often
+    carry a version suffix (e.g. ``fuse::2.0``); using the type directly as a
+    node name triggers ``InvalidNodeName`` in real Houdini, which silently
+    skips the entire postprocess node (observed in a real bicycle build where
+    the fuse was skipped, leaving 652 non-manifold edges). This replaces every
+    non-word character with an underscore.
+    """
+    import re
+    return re.sub(r"[^A-Za-z0-9_]", "_", type_str)
 
 
 def _safe_create_node(parent_path: str, node_type: str, name: str) -> Any:
@@ -2572,10 +2625,33 @@ def _build_python_component(
     cid: str,
     world_axis_by_cid: dict,
     anchors: list,
+    param_values: dict[str, float],
 ) -> Any:
-    """Build a Python-backend component. Returns the cooked python SOP."""
+    """Build a Python-backend component. Returns the cooked python SOP.
+
+    Installs ``reads`` params as spare parms on the python SOP (mirroring
+    vex_skeleton's ``_make_wrangle``), each with a ``ch("../<name>")``
+    expression, so the component's Python code can read asset-level params via
+    ``hou.ch("../param")``. Previously the python backend installed NO spare
+    parms, so ``hou.ch()`` always failed — the bicycle saddle component
+    cooked empty.
+    """
     code = comp.get("code", "")
     py_sop = _safe_create_node(root_path, "python", f"{cid}_python")
+    # Install reads as spare parms (parity with _make_wrangle for vex_skeleton).
+    reads = comp.get("reads") or []
+    for pname in reads:
+        if pname in param_values:
+            try:
+                ptg = py_sop.parmTemplateGroup()
+                if not ptg.find(pname):
+                    t = hou.FloatParmTemplate(pname, pname, 1,
+                        (param_values[pname],), 0, 100)
+                    ptg.append(t)
+                    py_sop.setParmTemplateGroup(ptg)
+                py_sop.parm(pname).setExpression(f'ch("../{pname}")')
+            except Exception:
+                pass
     effective_code = code
     if not anchors and cid in world_axis_by_cid:
         effective_code = code + _direct_component_world_axis_snippet(
@@ -2754,7 +2830,16 @@ def _build_vex_skeleton_component(
         fn = _safe_create_node(root_path, canonical_fn, fn_name)
         fn.setInput(0, wr_path)
         fn.setInput(1, wr_section)
-        fn_params = form.get("params") or {}
+        fn_params = dict(form.get("params") or {})
+        # Force surfaceshape=0 (default). Dual-wrangle uses the second input
+        # as the cross-section; any non-zero surfaceshape (1=roundtube,
+        # 2=extrude) makes Sweep IGNORE the second input and generate its own
+        # shape — defeating the dual-wrangle pattern (this was the root cause
+        # of the bicycle wheel/tube failures). If the recipe explicitly set a
+        # conflicting value, record it so the build can warn the author.
+        if fn_params.get("surfaceshape", 0) != 0:
+            _SWEEP_SURFACESHAPE_CONFLICTS.append(cid)
+        fn_params["surfaceshape"] = 0
         for pname, pvalue in fn_params.items():
             if isinstance(pvalue, str) and ('ch(' in pvalue or 'chf(' in pvalue):
                 try:
@@ -2806,6 +2891,62 @@ def _build_vex_skeleton_component(
 # ═══════════════════════════════════════════════════════════════
 #  build_procedural_asset (main entry point)
 # ═══════════════════════════════════════════════════════════════
+
+
+def _stamp_component(
+    root_path: str,
+    cid: str,
+    out_sop: Any,
+    anchors: list[dict],
+    resolved_anchors: list[dict],
+    anchor_ids: list[str],
+    world_axis_by_cid: dict[str, tuple[float, float, float]],
+    warnings: list[str],
+) -> Any:
+    """Build the Copy-to-Points stamping layer for a component with anchors.
+
+    Creates ``{cid}_anchors`` (anchor point generator) → ``copy_{cid}``
+    (copytopoints) → ``{cid}_idfix`` (per-instance component_id overwrite +
+    per-instance edini_world_axis bake). Returns the idfix node — the node
+    that feeds the merge.
+
+    Shared by build_procedural_asset and rebuild_component so both paths
+    produce identical stamping structure. (Previously this logic was inlined
+    only in build_procedural_asset, making incremental rebuild of a stamped
+    component impossible without losing per-instance ids.)
+    """
+    anc_name = f"{cid}_anchors"
+    anc_sop = _safe_create_node(root_path, "python", anc_name)
+    _set_parm_safe(anc_sop, "python", _anchor_generator_code(resolved_anchors, cid))
+    anc_sop.cook(force=True)
+    anc_errs = list(anc_sop.errors() or [])
+    if anc_errs:
+        warnings.append(f"component '{cid}' anchors: {anc_errs}")
+
+    copy_name = f"copy_{cid}"
+    copy_node = _safe_create_node(root_path, "copytopoints", copy_name)
+    copy_node.setInput(0, out_sop)
+    copy_node.setInput(1, anc_sop)
+
+    ow_name = f"{cid}_idfix"
+    ow_sop = _safe_create_node(root_path, "python", ow_name)
+    stamp_world_axes = [world_axis_by_cid.get(aid) for aid in anchor_ids]
+    # Only bake if ALL anchors resolved a world axis (partial baking would
+    # leave some instances tag-less and silently fall back to PCA — confusing).
+    if any(wa is None for wa in stamp_world_axes):
+        stamp_world_axes_param: list[tuple[float, float, float]] | None = None
+    else:
+        stamp_world_axes_param = stamp_world_axes  # type: ignore[assignment]
+    _set_parm_safe(
+        ow_sop, "python",
+        _component_id_overwrite_snippet(
+            anchor_ids, world_axes=stamp_world_axes_param))
+    ow_sop.setInput(0, copy_node)
+    ow_sop.cook(force=True)
+    ow_errs = list(ow_sop.errors() or [])
+    if ow_errs:
+        warnings.append(f"component '{cid}' idfix: {ow_errs}")
+    return ow_sop
 
 
 def build_procedural_asset(
@@ -2931,10 +3072,21 @@ def build_procedural_asset(
     orientation_asserts = recipe.get("orientation_asserts") or []
     params_spec = recipe.get("params") or {}
 
+    # Reset the per-build sweep-surfaceshape conflict log so warnings reflect
+    # only this build's components.
+    global _SWEEP_SURFACESHAPE_CONFLICTS
+    _SWEEP_SURFACESHAPE_CONFLICTS = []
+
     warnings: list[str] = []
     errors_runtime: list[str] = []
     components_built: list[str] = []
     anchors_built: dict[str, int] = {}
+    # Non-blocking recipe warnings (e.g. python backend without justification).
+    # Surfaced in the build result so the agent can act on them. Tracked
+    # separately so the result also exposes them under the documented
+    # "validation_warnings" alias.
+    validation_warnings = _validate_recipe_warnings(recipe)
+    warnings.extend(validation_warnings)
     out_path = ""
 
     try:
@@ -2945,11 +3097,30 @@ def build_procedural_asset(
         # Components read them via hou.ch("../../<name>") so a change to any
         # one parm re-cooks every dependent component (true linkage). The
         # resolved default values also feed anchor expression evaluation.
+        #
+        # Flow: compute primary defaults → compute derived values (pure) →
+        # install primary + derived in ONE _install_spare_params call so a
+        # single edini_params folder holds every parm (previously each derived
+        # got its own folder, fragmenting the parameter UI).
         param_install: dict[str, dict[str, Any]] = {}
         param_values: dict[str, float] = {}
         if params_spec:
             try:
-                param_install = _install_spare_params(root, params_spec)
+                # 1. Primary defaults (pure computation).
+                primary_values: dict[str, float] = {
+                    n: float(spec.get("default", 0.0))
+                    for n, spec in params_spec.items()
+                    if spec.get("kind", "primary") != "derived"
+                }
+                # 2. Derived values (pure computation, no install).
+                derived_report = _evaluate_derived_params(
+                    params_spec, primary_values)
+                if derived_report.get("errors"):
+                    errors_runtime.extend(derived_report["errors"])
+                derived_values = derived_report.get("derived_values", {})
+                # 3. Install primary + derived together (single folder).
+                param_install = _install_spare_params(
+                    root, params_spec, derived_values)
                 param_values = {n: v["value"] for n, v in param_install.items()}
                 # Surface which params failed to install as spare parms:
                 # channel refs (hou.ch) in component code will not bind
@@ -2969,24 +3140,6 @@ def build_procedural_asset(
                                 "component channel refs may not bind")
                 param_values = {n: float(spec.get("default", 0.0))
                                 for n, spec in params_spec.items()}
-
-        # ── A2-station (continued): evaluate derived params ──
-        # Primary params are installed.  Derived params declare a "from"
-        # expression that references primary (or earlier derived) values.
-        # Evaluate in dependency order (topological sort via Kahn) and
-        # install each derived value as a spare parm too, so component
-        # code reads them via hou.ch("../seat_top_x") just like primaries.
-        if params_spec:
-            derived_report = _evaluate_derived_params(
-                root, params_spec, param_values, param_install)
-            if derived_report.get("errors"):
-                errors_runtime.extend(derived_report["errors"])
-            if derived_report.get("warnings"):
-                warnings.extend(derived_report["warnings"])
-            # Refresh param_values with derived results for anchor expression eval
-            for n, v in derived_report.get("derived_values", {}).items():
-                param_values[n] = v
-            param_install = derived_report.get("param_install", param_install)
 
 
         # ── 1. Build one python SOP per component ──
@@ -3123,7 +3276,8 @@ def build_procedural_asset(
                         param_values)
                 else:  # python (default)
                     out_sop = _build_python_component(
-                        root_path, comp, cid, world_axis_by_cid, anchors)
+                        root_path, comp, cid, world_axis_by_cid, anchors,
+                        param_values)
             except Exception as e:
                 errors_runtime.append(
                     f"component '{cid}' ({backend}): {e}")
@@ -3161,50 +3315,9 @@ def build_procedural_asset(
                 anchor_ids = [a["component_id"] for a in resolved_anchors]
                 anchors_built[cid] = len(resolved_anchors)
 
-                # anchor generator python SOP (fed numeric, resolved anchors)
-                anc_name = f"{cid}_anchors"
-                anc_sop = _safe_create_node(root_path, "python", anc_name)
-                _set_parm_safe(anc_sop, "python", _anchor_generator_code(resolved_anchors, cid))
-                anc_sop.cook(force=True)
-                anc_errs = list(anc_sop.errors() or [])
-                if anc_errs:
-                    warnings.append(f"component '{cid}' anchors: {anc_errs}")
-
-                # copytopoints: in0 = component geometry, in1 = anchor points
-                copy_name = f"copy_{cid}"
-                copy_node = _safe_create_node(root_path, "copytopoints", copy_name)
-                copy_node.setInput(0, out_sop)
-                copy_node.setInput(1, anc_sop)
-
-                # id-overwrite python SOP: gives each instance its anchor
-                # component_id, AND bakes edini_world_axis per instance when
-                # the recipe declared construction axes (B-station).
-                ow_name = f"{cid}_idfix"
-                ow_sop = _safe_create_node(root_path, "python", ow_name)
-                stamp_world_axes = [
-                    world_axis_by_cid.get(aid)
-                    for aid in anchor_ids
-                ]
-                # Only bake if ALL anchors of this component resolved a world
-                # axis (partial baking would leave some instances tag-less and
-                # silently fall back to PCA for them — confusing). If any is
-                # missing, pass None to keep the idfix on the PCA fallback.
-                if any(wa is None for wa in stamp_world_axes):
-                    stamp_world_axes_param: list[tuple[float, float, float]] | None = None
-                else:
-                    stamp_world_axes_param = stamp_world_axes  # type: ignore[assignment]
-                _set_parm_safe(
-                    ow_sop, "python",
-                    _component_id_overwrite_snippet(
-                        anchor_ids, world_axes=stamp_world_axes_param))
-                ow_sop.setInput(0, copy_node)
-                # Cook the idfix so the per-instance component_id lands on geometry.
-                # (Real Houdini lazy-cooks on OUT; explicit is safer and works in tests.)
-                ow_sop.cook(force=True)
-                ow_errs = list(ow_sop.errors() or [])
-                if ow_errs:
-                    warnings.append(f"component '{cid}' idfix: {ow_errs}")
-
+                ow_sop = _stamp_component(
+                    root_path, cid, out_sop, anchors, resolved_anchors,
+                    anchor_ids, world_axis_by_cid, warnings)
                 comp_nodes.append(ow_sop)
                 stamped.append((cid, ow_sop, anchor_ids))
             else:
@@ -3230,7 +3343,7 @@ def build_procedural_asset(
                 pp_type = pp["type"]
                 pp_type = NODE_ALIASES.get(pp_type, pp_type)  # resolve alias
                 pp_params = pp.get("params") or {}
-                pp_name = f"post_{i}_{pp_type}"
+                pp_name = f"post_{i}_{_sanitize_node_name(pp_type)}"
                 try:
                     pp_node = _safe_create_node(root_path, pp_type, pp_name)
                 except Exception as e:
@@ -3329,6 +3442,14 @@ def build_procedural_asset(
                 f"Missing on: {g2_missing}. Detail: {g2_detail[:10]}")
 
         # ── 7. Diagnostics + structural checks + gate previews ──
+        # Surface sweep-surfaceshape conflicts collected during component builds.
+        for conflict_cid in _SWEEP_SURFACESHAPE_CONFLICTS:
+            warnings.append(
+                f"component '{conflict_cid}': dual-wrangle sweep ignores recipe "
+                f"surfaceshape!=0 (forced to 0). The second-input cross-section "
+                f"is incompatible with roundtube/extrude surface shapes; the "
+                f"section_code defines the shape. Remove 'surfaceshape' from "
+                f"form_node.params to silence this warning.")
         diag = _safe_collect_diagnostics(out_path, include_geometry=True)
         geo_stats = diag.get("geometry") or {}
         structural_checks = {
@@ -3352,6 +3473,7 @@ def build_procedural_asset(
             "diagnostics": diag,
             "structural_checks": structural_checks,
             "warnings": warnings,
+            "validation_warnings": validation_warnings,
             "preserved": True,
             "deleted": False,
         }
@@ -3473,6 +3595,260 @@ def build_procedural_asset(
 # Name of the integer piece attribute Copy to Points 2.0 reads by default to
 # dispatch variants (Houdini 21). Must be int or string — never float.
 _VARIANT_PIECE_ATTR = "variant"
+
+
+def _resolve_rebuild_axes(
+    component_spec: dict,
+    cid: str,
+    anchors: list,
+) -> dict[str, tuple[float, float, float]]:
+    """Resolve edini_world_axis per instance for a rebuild, mirroring
+    build_procedural_asset's tiered resolution but using only
+    component_spec (the full recipe's orientation_asserts are not passed to
+    rebuild_component, so tier-1 assert lookup is unavailable — tiers 2-4
+    apply).
+
+    Tier 2: component-level ``construction_axis`` field.
+    Tier 3: native_chain backend inference.
+    Tier 4: fallback Y.
+
+    Without this, a rebuilt stamped component loses its edini_world_axis and
+    the next commit_sandbox trips G3_NOT_BAKED.
+    """
+    world_axis_by_cid: dict[str, tuple[float, float, float]] = {}
+    comp_caxis = _normalize_axis_spec(component_spec.get("construction_axis"))
+    backend = component_spec.get("backend", "python")
+
+    def _resolve_one(caxis_field_value):
+        caxis = caxis_field_value
+        if caxis is None and backend == "native_chain":
+            for node_spec in (component_spec.get("nodes") or []):
+                bare = (node_spec.get("type") or "").lower().split("::")[0]
+                if bare in ("tube", "cylinder", "torus"):
+                    caxis = "Y"
+                    break
+        if caxis is None:
+            caxis = "Y"
+        return caxis
+
+    if anchors:
+        for anc in anchors:
+            anc_cid = anc.get("component_id", cid)
+            orient = list(anc.get("orient", [0.0, 0.0, 0.0, 1.0]))
+            caxis = _resolve_one(comp_caxis)
+            world_axis_by_cid[anc_cid] = _resolve_construction_world_axis(
+                orient, caxis)
+    else:
+        # Direct-merge: identity frame, axis == declared construction_axis.
+        caxis = _resolve_one(comp_caxis)
+        world_axis_by_cid[cid] = _resolve_construction_world_axis(
+            [0.0, 0.0, 0.0, 1.0], caxis)
+    return world_axis_by_cid
+
+
+def rebuild_component(
+    sandbox_root_path: str,
+    component_id: str,
+    component_spec: dict,
+) -> dict[str, Any]:
+    """Rebuild ONE component's subnet in an existing sandbox, leaving others.
+
+    Avoids discarding the entire sandbox + rewriting the whole recipe + full
+    rebuild when only one component changes. Locates every node belonging to
+    the target component (``{cid}_*`` plus the stamped ``copy_{cid}``),
+    records which merge input it feeds, destroys them, rebuilds via the
+    matching ``_build_*_component`` (+ ``_stamp_component`` if it has anchors),
+    and reconnects to the merge at the same index.
+
+    Args:
+        sandbox_root_path: sandbox root path (from build_procedural_asset)
+        component_id: the component id to rebuild
+        component_spec: the new full component definition (id must equal
+            component_id). The recipe is NOT persisted on the sandbox — the
+            caller passes the new spec explicitly.
+
+    Returns {"success", "sandbox_root_path", "component_id", ...} with error
+    detail on failure. On cook failure the sandbox is left in the destroyed
+    state (no rollback) so the agent can diagnose.
+    """
+    import traceback as _tb
+
+    spec_id = component_spec.get("id")
+    if spec_id != component_id:
+        return {
+            "success": False,
+            "sandbox_root_path": sandbox_root_path,
+            "component_id": component_id,
+            "error": (f"component_spec.id ({spec_id!r}) does not match "
+                      f"component_id ({component_id!r})"),
+        }
+
+    root = hou.node(sandbox_root_path)
+    if root is None:
+        return {
+            "success": False,
+            "sandbox_root_path": sandbox_root_path,
+            "component_id": component_id,
+            "error": f"Sandbox root not found: {sandbox_root_path}",
+        }
+
+    cid = component_id
+    # 1. Locate target nodes by an EXACT node-name vocabulary (not a loose
+    #    prefix). A loose `{cid}_` prefix would also destroy a sibling
+    #    component whose id shares a prefix (e.g. rebuilding "wheel" would
+    #    wipe "wheel_rim_*"). Enumerate the exact names the builder creates
+    #    for any backend: {cid}_path/section/sweep/tag/wrangle/python/nN
+    #    (geometry + native_chain), {cid}_anchors/copy_{cid}/{cid}_idfix
+    #    (stamping layer). Native_chain uses {cid}_n0, {cid}_n1, ... so match
+    #    those via a regex on the suffix.
+    import re as _re
+    own_node_names = {
+        f"{cid}_path", f"{cid}_section", f"{cid}_sweep", f"{cid}_tag",
+        f"{cid}_wrangle", f"{cid}_python", f"{cid}_anchors", f"{cid}_idfix",
+        f"copy_{cid}", cid,
+    }
+    own_node_re = _re.compile(rf"^{_re.escape(cid)}_n\d+$")
+    target_nodes = [c for c in root.children()
+                    if c.name() in own_node_names or own_node_re.match(c.name())]
+    if not target_nodes:
+        return {
+            "success": False,
+            "sandbox_root_path": sandbox_root_path,
+            "component_id": cid,
+            "error": (f"No nodes matching the {cid!r} node-name vocabulary "
+                      f"found in sandbox (component does not exist)"),
+        }
+
+    # 2. Locate merge + record the input index fed by this component. The
+    #    merge is fed by {cid}_tag/python (direct-merge) or {cid}_idfix
+    #    (stamped) — match those exact names.
+    merge_node = None
+    merge_input_index = None
+    for c in root.children():
+        if c.name() == "merge_all":
+            merge_node = c
+            break
+    feed_names = {f"{cid}_tag", f"{cid}_python", f"{cid}_idfix", cid}
+    if merge_node is not None:
+        for idx, inp in enumerate(merge_node.inputs()):
+            if inp is not None and inp.name() in feed_names:
+                merge_input_index = idx
+                break
+
+    # 3. Destroy the target nodes.
+    for node in target_nodes:
+        try:
+            node.destroy()
+        except Exception:
+            pass
+
+    # 4. Rebuild via the matching backend.
+    anchors = component_spec.get("anchors") or []
+    warnings: list[str] = []
+    # Reconstruct param_values from the sandbox root's installed spare parms
+    # (includes some transform-folder garbage keys, harmless — backends only
+    # look up names in `reads`).
+    param_values: dict[str, float] = {}
+    try:
+        for p in root.parms():
+            try:
+                param_values[p.name()] = float(p.eval())
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    backend = component_spec.get("backend", "python")
+    # Resolve world axes for this component so stamped instances keep their
+    # edini_world_axis after rebuild (otherwise the next commit's G3 gate
+    # trips G3_NOT_BAKED). Mirrors build_procedural_asset's tiered resolution
+    # but operates only on component_spec (the full recipe's
+    # orientation_asserts are not available here, so tier-1 assert lookup is
+    # best-effort via an optional `construction_axis` field; tiers 2-4 apply).
+    world_axis_by_cid = _resolve_rebuild_axes(component_spec, cid, anchors)
+    try:
+        if backend == "native_chain":
+            out_sop = _build_native_chain_component(
+                sandbox_root_path, component_spec, cid, world_axis_by_cid, anchors)
+        elif backend == "vex_skeleton":
+            out_sop = _build_vex_skeleton_component(
+                sandbox_root_path, component_spec, cid, world_axis_by_cid,
+                anchors, param_values)
+        else:
+            out_sop = _build_python_component(
+                sandbox_root_path, component_spec, cid, world_axis_by_cid,
+                anchors, param_values)
+    except Exception as e:
+        return {
+            "success": False,
+            "sandbox_root_path": sandbox_root_path,
+            "component_id": cid,
+            "error": f"rebuild of {cid!r} failed: {e}",
+            "traceback": _tb.format_exc(),
+        }
+
+    # For stamped components, rebuild the stamping layer too (anchor generator
+    # + copytopoints + idfix). The merge is fed by idfix, not the raw geometry.
+    feed_node = out_sop
+    if anchors:
+        try:
+            resolved_anchors, anc_errors = _resolve_anchor_exprs(
+                anchors, param_values, cid)
+            if anc_errors:
+                return {
+                    "success": False,
+                    "sandbox_root_path": sandbox_root_path,
+                    "component_id": cid,
+                    "error": f"anchor expr errors: {anc_errors}",
+                }
+            anchor_ids = [a["component_id"] for a in resolved_anchors]
+            feed_node = _stamp_component(
+                sandbox_root_path, cid, out_sop, anchors, resolved_anchors,
+                anchor_ids, world_axis_by_cid, warnings)
+        except Exception as e:
+            return {
+                "success": False,
+                "sandbox_root_path": sandbox_root_path,
+                "component_id": cid,
+                "error": f"stamping rebuild of {cid!r} failed: {e}",
+                "traceback": _tb.format_exc(),
+            }
+
+    # 5. Reconnect to the merge at the recorded index.
+    if merge_node is not None and merge_input_index is not None:
+        merge_node.setInput(merge_input_index, feed_node)
+
+    # 6. Cook OUT to validate.
+    out_node = hou.node(f"{sandbox_root_path}/OUT")
+    if out_node is not None:
+        try:
+            out_node.cook(force=True)
+            cook_errs = list(out_node.errors() or [])
+            if cook_errs:
+                return {
+                    "success": False,
+                    "sandbox_root_path": sandbox_root_path,
+                    "component_id": cid,
+                    "error": f"OUT cook errors after rebuild: {'; '.join(cook_errs)}",
+                }
+        except Exception as e:
+            return {
+                "success": False,
+                "sandbox_root_path": sandbox_root_path,
+                "component_id": cid,
+                "error": f"OUT cook failed after rebuild: {e}",
+            }
+
+    return {
+        "success": True,
+        "sandbox_root_path": sandbox_root_path,
+        "component_id": cid,
+        "rebuilt_backend": backend,
+        "stamped": bool(anchors),
+        "merge_input_index": merge_input_index,
+        "warnings": warnings,
+    }
+
 
 def _setup_copy_apply_attributes(copy_node, attribs: str = "id") -> bool:
     """Initialize Copy to Points 2.0's attribute transfer so the target
@@ -3868,7 +4244,7 @@ def build_variant_scatter(
             if not isinstance(pp_type, str) or not pp_type:
                 warnings.append(f"postprocess[{i}] has no type; skipped")
                 continue
-            pp_name = f"post_{i}_{pp_type}"
+            pp_name = f"post_{i}_{_sanitize_node_name(pp_type)}"
             try:
                 pp_node = _safe_create_node(root_path, pp_type, pp_name)
             except Exception as e:

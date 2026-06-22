@@ -1214,5 +1214,307 @@ class TestVariantScatterPointsCode(unittest.TestCase):
         self.assertNotIn("setAttribValue('variant'", wrapper)
 
 
+class TestPostprocessNodeNames(unittest.TestCase):
+    """postprocess 节点名必须清洗掉 :: 等非法字符。
+
+    真实 Houdini 拒绝含 :: 的节点名（InvalidNodeName），导致整个
+    postprocess 节点被跳过 → 非流形边残留（公路车 Phase 1 实跑留了
+    652 条）。mock 应模拟同样的校验，让这类 bug 在单元测试阶段暴露。
+    """
+
+    def test_fuse_versioned_postprocess_node_name_is_sanitized(self):
+        """postprocess 的 fuse::2.0 等带 :: 的类型，节点名必须清洗掉 ::。
+        真实 Houdini 拒绝含 :: 的节点名（InvalidNodeName），导致整个
+        postprocess 节点被跳过 → 非流形边残留（公路车 Phase 1 实跑留了
+        652 条）。"""
+        recipe = {
+            "asset_name": "fuse_test",
+            "components": [{"id": "x", "code": _geo_code("x"), "anchors": []}],
+            "postprocess": [
+                {"type": "fuse::2.0"},
+                {"type": "clean"},
+            ],
+        }
+        result = harness.build_procedural_asset(recipe, sandbox_name="fuse_test")
+        self.assertTrue(result.get("success"), f"build failed: {result.get('error')}")
+        root = _mock_hou.node(result["root_path"])
+        names = [c.name() for c in root.children() if c.name().startswith("post_")]
+        bad = [n for n in names if "::" in n]
+        self.assertEqual(bad, [], f"postprocess 节点名含非法字符 :: : {bad}")
+        self.assertTrue(any("fuse" in n for n in names),
+                        f"未找到 fuse postprocess 节点，children: {names}")
+
+    def test_mock_setName_rejects_colon_names(self):
+        """mock 应模拟真实 Houdini 的节点名校验。"""
+        from tests.test_node_utils import _mock_hou as mock_hou
+        root = mock_hou.node("/obj")
+        node = root.createNode("geo", "test_node_ok")
+        with self.assertRaises(Exception):
+            node.setName("fuse::2.0")
+
+
+class TestParameterFolderConsolidation(unittest.TestCase):
+    """主参数 + derived 参数必须全部装进同一个 edini_params 文件夹。
+
+    根因：原代码每个 derived 单独调用 _install_params_via_template_group，
+    每次新建一个 folder，导致 N 个 derived = N 个单参数文件夹，UI 无法用。
+    """
+
+    def test_derived_params_collapse_into_single_folder(self):
+        recipe = {
+            "asset_name": "folder_test",
+            "params": {
+                "wheel_r": {"default": 0.35, "kind": "primary"},
+                "bb_drop": {"default": 0.07, "kind": "primary"},
+                "st_angle": {"default": 73.0, "kind": "primary"},
+                "bb_height": {"kind": "derived", "from": "wheel_r - bb_drop"},
+                "st_rad": {"kind": "derived", "from": "radians(st_angle)"},
+                "seat_top_y": {"kind": "derived", "from": "bb_height + 0.5 * cos(st_rad)"},
+            },
+            "components": [
+                {"id": "c1", "code": _geo_code("c1"), "reads": ["wheel_r"]},
+            ],
+        }
+        result = harness.build_procedural_asset(recipe, sandbox_name="folder_test")
+        self.assertTrue(result.get("success"), f"build failed: {result.get('error')}")
+        root = _mock_hou.node(result["root_path"])
+        ptg = root.parmTemplateGroup()
+        from tests.mock_hou import MockFolderParmTemplate
+        # NOTE: mock's MockParmTemplate.name is a string ATTRIBUTE (not a
+        # method), so use t.name not t.name().
+        edini_folders = [t for t in ptg.entries()
+                         if isinstance(t, MockFolderParmTemplate)
+                         and t.name == "edini_params"]
+        self.assertEqual(len(edini_folders), 1,
+                         f"应有 1 个 edini_params 文件夹，实际 {len(edini_folders)}")
+        self.assertEqual(len(edini_folders[0].parmTemplates()), 6,
+                         f"文件夹应含 6 个参数，实际 {len(edini_folders[0].parmTemplates())}")
+
+
+class TestPythonBackendParams(unittest.TestCase):
+    """python 后端的组件代码用 hou.ch('../param') 读参数，builder 必须给
+    python SOP 装 spare parms（与 vex_skeleton 的 _make_wrangle 对齐）。
+    根因：_build_python_component 原本完全不装参数 → hou.ch 失败。"""
+
+    def test_python_backend_installs_read_params(self):
+        recipe = {
+            "asset_name": "pyparam_test",
+            "params": {"wheel_r": {"default": 0.35}},
+            "components": [
+                {"id": "wheel_py", "backend": "python",
+                 "code": _geo_code("wheel_py"), "reads": ["wheel_r"]},
+            ],
+        }
+        result = harness.build_procedural_asset(recipe, sandbox_name="pyparam_test")
+        self.assertTrue(result.get("success"), f"build failed: {result.get('error')}")
+        py_node = _mock_hou.node(f"{result['root_path']}/wheel_py_python")
+        self.assertIsNotNone(py_node, "wheel_py_python 节点未创建")
+        parm = py_node.parm("wheel_r")
+        self.assertIsNotNone(parm, "python SOP 未装 wheel_r spare parm")
+        # Verify the channel-reference expression was wired (not just the
+        # template existing) — the actual behavior that broke (hou.ch failed).
+        self.assertEqual(parm.expression(), 'ch("../wheel_r")',
+                         f"wheel_r 表达式未正确链接: {parm.expression()!r}")
+
+    def test_python_backend_without_justification_warns(self):
+        """python 后端应用作最后手段，需 justification 说明为何不能用 SOP。
+        无 justification 应产生 warning（不阻断，保持向后兼容）。"""
+        recipe = {
+            "asset_name": "pywarn_test",
+            "components": [
+                {"id": "c1", "backend": "python", "code": _geo_code("c1")},
+            ],
+        }
+        # 不应阻断（errors 为空）
+        errors = harness._validate_recipe(recipe)
+        self.assertEqual(errors, [], f"python 后端不应阻断: {errors}")
+        # 但应产生 warning
+        warnings = harness._validate_recipe_warnings(recipe)
+        self.assertTrue(
+            any("python" in w.lower() and "justification" in w.lower() for w in warnings),
+            f"python 后端无 justification 应产生 warning: {warnings}")
+
+    def test_python_backend_with_justification_no_warn(self):
+        """有 justification 的 python 后端不产生 warning。"""
+        recipe = {
+            "asset_name": "pyok_test",
+            "components": [
+                {"id": "c1", "backend": "python",
+                 "justification": "Organic NURBS saddle surface, no SOP equivalent",
+                 "code": _geo_code("c1")},
+            ],
+        }
+        warnings = harness._validate_recipe_warnings(recipe)
+        self.assertFalse(
+            any("python" in w.lower() and "justification" in w.lower() for w in warnings),
+            f"有 justification 不应 warning: {warnings}")
+
+
+class TestSweepSurfaceShape(unittest.TestCase):
+    """dual-wrangle sweep（有 section_code）必须 surfaceshape=0（默认），
+    否则第二端口的 cross-section 被忽略（sweep 自己画圆管）。这是公路车
+    车轮方向/管材成型失败的核心根因。
+
+    直接测试 _build_vex_skeleton_component（unit 级），因为完整 build 在
+    mock 下无法 cook VEX，会触发 G2_NOT_BAKED（mock 不执行 VEX 代码）。"""
+
+    def _build_sweep_component(self, form_params):
+        """Build a single vex_skeleton tube component and return its sweep node."""
+        # Create a sandbox root to build into.
+        root = _mock_hou.node("/obj").createNode("geo", "sweep_unit_test")
+        comp = {
+            "id": "tube1", "backend": "vex_skeleton",
+            "code": ('int p0=addpoint(0,set(0,0,0));'
+                     'int p1=addpoint(0,set(0,1,0));'
+                     'int pr=addprim(0,"polyline");'
+                     'addvertex(0,pr,p0);addvertex(0,pr,p1);'),
+            "section_code": ('float r=0.02;int n=8;int pts[];'
+                              'for(int i=0;i<n;i++){float a=6.28318*float(i)/float(n);'
+                              'int pt=addpoint(0,set(r*cos(a),0,r*sin(a)));push(pts,pt);}'
+                              'int pr=addprim(0,"polyline");'
+                              'for(int i=0;i<len(pts);i++)addvertex(0,pr,pts[i]);'
+                              'addvertex(0,pr,pts[0]);'),
+            "form_node": {"type": "sweep::2.0", "params": dict(form_params)},
+        }
+        harness._SWEEP_SURFACESHAPE_CONFLICTS = []
+        harness._build_vex_skeleton_component(
+            root.path(), comp, "tube1", {}, [], {"tube_od": 0.04})
+        sweep_node = _mock_hou.node(f"{root.path()}/tube1_sweep")
+        return root, sweep_node
+
+    def test_dual_wrangle_sweep_forces_surfaceshape_default(self):
+        root, sweep_node = self._build_sweep_component(
+            {"surfacetype": 2, "endcaptype": 1})
+        self.addCleanup(root.destroy)
+        self.assertIsNotNone(sweep_node, "tube1_sweep 节点未创建")
+        ss = sweep_node.parm("surfaceshape")
+        self.assertIsNotNone(ss, "sweep 节点无 surfaceshape parm")
+        self.assertEqual(ss.eval(), 0,
+                         f"dual-wrangle sweep surfaceshape 应强制为 0，实际 {ss.eval()}")
+
+    def test_dual_wrangle_explicit_nonzero_surfaceshape_forced_and_recorded(self):
+        """recipe 显式设 surfaceshape=1 + section_code → 强制改回 0，并记录
+        冲突供 build 层转 warning。"""
+        root, sweep_node = self._build_sweep_component(
+            {"surfacetype": 2, "endcaptype": 1, "surfaceshape": 1})
+        self.addCleanup(root.destroy)
+        ss = sweep_node.parm("surfaceshape")
+        self.assertEqual(ss.eval(), 0,
+                         f"冲突的 surfaceshape 应被强制为 0，实际 {ss.eval()}")
+        self.assertIn("tube1", harness._SWEEP_SURFACESHAPE_CONFLICTS,
+                      "冲突应被记录供 build 层 warning")
+
+
+class TestRebuildComponent(unittest.TestCase):
+    """rebuild_component 只重建指定 cid 的子网，不动其它组件。
+    避免改一个组件就要 discard 整个 sandbox + 重写整个 recipe。"""
+
+    def test_rebuild_only_target_component(self):
+        recipe = {
+            "asset_name": "rebuild_test",
+            "components": [
+                {"id": "keep_me", "code": _geo_code("keep_me")},
+                {"id": "rebuild_me", "code": _geo_code("rebuild_me")},
+            ],
+        }
+        result = harness.build_procedural_asset(recipe, sandbox_name="rebuild_test")
+        self.assertTrue(result.get("success"))
+        keep_node_before = _mock_hou.node(f"{result['root_path']}/keep_me_python")
+        self.assertIsNotNone(keep_node_before)
+
+        new_spec = {"id": "rebuild_me", "code": _geo_code("rebuild_me")}
+        rb = harness.rebuild_component(result["root_path"], "rebuild_me", new_spec)
+        self.assertTrue(rb.get("success"), f"rebuild failed: {rb.get('error')}")
+
+        # keep_me 节点身份应不变（未被销毁重建）
+        keep_node_after = _mock_hou.node(f"{result['root_path']}/keep_me_python")
+        self.assertIs(keep_node_before, keep_node_after,
+                      "keep_me 节点被错误重建")
+        # rebuild_me 应有新节点（身份变化）
+        rebuild_node_after = _mock_hou.node(f"{result['root_path']}/rebuild_me_python")
+        self.assertIsNotNone(rebuild_node_after, "rebuild_me 未重建")
+
+    def test_rebuild_nonexistent_cid_errors(self):
+        recipe = {"asset_name": "rb2", "components": [
+            {"id": "c1", "code": _geo_code("c1")}]}
+        result = harness.build_procedural_asset(recipe, sandbox_name="rb2")
+        rb = harness.rebuild_component(result["root_path"], "no_such",
+                                        {"id": "no_such"})
+        self.assertFalse(rb.get("success"))
+        self.assertIn("no_such", rb.get("error", ""))
+
+    def test_rebuild_mismatched_spec_id_errors(self):
+        recipe = {"asset_name": "rb3", "components": [
+            {"id": "c1", "code": _geo_code("c1")}]}
+        result = harness.build_procedural_asset(recipe, sandbox_name="rb3")
+        rb = harness.rebuild_component(result["root_path"], "c1", {"id": "wrong_id"})
+        self.assertFalse(rb.get("success"))
+
+    def test_rebuild_stamped_component_recreates_idfix(self):
+        """stamped 组件（有 anchors）的 rebuild 必须重建整个 stamping 层
+        （{cid}_anchors + copy_{cid} + {cid}_idfix），不能只重建原始几何，
+        否则会丢失 per-instance component_id 和 per-instance axis。"""
+        recipe = {
+            "asset_name": "rb_stamped",
+            "components": [
+                {"id": "keep", "code": _geo_code("keep")},
+                {"id": "wheel", "code": _geo_code("wheel_template"),
+                 "anchors": [
+                     {"position": [0.5, 0, 0], "component_id": "wheel_l"},
+                     {"position": [-0.5, 0, 0], "component_id": "wheel_r"},
+                 ]},
+            ],
+        }
+        result = harness.build_procedural_asset(recipe, sandbox_name="rb_stamped")
+        self.assertTrue(result.get("success"), f"build failed: {result.get('error')}")
+        root_path = result["root_path"]
+        keep_before = _mock_hou.node(f"{root_path}/keep_python")
+
+        new_spec = {
+            "id": "wheel", "code": _geo_code("wheel_template"),
+            "anchors": [
+                {"position": [0.5, 0, 0], "component_id": "wheel_l"},
+                {"position": [-0.5, 0, 0], "component_id": "wheel_r"},
+            ],
+        }
+        rb = harness.rebuild_component(root_path, "wheel", new_spec)
+        self.assertTrue(rb.get("success"), f"stamped rebuild failed: {rb.get('error')}")
+
+        self.assertIs(keep_before, _mock_hou.node(f"{root_path}/keep_python"))
+        for name in ("wheel_anchors", "copy_wheel", "wheel_idfix"):
+            self.assertIsNotNone(_mock_hou.node(f"{root_path}/{name}"),
+                                 f"{name} 未重建")
+
+    def test_rebuild_does_not_touch_prefix_sibling(self):
+        """rebuild 'wheel' must NOT destroy a sibling component 'wheel_rim',
+        even though 'wheel_rim_*' names start with 'wheel_'. The loose
+        {cid}_ prefix match would silently wipe out the sibling. The destroy
+        set must use an exact node-name vocabulary, not a prefix."""
+        recipe = {
+            "asset_name": "rb_prefix",
+            "components": [
+                {"id": "wheel", "code": _geo_code("wheel")},
+                {"id": "wheel_rim", "code": _geo_code("wheel_rim")},
+            ],
+        }
+        result = harness.build_procedural_asset(recipe, sandbox_name="rb_prefix")
+        self.assertTrue(result.get("success"))
+        root_path = result["root_path"]
+        # Record wheel_rim's node identity BEFORE rebuilding wheel.
+        rim_before = _mock_hou.node(f"{root_path}/wheel_rim_python")
+        self.assertIsNotNone(rim_before, "wheel_rim_python 应存在")
+
+        rb = harness.rebuild_component(root_path, "wheel", {"id": "wheel", "code": _geo_code("wheel")})
+        self.assertTrue(rb.get("success"), f"rebuild failed: {rb.get('error')}")
+
+        # wheel_rim_python must be the SAME object (not destroyed+rebuilt).
+        rim_after = _mock_hou.node(f"{root_path}/wheel_rim_python")
+        self.assertIs(rim_before, rim_after,
+                      "wheel_rim_python 被错误销毁（prefix 冲突 bug）")
+        # And wheel's own node should be rebuilt (new identity).
+        self.assertIsNotNone(_mock_hou.node(f"{root_path}/wheel_python"),
+                             "wheel_python 未重建")
+
+
 if __name__ == "__main__":
     unittest.main()
