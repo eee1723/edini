@@ -128,11 +128,47 @@ The `code` field defines the backbone path. The form_node is `sweep::2.0`:
   XZ plane. Sweep automatically rotates it perpendicular to the path.
 - `form_node.type` = `"sweep::2.0"` with `surfacetype=2` (tube) and
   `endcaptype=1` (cap both ends) for a perfectly closed pipe.
+- **NEVER set `surfaceshape`** when using `section_code`. The builder forces
+  `surfaceshape=0` (default) — any other value (1=roundtube, 2=extrude)
+  makes Sweep ignore the second-input cross-section and generate its own
+  shape, defeating the dual-wrangle pattern. If you set it, the builder
+  warns and overrides it.
+- **Cross-section coordinate convention (MANDATORY):** draw the section in
+  the **XZ plane**. The section's **Z axis aligns to the path's normal (N)
+  direction**, and its **Y axis aligns to the path's up direction**. Drawn
+  in the wrong plane, Sweep produces a flat/deformed tube instead of a
+  closed pipe. A circular tube cross-section is `set(r*cos(a), 0, r*sin(a))`
+  (Y=0, X and Z vary) — NOT `set(r*cos(a), r*sin(a), 0)`.
 - For twin tubes (chain stays, seat stays), create TWO polylines in `code`.
 
 This pattern produces **perfect closed tube geometry** with correct normals —
 no vertex winding errors, no open boundaries. It is the preferred method for
 ALL tube/pipe/frame components.
+
+## Backend: `python` (LAST RESORT)
+
+The `python` backend emits geometry from a single Python SOP cook body. It is
+the **last-resort backend** — use it ONLY for geometry no SOP can express
+(NURBS / subdivision surfaces, complex organic curves). Simple geometry
+(cylinders, boxes, torus, tubes, frames) MUST use `native_chain` or
+`vex_skeleton`.
+
+A python component MUST declare a `justification` string explaining why no
+SOP can express the geometry, or the builder emits a validation warning:
+
+```jsonc
+{
+  "id": "saddle",
+  "backend": "python",
+  "justification": "Organic NURBS saddle surface, no SOP equivalent",
+  "code": "<single-SOP python cook body emitting the saddle geometry>",
+  "reads": ["saddle_width"]
+}
+```
+
+The python SOP reads asset params via `hou.ch("../param")` — the builder
+installs `reads` as spare parms (same as `vex_skeleton`), so the two backends
+behave consistently.
 
 ## Backend: `native_chain` (simple shapes)
 
@@ -177,9 +213,41 @@ pre-computed value via `hou.ch("../derived_name")`:
 - ALL components read derived params via `hou.ch("../param")` — one
   computation, N consumers, zero redundancy.
 
-## `add_parm` tool — quick parameter creation
+## `rebuild_component` tool — incremental single-component rebuild
 
-Add a new parameter to any node at runtime (Houdini Python Shell):
+When only ONE component needs to change (a code tweak, a geometry fix), you
+don't have to discard the sandbox and rebuild everything. `rebuild_component`
+rebuilds just that component's subnet in an existing sandbox, leaving the
+others and their cook state intact:
+
+```python
+from edini.harness import rebuild_component
+rebuild_component(
+    sandbox_root_path="/obj/edini_sandbox_..._bicycle_...",  # from build result
+    component_id="wheel_rim",                                 # which to rebuild
+    component_spec={                                          # full new spec
+        "id": "wheel_rim",
+        "backend": "vex_skeleton",
+        "code": "<new path VEX>",
+        "section_code": "<new section VEX>",
+        "form_node": {"type": "sweep::2.0", "params": {"surfacetype": 2, "endcaptype": 1}},
+        "anchors": [...],
+    },
+)
+```
+
+- The recipe is NOT stored on the sandbox — you pass the new component spec
+  explicitly (`component_spec.id` must equal `component_id`).
+- Works for direct-merge components (no anchors) and stamped components
+  (with anchors) — the stamping layer (`{cid}_anchors` → `copy_{cid}` →
+  `{cid}_idfix`) is rebuilt too, preserving per-instance component_ids.
+- On failure the sandbox is left in the destroyed state (no rollback) so you
+  can diagnose; fix the spec and rebuild again.
+
+Use this INSTEAD of `discard_sandbox` + `build_procedural_asset` when the rest
+of the sandbox is fine and only one component changed.
+
+## `add_parm` tool — quick parameter creation
 
 ```python
 from edini.harness import add_parm

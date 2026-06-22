@@ -185,6 +185,12 @@ Pair with `make_gear_profile()` in a `vex_skeleton` component for toothed disc:
 }
 ```
 
+> **Note:** `surfaceshape: 1` (roundtube) here is the SINGLE-wrangle mode —
+> no `section_code`, so Sweep generates its own circular tube from `radius`.
+> This is the ONLY case where a non-zero `surfaceshape` is correct. If you
+> add a `section_code` (dual-wrangle), the builder will force `surfaceshape=0`
+> and warn — see the declarative-builder reference.
+
 ---
 
 ## Saddle Base (simplified box, replace with vex_skeleton+skin for real saddles)
