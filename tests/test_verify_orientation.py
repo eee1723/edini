@@ -277,16 +277,28 @@ class TestVerifyOrientationFlow(unittest.TestCase):
         MockNode._hou_ref = self.prev_hou_ref
 
     def _build_bike_geo(self, wheel_axle="X", handle_long="Z"):
+        """Build a bike geo with wheel + handlebar components.
+
+        Stage-5 (decision 3): the PCA fallback path was removed, so prims now
+        MUST carry a baked edini_world_axis. We bake it from the construction
+        params: the wheel's radial axis is its axle (the plane normal), the
+        handlebar's long axis is its direction. This keeps the tests' detection
+        semantics intact — when the baked axis matches expected_axis the check
+        passes; when it disagrees the check fails with the detected axis —
+        while exercising the construction path instead of PCA."""
         from tests.mock_hou import MockGeometry
         geo = MockGeometry()
         geo.clear()
         geo.addAttrib("prim", "component_id", "")
+        geo.addAttrib("prim", "edini_world_axis", (0.0, 0.0, 0.0))
 
+        wheel_axis_vec = {"X": (1, 0, 0), "Y": (0, 1, 0), "Z": (0, 0, 1)}[wheel_axle]
         wheel_plane = {"X": "YZ", "Y": "XZ", "Z": "XY"}[wheel_axle]
         for p in _ring_points(32, center=(0, 1, 0), radius=0.5, plane=wheel_plane):
             pt = geo.createPoint(); pt.setPosition(p)
             prim = geo.createPolygon(); prim.addVertex(pt)
             prim.setAttribValue("component_id", "wheel_front")
+            prim.setAttribValue("edini_world_axis", wheel_axis_vec)
 
         handle_dir = {"X": (1, 0, 0), "Y": (0, 1, 0), "Z": (0, 0, 1)}[handle_long]
         for p in _tube_points(32, start=(0, 2, 0), direction=handle_dir,
@@ -294,6 +306,7 @@ class TestVerifyOrientationFlow(unittest.TestCase):
             pt = geo.createPoint(); pt.setPosition(p)
             prim = geo.createPolygon(); prim.addVertex(pt)
             prim.setAttribValue("component_id", "handlebar")
+            prim.setAttribValue("edini_world_axis", handle_dir)
 
         return geo
 
@@ -482,8 +495,15 @@ class TestVerifyOrientationConstructionPath(unittest.TestCase):
         self.assertGreater(chk["pca_crosscheck"]["divergence_deg"], 75)
         self.assertIn("warning", chk["pca_crosscheck"])
 
-    def test_no_world_axis_falls_back_to_pca(self):
-        """Prims WITHOUT edini_world_axis still go through PCA (backward compat)."""
+    def test_no_world_axis_now_rejected(self):
+        """Decision 3 (single-path design): prims WITHOUT edini_world_axis FAIL.
+        The PCA fallback path was removed (it misclassifies elongated cylinders
+        → the hub 90° bug). With no estimation path left, a prim without a
+        baked axis fails outright and points at the fix: build via
+        build_procedural_asset (bakes edini_world_axis from construction_axis)
+        or remove the assert. This replaces the old
+        'no world axis falls back to PCA / backward compat' test — that
+        property was explicitly retired by decision 3."""
         from tests.mock_hou import MockGeometry
         geo = MockGeometry()
         geo.clear()
@@ -497,9 +517,12 @@ class TestVerifyOrientationConstructionPath(unittest.TestCase):
             {"component_id": "wheel_front", "kind": "radial",
              "expected_axis": "X", "tolerance_deg": 15},
         ])
-        self.assertEqual(result["passed"], 1)
+        self.assertEqual(result["failed"], 1)
+        self.assertEqual(result["passed"], 0)
         chk = result["checks"][0]
-        self.assertEqual(chk["method"], "pca")
+        self.assertEqual(chk["method"], "no_axis")
+        self.assertFalse(chk["passed"])
+        self.assertIn("edini_world_axis", chk["error"])
 
 
 if __name__ == "__main__":

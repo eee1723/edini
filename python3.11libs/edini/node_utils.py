@@ -2652,70 +2652,33 @@ def verify_orientation(
                     failed += 1
                 continue
 
-            # ── PCA fallback path (no edini_world_axis baked) ──
-            if len(pts) < 4:
-                entry["error"] = (
-                    f"Only {len(pts)} unique points - need >= 4 for PCA. "
-                    "Subdivide or add more samples."
-                )
-                results.append(entry); failed += 1; continue
-
-            cov, centroid = _compute_covariance(pts)
-            eigs, vecs = _jacobi_eigen_3x3(cov)
-
-            rank = _KIND_EIGEN_RANK[kind]
-            detected_vec = vecs[rank]
-            expected_vec = _AXIS_VECTORS[expected_axis]
-            if not signed_kind:
-                detected_vec = _flip_to_hemisphere(detected_vec, expected_vec)
-            detected_axis = _dominant_axis_name(detected_vec)
-
-            angle_deg, fix_q = _axis_angle_between(
-                detected_vec, expected_vec, signed=signed_kind
-            )
-            passed_check = angle_deg <= tol_deg
-
-            eig_total = sum(abs(e) for e in eigs) + 1e-12
-            ratios = [abs(e) / eig_total for e in eigs]
-
+            # ── No edini_world_axis baked (PCA fallback REMOVED, decision 3) ──
+            # The PCA estimation path was removed because it misclassifies
+            # elongated cylinders (the hub 90° bug): PCA picks the inertia axis,
+            # which for a radially-symmetric tube is the length axis, not the
+            # radial axle the assert expects. With the fallback gone there is no
+            # estimation path left, so a prim without a baked axis fails
+            # outright and points the agent at the fix: the asset must be built
+            # via build_procedural_asset (which bakes edini_world_axis from the
+            # declared construction_axis) or, if the component genuinely has no
+            # construction axis, the orientation_assert should be removed.
             entry.update({
-                "method": "pca",
+                "method": "no_axis",
                 "point_count": len(pts),
-                "centroid": [round(c, 4) for c in centroid],
-                "eigenvalues": [round(e, 6) for e in eigs],
-                "eigenvalue_ratios": [round(r, 4) for r in ratios],
-                "eigenvectors": [
-                    [round(c, 4) for c in vecs[0]],
-                    [round(c, 4) for c in vecs[1]],
-                    [round(c, 4) for c in vecs[2]],
-                ],
-                "detected_axis": detected_axis,
-                "detected_vector": [round(c, 4) for c in detected_vec],
-                "angle_error_deg": round(angle_deg, 2),
-                "passed": passed_check,
+                "passed": False,
+                "error": (
+                    f"{cid} has no edini_world_axis prim attribute. Orientation "
+                    f"verification requires a baked construction axis (decision 3 "
+                    f"— PCA estimation was removed because it misclassifies "
+                    f"elongated cylinders). Build this asset via "
+                    f"build_procedural_asset (it bakes edini_world_axis from the "
+                    f"declared construction_axis), or remove this "
+                    f"orientation_assert if the component has no meaningful "
+                    f"construction axis."
+                ),
             })
-
-            if not passed_check:
-                kind_hint = {
-                    "radial": "rotational symmetry axis (axle)",
-                    "planar": "surface normal",
-                    "elongated": "long axis",
-                }[kind]
-                entry["hint"] = (
-                    f"{cid} {kind_hint} currently along {detected_axis} "
-                    f"({[round(c,2) for c in detected_vec]}). "
-                    f"Expected {expected_axis}. Apply quaternion "
-                    f"(x,y,z,w)={[round(c,4) for c in fix_q]} to the component's "
-                    f"geometry, or pre-multiply the generating transform: "
-                    f"hou.Quaternion({round(fix_q[3],4)}, "
-                    f"hou.Vector3({round(fix_q[0],4)}, {round(fix_q[1],4)}, {round(fix_q[2],4)}))."
-                )
-
             results.append(entry)
-            if passed_check:
-                passed += 1
-            else:
-                failed += 1
+            failed += 1
 
         return {
             "success": True,
