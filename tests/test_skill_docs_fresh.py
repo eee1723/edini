@@ -127,6 +127,40 @@ def test_vexlib_usage_build_path_consistent():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  Guard 4b: no doc may reference the deleted 'Step 3a/3b' SKILL.md sections
+# ═══════════════════════════════════════════════════════════════════════════
+# The router was rewritten as a pipeline router with a 强制门控 section; the
+# old numbered 'Step 3a/3b' sections no longer exist. Cross-refs to them are
+# broken pointers.
+
+@pytest.mark.parametrize("path,text", list(ALL_SKILLS.items()),
+                         ids=lambda p: p)
+def test_no_skill_references_deleted_step_sections(path, text):
+    # 'Step 3b' / 'Step 3a' as a SKILL.md section pointer (not incidental text).
+    # The broken form was 'SKILL.md Step 3b' / '§ Step 3a'.
+    for stale in ("SKILL.md Step 3b", "SKILL.md Step 3a",
+                  "SKILL.md § Step 3a", "SKILL.md § Step 3b",
+                  "SKILL.md **Step 3b"):
+        assert stale not in text, (
+            f"{path}: references deleted '{stale}' section. The router was "
+            "rewritten — point at the 强制门控 section or the component-building "
+            "Backend red-line table instead.")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Guard 4c: python-sop-template must not teach network_mode for multi-component
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_python_sop_template_deprecates_network_mode():
+    tpl = read(f"{SKILL}/procedural-modeling/scripts/python-sop-template.py")
+    # The old iron-rule comment told agents to 'use network_mode=true' for
+    # multi-component. It must now point at build_procedural_asset.
+    assert "To build a network, use network_mode=true" not in tpl, (
+        "python-sop-template.py still tells agents to use network_mode for "
+        "multi-component. Point at build_procedural_asset instead.")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  Guard 5: the verification_receipt must be documented where commit is taught
 # ═══════════════════════════════════════════════════════════════════════════
 # Stage 4 made commit_sandbox return a tamper-evident receipt; Stage 7 made

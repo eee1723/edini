@@ -17,7 +17,8 @@ Secondary components and surface treatments that repeat ≥10× (rivets along a
 seam, bricks in a wall, roof tiles, balusters, chain links, scales/shingles,
 crenellations, studs) are real detail — but only when built as **one template
 piece copied onto scatter points**, not hand-stamped in a Python loop. See
-SKILL.md **Step 3b — Micro-repetition MUST use Copy-to-Points**.
+the `component-building` skill's **Backend red-line table** (重复件 → native_chain
+template + CTP).
 
 - Good: one `rivet` python SOP (single rivet, tagged `component_id="rivet"`) +
   a scatter-points SOP feeding a copytopoints. Edit the rivet once → all update.

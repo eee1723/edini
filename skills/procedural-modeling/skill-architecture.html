@@ -197,6 +197,16 @@
 </head>
 <body>
 
+<!-- ⚠ 架构图已部分更新到单路径+三道闸门设计（2026-06-22）。
+     权威来源是 SKILL.md + references/ 下的 .md 文档；本 HTML 为可视化预览，
+     若与本图冲突，以 SKILL.md 为准。部分旧卡片（标 Step 3a/3b/4）的编号
+     已废弃，内容已修正但保留原位置。 -->
+<div style="background:#3a2a00;border-bottom:1px solid #5a4400;color:#ffdf80;padding:8px 16px;font-size:13px;">
+  <strong>注意：</strong>本图为可视化预览。权威文档为 <code>SKILL.md</code> +
+  <code>references/*.md</code>。已更新到单构建路径 + 三道闸门设计（G1/G2/G3）。
+  build_procedural_asset 是唯一多组件入口；raw network_mode 无法过 G3。
+</div>
+
 <!-- ═══════════ HERO ═══════════ -->
 <div class="hero">
   <h1>Edini <span>Procedural Modeling</span> Skill</h1>
@@ -332,38 +342,38 @@
       </div>
 
       <div class="card">
-        <h3>Step 3a — 选择构建路径</h3>
-        <div class="path">SKILL.md § Step 3a</div>
+        <h3>构建路径决策（单路径 + 三道闸门设计）</h3>
+        <div class="path">SKILL.md § 强制门控</div>
         <div class="design">
-          根据组件数量和类型自动路由到正确的工具：<br>
-          多组件 → Builder Recipe<br>
-          多变体 → Variant Scatter<br>
-          路径+截面 → VEXlib + network_mode<br>
-          单件生成器 → 单SOP沙盒
+          build_procedural_asset 是唯一的多组件构建入口（内部串联
+          validate→build→烘焙→组装，并过 G1/G2 闸）。commit_sandbox 的 G3 闸
+          拒绝任何未经 builder 烘焙 edini_world_axis 的资产。
         </div>
-        <div class="prompt"># 🛠️ 构建路径决策表
+        <div class="prompt"># 🛠️ 构建路径决策表（单路径设计）
 
 多组件资产（≥2组件或有可替换/重复部件）
-  → houdini_build_procedural_asset（声明式食谱）★首选
+  → build_procedural_asset（声明式食谱）★唯一多组件入口
 
 重复部件有多个样式（N种窗户/门/树，种子散布）
   → houdini_variant_scatter（attribfrompieces + Copy按variant分发）
 
 路径+截面或轮廓+拉伸形体（管、梁、楼梯、柱）
-  → VEX vexlib 函数 + network_mode 或 recipe 中的原生SOP
+  → recipe 中的 vex_skeleton backend（VEXlib 函数 + Sweep/PolyExtrude）
   → 查阅 scripts/vexlib/README.md（函数目录）
   → 查阅 scripts/vexlib-usage.md（配套节点配方）
 
-无法用食谱表达的非标准拓扑
+无法用食谱表达的非标准拓扑（最后手段，需文档说明）
   → houdini_run_python_sandbox(network_mode=true)
+  ⚠ raw network_mode 不烘焙 edini_world_axis，若几何带 @component_id
+    则无法通过 G3 commit 闸门
 
 真正的单件生成器（一个分形、一个曲面）
   → houdini_run_python_sandbox（默认单SOP模式）</div>
       </div>
 
       <div class="card">
-        <h3>Step 3b — 微观重复必须用 CTP</h3>
-        <div class="path">SKILL.md § Step 3b</div>
+        <h3>微观重复必须用 CTP（Backend 红线）</h3>
+        <div class="path">component-building § Backend 红线</div>
         <div class="design">
           两种粒度的重复，都必须用 Copy-to-Points，禁止内联生成：<br>
           <strong>组件级</strong>（塔、窗、轮、桌腿）→ Builder anchors → CTP<br>

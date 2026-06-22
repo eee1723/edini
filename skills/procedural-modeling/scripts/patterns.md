@@ -77,7 +77,8 @@ pt.setAttribValue("component_id", "wheel")
 For any surface covered by ≥10 copies of a small same-shaped piece (bricks,
 roof tiles, shingles, rivets along a seam, balusters, chain links), build it as
 **one template piece + scatter points + Copy-to-Points**. Never hand-stamp
-these in a `for i in range(N):` loop (see SKILL.md Step 3b).
+these in a `for i in range(N):` loop (see the `component-building` Backend
+red-line table).
 
 The whole thing is a 3-node network built via `build_procedural_asset`
 (one anchored component — the only multi-component build path. Do NOT use

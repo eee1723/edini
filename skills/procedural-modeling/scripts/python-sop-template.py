@@ -1,9 +1,16 @@
 # Python SOP generator skeleton.
-# Single-SOP mode (default). For multi-component, see network_mode block below.
+# Single-SOP mode (default): one self-contained generator (a fractal, a
+# parametric surface, a single wheel template).
+#
+# For MULTI-COMPONENT assets (body + wheels + handles via Copy-to-Points),
+# do NOT hand-write the network below — use `build_procedural_asset(recipe)`.
+# It builds the Copy-to-Points/merge/postprocess network deterministically
+# AND bakes edini_world_axis (required to pass the G3 commit gate). A raw
+# network_mode hand-written network cannot pass G3.
 #
 # IRON RULES (from SKILL.md):
 #   1. NEVER call createNode inside this cook body -> infinite recursion.
-#      To build a network, use network_mode=true (see bottom).
+#      Multi-component: use build_procedural_asset (it owns the network).
 #   2. Declare ALL attributes BEFORE creating any geometry.
 #   3. Tag every prim with component_id.
 
@@ -82,9 +89,15 @@ poly.setAttribValue("material_zone", "rubber")
 
 
 # =====================================================================
-# NETWORK MODE (for multi-component assets). Do NOT mix with the above.
-# Pass network_mode=true to houdini_run_python_sandbox. The code below runs
-# in the sandbox geo container (NOT inside a cook), so createNode is safe.
+# NETWORK MODE — DEPRECATED for multi-component assets.
+# The block below shows the OLD hand-written network pattern. It is kept
+# only as a reference for genuinely single-piece assets that a recipe
+# cannot express (and even then, the geometry must NOT carry @component_id
+# prims, or the G3 commit gate refuses it for lacking edini_world_axis).
+#
+# For any multi-component / repeated-part asset, use build_procedural_asset.
+# Pass network_mode=true to houdini_run_python_sandbox ONLY for last-resort
+# single-piece topologies, with a documented reason.
 # =====================================================================
 #
 # container = sandbox_root            # injected; == hou.node(sandbox_root_path)
