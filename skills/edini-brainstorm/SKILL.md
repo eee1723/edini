@@ -65,11 +65,13 @@ After gathering answers, propose the design as a structured summary:
 ### 组装架构
 [ASCII diagram showing Merge → CTP → postprocess flow]
 
-### Workspace Plan（微细重复件独立构建计划）
-| Workspace | 内容 | 方法 |
+### Micro-Repetition Plan（微细重复件计划）
+| 组件 | 内容 | 方法（闸门安全） |
 |---|---|---|
-| _wheel_spokes_ | 单根辐条模板 + scatter → CTP | network_mode sandbox |
-| _chain_links_ | 单节链条模板 + 路径scatter → CTP | network_mode sandbox |
+| _wheel_spokes_ | 单根辐条模板 + N 个 anchors | `build_procedural_asset` 多锚点 CTP（样式单一）|
+| _chain_links_ | 单节链条模板 + 路径 scatter 点 | `build_procedural_asset` 多锚点 CTP，或 `houdini_variant_scatter`（样式多样）|
+
+> **不要用 raw `network_mode` 做微重复**——它不烘焙 `edini_world_axis`，无法通过 G3 commit 闸门。多锚点 CTP 或 variant_scatter 是闸门安全的替代。
 
 \`\`\`
 

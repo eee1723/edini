@@ -98,3 +98,9 @@ if overlap / min(vol(A), vol(B)) > 0.05：
 | 穿插（高重叠）| 组件碰撞 | **告警** — 检查约束表达式 |
 | 约束 `block` 失败 | 硬性约束被违反 | **阻塞提交** — 缩小范围或放宽约束 |
 | 约束 `warn` 失败 | 软性约束被违反 | **告警** — 向用户说明 |
+
+## 完成后
+
+- **所有场景全过（无 block）** → 返回 `procedural-modeling` 路由，调 `commit_sandbox`（G3 闸 + verification_receipt）。汇报逐字段引用 receipt
+- **有 block 失败** → 缩小参数范围（min/max）或加固几何体；回到 `recipe-authoring` 改 params 重建
+- **只有 warn** → 向用户说明告警项，仍可 commit（warn 不阻塞）

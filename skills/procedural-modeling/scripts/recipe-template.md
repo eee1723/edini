@@ -21,13 +21,13 @@ MODULAR ANCHORS (for Copy-to-Points):
   - anchor_name: count, purpose (e.g., "wheel_mount: 4, wheel placement positions")
 
 ORIENTATION ASSERTS (consumed by verify_orientation — MANDATORY):
-  - wheel_fl:        kind=radial,     expected_axis=X  (axle horizontal across bike)
-  - wheel_fr:        kind=radial,     expected_axis=X
-  - wheel_rl:        kind=radial,     expected_axis=X
-  - wheel_rr:        kind=radial,     expected_axis=X
-  - handlebar:       kind=elongated,  expected_axis=Z  (long axis across front)
-  - frame_downtube:  kind=elongated,  expected_axis=Z  (or whatever the design calls for)
-  - saddle:          kind=planar,     expected_axis=Y, signed=true  (must point UP)
+  - wheel_fl:        kind=radial,     expected_axis=X, construction_axis=Y  (axle horizontal across bike)
+  - wheel_fr:        kind=radial,     expected_axis=X, construction_axis=Y
+  - wheel_rl:        kind=radial,     expected_axis=X, construction_axis=Y
+  - wheel_rr:        kind=radial,     expected_axis=X, construction_axis=Y
+  - handlebar:       kind=elongated,  expected_axis=Z, construction_axis=Z  (long axis across front)
+  - frame_downtube:  kind=elongated,  expected_axis=Z, construction_axis=Z
+  - saddle:          kind=planar,     expected_axis=Y, signed=true, construction_axis=Y  (must point UP)
 
 DETAIL PLAN:
   - Post-processing: [bevel, subdivide, noise, normal]
@@ -44,6 +44,8 @@ VERIFICATION:
 - `radial`: component has rotational symmetry around an axis (wheel, gear). `expected_axis` = the axle direction.
 - `elongated`: component is long/thin (tube, bar, handlebar). `expected_axis` = the long dimension.
 - `planar`: component is flat (panel, plate, saddle). `expected_axis` = the surface normal. Use `signed=true` when direction matters (e.g. saddle must point up +Y).
+
+**`construction_axis` is MANDATORY on every assert (A8).** It's the **local-space** axis the component is generated around (the axle for a radial wheel, the long dimension for an elongated tube, the normal for a planar surface). The builder bakes `edini_world_axis` from it; without it the check fails (`method:"no_axis"` — there is no PCA fallback). Pass an **empty** `orientation_asserts` array to skip orientation verification entirely.
 
 ---
 

@@ -83,3 +83,9 @@ license: MIT
 
 `capture_review` 是**仅存档**步骤 — 在提交前保存一次截图以备记录。
 **绝不用它来驱动重建循环。** 不要用视觉模型判断它。不要从截图“看到”的缺失组件来重建。
+
+## 完成后
+
+- **验证全过（health overall_ok、orientation 全过、inventory 无缺件）** → 返回 `procedural-modeling` 路由，进入 `parametric-testing`（参数边界测试），全过后 `commit_sandbox`（G3 闸 + receipt）
+- **某层失败** → 按调试纪律（一轮一个命名缺陷，2 轮换方案，3 轮问用户）修复；方向错→加载 `component-building` 修 recipe，健康错→Fuse/Clean
+- **3 轮仍失败** → 停止，向用户报告失败的层 + 具体缺陷 + 已尝试方案

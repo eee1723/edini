@@ -1,19 +1,13 @@
-# Two-Layer Verification Protocol
+# Verification Protocol
 
-**Two layers, not three.** A recurring failure mode was the visual layer
-(`capture_review` + `describe_image`) driving rebuild loops: vision
-models cannot reliably see small/thin components (bricks, chains, bolts) at
-viewport resolution, so they report real geometry as "missing" or "smooth",
-contradicting the geometry inventory — and the agent wastes iterations
-rebuilding geometry that was already correct. **The visual layer is now an
-archive step only, not a verification loop.** Rely on the cheap authoritative
-layers; capture a final screenshot for the record but never let it drive a
-rebuild.
+**Verification layers (cheap authoritative checks) are separate from the build gates (G1/G2/G3).** The layers below are the checks you run to judge quality; the gates are defense-in-depth the commit tool enforces automatically. Both matter.
+
+A recurring failure mode was the visual layer (`capture_review` + `describe_image`) driving rebuild loops: vision models cannot reliably see small/thin components (bricks, chains, bolts) at viewport resolution, so they report real geometry as "missing" or "smooth", contradicting the geometry inventory — and the agent wastes iterations rebuilding geometry that was already correct. **The visual layer is now an archive step only, not a verification loop.** Rely on the cheap authoritative layers; capture a final screenshot for the record but never let it drive a rebuild.
 
 | Layer | Tool | What it catches | Authority | Cost |
 |---|---|---|---|---|
 | **1. Geometry health** | `inspect_health` | orphan points, stray open curves (BLOCKING); degenerate faces, non-manifold edges, open boundary edges, coincident points (ADVISORY) | AUTHORITATIVE — blocking checks must pass | cheap (no render) |
-| **2a. Orientation** | `verify_orientation` | Wrong axle direction, flipped components, misaligned axes | AUTHORITATIVE — gate | cheap |
+| **2a. Orientation** | `verify_orientation` | Wrong axle direction, flipped components, misaligned axes (reads the baked `edini_world_axis`) | AUTHORITATIVE — gate | cheap |
 | **2b. Inventory data** | `geometry_inventory` / the `geometry_inventory` field returned by `capture_review` | Which component_ids exist, their prim counts + relative sizes | AUTHORITATIVE for "is it present?" | cheap |
 | **3. Archive capture** | `capture_review` (optional, commit-time only) | A saved screenshot of the finished asset | **Archive only — NOT a verification loop** | render |
 
@@ -40,8 +34,10 @@ false, fix the named blocking check only.
 ## Mandatory Pre-Commit Sequence
 
 ```
-0. CHECK structure_advisory (returned by run_python_sandbox) — if is_monolithic,
-   discard and rebuild modular. Do this BEFORE any verification.
+0. The build already ran G1 (validate_recipe A1-A9) + G2 (bake gate) inside
+   build_procedural_asset. CHECK the build result's structure_advisory + 
+   component_id_check.missing — if monolithic or missing ids, fix the recipe
+   and rebuild BEFORE any verification.
 
 1. inspect_health on the OUT node — MANDATORY, not optional.
    - overall_ok reflects ONLY the BLOCKING checks (orphan_points, open_curves).
@@ -52,9 +48,12 @@ false, fix the named blocking check only.
      about to run. Do NOT rebuild to zero them out.
 
 2. verify_orientation on the OUT node
-   - Pass all checks from the recipe's ORIENTATION ASSERTS section
-   - If any check fails, apply the hint quaternion to the SOURCE code and
-     re-run the sandbox. Do NOT rotate post-hoc on geometry.
+   - Pass all checks from the recipe's ORIENTATION ASSERTS section.
+   - Each assert MUST declare construction_axis (A8) — the builder bakes
+     edini_world_axis from it; verify_orientation reads that (method:"construction").
+     PCA estimation is gone (method:"no_axis" = hard fail if the axis wasn't baked).
+   - If any check fails, the hint says to fix the SOURCE (construction_axis /
+     anchor orient / component code), NOT to rotate post-hoc.
 
 3. geometry_inventory on the OUT node
    - Confirm every expected component_id is present with prim_count > 0.
@@ -68,8 +67,14 @@ false, fix the named blocking check only.
    - If you are unsure whether a component is correct, re-check the INVENTORY
      (step 3), not the pixels. Inventory is authoritative; pixels are not.
 
-5. commit_sandbox — runs the modular-structure gate then the
-   orientation gate as final checks.
+5. commit_sandbox — runs the G3 gate (three defense-in-depth layers):
+   - G3a bake: every @component_id prim must carry a non-zero edini_world_axis
+     (refuses raw network_mode builds).
+   - G3b orientation: verify_orientation on the asserts.
+   - G3c health: BLOCKING checks must pass.
+   On success returns a verification_receipt — your completion report MUST
+   reference its fields (passed, orientation.failed, health.hard_errors_count)
+   rather than re-counting geometry. Report passed:false honestly.
 ```
 
 ## Debug Discipline (anti-flail rules)
@@ -103,17 +108,18 @@ the geometry is essentially unchanged, repeat 4×. These rules prevent it:
 
 ```python
 # Wheel: axle should be horizontal (along X for a bike facing +Z)
+# construction_axis = the local axis the component is generated around (MANDATORY, A8)
 verify_orientation(
     node_path="/obj/edini_sandbox_.../edini_generate",
     checks=[
-        {"component_id": "wheel_fl", "kind": "radial", "expected_axis": "X"},
-        {"component_id": "wheel_fr", "kind": "radial", "expected_axis": "X"},
-        {"component_id": "wheel_rl", "kind": "radial", "expected_axis": "X"},
-        {"component_id": "wheel_rr", "kind": "radial", "expected_axis": "X"},
+        {"component_id": "wheel_fl", "kind": "radial", "expected_axis": "X", "construction_axis": "Y"},
+        {"component_id": "wheel_fr", "kind": "radial", "expected_axis": "X", "construction_axis": "Y"},
+        {"component_id": "wheel_rl", "kind": "radial", "expected_axis": "X", "construction_axis": "Y"},
+        {"component_id": "wheel_rr", "kind": "radial", "expected_axis": "X", "construction_axis": "Y"},
         # Handlebar long axis transverse (Z direction for a bike facing +Z)
-        {"component_id": "handlebar", "kind": "elongated", "expected_axis": "Z"},
+        {"component_id": "handlebar", "kind": "elongated", "expected_axis": "Z", "construction_axis": "Z"},
         # Saddle normal must point up (signed=true)
-        {"component_id": "saddle", "kind": "planar", "expected_axis": "Y", "signed": True},
+        {"component_id": "saddle", "kind": "planar", "expected_axis": "Y", "signed": True, "construction_axis": "Y"},
     ]
 )
 ```
