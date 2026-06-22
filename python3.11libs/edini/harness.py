@@ -1754,6 +1754,41 @@ def _validate_recipe(recipe: Any) -> list[str]:
     return errors
 
 
+def _validate_recipe_warnings(recipe: Any) -> list[str]:
+    """Return non-blocking recipe warnings (separate from _validate_recipe's
+    blocking errors).
+
+    Currently checks:
+    - python-backend components without a ``justification`` field. Python is
+      the last-resort backend (for NURBS / subdivision surfaces with no SOP
+      equivalent); simple geometry should use native_chain or vex_skeleton.
+      A component using python must declare a ``justification`` string
+      explaining why SOP cannot express the geometry, or get a warning guiding
+      the author to the right backend.
+    """
+    warnings: list[str] = []
+    if not isinstance(recipe, dict):
+        return warnings
+    components = recipe.get("components")
+    if not isinstance(components, list):
+        return warnings
+    for i, comp in enumerate(components):
+        if not isinstance(comp, dict):
+            continue
+        if comp.get("backend", "python") == "python":
+            just = comp.get("justification")
+            if not isinstance(just, str) or not just.strip():
+                warnings.append(
+                    f"components[{i}] ('{comp.get('id', '?')}') uses the python "
+                    f"backend without a 'justification' field. Python is the "
+                    f"last-resort backend (for NURBS/subdivision surfaces with "
+                    f"no SOP equivalent); simple geometry should use "
+                    f"native_chain or vex_skeleton. Add a 'justification' "
+                    f"string explaining why SOP cannot express this geometry "
+                    f"to silence this warning.")
+    return warnings
+
+
 def _anchor_generator_code(anchors: list[dict], component_id: str) -> str:
     """Generate a single-SOP python cook body that emits the given anchor points.
 
@@ -2969,6 +3004,9 @@ def build_procedural_asset(
     errors_runtime: list[str] = []
     components_built: list[str] = []
     anchors_built: dict[str, int] = {}
+    # Non-blocking recipe warnings (e.g. python backend without justification).
+    # Surfaced in the build result so the agent can act on them.
+    warnings.extend(_validate_recipe_warnings(recipe))
     out_path = ""
 
     try:

@@ -1312,6 +1312,39 @@ class TestPythonBackendParams(unittest.TestCase):
         parm = py_node.parm("wheel_r")
         self.assertIsNotNone(parm, "python SOP 未装 wheel_r spare parm")
 
+    def test_python_backend_without_justification_warns(self):
+        """python 后端应用作最后手段，需 justification 说明为何不能用 SOP。
+        无 justification 应产生 warning（不阻断，保持向后兼容）。"""
+        recipe = {
+            "asset_name": "pywarn_test",
+            "components": [
+                {"id": "c1", "backend": "python", "code": _geo_code("c1")},
+            ],
+        }
+        # 不应阻断（errors 为空）
+        errors = harness._validate_recipe(recipe)
+        self.assertEqual(errors, [], f"python 后端不应阻断: {errors}")
+        # 但应产生 warning
+        warnings = harness._validate_recipe_warnings(recipe)
+        self.assertTrue(
+            any("python" in w.lower() and "justification" in w.lower() for w in warnings),
+            f"python 后端无 justification 应产生 warning: {warnings}")
+
+    def test_python_backend_with_justification_no_warn(self):
+        """有 justification 的 python 后端不产生 warning。"""
+        recipe = {
+            "asset_name": "pyok_test",
+            "components": [
+                {"id": "c1", "backend": "python",
+                 "justification": "Organic NURBS saddle surface, no SOP equivalent",
+                 "code": _geo_code("c1")},
+            ],
+        }
+        warnings = harness._validate_recipe_warnings(recipe)
+        self.assertFalse(
+            any("python" in w.lower() and "justification" in w.lower() for w in warnings),
+            f"有 justification 不应 warning: {warnings}")
+
 
 if __name__ == "__main__":
     unittest.main()
