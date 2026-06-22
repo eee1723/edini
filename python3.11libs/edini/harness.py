@@ -2587,10 +2587,17 @@ def _build_python_component(
 def _axis_bake_vex_snippet(world_axis: tuple[float, float, float]) -> str:
     """VEX snippet (run over prims) that bakes edini_world_axis onto every
     prim. Used by native_chain / vex_skeleton direct-merge tag nodes so the
-    G2 bake check passes without relying on the python direct-merge suffix."""
+    G2 bake check passes without relying on the python direct-merge suffix.
+
+    Uses ``addattrib(0, "prim", name, default)`` where the default IS the axis
+    vector — addattrib initializes all existing prims to its default, so no
+    separate per-prim write is needed. The naive ``3@name = {...}`` write form
+    FAILS to cook in H21 when the attribute doesn't exist yet (it cannot
+    auto-create on write in prim run-over context). Caught by hython e2e
+    validation (the mock does not compile VEX, so this slipped past mock tests)."""
     ax = ", ".join(repr(float(c)) for c in world_axis)
     return (
-        "3@edini_world_axis = {" + ax + "};\n"
+        'addattrib(0, "prim", "edini_world_axis", {' + ax + '});\n'
     )
 
 

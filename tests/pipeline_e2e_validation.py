@@ -4,7 +4,7 @@ Edini Pipeline Architecture — End-to-End Validation Script
 Run in Houdini Python Shell.
 """
 import json, os, sys
-EDINI_ROOT = r"Z:\EEE_Project\Edini"
+EDINI_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(EDINI_ROOT, "python3.11libs"))
 for mod in list(sys.modules.keys()):
     if mod.startswith("edini."): del sys.modules[mod]

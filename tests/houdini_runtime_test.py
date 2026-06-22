@@ -4,7 +4,7 @@ Validates: parm catalog, Phase A validation, Phase B+C build, and commit.
 """
 import sys, os, json
 
-EDINI_ROOT = r"Z:\EEE_Project\Edini"
+EDINI_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(EDINI_ROOT, "python3.11libs"))
 
 # Clear any cached edini modules
