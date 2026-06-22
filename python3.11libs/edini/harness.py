@@ -2893,6 +2893,62 @@ def _build_vex_skeleton_component(
 # ═══════════════════════════════════════════════════════════════
 
 
+def _stamp_component(
+    root_path: str,
+    cid: str,
+    out_sop: Any,
+    anchors: list[dict],
+    resolved_anchors: list[dict],
+    anchor_ids: list[str],
+    world_axis_by_cid: dict[str, tuple[float, float, float]],
+    warnings: list[str],
+) -> Any:
+    """Build the Copy-to-Points stamping layer for a component with anchors.
+
+    Creates ``{cid}_anchors`` (anchor point generator) → ``copy_{cid}``
+    (copytopoints) → ``{cid}_idfix`` (per-instance component_id overwrite +
+    per-instance edini_world_axis bake). Returns the idfix node — the node
+    that feeds the merge.
+
+    Shared by build_procedural_asset and rebuild_component so both paths
+    produce identical stamping structure. (Previously this logic was inlined
+    only in build_procedural_asset, making incremental rebuild of a stamped
+    component impossible without losing per-instance ids.)
+    """
+    anc_name = f"{cid}_anchors"
+    anc_sop = _safe_create_node(root_path, "python", anc_name)
+    _set_parm_safe(anc_sop, "python", _anchor_generator_code(resolved_anchors, cid))
+    anc_sop.cook(force=True)
+    anc_errs = list(anc_sop.errors() or [])
+    if anc_errs:
+        warnings.append(f"component '{cid}' anchors: {anc_errs}")
+
+    copy_name = f"copy_{cid}"
+    copy_node = _safe_create_node(root_path, "copytopoints", copy_name)
+    copy_node.setInput(0, out_sop)
+    copy_node.setInput(1, anc_sop)
+
+    ow_name = f"{cid}_idfix"
+    ow_sop = _safe_create_node(root_path, "python", ow_name)
+    stamp_world_axes = [world_axis_by_cid.get(aid) for aid in anchor_ids]
+    # Only bake if ALL anchors resolved a world axis (partial baking would
+    # leave some instances tag-less and silently fall back to PCA — confusing).
+    if any(wa is None for wa in stamp_world_axes):
+        stamp_world_axes_param: list[tuple[float, float, float]] | None = None
+    else:
+        stamp_world_axes_param = stamp_world_axes  # type: ignore[assignment]
+    _set_parm_safe(
+        ow_sop, "python",
+        _component_id_overwrite_snippet(
+            anchor_ids, world_axes=stamp_world_axes_param))
+    ow_sop.setInput(0, copy_node)
+    ow_sop.cook(force=True)
+    ow_errs = list(ow_sop.errors() or [])
+    if ow_errs:
+        warnings.append(f"component '{cid}' idfix: {ow_errs}")
+    return ow_sop
+
+
 def build_procedural_asset(
     recipe: dict,
     *,
@@ -3256,50 +3312,9 @@ def build_procedural_asset(
                 anchor_ids = [a["component_id"] for a in resolved_anchors]
                 anchors_built[cid] = len(resolved_anchors)
 
-                # anchor generator python SOP (fed numeric, resolved anchors)
-                anc_name = f"{cid}_anchors"
-                anc_sop = _safe_create_node(root_path, "python", anc_name)
-                _set_parm_safe(anc_sop, "python", _anchor_generator_code(resolved_anchors, cid))
-                anc_sop.cook(force=True)
-                anc_errs = list(anc_sop.errors() or [])
-                if anc_errs:
-                    warnings.append(f"component '{cid}' anchors: {anc_errs}")
-
-                # copytopoints: in0 = component geometry, in1 = anchor points
-                copy_name = f"copy_{cid}"
-                copy_node = _safe_create_node(root_path, "copytopoints", copy_name)
-                copy_node.setInput(0, out_sop)
-                copy_node.setInput(1, anc_sop)
-
-                # id-overwrite python SOP: gives each instance its anchor
-                # component_id, AND bakes edini_world_axis per instance when
-                # the recipe declared construction axes (B-station).
-                ow_name = f"{cid}_idfix"
-                ow_sop = _safe_create_node(root_path, "python", ow_name)
-                stamp_world_axes = [
-                    world_axis_by_cid.get(aid)
-                    for aid in anchor_ids
-                ]
-                # Only bake if ALL anchors of this component resolved a world
-                # axis (partial baking would leave some instances tag-less and
-                # silently fall back to PCA for them — confusing). If any is
-                # missing, pass None to keep the idfix on the PCA fallback.
-                if any(wa is None for wa in stamp_world_axes):
-                    stamp_world_axes_param: list[tuple[float, float, float]] | None = None
-                else:
-                    stamp_world_axes_param = stamp_world_axes  # type: ignore[assignment]
-                _set_parm_safe(
-                    ow_sop, "python",
-                    _component_id_overwrite_snippet(
-                        anchor_ids, world_axes=stamp_world_axes_param))
-                ow_sop.setInput(0, copy_node)
-                # Cook the idfix so the per-instance component_id lands on geometry.
-                # (Real Houdini lazy-cooks on OUT; explicit is safer and works in tests.)
-                ow_sop.cook(force=True)
-                ow_errs = list(ow_sop.errors() or [])
-                if ow_errs:
-                    warnings.append(f"component '{cid}' idfix: {ow_errs}")
-
+                ow_sop = _stamp_component(
+                    root_path, cid, out_sop, anchors, resolved_anchors,
+                    anchor_ids, world_axis_by_cid, warnings)
                 comp_nodes.append(ow_sop)
                 stamped.append((cid, ow_sop, anchor_ids))
             else:
@@ -3576,6 +3591,192 @@ def build_procedural_asset(
 # Name of the integer piece attribute Copy to Points 2.0 reads by default to
 # dispatch variants (Houdini 21). Must be int or string — never float.
 _VARIANT_PIECE_ATTR = "variant"
+
+def rebuild_component(
+    sandbox_root_path: str,
+    component_id: str,
+    component_spec: dict,
+) -> dict[str, Any]:
+    """Rebuild ONE component's subnet in an existing sandbox, leaving others.
+
+    Avoids discarding the entire sandbox + rewriting the whole recipe + full
+    rebuild when only one component changes. Locates every node belonging to
+    the target component (``{cid}_*`` plus the stamped ``copy_{cid}``),
+    records which merge input it feeds, destroys them, rebuilds via the
+    matching ``_build_*_component`` (+ ``_stamp_component`` if it has anchors),
+    and reconnects to the merge at the same index.
+
+    Args:
+        sandbox_root_path: sandbox root path (from build_procedural_asset)
+        component_id: the component id to rebuild
+        component_spec: the new full component definition (id must equal
+            component_id). The recipe is NOT persisted on the sandbox — the
+            caller passes the new spec explicitly.
+
+    Returns {"success", "sandbox_root_path", "component_id", ...} with error
+    detail on failure. On cook failure the sandbox is left in the destroyed
+    state (no rollback) so the agent can diagnose.
+    """
+    import traceback as _tb
+
+    spec_id = component_spec.get("id")
+    if spec_id != component_id:
+        return {
+            "success": False,
+            "sandbox_root_path": sandbox_root_path,
+            "component_id": component_id,
+            "error": (f"component_spec.id ({spec_id!r}) does not match "
+                      f"component_id ({component_id!r})"),
+        }
+
+    root = hou.node(sandbox_root_path)
+    if root is None:
+        return {
+            "success": False,
+            "sandbox_root_path": sandbox_root_path,
+            "component_id": component_id,
+            "error": f"Sandbox root not found: {sandbox_root_path}",
+        }
+
+    cid = component_id
+    # 1. Locate target nodes: {cid}_* and copy_{cid} (the stamped copytopoints
+    #    is named copy_{cid}, outside the {cid}_ prefix).
+    prefix = f"{cid}_"
+    target_nodes = [c for c in root.children()
+                    if c.name().startswith(prefix) or c.name() == f"copy_{cid}"]
+    if not target_nodes:
+        return {
+            "success": False,
+            "sandbox_root_path": sandbox_root_path,
+            "component_id": cid,
+            "error": (f"No nodes with prefix {prefix!r} or name 'copy_{cid}' "
+                      f"found in sandbox (component {cid!r} does not exist)"),
+        }
+
+    # 2. Locate merge + record the input index fed by this component.
+    merge_node = None
+    merge_input_index = None
+    for c in root.children():
+        if c.name() == "merge_all":
+            merge_node = c
+            break
+    if merge_node is not None:
+        for idx, inp in enumerate(merge_node.inputs()):
+            if inp is not None and (
+                    inp.name().startswith(prefix)
+                    or inp.name() == f"copy_{cid}"
+                    or inp.name() == f"{cid}_idfix"):
+                merge_input_index = idx
+                break
+
+    # 3. Destroy the target nodes.
+    for node in target_nodes:
+        try:
+            node.destroy()
+        except Exception:
+            pass
+
+    # 4. Rebuild via the matching backend.
+    anchors = component_spec.get("anchors") or []
+    world_axis_by_cid: dict[str, tuple[float, float, float]] = {}
+    warnings: list[str] = []
+    # Reconstruct param_values from the sandbox root's installed spare parms
+    # (includes some transform-folder garbage keys, harmless — backends only
+    # look up names in `reads`).
+    param_values: dict[str, float] = {}
+    try:
+        for p in root.parms():
+            try:
+                param_values[p.name()] = float(p.eval())
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    backend = component_spec.get("backend", "python")
+    try:
+        if backend == "native_chain":
+            out_sop = _build_native_chain_component(
+                sandbox_root_path, component_spec, cid, world_axis_by_cid, anchors)
+        elif backend == "vex_skeleton":
+            out_sop = _build_vex_skeleton_component(
+                sandbox_root_path, component_spec, cid, world_axis_by_cid,
+                anchors, param_values)
+        else:
+            out_sop = _build_python_component(
+                sandbox_root_path, component_spec, cid, world_axis_by_cid,
+                anchors, param_values)
+    except Exception as e:
+        return {
+            "success": False,
+            "sandbox_root_path": sandbox_root_path,
+            "component_id": cid,
+            "error": f"rebuild of {cid!r} failed: {e}",
+            "traceback": _tb.format_exc(),
+        }
+
+    # For stamped components, rebuild the stamping layer too (anchor generator
+    # + copytopoints + idfix). The merge is fed by idfix, not the raw geometry.
+    feed_node = out_sop
+    if anchors:
+        try:
+            resolved_anchors, anc_errors = _resolve_anchor_exprs(
+                anchors, param_values, cid)
+            if anc_errors:
+                return {
+                    "success": False,
+                    "sandbox_root_path": sandbox_root_path,
+                    "component_id": cid,
+                    "error": f"anchor expr errors: {anc_errors}",
+                }
+            anchor_ids = [a["component_id"] for a in resolved_anchors]
+            feed_node = _stamp_component(
+                sandbox_root_path, cid, out_sop, anchors, resolved_anchors,
+                anchor_ids, world_axis_by_cid, warnings)
+        except Exception as e:
+            return {
+                "success": False,
+                "sandbox_root_path": sandbox_root_path,
+                "component_id": cid,
+                "error": f"stamping rebuild of {cid!r} failed: {e}",
+                "traceback": _tb.format_exc(),
+            }
+
+    # 5. Reconnect to the merge at the recorded index.
+    if merge_node is not None and merge_input_index is not None:
+        merge_node.setInput(merge_input_index, feed_node)
+
+    # 6. Cook OUT to validate.
+    out_node = hou.node(f"{sandbox_root_path}/OUT")
+    if out_node is not None:
+        try:
+            out_node.cook(force=True)
+            cook_errs = list(out_node.errors() or [])
+            if cook_errs:
+                return {
+                    "success": False,
+                    "sandbox_root_path": sandbox_root_path,
+                    "component_id": cid,
+                    "error": f"OUT cook errors after rebuild: {'; '.join(cook_errs)}",
+                }
+        except Exception as e:
+            return {
+                "success": False,
+                "sandbox_root_path": sandbox_root_path,
+                "component_id": cid,
+                "error": f"OUT cook failed after rebuild: {e}",
+            }
+
+    return {
+        "success": True,
+        "sandbox_root_path": sandbox_root_path,
+        "component_id": cid,
+        "rebuilt_backend": backend,
+        "stamped": bool(anchors),
+        "merge_input_index": merge_input_index,
+        "warnings": warnings,
+    }
+
 
 def _setup_copy_apply_attributes(copy_node, attribs: str = "id") -> bool:
     """Initialize Copy to Points 2.0's attribute transfer so the target

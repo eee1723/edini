@@ -1401,5 +1401,86 @@ class TestSweepSurfaceShape(unittest.TestCase):
                       "冲突应被记录供 build 层 warning")
 
 
+class TestRebuildComponent(unittest.TestCase):
+    """rebuild_component 只重建指定 cid 的子网，不动其它组件。
+    避免改一个组件就要 discard 整个 sandbox + 重写整个 recipe。"""
+
+    def test_rebuild_only_target_component(self):
+        recipe = {
+            "asset_name": "rebuild_test",
+            "components": [
+                {"id": "keep_me", "code": _geo_code("keep_me")},
+                {"id": "rebuild_me", "code": _geo_code("rebuild_me")},
+            ],
+        }
+        result = harness.build_procedural_asset(recipe, sandbox_name="rebuild_test")
+        self.assertTrue(result.get("success"))
+        keep_node_before = _mock_hou.node(f"{result['root_path']}/keep_me_python")
+        self.assertIsNotNone(keep_node_before)
+
+        new_spec = {"id": "rebuild_me", "code": _geo_code("rebuild_me")}
+        rb = harness.rebuild_component(result["root_path"], "rebuild_me", new_spec)
+        self.assertTrue(rb.get("success"), f"rebuild failed: {rb.get('error')}")
+
+        # keep_me 节点身份应不变（未被销毁重建）
+        keep_node_after = _mock_hou.node(f"{result['root_path']}/keep_me_python")
+        self.assertIs(keep_node_before, keep_node_after,
+                      "keep_me 节点被错误重建")
+        # rebuild_me 应有新节点（身份变化）
+        rebuild_node_after = _mock_hou.node(f"{result['root_path']}/rebuild_me_python")
+        self.assertIsNotNone(rebuild_node_after, "rebuild_me 未重建")
+
+    def test_rebuild_nonexistent_cid_errors(self):
+        recipe = {"asset_name": "rb2", "components": [
+            {"id": "c1", "code": _geo_code("c1")}]}
+        result = harness.build_procedural_asset(recipe, sandbox_name="rb2")
+        rb = harness.rebuild_component(result["root_path"], "no_such",
+                                        {"id": "no_such"})
+        self.assertFalse(rb.get("success"))
+        self.assertIn("no_such", rb.get("error", ""))
+
+    def test_rebuild_mismatched_spec_id_errors(self):
+        recipe = {"asset_name": "rb3", "components": [
+            {"id": "c1", "code": _geo_code("c1")}]}
+        result = harness.build_procedural_asset(recipe, sandbox_name="rb3")
+        rb = harness.rebuild_component(result["root_path"], "c1", {"id": "wrong_id"})
+        self.assertFalse(rb.get("success"))
+
+    def test_rebuild_stamped_component_recreates_idfix(self):
+        """stamped 组件（有 anchors）的 rebuild 必须重建整个 stamping 层
+        （{cid}_anchors + copy_{cid} + {cid}_idfix），不能只重建原始几何，
+        否则会丢失 per-instance component_id 和 per-instance axis。"""
+        recipe = {
+            "asset_name": "rb_stamped",
+            "components": [
+                {"id": "keep", "code": _geo_code("keep")},
+                {"id": "wheel", "code": _geo_code("wheel_template"),
+                 "anchors": [
+                     {"position": [0.5, 0, 0], "component_id": "wheel_l"},
+                     {"position": [-0.5, 0, 0], "component_id": "wheel_r"},
+                 ]},
+            ],
+        }
+        result = harness.build_procedural_asset(recipe, sandbox_name="rb_stamped")
+        self.assertTrue(result.get("success"), f"build failed: {result.get('error')}")
+        root_path = result["root_path"]
+        keep_before = _mock_hou.node(f"{root_path}/keep_python")
+
+        new_spec = {
+            "id": "wheel", "code": _geo_code("wheel_template"),
+            "anchors": [
+                {"position": [0.5, 0, 0], "component_id": "wheel_l"},
+                {"position": [-0.5, 0, 0], "component_id": "wheel_r"},
+            ],
+        }
+        rb = harness.rebuild_component(root_path, "wheel", new_spec)
+        self.assertTrue(rb.get("success"), f"stamped rebuild failed: {rb.get('error')}")
+
+        self.assertIs(keep_before, _mock_hou.node(f"{root_path}/keep_python"))
+        for name in ("wheel_anchors", "copy_wheel", "wheel_idfix"):
+            self.assertIsNotNone(_mock_hou.node(f"{root_path}/{name}"),
+                                 f"{name} 未重建")
+
+
 if __name__ == "__main__":
     unittest.main()

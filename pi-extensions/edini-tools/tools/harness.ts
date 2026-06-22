@@ -324,6 +324,43 @@ export const buildProceduralAssetTool = {
   },
 };
 
+export const rebuildComponentTool = {
+  name: "rebuild_component",
+  label: "Rebuild Single Component (Incremental)",
+  description:
+    "Rebuild ONE component's subnet in an existing sandbox, leaving all other components untouched. Avoids discarding the whole sandbox + rewriting the whole recipe + full rebuild when only one component changes. Locates the component's nodes ({cid}_* plus copy_{cid} for stamped components), records the merge input index, destroys them, rebuilds via the matching backend (+ stamping layer if it has anchors), and reconnects to the merge at the same index.",
+  promptSnippet: "Rebuild one component without rebuilding the whole sandbox",
+  promptGuidelines: [
+    "Use this INSTEAD of discard_sandbox + build_procedural_asset when you only need to change ONE component's geometry/code and the rest of the sandbox is fine — it preserves the other components and their cook state.",
+    "The sandbox must already exist (built via build_procedural_asset). Pass the sandbox root_path from the original build result.",
+    "component_spec is the FULL new component definition (same shape as one entry in recipe.components) — id must equal component_id. The recipe is NOT stored on the sandbox, so you pass the new spec explicitly.",
+    "Works for both direct-merge components (no anchors) and stamped components (with anchors) — the stamping layer (anchors + copytopoints + idfix) is rebuilt too, preserving per-instance component_ids.",
+    "On failure the sandbox is left in the destroyed state for diagnosis (no rollback). Read the error, fix the spec, and rebuild again.",
+  ],
+  parameters: Type.Object({
+    sandbox_root_path: Type.String({
+      description: "Path to the existing sandbox root (from build_procedural_asset's root_path result field)",
+    }),
+    component_id: Type.String({
+      description: "The component id to rebuild (must match an existing component in the sandbox)",
+    }),
+    component_spec: Type.Record(Type.String(), Type.Unknown(), {
+      description:
+        "Full new component definition (same schema as one recipe.components entry). id must equal component_id. Include backend (python|vex_skeleton|native_chain), code/nodes/section_code as appropriate, reads, anchors, form_node, etc.",
+    }),
+  }),
+  async execute(
+    _toolCallId: string,
+    params: {
+      sandbox_root_path: string;
+      component_id: string;
+      component_spec: Record<string, unknown>;
+    }
+  ) {
+    return forwardTool("rebuild_component", params);
+  },
+};
+
 export const captureReviewTool = {
   name: "capture_review",
   label: "Capture Procedural Review",
@@ -482,6 +519,7 @@ export const dumpParmCatalogTool = {
 export const harnessTools = [
   houdiniCollectDiagnostics,
   buildProceduralAssetTool,
+  rebuildComponentTool,
   validateRecipeTool,
   houdiniRunPythonSandbox,
   houdiniVerifyAsset,
