@@ -1,14 +1,14 @@
 # Declarative Recipe Builder
 
-`build_procedural_asset` is the **preferred path** for any multi-component asset (vehicles, furniture, anything with swappable/repeated parts). You submit a JSON **recipe** and the harness **deterministically** assembles the modular network — you never write `createNode`/`setInput`/`blockpath`/wiring. This eliminates the whole class of imperative-Houdini-API errors that dominate failed procedural runs.
+`build_procedural_asset` is the **only build path** for any multi-component asset (vehicles, furniture, anything with swappable/repeated parts). You submit a JSON **recipe** and the harness **deterministically** assembles the modular network — you never write `createNode`/`setInput`/`blockpath`/wiring. This eliminates the whole class of imperative-Houdini-API errors that dominate failed procedural runs.
 
 **When to use which build path:**
 
 | Situation | Tool |
 |---|---|
-| Multi-component asset (body + wheels/handles/legs via Copy-to-Points) | **`build_procedural_asset`** (this section) — PREFERRED |
-| Non-standard topology you can't express as a recipe | `houdini_run_python_sandbox(network_mode=true)` (hand-write the network) |
+| Multi-component asset (body + wheels/handles/legs via Copy-to-Points) | **`build_procedural_asset`** (this section) — the only path |
 | Genuinely single-piece generator (one fractal, one surface) | `houdini_run_python_sandbox` (default single-SOP mode) |
+| Non-standard topology you can't express as a recipe | `houdini_run_python_sandbox(network_mode=true)` — **last resort only**, must document why the recipe cannot express it. Raw network_mode does NOT bake `edini_world_axis`, so it **cannot pass the G3 commit gate** if the geometry carries `@component_id` prims. |
 
 ## The recipe schema
 
@@ -194,7 +194,7 @@ add_parm("/obj/my_asset", "crank_len", default=0.17, min=0.15, max=0.20, label="
 - `position`: world-space `[x, y, z]` where the stamp lands.
 - `orient`: quaternion `[x, y, z, w]` (NOT Euler). Identity = `[0,0,0,1]`.
 - `pscale`: `1.0` = source geometry at original size. Model stamped components at **unit scale** and set `pscale` to real size (cleanest), or model at real scale and use `1.0`.
-- `component_id` (per anchor): the **per-instance** id (e.g. `wheel_fl`). The builder overwrites each stamped instance's prim `component_id` with this, so `verify_orientation` can PCA each instance separately.
+- `component_id` (per anchor): the **per-instance** id (e.g. `wheel_fl`). The builder overwrites each stamped instance's prim `component_id` with this, so `verify_orientation` can check each instance separately (using its baked `edini_world_axis`).
 
 ## What the builder assembles (deterministic — you don't write this)
 ```
@@ -212,7 +212,11 @@ The `build_procedural_asset` result includes:
 - `component_id_check` — `{missing: [...], ok: [...]}`. **Fix any `missing` before committing** (orientation checks will fail for missing ids).
 - `structure_advisory` — should be `passed: true` (the builder's Copy-to-Points network is inherently modular, so the monolithic gate never trips).
 - `orientation_check` — a PREVIEW of `verify_orientation` (advisory; the hard gate runs at commit). Apply any failed-check `hint` quaternion **in the component code** (fix the source, don't rotate post-hoc).
+- `construction_axis_summary` — the deterministic world axis baked on every component (Stage 3: ALL components get an axis, not just those with asserts). Review this to confirm the axis matches how the geometry is generated.
+- `defaulted_axes` — components whose axis came from backend inference or the Y fallback (no explicit declaration). **Review these**: if the inferred axis is wrong, declare `construction_axis` explicitly.
 - `diagnostics` / `structural_checks` — point/prim counts, bounds.
+
+**G2 bake gate (runs inside build):** after the OUT cook, the builder verifies every prim carries a non-zero `edini_world_axis`. A backend that forgot to wire the bake fails the build with `G2_NOT_BAKED` — you should never see this on a normal recipe; it signals a builder bug.
 
 ## Commit (separate step)
 ```python
@@ -222,19 +226,26 @@ commit_sandbox(
     orientation_checks=<recipe.orientation_asserts>,
 )
 ```
-The existing structure gate + orientation gate run on the built OUT automatically — no gate changes were needed for the builder.
+The commit gate (G3) runs three defense-in-depth layers on the built OUT:
+- **G3a bake** — every `@component_id` prim must carry a non-zero `edini_world_axis` (refuses raw `network_mode` builds that bypass the builder).
+- **G3b orientation** — `verify_orientation` on the asserts.
+- **G3c health** — `inspect_geometry_health` BLOCKING checks (orphan_points, open_curves) must pass.
 
-## Construction axis (PREFERRED over leaving orientation to PCA)
+On success, commit returns a **`verification_receipt`** — a tamper-evident JSON object. Your completion report must reference its fields (passed, orientation.failed, health.hard_errors_count) rather than re-counting geometry.
 
-`orientation_asserts` gain an optional `construction_axis` field. Set it whenever you can — it makes orientation a **deterministic** check instead of a PCA estimate:
+## Construction axis (MANDATORY on every orientation_assert — A8)
+
+`orientation_asserts` carry a **required** `construction_axis` field. The PCA estimation path was **removed** (it misclassified elongated cylinders — the hub 90° bug), so the axis must be **declared, not estimated**:
 
 - `construction_axis`: the **local-space** axis the component is generated around. A wheel built as a ring in the XZ plane has `construction_axis:"Y"` (its axle / symmetry axis). A frame tube drawn along Z has `construction_axis:"Z"`.
 - The builder derives the world axis by rotating `construction_axis` through the anchor's `@orient` quaternion — pure algebra, no point sampling, no PCA. It bakes that world axis onto each instance as the `edini_world_axis` prim attribute. `verify_orientation` reads it directly (`method:"construction"`).
-- Without `construction_axis`, the check falls back to PCA on point positions (`method:"pca"`). PCA is an *estimate* and is noisy on uneven point distributions — prefer the deterministic path.
+- **Omitting `construction_axis` on a non-empty assert is an A8 BLOCKING error** (`A8_MISSING_CONSTRUCTION_AXIS`). There is no fallback. To skip orientation verification entirely, pass an **empty** `orientation_asserts` array (explicit opt-out).
 
-**The builder also catches self-consistent errors at build time.** If your `construction_axis` + anchor `@orient` + `expected_axis` contradict each other (e.g. you declare `construction_axis:"Y"` but the anchor orient rotates Y to world Z while `expected_axis` says X), the build **refuses** before any cook, telling you exactly which field to fix. This is the key value: a wrong mental model can no longer produce a self-consistent-but-incorrect asset that PCA would happily confirm.
+**Every component gets an axis baked (Stage 3, decision 6)** — not just those with asserts. Axis source priority: ① the assert's `construction_axis` ② the component's top-level `construction_axis` field ③ backend inference (native_chain tube/cylinder → Y) ④ Y fallback. Tiers ③④ are recorded in `defaulted_axes` for review.
 
-Read the build result's `construction_axis_summary` to confirm which components got deterministic axes (`method:"construction"`) and their derived world axes.
+**The builder also catches self-consistent errors at build time.** If your `construction_axis` + anchor `@orient` + `expected_axis` contradict each other, the build **refuses** before any cook, telling you exactly which field to fix. A wrong mental model can no longer produce a self-consistent-but-incorrect asset.
+
+A construction-path **PCA crosscheck** still runs as a warning-only sanity check: if the declared axis diverges >2× tolerance from the actual geometry distribution, you get a `pca_crosscheck.warning` to review (the construction axis stays authoritative). Read `construction_axis_summary` to confirm which components got deterministic axes and their derived world axes.
 
 For a component with **no anchors** (direct-merge), the world frame is identity, so `construction_axis` and `expected_axis` are usually the same value.
 

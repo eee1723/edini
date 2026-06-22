@@ -135,7 +135,7 @@ wrangle_path（Detail，make_polyline）──┐
 wrangle_sect（Detail，make_circle_section）┘
 ```
 
-**Network (built via `build_procedural_asset` or `network_mode`):**
+**Network (built via `build_procedural_asset` — the only multi-component build path; raw `network_mode` cannot pass the G3 commit gate because it does not bake `edini_world_axis`):**
 
 ```
 wrangle_path (attribwrangle, Detail):
@@ -165,7 +165,6 @@ OUT
 ```
 wrangle (attribwrangle, Detail):
   int prof[] = make_rect_section(0, chf("width"), chf("height"), "XY");
-  @component_id = "beam";
   ↓ (closed rectangular contour)
 polyextrude (polyextrude::2.0):
   input0 = wrangle
@@ -187,7 +186,6 @@ OUT
 ```
 wrangle (attribwrangle, Detail):
   int prof[] = make_circle_section(0, chf("radius"), chi("sides"), "XZ", {0,0,0});
-  @component_id = "pillar";
   ↓
 polyextrude (polyextrude::2.0):
   input0 = wrangle

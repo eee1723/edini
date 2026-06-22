@@ -80,7 +80,9 @@ roof tiles, shingles, rivets along a seam, balusters, chain links), build it as
 these in a `for i in range(N):` loop (see SKILL.md Step 3b).
 
 The whole thing is a 3-node network built via `build_procedural_asset`
-(one anchored component) or `houdini_run_python_sandbox(network_mode=True)`:
+(one anchored component — the only multi-component build path. Do NOT use
+raw `houdini_run_python_sandbox(network_mode=true)` for this: it does not
+bake `edini_world_axis` and cannot pass the G3 commit gate):
 
 ```
 brick_template (python: emit ONE brick, tag component_id="brick")

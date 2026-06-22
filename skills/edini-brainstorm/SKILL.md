@@ -165,5 +165,5 @@ RECIPE SIZE:
 After the user approves the design:
 1. **MANDATORY:** Load the **procedural-modeling** skill — it will route you to recipe-authoring
 2. **MANDATORY:** Use `build_procedural_asset(recipe)` as the build entry — NEVER use `houdini_run_python_sandbox(network_mode=true)` for multi-component assets
-3. Follow the pipeline: recipe → validate_recipe → build_component → assemble → verify → commit
+3. Follow the pipeline: recipe → validate_recipe (G1, A1-A9) → build_procedural_asset (构建+组装+G2 烘焙) → verify (G3 闸) → commit (返回 verification_receipt) → test_params
 4. Do NOT re-ask clarifying questions already answered
