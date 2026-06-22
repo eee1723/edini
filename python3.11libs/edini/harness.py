@@ -1907,12 +1907,25 @@ def _install_params_via_template_group(
 def _install_spare_params(
     root: Any,
     params_spec: dict[str, dict],
+    derived_values: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Install asset-level params on the sandbox root (A2-station).
+    """Install asset-level params (primary + derived) on the sandbox root.
 
-    Each entry in params_spec is {name: {default, min?, max?, label?}}. The
-    parms land on the sandbox root (the /obj/<sandbox> geo container), so a
-    component python SOP reads them via hou.ch("../<name>") — it sits ONE
+    All params are collected into ONE template batch and installed in a single
+    ``_install_params_via_template_group`` call, producing a single
+    ``edini_params`` folder. (Previously each derived param was installed in
+    its own folder, making the parameter UI unusable — N derived = N folders.)
+
+    Args:
+        root: sandbox root geo container
+        params_spec: {name: {default?, min?, max?, label?, kind?, from?}}.
+            Primary params (kind != "derived") need a default.
+        derived_values: pre-computed derived values
+            {name: {value, label, min, max}} from ``_evaluate_derived_params``.
+            None or {} means no derived params.
+
+    Each parm lands on the sandbox root (the /obj/<sandbox> geo container), so
+    a component python SOP reads them via hou.ch("../<name>") — it sits ONE
     level below the root, so `..` resolves to the root and changing any one
     parm re-cooks every dependent component (true linkage).
 
@@ -1927,12 +1940,13 @@ def _install_spare_params(
     Returns {name: {"value", "channel_path", "label?", "installed"}}.
     """
     import hou as _hou
+    derived_values = derived_values or {}
     result: dict[str, dict[str, Any]] = {}
-    if not params_spec:
+    if not params_spec and not derived_values:
         return result
     templates: list[Any] = []
+    # Primary params (skip derived — handled below from derived_values).
     for name, spec in params_spec.items():
-        # Skip derived params — they are evaluated separately
         if spec.get("kind") == "derived":
             continue
         default = float(spec.get("default", 0.0))
@@ -1954,6 +1968,25 @@ def _install_spare_params(
             "channel_path": f"{root.path()}/{name}",
             "label": label if label != name else None,
             "installed": False,  # set True only if a group install succeeds
+        }
+    # Derived params — merged into the SAME template batch so a single
+    # setParmTemplateGroup call produces one edini_params folder for all.
+    for name, dspec in derived_values.items():
+        value = float(dspec.get("value", 0.0))
+        label = dspec.get("label", name)
+        min_v = float(dspec.get("min", -1000.0))
+        max_v = float(dspec.get("max", 1000.0))
+        try:
+            tmpl = _build_float_parm_template(
+                _hou, name, label, value, min_v, max_v)
+            templates.append(tmpl)
+        except Exception:
+            pass
+        result[name] = {
+            "value": value,
+            "channel_path": f"{root.path()}/{name}",
+            "label": label if label != name else None,
+            "installed": False,
         }
     if templates:
         installed = False
@@ -1982,12 +2015,10 @@ def _install_spare_params(
 
 
 def _evaluate_derived_params(
-    root: Any,
     params_spec: dict[str, dict],
-    param_values: dict[str, float],
-    param_install: dict[str, dict[str, Any]],
+    primary_values: dict[str, float],
 ) -> dict[str, Any]:
-    """Evaluate derived (kind: "derived") params and install as spare parms.
+    """Compute derived (kind: "derived") param values (pure — no install).
 
     Derived params reference primary (or earlier derived) values via a
     "from" expression, e.g.::
@@ -1995,32 +2026,29 @@ def _evaluate_derived_params(
         "seat_top_x": {"kind": "derived",
                         "from": "seat_length * cos(radians(st_angle))"}
 
-    Evaluated in dependency order (topological sort).  The result is
-    installed as a spare float parm on the sandbox root so component
-    code reads it with hou.ch("../seat_top_x") — computed once, shared.
+    Evaluated in dependency order (topological sort via Kahn). The result is
+    returned to the caller, which installs ALL params (primary + derived) in
+    a single ``_install_spare_params`` call — producing ONE edini_params
+    folder rather than one folder per derived param (the previous bug).
 
-    Returns {derived_values, errors, warnings, param_install}.
+    Returns {"derived_values": {name: {value, label, min, max}}, "errors": [...]}.
     """
     from collections import deque
-    import hou as _hou
 
-    derived_values: dict[str, float] = {}
+    derived_values: dict[str, dict[str, Any]] = {}
     errors: list[str] = []
-    warnings: list[str] = []
 
     # Separate derived from primary
     derived_specs: dict[str, dict] = {}
     for name, spec in params_spec.items():
-        kind = spec.get("kind", "primary")
-        if kind == "derived":
+        if spec.get("kind", "primary") == "derived":
             derived_specs[name] = spec
-
     if not derived_specs:
-        return {"derived_values": {}, "errors": [], "warnings": [],
-                "param_install": param_install}
+        return {"derived_values": {}, "errors": []}
 
-    # Build dependency graph
-    graph: dict[str, list[str]] = {}  # name -> [dependencies]
+    # Build dependency graph (only derived->derived edges; primary refs are
+    # already in primary_values)
+    graph: dict[str, list[str]] = {}
     for name, spec in derived_specs.items():
         from_expr = spec.get("from", "")
         if not from_expr:
@@ -2034,7 +2062,7 @@ def _evaluate_derived_params(
         graph[name] = [d for d in deps if d in derived_specs]
 
     # Topological sort (Kahn)
-    in_degree: dict[str, int] = {n: len(deps) for n, deps in graph.items()}
+    in_degree: dict[str, int] = {n: len(d) for n, d in graph.items()}
     queue: deque[str] = deque(n for n, d in in_degree.items() if d == 0)
     order: list[str] = []
     while queue:
@@ -2045,15 +2073,13 @@ def _evaluate_derived_params(
                 in_degree[other] -= 1
                 if in_degree[other] == 0:
                     queue.append(other)
-
     if len(order) != len(graph):
         remaining = [n for n in graph if n not in order]
         errors.append(f"derived param cycle detected among: {remaining}")
-        return {"derived_values": {}, "errors": errors, "warnings": [],
-                "param_install": param_install}
+        return {"derived_values": {}, "errors": errors}
 
-    # Evaluate in topological order, installing each result
-    eval_bindings = dict(param_values)  # mutable dict fed to exprs.evaluate
+    # Evaluate in topological order — pure computation, no install.
+    eval_bindings = dict(primary_values)
     for name in order:
         spec = derived_specs[name]
         from_expr = spec["from"]
@@ -2063,43 +2089,14 @@ def _evaluate_derived_params(
         except Exception as e:
             errors.append(f"derived param '{name}': cannot evaluate '{from_expr}': {e}")
             continue
-        derived_values[name] = value
         eval_bindings[name] = value
-
-        # Install as spare parm on root
-        label = spec.get("label", name)
-        try:
-            tmpl = _build_float_parm_template(_hou, name, label, value, -1000.0, 1000.0)
-            installed = _install_params_via_template_group(root, _hou, [tmpl])
-            if not installed:
-                try:
-                    grp = _hou.ParmTemplateGroup()
-                    grp.appendToFolder("Spare", tmpl)
-                    root.setSpareParmGroup(grp)
-                    installed = True
-                except Exception:
-                    pass
-            param_install[name] = {
-                "value": value,
-                "channel_path": f"{root.path()}/{name}",
-                "label": label,
-                "installed": installed,
-            }
-        except Exception as e:
-            warnings.append(f"derived param '{name}' spare parm install failed: {e}")
-            param_install[name] = {
-                "value": value,
-                "channel_path": f"{root.path()}/{name}",
-                "label": label,
-                "installed": False,
-            }
-
-    return {
-        "derived_values": derived_values,
-        "errors": errors,
-        "warnings": warnings,
-        "param_install": param_install,
-    }
+        derived_values[name] = {
+            "value": value,
+            "label": spec.get("label", name),
+            "min": spec.get("min", -1000.0),
+            "max": spec.get("max", 1000.0),
+        }
+    return {"derived_values": derived_values, "errors": errors}
 
 
 def add_parm(
@@ -2959,11 +2956,30 @@ def build_procedural_asset(
         # Components read them via hou.ch("../../<name>") so a change to any
         # one parm re-cooks every dependent component (true linkage). The
         # resolved default values also feed anchor expression evaluation.
+        #
+        # Flow: compute primary defaults → compute derived values (pure) →
+        # install primary + derived in ONE _install_spare_params call so a
+        # single edini_params folder holds every parm (previously each derived
+        # got its own folder, fragmenting the parameter UI).
         param_install: dict[str, dict[str, Any]] = {}
         param_values: dict[str, float] = {}
         if params_spec:
             try:
-                param_install = _install_spare_params(root, params_spec)
+                # 1. Primary defaults (pure computation).
+                primary_values: dict[str, float] = {
+                    n: float(spec.get("default", 0.0))
+                    for n, spec in params_spec.items()
+                    if spec.get("kind", "primary") != "derived"
+                }
+                # 2. Derived values (pure computation, no install).
+                derived_report = _evaluate_derived_params(
+                    params_spec, primary_values)
+                if derived_report.get("errors"):
+                    errors_runtime.extend(derived_report["errors"])
+                derived_values = derived_report.get("derived_values", {})
+                # 3. Install primary + derived together (single folder).
+                param_install = _install_spare_params(
+                    root, params_spec, derived_values)
                 param_values = {n: v["value"] for n, v in param_install.items()}
                 # Surface which params failed to install as spare parms:
                 # channel refs (hou.ch) in component code will not bind
@@ -2983,24 +2999,6 @@ def build_procedural_asset(
                                 "component channel refs may not bind")
                 param_values = {n: float(spec.get("default", 0.0))
                                 for n, spec in params_spec.items()}
-
-        # ── A2-station (continued): evaluate derived params ──
-        # Primary params are installed.  Derived params declare a "from"
-        # expression that references primary (or earlier derived) values.
-        # Evaluate in dependency order (topological sort via Kahn) and
-        # install each derived value as a spare parm too, so component
-        # code reads them via hou.ch("../seat_top_x") just like primaries.
-        if params_spec:
-            derived_report = _evaluate_derived_params(
-                root, params_spec, param_values, param_install)
-            if derived_report.get("errors"):
-                errors_runtime.extend(derived_report["errors"])
-            if derived_report.get("warnings"):
-                warnings.extend(derived_report["warnings"])
-            # Refresh param_values with derived results for anchor expression eval
-            for n, v in derived_report.get("derived_values", {}).items():
-                param_values[n] = v
-            param_install = derived_report.get("param_install", param_install)
 
 
         # ── 1. Build one python SOP per component ──

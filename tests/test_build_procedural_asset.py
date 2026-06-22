@@ -1253,5 +1253,43 @@ class TestPostprocessNodeNames(unittest.TestCase):
             node.setName("fuse::2.0")
 
 
+class TestParameterFolderConsolidation(unittest.TestCase):
+    """主参数 + derived 参数必须全部装进同一个 edini_params 文件夹。
+
+    根因：原代码每个 derived 单独调用 _install_params_via_template_group，
+    每次新建一个 folder，导致 N 个 derived = N 个单参数文件夹，UI 无法用。
+    """
+
+    def test_derived_params_collapse_into_single_folder(self):
+        recipe = {
+            "asset_name": "folder_test",
+            "params": {
+                "wheel_r": {"default": 0.35, "kind": "primary"},
+                "bb_drop": {"default": 0.07, "kind": "primary"},
+                "st_angle": {"default": 73.0, "kind": "primary"},
+                "bb_height": {"kind": "derived", "from": "wheel_r - bb_drop"},
+                "st_rad": {"kind": "derived", "from": "radians(st_angle)"},
+                "seat_top_y": {"kind": "derived", "from": "bb_height + 0.5 * cos(st_rad)"},
+            },
+            "components": [
+                {"id": "c1", "code": _geo_code("c1"), "reads": ["wheel_r"]},
+            ],
+        }
+        result = harness.build_procedural_asset(recipe, sandbox_name="folder_test")
+        self.assertTrue(result.get("success"), f"build failed: {result.get('error')}")
+        root = _mock_hou.node(result["root_path"])
+        ptg = root.parmTemplateGroup()
+        from tests.mock_hou import MockFolderParmTemplate
+        # NOTE: mock's MockParmTemplate.name is a string ATTRIBUTE (not a
+        # method), so use t.name not t.name().
+        edini_folders = [t for t in ptg.entries()
+                         if isinstance(t, MockFolderParmTemplate)
+                         and t.name == "edini_params"]
+        self.assertEqual(len(edini_folders), 1,
+                         f"应有 1 个 edini_params 文件夹，实际 {len(edini_folders)}")
+        self.assertEqual(len(edini_folders[0].parmTemplates()), 6,
+                         f"文件夹应含 6 个参数，实际 {len(edini_folders[0].parmTemplates())}")
+
+
 if __name__ == "__main__":
     unittest.main()
