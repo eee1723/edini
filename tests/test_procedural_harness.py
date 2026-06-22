@@ -285,8 +285,16 @@ raise RuntimeError("cleanup")
         self.assertIn("diagnostics boom", r["diagnostics"]["error"])
 
     def test_commit_on_success_requests_but_does_not_report_commit(self):
+        # Stage-4: emit a valid polygon (not a bare point) so G3c health gate
+        # doesn't refuse the commit on orphan_points. The point of this test is
+        # the commit_on_success wiring, not geometry validity — but the gates
+        # now run unconditionally on commit, so the scaffold geometry must be
+        # gate-clean (a closed polygon with no orphan points).
         r = harness.run_python_sandbox(
-            "node = hou.pwd()\nnode.geometry().clear()\npt = node.geometry().createPoint()\npt.setPosition((1, 2, 3))",
+            "node = hou.pwd()\ngeo = node.geometry()\ngeo.clear()\n"
+            "pts = []\nfor p in [(0,0,0),(1,0,0),(1,1,0),(0,1,0)]:\n"
+            "    pt = geo.createPoint(); pt.setPosition(p); pts.append(pt)\n"
+            "poly = geo.createPolygon()\nfor pt in pts: poly.addVertex(pt)\n",
             sandbox_name="commit_scaffold",
             commit_on_success=True,
         )
@@ -751,7 +759,11 @@ class TestModularStructureGate(unittest.TestCase):
         return run, root
 
     def _make_python_sop_with_components(self, parent, name, cids, code_lines=250):
-        """Create a python SOP whose geometry carries the given component_ids."""
+        """Create a python SOP whose geometry carries the given component_ids.
+
+        Stage-4: also bakes edini_world_axis on every prim so the asset passes
+        the G3a bake gate (it models a 'correctly built but monolithic' asset —
+        the structure gate is what these tests exercise, not the bake gate)."""
         node = parent.createNode("python", name)
         _mock_hou.add_node(node)
         geo = _mock_hou.MockGeometry(point_count=100, prim_count=50,
@@ -765,6 +777,7 @@ class TestModularStructureGate(unittest.TestCase):
         geo2 = _mock_hou.MockGeometry()
         geo2.clear()
         geo2.addAttrib(None, "component_id", "")
+        geo2.addAttrib(None, "edini_world_axis", (0.0, 0.0, 0.0))
         from tests.mock_hou import MockPoint
         for cid in cids:
             for _ in range(3):
@@ -775,6 +788,10 @@ class TestModularStructureGate(unittest.TestCase):
             for v in geo2._points[-3:]:
                 poly.addVertex(v)
             poly.setAttribValue("component_id", cid)
+            # Stage-4: bake a non-zero axis so G3a passes (Y fallback, mimicking
+            # what build_procedural_asset would bake for a component with no
+            # explicit construction_axis).
+            poly.setAttribValue("edini_world_axis", (0.0, 1.0, 0.0))
         node._geometry = geo2
         # Set the python parm to a long dummy code so line count > 200
         long_code = "\n".join(f"# line {i}" for i in range(code_lines))

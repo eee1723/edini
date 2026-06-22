@@ -902,15 +902,24 @@ class TestInstallSpareParams(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 def _variant_geo_code(cid):
-    """Minimal variant cook body: emits one prim tagged with component_id."""
+    """Minimal variant cook body: emits one prim tagged with component_id.
+
+    Stage-4: also bakes edini_world_axis so the variant source geometry passes
+    the G3a bake gate. In real Houdini the axis is baked by the scatter_idfix
+    node downstream; in the mock, copytopoints does not propagate geometry, so
+    the source geometry itself must carry the axis for the gate to see it.
+    This mirrors build_procedural_asset's Y-fallback for components with no
+    explicit construction_axis."""
     return (
         "node = hou.pwd()\n"
         "geo = node.geometry()\n"
         "geo.clear()\n"
         'geo.addAttrib(hou.attribType.Prim, "component_id", "")\n'
+        'geo.addAttrib(hou.attribType.Prim, "edini_world_axis", (0.0, 0.0, 0.0))\n'
         "pt = geo.createPoint(); pt.setPosition((0, 0, 0))\n"
         "poly = geo.createPolygon(); poly.addVertex(pt)\n"
         f'poly.setAttribValue("component_id", "{cid}")\n'
+        'poly.setAttribValue("edini_world_axis", (0.0, 1.0, 0.0))\n'
     )
 
 

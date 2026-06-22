@@ -392,6 +392,59 @@ def commit_sandbox(
                     "traceback": traceback.format_exc(),
                 }
 
+    # ── G3a: bake gate (spec §4 G3a, decision 1+4) ──
+    # The FIRST defense-in-depth layer. When the asset carries @component_id-
+    # tagged prims (a real procedural asset), every such prim must also carry
+    # a non-zero edini_world_axis — which only build_procedural_asset bakes.
+    # A raw network_mode hand-written sandbox that emits component_id geometry
+    # has no axis attribute → refused here, before any structure/orientation/
+    # health work. Decision 12: the asset stays in the sandbox (no rename, no
+    # discard) so the agent can fix and re-commit without rebuilding.
+    #
+    # Scope: only applies when component_id prims exist. Empty/scaffolding
+    # geometry (no component_id) is not a procedural asset — there is nothing
+    # to orientation-verify, so the gate passes (parity with the orientation
+    # gate, which also no-ops without component_id).
+    g3_target = None
+    try:
+        g3_target = _select_gate_target(node)
+    except Exception:
+        g3_target = None
+    g3_has_component_prims = False
+    if g3_target is not None:
+        try:
+            _g = g3_target.geometry()
+            g3_has_component_prims = (
+                _g is not None
+                and _g.findPrimAttrib("component_id") is not None
+                and _g.intrinsicValue("primitivecount") > 0
+            )
+        except Exception:
+            g3_has_component_prims = False
+    if g3_has_component_prims:
+        g3_baked = True
+        g3_missing: list[str] = []
+        try:
+            g3_baked, g3_missing, _detail = _verify_world_axes_baked(g3_target)
+        except Exception as _e:
+            g3_baked = False
+            g3_missing = [f"<check error: {_e}>"]
+        if not g3_baked:
+            return {
+                "success": False,
+                "sandbox_root_path": sandbox_root_path,
+                "final_path": final_path,
+                "committed": False,
+                "refused": True,
+                "error": (
+                    "G3_NOT_BAKED: asset did not go through "
+                    "build_procedural_asset (no edini_world_axis on every "
+                    "prim). Raw houdini_run_python_sandbox(network_mode) "
+                    "builds cannot pass this gate — they bypass the "
+                    f"deterministic axis bake. Missing on: {g3_missing}"
+                ),
+            }
+
     # ── Modular structure gate ──
     # Refuse to commit monolithic assets (single Python SOP emitting all
     # multi-component geometry with no Copy-to-Points/Sweep/foreach). This is
@@ -417,7 +470,7 @@ def commit_sandbox(
                 "structure": structure_result,
             }
 
-    # ── Orientation gate ──
+    # ── G3b: Orientation gate ──
     # If the agent supplied orientation_checks OR the asset has a component_id
     # attribute, run verify_orientation and refuse to commit on failure.
     orientation_result = None
@@ -432,12 +485,45 @@ def commit_sandbox(
                 "final_path": final_path,
                 "committed": False,
                 "error": (
-                    "Orientation verification failed — refusing to commit. "
-                    "Fix the defects below (each comes with a fix quaternion), "
-                    "or pass skip_orientation=true only if you have a documented "
-                    "reason."
+                    "G3_ORIENTATION_FAILED: Orientation verification failed — "
+                    "refusing to commit. Fix the defects below (each comes "
+                    "with a fix quaternion), or pass skip_orientation=true "
+                    "only if you have a documented reason."
                 ),
                 "orientation": orientation_result,
+            }
+
+    # ── G3c: geometry-health hard-error gate (decision 7) ──
+    # inspect_geometry_health already classifies checks into BLOCKING
+    # (orphan_points, open_curves) vs ADVISORY (degenerate/nonmanifold/
+    # open_boundary/coincident). Only BLOCKING failures refuse commit;
+    # advisory findings are recorded in the receipt but never block (overlapping
+    # tubes produce nonmanifold edges + open boundaries that are accepted per
+    # decision 2).
+    health_result = None
+    try:
+        from edini.node_utils import inspect_geometry_health
+        health_target = _select_gate_target(node)
+        if health_target is not None:
+            health_result = inspect_geometry_health(health_target.path())
+    except Exception as _e:
+        health_result = {"success": False, "error": str(_e)}
+    if health_result is not None and health_result.get("success"):
+        _hard, _soft = _health_hard_soft_summary(health_result)
+        if _hard > 0:
+            return {
+                "success": False,
+                "sandbox_root_path": sandbox_root_path,
+                "final_path": final_path,
+                "committed": False,
+                "refused": True,
+                "error": (
+                    "G3_HEALTH_HARD_ERRORS: geometry health has blocking "
+                    f"defects ({_hard} hard error(s), e.g. orphan points or "
+                    "stray open curves). Fix them before committing. Advisory "
+                    f"findings ({_soft}) are recorded but do not block."
+                ),
+                "health": health_result,
             }
 
     try:
@@ -465,16 +551,42 @@ def commit_sandbox(
             "display_traceback": traceback.format_exc(),
         }
 
+    # ── Build the tamper-evident verification receipt (spec §5.2) ──
+    # The agent's completion report must reference this receipt's fields
+    # rather than re-counting geometry. It's a JSON object the tool returns,
+    # so the agent cannot rewrite its numbers.
+    components_detected: list[str] = []
+    axes_baked = True
+    try:
+        receipt_target = _select_gate_target(node)
+        if receipt_target is not None:
+            axes_baked, _miss, _det = _verify_world_axes_baked(receipt_target)
+            _geo = receipt_target.geometry()
+            if _geo is not None:
+                components_detected = sorted(_geometry_component_ids(_geo))
+    except Exception:
+        pass
+    receipt = _build_verification_receipt(
+        out_node=node,
+        orientation=orientation_result,
+        health=health_result,
+        components_detected=components_detected,
+        construction_axes_baked=axes_baked,
+    )
+
     result = {
         "success": True,
         "sandbox_root_path": sandbox_root_path,
         "final_path": actual_final_path,
         "committed": True,
+        "verification_receipt": receipt,
     }
     if orientation_result is not None:
         result["orientation"] = orientation_result
     if structure_result is not None:
         result["structure"] = structure_result
+    if health_result is not None and health_result.get("success"):
+        result["health"] = health_result
     return result
 
 
@@ -518,11 +630,30 @@ def _select_gate_target(root) -> Any:
         candidates.append((prim_count or 0, bool(has_cid), sub))
 
     if candidates:
-        # Prefer component_id-bearing nodes; within that group take the most
-        # prims (the final merged OUT). Fall back to the highest-prim node.
+        # Prefer component_id-bearing nodes; within that group prefer the
+        # terminal output node (OUT/out) or the *last* node in network order —
+        # this is the baked output that actually ships, not an upstream source
+        # (e.g. a variant Python SOP that has component_id but no
+        # edini_world_axis because the bake happens downstream in idfix).
         with_cid = [c for c in candidates if c[1]]
         pool = with_cid if with_cid else candidates
-        # max() on (prim_count,) — has_cid already filtered, so it's a tiebreak only
+        # Tier 1: an explicit OUT/out node with component_id.
+        for _pc, _has, sub in pool:
+            if sub.name().lower() in ("out",):
+                return sub
+        # Tier 2: prefer the downstream-most (highest creation/network order)
+        # component_id node — nodes built later are closer to the output. We
+        # approximate 'downstream' by the order in allSubChildren (a
+        # depth-first traversal that visits later-built/displayed nodes later),
+        # then break ties by prim count. This picks idfix/OUT over variant
+        # source Python SOPs.
+        if with_cid:
+            # Stable index = position in the traversal.
+            indexed = {id(sub): i for i, (_pc, _has, sub) in enumerate(candidates)}
+            pool.sort(
+                key=lambda c: (indexed.get(id(c[2]), 1 << 30), -c[0]))
+            return pool[0][2]
+        # No component_id anywhere — fall back to the highest-prim node.
         pool_sorted = sorted(pool, key=lambda c: c[0], reverse=True)
         return pool_sorted[0][2]
 
@@ -594,6 +725,85 @@ def _verify_world_axes_baked(out_node) -> tuple[bool, list[str], list[str]]:
             if len(detail) < 20:
                 detail.append(f"{cid}: axis {axis}")
     return len(missing_cids) == 0, sorted(missing_cids), detail
+
+
+def _health_hard_soft_summary(health: dict) -> tuple[int, int]:
+    """Map inspect_geometry_health's two-tier output to (hard_errors_count,
+    soft_warnings_count) for the verification receipt.
+
+    inspect_geometry_health reports `overall_ok` (driven only by BLOCKING
+    checks) plus per-check dicts carrying a `severity` field and a `count`.
+    We do NOT change its signature (avoiding churn across 478 tests); the
+    receipt just sums the counts by severity tier.
+
+      hard_errors_count = sum of counts for BLOCKING checks that did NOT pass
+                          (orphan_points, open_curves)
+      soft_warnings     = sum of counts for ADVISORY checks
+                          (degenerate, nonmanifold, open_boundary, coincident)
+    """
+    if not isinstance(health, dict) or not health.get("success"):
+        # Health check itself failed -> treat as a hard error (conservative).
+        return 1, 0
+    checks = health.get("checks", {}) or {}
+    hard = 0
+    soft = 0
+    for name, chk in checks.items():
+        if not isinstance(chk, dict):
+            continue
+        severity = chk.get("severity", "blocking")
+        count = int(chk.get("count", 0))
+        if severity == "blocking":
+            # Only count it as a hard error if it actually failed.
+            if not chk.get("passed", False):
+                hard += count if count > 0 else 1
+        else:
+            soft += count
+    return hard, soft
+
+
+def _build_verification_receipt(
+    out_node,
+    orientation: dict | None,
+    health: dict | None,
+    components_detected: list[str] | None = None,
+    construction_axes_baked: bool = True,
+    defaulted_axes: dict | None = None,
+) -> dict[str, Any]:
+    """Build a tamper-evident verification receipt (spec §5.2).
+
+    The agent's completion report MUST reference fields from this receipt
+    rather than re-counting geometry itself — the receipt is a JSON object
+    returned by the tool, so the agent cannot rewrite its numbers. The agent
+    can only choose to omit a failure, but the receipt stays complete in the
+    tool result the user can see.
+    """
+    hard_errors, soft_warnings = _health_hard_soft_summary(health or {})
+    ori = orientation or {}
+    health_dict = health or {}
+    ori_failed = ori.get("failed", 0)
+    receipt = {
+        "passed": (ori_failed == 0 and hard_errors == 0),
+        "orientation": {
+            "passed": ori.get("passed", 0),
+            "failed": ori_failed,
+            "total": ori.get("total", 0),
+            "failures": [c for c in ori.get("checks", []) if not c.get("passed")],
+        },
+        "health": {
+            "overall_ok": health_dict.get("overall_ok", False),
+            "hard_errors_count": hard_errors,
+            "soft_warnings": soft_warnings,
+            "blocking_checks": health_dict.get("blocking_checks", []),
+            "advisory_checks": health_dict.get("advisory_checks", []),
+        },
+        "components_detected": components_detected or [],
+        "construction_axes_baked": construction_axes_baked,
+        "defaulted_axes": defaulted_axes or {},
+        "timestamp": _dt.datetime.now().isoformat(timespec="seconds"),
+    }
+    return receipt
+
+
 # Presence of ANY of these means the asset uses proper modular patterns.
 _MODULAR_NODE_TYPES = {
     "copytopoints", "copytopoints::2.0", "copy", "copystamp",
@@ -3384,6 +3594,14 @@ def _variant_idfix_snippet(variant_ids: list[str]) -> str:
         "# one instance, regardless of variant connectivity.\n"
         "if geo.findPrimAttrib('component_id') is None:\n"
         "    geo.addAttrib(hou.attribType.Prim, 'component_id', '')\n"
+        "# Stage-4: bake edini_world_axis so variant-scatter assets pass the\n"
+        "# G2/G3 bake gates (decision 1 — variant scatter is a build path).\n"
+        "# Variants are detail scatter (windows, rocks, props) without a\n"
+        "# meaningful construction-axis declaration, so we use the Y fallback\n"
+        "# (upright). Recipe authors who care about per-variant orientation\n"
+        "# should use build_procedural_asset with explicit construction_axis.\n"
+        "if geo.findPrimAttrib('edini_world_axis') is None:\n"
+        "    geo.addAttrib(hou.attribType.Prim, 'edini_world_axis', (0.0, 0.0, 0.0))\n"
         "for prim in geo.prims():\n"
         "    vidx = 0\n"
         "    try: vidx = int(prim.attribValue('" + _VARIANT_PIECE_ATTR + "'))\n"
@@ -3398,6 +3616,7 @@ def _variant_idfix_snippet(variant_ids: list[str]) -> str:
         "        except Exception: inst_id = 0\n"
         "    cid = variant_ids[vidx] + '_' + str(inst_id)\n"
         "    prim.setAttribValue('component_id', cid)\n"
+        "    prim.setAttribValue('edini_world_axis', (0.0, 1.0, 0.0))\n"
     )
 
 
@@ -3612,6 +3831,14 @@ def build_variant_scatter(
         idfix = _safe_create_node(root_path, "python", "scatter_idfix")
         _set_parm_safe(idfix, "python", idfix_code)
         idfix.setInput(0, copy_node)
+        # Force-cook the idfix so per-instance component_id + edini_world_axis
+        # (Stage-4 bake) actually land on geometry in both the mock and real
+        # Houdini. Without this the OUT/gate-target reads the upstream copy
+        # geometry which has template-level component_id but no axis.
+        try:
+            idfix.cook(force=True)
+        except Exception:
+            pass
 
         last_node = idfix
 
