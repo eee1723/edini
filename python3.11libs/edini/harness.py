@@ -530,7 +530,70 @@ def _select_gate_target(root) -> Any:
     return root
 
 
-# SOP node types that indicate a modular/procedural decomposition.
+def _verify_world_axes_baked(out_node) -> tuple[bool, list[str], list[str]]:
+    """G2/G3 bake check: confirm every prim on the output carries a non-zero
+    edini_world_axis (the deterministic construction axis the builder bakes).
+
+    Decision 11: the zero vector (0,0,0) is the addAttrib default and the
+    sentinel for 'not baked' — a legitimate axis always has unit length after
+    rotation, so a zero can never be a real construction axis. A prim carrying
+    a zero (or the attribute missing entirely) means the build path skipped
+    the bake (raw network_mode, or a backend that forgot to wire the bake).
+
+    Returns (all_baked, missing_component_ids, missing_detail):
+      all_baked              — True iff every prim has a non-zero axis.
+      missing_component_ids  — distinct component_ids whose prims have a zero /
+                               absent axis (for the error message).
+      missing_detail         — per-prim diagnostic strings (capped for size).
+    """
+    missing_cids: set[str] = set()
+    detail: list[str] = []
+    try:
+        geo = out_node.geometry()
+    except Exception:
+        return False, ["<no geometry>"], ["could not read geometry"]
+    if geo is None:
+        return False, ["<no geometry>"], ["geometry is None"]
+
+    attr = geo.findPrimAttrib("edini_world_axis")
+    if attr is None:
+        # Attribute missing entirely → every component is unbaked. List the
+        # distinct component_ids so the error points at what to fix.
+        try:
+            for prim in geo.prims():
+                cid = ""
+                try:
+                    cid = str(prim.stringAttribValue("component_id"))
+                except Exception:
+                    cid = f"prim#{prim.number()}"
+                missing_cids.add(cid)
+        except Exception:
+            missing_cids.add("<unknown>")
+        return False, sorted(missing_cids), ["edini_world_axis attribute missing entirely"]
+
+    n_prims_scanned = 0
+    for prim in geo.prims():
+        n_prims_scanned += 1
+        try:
+            raw = prim.floatListAttribValue("edini_world_axis")
+        except Exception:
+            try:
+                raw = prim.attribValue("edini_world_axis")
+            except Exception:
+                raw = None
+        if raw is None or len(raw) < 3:
+            axis = None
+        else:
+            axis = (float(raw[0]), float(raw[1]), float(raw[2]))
+        if axis is None or axis == (0.0, 0.0, 0.0):
+            try:
+                cid = str(prim.stringAttribValue("component_id"))
+            except Exception:
+                cid = f"prim#{prim.number()}"
+            missing_cids.add(cid)
+            if len(detail) < 20:
+                detail.append(f"{cid}: axis {axis}")
+    return len(missing_cids) == 0, sorted(missing_cids), detail
 # Presence of ANY of these means the asset uses proper modular patterns.
 _MODULAR_NODE_TYPES = {
     "copytopoints", "copytopoints::2.0", "copy", "copystamp",
@@ -2311,6 +2374,16 @@ def _build_python_component(
     return py_sop
 
 
+def _axis_bake_vex_snippet(world_axis: tuple[float, float, float]) -> str:
+    """VEX snippet (run over prims) that bakes edini_world_axis onto every
+    prim. Used by native_chain / vex_skeleton direct-merge tag nodes so the
+    G2 bake check passes without relying on the python direct-merge suffix."""
+    ax = ", ".join(repr(float(c)) for c in world_axis)
+    return (
+        "3@edini_world_axis = {" + ax + "};\n"
+    )
+
+
 def _build_native_chain_component(
     root_path: str,
     comp: dict,
@@ -2323,6 +2396,10 @@ def _build_native_chain_component(
     Creates a chain of native SOPs (box/tube/torus/attribcreate/...)
     wired input-0 to previous. The last node drives the component output.
     Returns the last node in the chain.
+
+    Stage-3: for direct-merge native_chain components (no anchors), appends a
+    prim attribwrangle baking edini_world_axis so G2 (bake check) passes.
+    Stamped components get their per-instance axis via the idfix SOP instead.
     """
     nodes = comp.get("nodes") or []
     if not nodes:
@@ -2366,6 +2443,16 @@ def _build_native_chain_component(
                         f"parm '{pname}={pvalue}': {e}")
         prev = node
         last_node = node
+
+    # Stage-3: bake edini_world_axis on direct-merge native_chain components.
+    # Stamped ones get per-instance axes from the idfix SOP downstream.
+    if not anchors and cid in world_axis_by_cid:
+        ax_tag = _safe_create_node(root_path, "attribwrangle", f"{cid}_axis")
+        ax_tag.setInput(0, last_node)
+        ax_tag.parm("class").set("primitive")
+        ax_tag.parm("snippet").set(
+            _axis_bake_vex_snippet(world_axis_by_cid[cid]))
+        last_node = ax_tag
 
     return last_node
 
@@ -2448,12 +2535,16 @@ def _build_vex_skeleton_component(
             else:
                 _set_parm_safe(fn, pname, pvalue)
 
-        # component_id tag
+        # component_id tag + edini_world_axis bake (direct-merge only;
+        # stamped components get per-instance axis from the idfix SOP).
         tag_name = f"{cid}_tag"
         tag = _safe_create_node(root_path, "attribwrangle", tag_name)
         tag.setInput(0, fn)
         tag.parm("class").set("primitive")
-        tag.parm("snippet").set(f's@component_id = "{cid}";')
+        tag_snippet = f's@component_id = "{cid}";\n'
+        if not anchors and cid in world_axis_by_cid:
+            tag_snippet += _axis_bake_vex_snippet(world_axis_by_cid[cid])
+        tag.parm("snippet").set(tag_snippet)
         return tag
 
     # ── Single-wrangle mode: profile → PolyExtrude ──
@@ -2475,7 +2566,10 @@ def _build_vex_skeleton_component(
     tag.setInput(0, fn)
     # Use attribwrangle (prim mode) to re-tag component_id
     tag.parm("class").set("primitive")
-    tag.parm("snippet").set(f's@component_id = "{cid}";')
+    tag_snippet = f's@component_id = "{cid}";\n'
+    if not anchors and cid in world_axis_by_cid:
+        tag_snippet += _axis_bake_vex_snippet(world_axis_by_cid[cid])
+    tag.parm("snippet").set(tag_snippet)
 
     return tag
 
@@ -2677,8 +2771,12 @@ def build_procedural_asset(
         # can trust every construction_axis assert that reaches here resolves.
         direct_components_set: set[str] = set()
         anchor_cid_orient: dict[str, list[float]] = {}
+        # Also index components by id + remember each component's backend + own
+        # construction_axis field, for the tiered axis resolution below.
+        comp_by_id: dict[str, dict] = {}
         for comp in components:
             cid = comp.get("id")
+            comp_by_id[cid] = comp
             anchors = comp.get("anchors") or []
             if not anchors:
                 direct_components_set.add(cid)
@@ -2688,28 +2786,96 @@ def build_procedural_asset(
                     anchor_cid_orient[anc_cid] = list(
                         anc.get("orient", [0.0, 0.0, 0.0, 1.0]))
 
-        # B-station: resolve deterministic world axes per component instance.
+        # ── Stage-3: resolve a world axis for EVERY component (decision 6) ──
         # world_axis_by_cid maps a per-instance component_id (or a direct-merge
         # component id) -> its deterministically-derived world construction
-        # axis. Built once here from orientation_asserts so both the stamped
-        # idfix and the direct-merge suffix consume the same source of truth.
-        # NOTE: for stamped components, the assert's component_id is the
-        # per-INSTANCE id (wheel_fl), matching anchor.component_id. For direct
-        # components it's the component id itself (frame).
+        # axis. Axis source priority (decision 9):
+        #   1. the component's construction_axis as declared in an assert
+        #   2. the component's own top-level `construction_axis` field
+        #   3. backend inference (native_chain tube/torus/cylinder -> length axis)
+        #   4. fallback Y
+        # Tiers 3/4 are recorded in `defaulted_axes` so the receipt can flag
+        # them for agent review. Every component gets an axis here — G2 (bake
+        # check) then confirms the axis actually landed on geometry.
         world_axis_by_cid: dict[str, tuple[float, float, float]] = {}
+        # defaulted_axes: {cid: "Y(fallback)"/"tube:Y(inferred)"...} — only
+        # components that did NOT explicitly declare an axis go here.
+        defaulted_axes: dict[str, str] = {}
+
+        def _infer_native_chain_axis(comp: dict) -> str | None:
+            """Decision 9 tier 3: infer the length axis from the first
+            tube/torus/cylinder primitive node in a native_chain. Returns
+            a local axis name (X/Y/Z) or None if no inference possible."""
+            for node_spec in (comp.get("nodes") or []):
+                tname = (node_spec.get("type") or "").lower()
+                # Strip namespace: 'tube::2.0' -> 'tube'
+                bare = tname.split("::")[0]
+                if bare in ("tube", "cylinder"):
+                    return "Y"  # tube SOP default length axis is Y
+                if bare == "torus":
+                    return "Y"  # torus lies in XZ plane -> normal is Y
+            return None
+
+        # Build a quick lookup: assert construction_axis by the component_id
+        # the assert references (per-instance id for stamped, comp id for direct).
+        assert_caxis_by_cid: dict[str, str] = {}
         for a in orientation_asserts:
             caxis = _normalize_axis_spec(a.get("construction_axis"))
-            if caxis is None:
-                continue
-            a_cid = a.get("component_id")
-            if a_cid in direct_components_set:
-                # Direct-merge: world frame is identity, so world axis == local.
-                world_axis_by_cid[a_cid] = _resolve_construction_world_axis(
+            if caxis is not None:
+                assert_caxis_by_cid[a.get("component_id", "")] = caxis
+
+        for comp in components:
+            cid = comp.get("id")
+            backend = comp.get("backend", "python")
+            anchors = comp.get("anchors") or []
+            comp_caxis_field = _normalize_axis_spec(comp.get("construction_axis"))
+
+            if anchors:
+                # Stamped component: resolve a world axis PER anchor instance.
+                for anc in anchors:
+                    anc_cid = anc.get("component_id", cid)
+                    orient = anchor_cid_orient.get(
+                        anc_cid, [0.0, 0.0, 0.0, 1.0])
+                    # Tier 1: assert for this instance
+                    caxis = assert_caxis_by_cid.get(anc_cid)
+                    source_tag = None
+                    if caxis is None and comp_caxis_field is not None:
+                        # Tier 2: component-level field applies to all instances
+                        caxis = comp_caxis_field
+                    if caxis is None:
+                        # Tier 3: backend inference
+                        if backend == "native_chain":
+                            inferred = _infer_native_chain_axis(comp)
+                            if inferred is not None:
+                                caxis = inferred
+                                source_tag = f"{backend}:{inferred}(inferred)"
+                    if caxis is None:
+                        # Tier 4: fallback Y
+                        caxis = "Y"
+                        source_tag = "Y(fallback)"
+                    if source_tag is not None:
+                        defaulted_axes[anc_cid] = source_tag
+                    world_axis_by_cid[anc_cid] = _resolve_construction_world_axis(
+                        orient, caxis)
+            else:
+                # Direct-merge component: world frame is identity.
+                caxis = assert_caxis_by_cid.get(cid)
+                source_tag = None
+                if caxis is None and comp_caxis_field is not None:
+                    caxis = comp_caxis_field
+                if caxis is None:
+                    if backend == "native_chain":
+                        inferred = _infer_native_chain_axis(comp)
+                        if inferred is not None:
+                            caxis = inferred
+                            source_tag = f"{backend}:{inferred}(inferred)"
+                if caxis is None:
+                    caxis = "Y"
+                    source_tag = "Y(fallback)"
+                if source_tag is not None:
+                    defaulted_axes[cid] = source_tag
+                world_axis_by_cid[cid] = _resolve_construction_world_axis(
                     [0.0, 0.0, 0.0, 1.0], caxis)
-            elif a_cid in anchor_cid_orient:
-                world_axis_by_cid[a_cid] = _resolve_construction_world_axis(
-                    anchor_cid_orient[a_cid], caxis)
-            # else: pre-check already rejected these, so nothing to do.
 
         for comp in components:
             cid = comp["id"]
@@ -2911,6 +3077,28 @@ def build_procedural_asset(
         except Exception as e:
             warnings.append(f"component_id check failed: {e}")
 
+        # ── 6b. G2 bake gate: every prim must carry a non-zero edini_world_axis ──
+        # Decision 6/11 + spec §4 G2. The builder bakes edini_world_axis on
+        # every component (direct-merge via tag/suffix, stamped via idfix).
+        # A missing or zero axis means a backend forgot to wire the bake — a
+        # build bug, surfaced now rather than at commit (G3 repeats the check
+        # as the final defense-in-depth layer against raw-sandbox bypass).
+        g2_baked = True
+        g2_missing: list[str] = []
+        g2_detail: list[str] = []
+        try:
+            gate_target = _select_gate_target(root)
+            if gate_target is not None:
+                g2_baked, g2_missing, g2_detail = _verify_world_axes_baked(gate_target)
+        except Exception as e:
+            warnings.append(f"G2 bake check failed: {e}")
+        if not g2_baked:
+            raise RuntimeError(
+                "G2_NOT_BAKED: build did not bake edini_world_axis on every "
+                "prim. This means a backend skipped the axis bake (a build "
+                f"bug) or the asset was not built via build_procedural_asset. "
+                f"Missing on: {g2_missing}. Detail: {g2_detail[:10]}")
+
         # ── 7. Diagnostics + structural checks + gate previews ──
         diag = _safe_collect_diagnostics(out_path, include_geometry=True)
         geo_stats = diag.get("geometry") or {}
@@ -2939,9 +3127,11 @@ def build_procedural_asset(
             "deleted": False,
         }
 
-        # B-station: surface which components got deterministic construction
-        # axes baked (vs PCA fallback). The agent reads this to confirm the
-        # edini_world_axis prim attrib landed where it expected.
+        # Stage-3: surface the deterministic construction axes baked on every
+        # component (decision 6 — ALL components get an axis, not just those
+        # with asserts). `defaulted_axes` flags components whose axis came from
+        # tier 3 (backend inference) or tier 4 (Y fallback) rather than an
+        # explicit declaration — the agent should review those.
         if world_axis_by_cid:
             response["construction_axis_summary"] = {
                 cid: {
@@ -2950,6 +3140,15 @@ def build_procedural_asset(
                 }
                 for cid, ax in sorted(world_axis_by_cid.items())
             }
+        if defaulted_axes:
+            response["defaulted_axes"] = defaulted_axes
+            response["warnings"].append(
+                "Some components had no explicit construction_axis and were "
+                "assigned an inferred/fallback axis: "
+                + ", ".join(f"{c}={a}" for c, a in sorted(defaulted_axes.items()))
+                + ". Review these in the receipt — if the inferred axis is "
+                "wrong, declare construction_axis explicitly on the component "
+                "or its orientation_assert.")
 
         # structure advisory (reuses the same gate commit_sandbox enforces)
         try:
