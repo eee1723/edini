@@ -201,7 +201,7 @@ def test_param_install() -> str | None:
              "reads": ["wheelbase", "wheel_r"]},
         ],
         "orientation_asserts": [
-            {"component_id": "frame", "kind": "planar", "expected_axis": "Z"},
+            {"component_id": "frame", "kind": "planar", "expected_axis": "Z", "construction_axis": "Z"},
         ],
     }
 

@@ -662,6 +662,144 @@ def _validate_a7_backend_appropriateness(recipe: dict) -> list[dict]:
 
 
 # ═══════════════════════════════════════════════════════════════
+#  A8 — Mandatory construction_axis on orientation_asserts
+# ═══════════════════════════════════════════════════════════════
+
+# Decision 3 (single-path design): PCA estimation is disabled because it
+# misclassifies elongated cylinders (the hub 90° bug). Every orientation_assert
+# must therefore declare its deterministic construction_axis. An empty asserts
+# array is an explicit opt-out (decision 6).
+VALID_CONSTRUCTION_AXES = {"X", "Y", "Z", "-X", "-Y", "-Z"}
+
+
+def _validate_a8_construction_axis(recipe: dict) -> list[dict]:
+    """A8: every non-empty orientation_assert must carry a valid construction_axis.
+
+    Rationale: with the PCA fallback branch removed (Stage 5), there is no
+    estimation path left — a component without a baked edini_world_axis fails
+    orientation verification outright. construction_axis is what makes the
+    builder bake that axis deterministically. Allowing asserts without it
+    would let an asset reach commit only to be refused at G3 with a confusing
+    'edini_world_axis missing' error; A8 surfaces the real fix (declare the
+    axis) at validation time, before any cook.
+    """
+    errors: list[dict] = []
+    asserts = recipe.get("orientation_asserts") or []
+    if not asserts:
+        # Empty array (or absent) = explicit opt-out (decision 6). No check.
+        return errors
+
+    for i, a in enumerate(asserts):
+        if not isinstance(a, dict):
+            continue  # A1 schema already flags malformed entries
+        loc: dict[str, Any] = {
+            "orientation_assert_index": i,
+            "component_id": a.get("component_id", "?"),
+        }
+        caxis = a.get("construction_axis")
+        if caxis is None:
+            errors.append(_error(
+                "A8_MISSING_CONSTRUCTION_AXIS",
+                f"orientation_asserts[{i}] for '{a.get('component_id', '?')}' "
+                f"has no construction_axis. Declare one of "
+                f"{sorted(VALID_CONSTRUCTION_AXES)} — the local-space axis the "
+                f"component is generated around. PCA estimation is disabled "
+                f"(it misclassifies elongated cylinders, the hub 90° bug), so "
+                f"the axis must be declared, not estimated. To skip orientation "
+                f"verification entirely, pass an empty orientation_asserts "
+                f"array (decision 6 explicit opt-out).",
+                loc,
+            ))
+        elif not isinstance(caxis, str) or caxis.upper() not in VALID_CONSTRUCTION_AXES:
+            errors.append(_error(
+                "A8_BAD_CONSTRUCTION_AXIS",
+                f"orientation_asserts[{i}].construction_axis {caxis!r} must be "
+                f"one of {sorted(VALID_CONSTRUCTION_AXES)}.",
+                loc,
+            ))
+    return errors
+
+
+# ═══════════════════════════════════════════════════════════════
+#  A9 — Hardcoded size guard
+# ═══════════════════════════════════════════════════════════════
+
+# Decision 13: a size variable assigned a numeric literal in component code,
+# when that variable is NOT declared in recipe.params and NOT in the
+# component's reads list, is a hardcoded dimension — the opposite of the
+# parametric system. Catch the canonical antipattern `wheelbase = 1.0` that
+# drove the road_bike session's "change a param, nothing moves" failures.
+#
+# Heuristic (Pareto, not exhaustive): only flags assignments whose LHS name
+# contains a size hint. `i = 0` loop counters pass through unmolested.
+SIZE_VAR_PATTERN = re.compile(
+    r'^\s*(\w+)\s*=\s*([-+]?\d*\.?\d+)\s*(?:#|$)',
+    re.MULTILINE,
+)
+SIZE_NAME_HINTS = (
+    "wheelbase", "wheel_r", "width", "height", "length", "radius",
+    "bb_", "seat_", "stem_", "fork_", "crank", "tire", "spacing",
+)
+
+
+def _validate_a9_hardcoded_size(recipe: dict) -> list[dict]:
+    """A9: reject hardcoded dimension literals in component code (BLOCKING).
+
+    A variable named like a size (`wheelbase`, `radius`, `bb_height`, ...)
+    assigned a bare numeric literal, where the variable is neither a declared
+    recipe param nor listed in the component's `reads`, is a hardcoded
+    dimension. The fix is to move it into recipe.params (so it becomes a real
+    spare parm with cross-component linkage) or add it to the component's
+    reads list (if it's a local alias of a param the component reads via
+    hou.ch).
+
+    This is BLOCKING because hardcoded sizes are the root cause of "change a
+    param, nothing moves" — the agent edits the asset-level parm but the
+    geometry was baked from a literal. The parameter system (primary/derived/
+    constrained) exists precisely to make every dimension driven by a channel.
+    """
+    errors: list[dict] = []
+    declared_params = set((recipe.get("params") or {}).keys())
+
+    for i, comp in enumerate(recipe.get("components", [])):
+        if not isinstance(comp, dict):
+            continue
+        cid = comp.get("id", f"@index_{i}")
+        backend = comp.get("backend", "python")
+        # native_chain has no free-form code (geometry comes from SOP parms);
+        # vex_skeleton code is VEX, not Python — assignment syntax differs and
+        # sizes there are typically ch() refs already (A4 covers undef refs).
+        if backend == "native_chain":
+            continue
+        code = comp.get("code", "") or ""
+        if not isinstance(code, str) or not code:
+            continue
+        reads = set(comp.get("reads") or [])
+        allowed = declared_params | reads
+        loc: dict[str, Any] = {"component_index": i, "component_id": cid}
+
+        for m in SIZE_VAR_PATTERN.finditer(code):
+            varname, literal = m.group(1), m.group(2)
+            if not any(h in varname.lower() for h in SIZE_NAME_HINTS):
+                continue  # not a size-named variable; leave alone
+            if varname in allowed:
+                continue  # declared param or explicit read — legit
+            lineno = code[:m.start()].count("\n") + 1
+            errors.append(_error(
+                "A9_HARDCODED_SIZE",
+                f"component '{cid}' assigns {varname} = {literal} as a hardcoded "
+                f"literal (line {lineno}). Dimensions must live in recipe.params "
+                f"and be read via hou.ch('../{varname}') so editing the asset "
+                f"parm actually re-cooks the geometry. Either add "
+                f"'{varname}' to recipe.params (e.g. "
+                f'"{varname}": {{"default": {literal}}}) or to this '
+                f"component's reads list if it's a local alias.",
+                {**loc, "line": lineno, "variable": varname, "literal": literal},
+            ))
+    return errors
+
+
+# ═══════════════════════════════════════════════════════════════
 #  Main entry point
 # ═══════════════════════════════════════════════════════════════
 
@@ -701,6 +839,9 @@ def validate_recipe(
     all_errors.extend(dep_errors)
 
     all_errors.extend(_validate_a7_backend_appropriateness(recipe))
+
+    all_errors.extend(_validate_a8_construction_axis(recipe))
+    all_errors.extend(_validate_a9_hardcoded_size(recipe))
 
     # ── Summarize ──
     blocking = [e for e in all_errors if e["severity"] == "BLOCKING"]

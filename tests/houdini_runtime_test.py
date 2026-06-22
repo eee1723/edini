@@ -185,8 +185,8 @@ recipe = {
     ],
     "postprocess": [],
     "orientation_asserts": [
-        {"component_id": "base_box", "kind": "planar", "expected_axis": "Y", "signed": True},
-        {"component_id": "pillar_copy", "kind": "planar", "expected_axis": "Y", "signed": True},
+        {"component_id": "base_box", "kind": "planar", "expected_axis": "Y", "signed": True, "construction_axis": "Y"},
+        {"component_id": "pillar_copy", "kind": "planar", "expected_axis": "Y", "signed": True, "construction_axis": "Y"},
     ],
 }
 
@@ -225,8 +225,8 @@ if out_node:
 
     # Verify orientation
     orient = verify_orientation(out_node_path, [
-        {"component_id": "base_box", "kind": "planar", "expected_axis": "Y", "signed": True},
-        {"component_id": "pillar_copy", "kind": "planar", "expected_axis": "Y", "signed": True},
+        {"component_id": "base_box", "kind": "planar", "expected_axis": "Y", "signed": True, "construction_axis": "Y"},
+        {"component_id": "pillar_copy", "kind": "planar", "expected_axis": "Y", "signed": True, "construction_axis": "Y"},
     ])
     check("C3 verify_orientation success", orient.get("success"))
     check("C4 all orientation passed", orient.get("passed", 0) == orient.get("total", 0),
@@ -249,8 +249,8 @@ if result.get("root_path"):
         result["root_path"],
         "validation_test_result",
         orientation_checks=[
-            {"component_id": "base_box", "kind": "planar", "expected_axis": "Y", "signed": True},
-            {"component_id": "pillar_copy", "kind": "planar", "expected_axis": "Y", "signed": True},
+            {"component_id": "base_box", "kind": "planar", "expected_axis": "Y", "signed": True, "construction_axis": "Y"},
+            {"component_id": "pillar_copy", "kind": "planar", "expected_axis": "Y", "signed": True, "construction_axis": "Y"},
         ],
     )
     check("D1 commit success", cr.get("success"), str(cr.get("error", ""))[:200])

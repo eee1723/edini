@@ -324,7 +324,8 @@ class TestBuildStampedComponents(unittest.TestCase):
             "asset_name": "ori",
             "components": [{"id": "x", "code": _geo_code("x"), "anchors": []}],
             "orientation_asserts": [
-                {"component_id": "x", "kind": "elongated", "expected_axis": "Y"},
+                {"component_id": "x", "kind": "elongated", "expected_axis": "Y",
+                 "construction_axis": "Y"},
             ],
         }
         r = harness.build_procedural_asset(recipe)
@@ -396,7 +397,8 @@ class TestBuildResultShape(unittest.TestCase):
                 ]},
             ],
             "orientation_asserts": [
-                {"component_id": "frame", "kind": "elongated", "expected_axis": "Z"},
+                {"component_id": "frame", "kind": "elongated", "expected_axis": "Z",
+                 "construction_axis": "Z"},
             ],
         }
         r = harness.build_procedural_asset(recipe)
@@ -570,21 +572,31 @@ class TestConstructionAxisBuildBake(unittest.TestCase):
         snippet_old = harness._component_id_overwrite_snippet(["w1", "w2"])
         self.assertNotIn("edini_world_axis", snippet_old)
 
-    def test_construction_axis_omitted_falls_back_to_pca(self):
-        """orientation_asserts WITHOUT construction_axis → no summary, PCA path.
-        This proves backward compatibility: old recipes are untouched."""
-        r = harness.build_procedural_asset({
-            "asset_name": "pca_only",
+    def test_construction_axis_omitted_now_rejected(self):
+        """Decision 3 (single-path design): orientation_asserts WITHOUT
+        construction_axis are rejected by A8. The PCA fallback path is gone
+        (it misclassified elongated cylinders → hub 90° bug), so the axis must
+        be declared, not estimated. This replaces the old
+        'omitted falls back to PCA / backward compat' test — that property was
+        explicitly retired by the single-path design.
+
+        A8 lives in recipe_validator.validate_recipe (Phase A) and runs
+        unconditionally there (it needs no parm catalog). We test at that level
+        rather than via build_procedural_asset because the build path only runs
+        Phase A when a parm catalog is present, making A8 conditional there."""
+        from edini.recipe_validator import validate_recipe
+        r = validate_recipe({
             "components": [
-                {"id": "frame", "code": _geo_code("frame"), "anchors": []},
+                {"id": "frame", "code": "x"},
             ],
             "orientation_asserts": [
                 {"component_id": "frame", "kind": "elongated",
                  "expected_axis": "Y"},
             ],
         })
-        self.assertTrue(r["success"], msg=r)
-        self.assertNotIn("construction_axis_summary", r)
+        self.assertFalse(r["passed"], msg=r)
+        stages = [e["stage"] for e in r["errors"]]
+        self.assertIn("A8_MISSING_CONSTRUCTION_AXIS", stages)
 
     def test_consistency_check_helper_pure(self):
         """The consistency pre-check is deterministic algebra — test it directly."""
