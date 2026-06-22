@@ -1346,5 +1346,60 @@ class TestPythonBackendParams(unittest.TestCase):
             f"有 justification 不应 warning: {warnings}")
 
 
+class TestSweepSurfaceShape(unittest.TestCase):
+    """dual-wrangle sweep（有 section_code）必须 surfaceshape=0（默认），
+    否则第二端口的 cross-section 被忽略（sweep 自己画圆管）。这是公路车
+    车轮方向/管材成型失败的核心根因。
+
+    直接测试 _build_vex_skeleton_component（unit 级），因为完整 build 在
+    mock 下无法 cook VEX，会触发 G2_NOT_BAKED（mock 不执行 VEX 代码）。"""
+
+    def _build_sweep_component(self, form_params):
+        """Build a single vex_skeleton tube component and return its sweep node."""
+        # Create a sandbox root to build into.
+        root = _mock_hou.node("/obj").createNode("geo", "sweep_unit_test")
+        comp = {
+            "id": "tube1", "backend": "vex_skeleton",
+            "code": ('int p0=addpoint(0,set(0,0,0));'
+                     'int p1=addpoint(0,set(0,1,0));'
+                     'int pr=addprim(0,"polyline");'
+                     'addvertex(0,pr,p0);addvertex(0,pr,p1);'),
+            "section_code": ('float r=0.02;int n=8;int pts[];'
+                              'for(int i=0;i<n;i++){float a=6.28318*float(i)/float(n);'
+                              'int pt=addpoint(0,set(r*cos(a),0,r*sin(a)));push(pts,pt);}'
+                              'int pr=addprim(0,"polyline");'
+                              'for(int i=0;i<len(pts);i++)addvertex(0,pr,pts[i]);'
+                              'addvertex(0,pr,pts[0]);'),
+            "form_node": {"type": "sweep::2.0", "params": dict(form_params)},
+        }
+        harness._SWEEP_SURFACESHAPE_CONFLICTS = []
+        harness._build_vex_skeleton_component(
+            root.path(), comp, "tube1", {}, [], {"tube_od": 0.04})
+        sweep_node = _mock_hou.node(f"{root.path()}/tube1_sweep")
+        return root, sweep_node
+
+    def test_dual_wrangle_sweep_forces_surfaceshape_default(self):
+        root, sweep_node = self._build_sweep_component(
+            {"surfacetype": 2, "endcaptype": 1})
+        self.addCleanup(root.destroy)
+        self.assertIsNotNone(sweep_node, "tube1_sweep 节点未创建")
+        ss = sweep_node.parm("surfaceshape")
+        self.assertIsNotNone(ss, "sweep 节点无 surfaceshape parm")
+        self.assertEqual(ss.eval(), 0,
+                         f"dual-wrangle sweep surfaceshape 应强制为 0，实际 {ss.eval()}")
+
+    def test_dual_wrangle_explicit_nonzero_surfaceshape_forced_and_recorded(self):
+        """recipe 显式设 surfaceshape=1 + section_code → 强制改回 0，并记录
+        冲突供 build 层转 warning。"""
+        root, sweep_node = self._build_sweep_component(
+            {"surfacetype": 2, "endcaptype": 1, "surfaceshape": 1})
+        self.addCleanup(root.destroy)
+        ss = sweep_node.parm("surfaceshape")
+        self.assertEqual(ss.eval(), 0,
+                         f"冲突的 surfaceshape 应被强制为 0，实际 {ss.eval()}")
+        self.assertIn("tube1", harness._SWEEP_SURFACESHAPE_CONFLICTS,
+                      "冲突应被记录供 build 层 warning")
+
+
 if __name__ == "__main__":
     unittest.main()

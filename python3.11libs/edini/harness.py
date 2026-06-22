@@ -16,6 +16,13 @@ import hou
 EXECUTION_MODE_LIVE = "live_sandbox"
 
 
+# Dual-wrangle sweep (section_code present) forces surfaceshape=0. When the
+# recipe explicitly set a non-zero surfaceshape, the conflicting cid is
+# recorded here so build_procedural_asset can turn it into a warning. Reset
+# at the start of each build.
+_SWEEP_SURFACESHAPE_CONFLICTS: list[str] = []
+
+
 def make_job_id(label: str = "job") -> str:
     safe = re.sub(r"[^A-Za-z0-9_]+", "_", label).strip("_").lower() or "job"
     stamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -2823,7 +2830,16 @@ def _build_vex_skeleton_component(
         fn = _safe_create_node(root_path, canonical_fn, fn_name)
         fn.setInput(0, wr_path)
         fn.setInput(1, wr_section)
-        fn_params = form.get("params") or {}
+        fn_params = dict(form.get("params") or {})
+        # Force surfaceshape=0 (default). Dual-wrangle uses the second input
+        # as the cross-section; any non-zero surfaceshape (1=roundtube,
+        # 2=extrude) makes Sweep IGNORE the second input and generate its own
+        # shape — defeating the dual-wrangle pattern (this was the root cause
+        # of the bicycle wheel/tube failures). If the recipe explicitly set a
+        # conflicting value, record it so the build can warn the author.
+        if fn_params.get("surfaceshape", 0) != 0:
+            _SWEEP_SURFACESHAPE_CONFLICTS.append(cid)
+        fn_params["surfaceshape"] = 0
         for pname, pvalue in fn_params.items():
             if isinstance(pvalue, str) and ('ch(' in pvalue or 'chf(' in pvalue):
                 try:
@@ -2999,6 +3015,11 @@ def build_procedural_asset(
     postprocess = recipe.get("postprocess") or []
     orientation_asserts = recipe.get("orientation_asserts") or []
     params_spec = recipe.get("params") or {}
+
+    # Reset the per-build sweep-surfaceshape conflict log so warnings reflect
+    # only this build's components.
+    global _SWEEP_SURFACESHAPE_CONFLICTS
+    _SWEEP_SURFACESHAPE_CONFLICTS = []
 
     warnings: list[str] = []
     errors_runtime: list[str] = []
@@ -3403,6 +3424,14 @@ def build_procedural_asset(
                 f"Missing on: {g2_missing}. Detail: {g2_detail[:10]}")
 
         # ── 7. Diagnostics + structural checks + gate previews ──
+        # Surface sweep-surfaceshape conflicts collected during component builds.
+        for conflict_cid in _SWEEP_SURFACESHAPE_CONFLICTS:
+            warnings.append(
+                f"component '{conflict_cid}': dual-wrangle sweep ignores recipe "
+                f"surfaceshape!=0 (forced to 0). The second-input cross-section "
+                f"is incompatible with roundtube/extrude surface shapes; the "
+                f"section_code defines the shape. Remove 'surfaceshape' from "
+                f"form_node.params to silence this warning.")
         diag = _safe_collect_diagnostics(out_path, include_geometry=True)
         geo_stats = diag.get("geometry") or {}
         structural_checks = {

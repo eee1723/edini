@@ -1085,6 +1085,25 @@ def _make_normal_ptg():
     return g
 
 
+def _make_sweep_ptg():
+    """Sweep 2.0 parm template group (subset relevant to the builder).
+
+    The builder forces ``surfaceshape=0`` when a section_code is present
+    (dual-wrangle mode), because any non-zero surfaceshape (1=roundtube,
+    2=extrude) makes Sweep ignore the second-input cross-section. Exposing
+    ``surfaceshape`` as a mock parm lets unit tests verify the enforcement.
+    Also includes ``surfacetype`` and ``endcaptype`` used by recipes."""
+    g = MockParmTemplateGroup()
+    g.append(MockMenuParmTemplate("surfaceshape", "Surface Shape",
+                                  ["splines", "roundtube", "extrude"],
+                                  default=0))
+    g.append(MockMenuParmTemplate("surfacetype", "Surface Type",
+                                  ["interpolating", "noninterp"], default=2))
+    g.append(MockMenuParmTemplate("endcaptype", "End Caps",
+                                  ["noends", "onend", "bothends"], default=1))
+    return g
+
+
 def _make_copytopoints_ptg():
     """Copy to Points 2.0 parm template group (H21.0.440 structure).
 
@@ -1240,6 +1259,9 @@ class MockHou:
             "normal": MockNodeType(
                 "normal", "Normal", "Sop", 1, 0,
                 parm_template_group=_make_normal_ptg()),
+            "sweep": MockNodeType(
+                "sweep::2.0", "Sweep", "Sop", 2, 1,
+                parm_template_group=_make_sweep_ptg()),
         })
         obj_cat = MockCategory("Object", {
             "geo": MockNodeType("geo", "Geometry", "Object", 1, 0),
