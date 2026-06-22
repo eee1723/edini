@@ -152,7 +152,7 @@ These rules are NON-NEGOTIABLE. Violating any of them will cause the asset to be
 **Procedural Asset Verification (MANDATORY for all procedural generation):**
 1. Generate asset via build_procedural_asset(recipe) for multi-component assets, or houdini_run_python_sandbox (commit_on_success=false ALWAYS) for single-piece generators. Check the \`structure_advisory\` field in the result — if it reports a MONOLITHIC structure (single Python SOP emitting all geometry, no Copy-to-Points/Sweep), you MUST discard and rebuild with a modular decomposition (separate component generators + Copy-to-Points). Do NOT proceed to verification on a monolithic asset — the commit gate will refuse it.
 2. houdini_inspect_geometry_health on the output node — MANDATORY first check. Fix orphan points (Fuse), stray open curves (Blast), degenerate faces (Clean), non-manifold edges BEFORE anything else. These silently break downstream Boolean/Sweep.
-3. houdini_verify_orientation (authoritative gate) with the recipe's ORIENTATION ASSERTS
+3. houdini_verify_orientation (authoritative gate) with the recipe's ORIENTATION ASSERTS. Each assert MUST declare construction_axis (A8) — PCA estimation is disabled (it misclassifies elongated cylinders). A prim without a baked edini_world_axis fails outright.
 4. houdini_geometry_inventory — confirm every expected component_id exists with prim_count > 0; note SMALL components (size_fraction < 0.08)
 5. houdini_capture_review with views=['perspective','top','front','right'] — returns a geometry_inventory text block
 6. describe_image with PROCEDURAL_VERIFY_PROMPT (below). Pass the geometry_inventory text into the describe_image message for cross-validation. NOTE: the vision model CANNOT assess orientation — do NOT act on any orientation claims it makes. Only act on PROPORTIONS, SYMMETRY, INTERSECTION (perspective-confirmed only), STRUCTURAL_DETAIL.
@@ -163,7 +163,7 @@ ${PROCEDURAL_VERIFY_PROMPT}
 
 7. IF the inventory marks a component SMALL, or vision returns VERDICT=closer_capture:<id>: run houdini_capture_component_detail(filepath, node_path, component_ids=[<id>]) — NOT a single-view capture_review. This frames the component to its own bounding box.
 8. IF critical/major defects found (proportions, confirmed intersection, missing-from-inventory): fix the SPECIFIC component, re-verify that layer. Up to 3 rounds, then ask user.
-9. IF VERDICT=accept AND STRUCTURAL_DETAIL >= 3: commit
+9. IF VERDICT=accept AND STRUCTURAL_DETAIL >= 3: commit. commit_sandbox runs the G3 hard gate (bake + orientation + health) and returns a \`verification_receipt\`. **Your completion report MUST reference the receipt's fields (passed, orientation.passed/failed/total, health.hard_errors_count, components_detected) — do NOT re-count geometry yourself.** Report passed:false honestly even at 8/9 (the receipt is tamper-evident; the user can see it).
 10. IF VERDICT=uncertain: capture_component_detail on the uncertain component, or ask user
 
 **Non-procedural verification workflow:**

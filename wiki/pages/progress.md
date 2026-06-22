@@ -1,6 +1,6 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-21 &nbsp;|&nbsp; 第三十二阶段：vex_skeleton Sweep · 派生参数 · add_parm 工具 ✅ &nbsp;|&nbsp; 规划：完整自行车端到端演示
+> 最后更新：2026-06-22 &nbsp;|&nbsp; 第三十三阶段：单构建路径 + 三道闸门 ✅ &nbsp;|&nbsp; 规划：完整自行车端到端演示
 
 ## 总览看板
 
@@ -12,7 +12,7 @@
     <span class="status-tag status-done">完成</span>
   </div>
   <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:100%"></div></div>
-  <div class="phase-card-detail">Phase A → B → C（验证→构建→组装）。参数三态。4 新工具。8 别名。H21 hython 53/53 + mock 425/425。parm_catalog 自动生成。recipe_validator 6 层检查。</div>
+  <div class="phase-card-detail">Phase A → B → C（验证→构建→组装）。单构建路径（build_procedural_asset 唯一入口，旧 builder 已删）。三道闸门：G1 验证（A1-A9）/ G2 bake（edini_world_axis 烘焙）/ G3 commit（bake+orientation+health 硬闸 + verification_receipt）。参数三态。8 别名。H21 hython 53/53 + mock 468/468。parm_catalog 自动生成。</div>
 </div>
 
 <div class="phase-card">
@@ -84,7 +84,7 @@
     <span class="status-tag status-done">完成</span>
   </div>
   <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:100%"></div></div>
-  <div class="phase-card-detail">✅ Mock Hou 模块 · ✅ 478 测试（mock 425 + Houdini hython 53）· ✅ 三阶段管道完整覆盖 · ⬜ Edini GUI 全链路测试</div>
+  <div class="phase-card-detail">✅ Mock Hou 模块 · ✅ 521 测试（mock 468 + Houdini hython 53）· ✅ 三阶段管道完整覆盖 · ✅ 三道闸门测试矩阵（test_pipeline_gates.py 17 用例）· ⬜ Edini GUI 全链路测试</div>
 </div>
 
 <div class="phase-card">
@@ -131,6 +131,20 @@
     <div class="timeline-summary">① 根因分析：车架 8/8 组件全用 Python 手写管材（add_tube()），违反"管材用 vex_skeleton"铁律。根因 = vex_skeleton 的 `_build_vex_skeleton_component` 有两个阻塞缺陷：(a) wrangle spare parm expr 用 `../../` 而非 `../`（同一作用域 bug 再次出现，session 日志 3 轮修复佐证），(b) form_node params 只支持静态值，不支持 ch() 通道表达式。② 修复 A：form_node params 检测字符串含 `ch(` 则调 `setExpression()` 而非 `set()` → 管长可参数化。③ 修复 B：wrangle spare parm expr 从 `ch("../../param")` 改为 `ch("../param")`。④ 修复 C：PolyExtrude 需要 polygon face 而非 polyline → VEX 用 `addprim(0,"poly")` 创建封闭面。⑤ 修复 D：PolyExtrude/Sweep 剥离 component_id 属性 → 在 form_node 后加 `attribwrangle` 重新打标。⑥ **架构突破**：扩展 `_build_vex_skeleton_component` 支持双 wrangle Sweep 模式（`section_code` 字段）。路径 wrangle + 截面 wrangle → Sweep 自动垂直对齐 → 完美封闭管材（endcaptype=1）。⑦ **派生参数系统**：实现 `_evaluate_derived_params`，params 支持 `kind: "derived"` + `from` 表达式。拓扑排序求值，16 个派生坐标一次计算、全部组件共享。⑧ **add_parm 工具**：`add_parm(node_path, name, default, min, max, label)` 一键创建 spare float 参数，返回 channel_path。⑨ **最终效果**：车架从 0% vex → **75% vex**（6 vex_skeleton + 1 native_chain + 1 python），Python 占比从 94%→12%。成功构建完整公路自行车车架（8 组件 273 点 185 面），保存可操作 .hip 文件。⑩ **文档更新**：declarative-builder.md（vex_skeleton 双模式、派生参数）、params-and-linkage.md（三态体系、add_parm）、pitfalls.md（hou.ch ../ 路径、poly vs polyline、outputback 命名）、wiki tools/progress/procedural-harness 同步更新。</div>
     <div class="timeline-tags">
       <span>三阶段管道</span><span>A1-A6验证</span><span>parm_catalog</span><span>工具重组</span><span>H21 hython</span><span>parmTuple</span><span>478测试</span>
+    </div>
+  </div>
+</div>
+
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-22</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第三十三阶段：单构建路径 + 三道闸门（根治 road_bike 失败会话）</span>
+      <span class="status-tag status-done">完成</span>
+    </div>
+    <div class="timeline-summary">① **根因**：road_bike 会话失败日志分析暴露 4 类失控——agent 谎报 7/9 为 7/7、832 开放边、402 退化面、hub 90° 错。根因是**双构建路径**（build_procedural_asset 与旧 component_builder/assembly_engine 并行）让 raw network_mode 手写网络能伪装成已验证资产提交。② **阶段 1 删旧 builder**：删 component_builder.py / assembly_engine.py / component_cache.py + build_component/assemble_components 工具（-776 行）。build_procedural_asset 成为唯一构建入口。③ **阶段 2 G1 验证闸 A8+A9**：A8 每个 orientation_assert 必须声明 construction_axis（PCA 已禁用，轴不能靠估计）；A9（BLOCKING）禁止组件代码里硬编码尺寸字面量（wheelbase=1.0），逃生口=加进 params/reads。④ **阶段 3 全组件烘焙轴 + G2 bake 闸**：决策 6——为每个组件烘焙 edini_world_axis（优先级：assert 声明 > 组件字段 > backend 推断 > Y 兜底），走推断/兜底的记入 defaulted_axes。G2 检查输出几何每个 prim 都带非零轴。⑤ **阶段 4 G3 commit 硬闸 + receipt**：commit_sandbox 三层防御——G3a 烘焙（堵 raw sandbox）/ G3b 方向 / G3c 健康（BLOCKING 检查）。失败保留 sandbox（决策 12）。成功返 verification_receipt（防篡改 JSON，agent 汇报必须逐字段引用，禁止自行计数）。⑥ **阶段 5 删 PCA fallback**：verify_orientation 的 PCA 估计分支移除（决策 3，根治 hub 90° bug——PCA 对细长圆柱体取惯性轴而非径向轴）。construction 路径的 PCA crosscheck 保留（warning-only）。⑦ **阶段 6 测试矩阵**：新增 test_pipeline_gates.py 17 用例，每条复现日志一个失败模式（A8/A9/G2/G3/receipt/sandbox 保留）。⑧ **阶段 7 文档/prompt**：params-and-linkage.md（尺寸必须进 params）、pitfalls.md（raw network_mode 无法过 G3）、verification/SKILL.md（receipt 引用规则）、edini-context（commit 返 receipt，汇报引用它）、procedural-modeling/SKILL.md（单构建路径流程图）。⑨ **取证发现**：spec 设想的约 40% 代码里已实现（construction_axis 烘焙、健康硬/软分档、PCA crosscheck），避免重复劳动。⑩ 521 测试通过（468 mock + 53 hython）。</div>
+    <div class="timeline-tags">
+      <span>单构建路径</span><span>A8必填construction_axis</span><span>A9硬编码尺寸</span><span>G2烘焙闸</span><span>G3提交硬闸</span><span>verification_receipt</span><span>删PCAfallback</span><span>hub90°根治</span><span>521测试</span>
     </div>
   </div>
 </div>

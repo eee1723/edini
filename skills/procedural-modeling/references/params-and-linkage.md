@@ -1,6 +1,6 @@
 # Asset-level Parameters & Linkage (A2-station)
 
-By default each component's `code` is independent — a hardcoded `wheelbase = 1.0` in the frame does nothing to the wheel anchors. To make a **real parametric asset** (change one value, every dependent part updates), use asset-level `params` + expression-driven anchors.
+Each component's `code` is independent by default. Dimensions **must** live in asset-level `params` and be read via `hou.ch('../name')` — a hardcoded `wheelbase = 1.0` literal in the frame is now **rejected at validation (A9, BLOCKING)** because it breaks the parametric contract (editing the asset parm does nothing; the geometry was baked from a literal). To make a **real parametric asset** (change one value, every dependent part updates), declare every size in `params` + use expression-driven anchors.
 
 ## Parameter Kinds
 

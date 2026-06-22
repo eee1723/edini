@@ -2,6 +2,41 @@
 
 Mistakes that waste 30-50% of procedural generation time. Avoid them.
 
+## Raw `network_mode` cannot pass commit (G3 bake gate)
+
+A hand-written `houdini_run_python_sandbox(network_mode=true)` build that emits
+`@component_id`-tagged geometry has **no `edini_world_axis`** — only
+`build_procedural_asset` bakes that axis (from the declared `construction_axis`).
+The commit gate (G3a) refuses such a sandbox outright:
+
+```
+G3_NOT_BAKED: asset did not go through build_procedural_asset
+(no edini_world_axis on every prim). ... Missing on: ['frame', 'wheel_front']
+```
+
+The asset stays in the sandbox (no rename/discard) so you can fix and re-commit.
+**Fix**: rebuild via `build_procedural_asset` with a recipe. `network_mode` is
+reserved for genuinely single-piece assets that recipe cannot express (one
+fractal, one parametric surface) — and even then the commit gate only passes
+if the geometry has no `@component_id` prims (i.e. it's not pretending to be a
+modular asset).
+
+## Hardcoded size literals are BLOCKING (A9)
+
+A size-named variable (`wheelbase`, `radius`, `bb_height`, ...) assigned a bare
+numeric literal in component `code`, where the variable is neither a declared
+recipe param nor in the component's `reads` list, is a hardcoded dimension.
+`validate_recipe` rejects it at A9:
+
+```
+A9_HARDCODED_SIZE: component 'frame' assigns wheelbase = 1.0 as a hardcoded
+literal (line 5). Dimensions must live in recipe.params ...
+```
+
+**Fix**: add the var to `recipe.params` (becomes a real spare parm) or to the
+component's `reads` list (if it's a local alias of a param the component reads).
+Loop counters like `i = 0` pass through (no size hint).
+
 ## Python `hou.ch()` must use `../` prefix
 
 Params are installed on the sandbox root (one level ABOVE component SOPs).

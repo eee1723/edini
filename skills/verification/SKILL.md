@@ -37,7 +37,32 @@ license: MIT
 - `radial` — 围绕轴旋转对称（轮子、齿轮）。`expected_axis` = 轴方向。
 - `elongated` — 长/细（管、杆）。`expected_axis` = 长轴。
 - `planar` — 扁平（面板、板、座垫）。`expected_axis` = 表面法线。`signed: true` 当方向重要时。
-- `construction_axis` — 可选的局部空间轴。声明后，检查是**确定性的**（非 PCA 估计）。
+- `construction_axis` — 局部空间轴（X/Y/Z/-X/-Y/-Z）。**单路径设计后为必填**
+  （A8 检查）—— PCA 估计路径已移除（它对细长圆柱体误判 → hub 90° bug），
+  所以每个 assert 都必须声明轴。声明后检查是**确定性的**（基于 builder 烘焙的
+  `edini_world_axis`，非估计）。空 `orientation_asserts` 数组 = 显式跳过。
+
+## verification_receipt —— 汇报必须引用它（spec §5.2）
+
+`commit_sandbox` 成功后返回 `verification_receipt`，一个防篡改的 JSON 对象：
+
+```jsonc
+{"passed": true,
+ "orientation": {"passed": 2, "failed": 0, "total": 2, "failures": []},
+ "health": {"overall_ok": true, "hard_errors_count": 0, "soft_warnings": 3,
+            "blocking_checks": [...], "advisory_checks": [...]},
+ "components_detected": ["frame", "wheel_front", "wheel_rear"],
+ "construction_axes_baked": true, "defaulted_axes": {"seat": "Y(fallback)"},
+ "timestamp": "2026-06-22T17:30:00"}
+```
+
+**汇报规则**：
+- **逐字段引用 receipt，不要自己计数几何** —— receipt 是工具返回的 JSON，
+  agent 无法改写它的数字，只能选择省略某个失败项（用户仍能在工具结果里看到）。
+- **`passed: false` 必须如实报告** —— 即使 `passed=8/total=9`，也要报告那 1 个失败。
+  谎报 7/7 为全过正是单路径设计要根治的失败模式（road_bike 会话）。
+- **`defaulted_axes` 非空时说明** —— 这些组件用了推断/兜底轴（Y fallback），
+  agent 应说明哪些组件的轴是推断的、是否需要显式声明。
 
 ## 库存核对
 
