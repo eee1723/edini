@@ -14,14 +14,19 @@ license: MIT
 `houdini_run_python_sandbox(network_mode=true)`。必须走声明式 Recipe 管道：
 
 ```
-build_procedural_asset(recipe)  ← 唯一正确入口
-  → validate_recipe → build_component → assemble_components → commit_sandbox
+build_procedural_asset(recipe)  ← 唯一构建入口（内部串联验证→构建→组装）
+  → validate_recipe (A1-A9)     ← G1 验证闸
+  → cook + 烘焙 component_id / edini_world_axis
+  → commit_sandbox               ← G3 硬闸（world_axis + orientation + health）
+                                   返回 verification_receipt，汇报引用它
 ```
 
 `houdini_run_python_sandbox` 仅允许以下场景：
 - **单 SOP 模式**（默认）：真正的单体生成器（一个分形、一个参数曲面）
 - **network_mode**：仅在 recipe 框架**确实无法表达**的非标准拓扑时可用，
-  且必须在代码注释中说明「为何 recipe 无法表达」
+  且必须在代码注释中说明「为何 recipe 无法表达」。
+  **注意**：raw network_mode 不烘焙 `edini_world_axis`，因此永远无法通过
+  `commit_sandbox` 的 G3 闸——它只为无法 Recipe 化的单件资产保留。
 
 **如果你在构建一个有多组件、可替换件、管材、轮毂、辐条、
 或任何重复 ≥2 次的元素的资产：STOP — 你必须用 `build_procedural_asset`。**
@@ -35,21 +40,23 @@ build_procedural_asset(recipe)  ← 唯一正确入口
                              │
                   ┌──────────▼──────────┐
                   │ validate_recipe     │
-                  │ 全部通过？           │
+                  │ (A1-A9) 全部通过？   │
                   └──────┬─────┬───────┘
                      YES  │     │ NO
                           │     └──→ 加载 recipe-authoring
                   ┌───────▼───────┐
-                  │ 所有组件       │
-                  │ build 通过？   │
+                  │ build_procedural_asset │
+                  │ 构建 + 烘焙成功？       │
                   └───────┬───────┘
                      YES  │     │ NO
                           │     └──→ 加载 component-building
                   ┌───────▼───────┐
-                  │ assemble 完成？│
+                  │ 验证通过？     │
+                  │（health/orient │
+                  │ /inventory）   │
                   └───────┬───────┘
                      YES  │     │ NO
-                          │     └──→ 加载 assembly-wiring
+                          │     └──→ 加载 verification
                   ┌───────▼───────┐
                   │ test_params   │
                   │ 全部通过？     │
@@ -58,6 +65,7 @@ build_procedural_asset(recipe)  ← 唯一正确入口
                           │     └──→ 加载 parametric-testing
                   ┌───────▼───────┐
                   │ commit_sandbox│
+                  │ (G3 闸 + receipt)│
                   └───────────────┘
 ```
 
@@ -68,9 +76,9 @@ build_procedural_asset(recipe)  ← 唯一正确入口
 | 设计 | 用户说"做一个..." | `edini-brainstorm` |
 | 写 Recipe | 设计已批准，无 Recipe | `recipe-authoring` |
 | 验证 Recipe | `validate_recipe` 返回错误 | `recipe-authoring` |
-| 构建组件 | 验证通过，组件未构建 | `component-building` |
-| 组装 | 所有组件 passed，未组装 | `assembly-wiring` |
-| 验证 | 组装完成，未验证 | `verification` |
+| 构建组件 | 验证通过，某组件 cook 失败 | `component-building` |
+| 组装 | build 网络结构有问题 | `assembly-wiring` |
+| 验证 | 构建完成，验证未通过 | `verification` |
 | 参数测试 | 验证通过，未测试边界 | `parametric-testing` |
 | 提交 | 全部通过 | 直接 `commit_sandbox` |
 
@@ -88,7 +96,7 @@ build_procedural_asset(recipe)  ← 唯一正确入口
 
 ## 关键规则（来自旧版，保持不变）
 
-1. **永远不要使用 `houdini_run_python`** — 已从工具注册表中移除。使用 `build_component(network_mode=true)`。
+1. **永远不要使用 `houdini_run_python`** — 已从工具注册表中移除。多组件资产用 `build_procedural_asset`；无法 Recipe 化的单件用 `houdini_run_python_sandbox`。
 2. **在设置任何 parm 之前查询参数名** — 使用 `query_parms(type)`。自动目录是权威来源。
 3. **用 `@component_id` 标记每个几何组件** — 在创建几何体之前声明。
 4. **靠构造保证封闭性，不靠缠绕** — Sweep(endcaptype=1) / PolyExtrude(output_back=1)。

@@ -12,6 +12,9 @@ def test_harness_tools_file_contains_all_tool_names():
     text = read("pi-extensions/edini-tools/tools/harness.ts")
     # Post-Task-7: tool names were streamlined (houdini_ prefix dropped on
     # renamed tools; old names still work via TOOL_ALIASES in tool_executor.py).
+    # Stage-1 (single-build-path): build_component/assemble_components removed
+    # (the old component_builder/assembly_engine backend) — the only build
+    # entry point is now build_procedural_asset.
     for name in [
         "houdini_collect_diagnostics",
         "houdini_run_python_sandbox",
@@ -22,8 +25,6 @@ def test_harness_tools_file_contains_all_tool_names():
         "verify_orientation",
         "build_procedural_asset",
         "validate_recipe",
-        "build_component",
-        "assemble_components",
         "dump_parm_catalog",
     ]:
         assert name in text
@@ -57,9 +58,12 @@ def test_review_guidance_mentions_views():
 def test_procedural_modeling_skill_requires_harness():
     text = read("skills/procedural-modeling/SKILL.md")
     # Post-Task-8: skill was rewritten with streamlined tool names
-    # and new pipeline-phase routing.
+    # and new pipeline-phase routing. Stage-1 (single-build-path) made
+    # build_procedural_asset the sole build entry point; build_component/
+    # assemble_components tools were removed, so we assert the canonical
+    # build entry point instead.
     assert "validate_recipe" in text
-    assert "build_component" in text
+    assert "build_procedural_asset" in text
     assert "commit_sandbox" in text
     assert "query_parms" in text or "houdini" in text.lower()
     assert "recipe-authoring" in text or "Recipe" in text

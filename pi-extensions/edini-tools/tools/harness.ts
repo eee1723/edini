@@ -446,7 +446,8 @@ export const validateRecipeTool = {
   label: "Validate Procedural Asset Recipe",
   description:
     "Phase A: validate a procedural asset recipe without any Houdini operations. " +
-    "Checks A1-A6 (schema, parm names, node types, VEX lint, construction axes, dependency graph). " +
+    "Checks A1-A9 (schema, parm names, node types, VEX lint, construction axes, dependency graph, " +
+    "backend heuristics, A8 mandatory construction_axis on orientation_asserts, A9 hardcoded-size guard). " +
     "Catches parm-name typos and invalid node types before any cook — zero Houdini cost.",
   promptSnippet: "Validate a procedural asset recipe before building",
   parameters: Type.Object({
@@ -459,40 +460,6 @@ export const validateRecipeTool = {
   }),
   async execute(_toolCallId: string, params: { recipe: Record<string,unknown>; catalog_path?: string }) {
     return forwardTool("validate_recipe", params);
-  },
-};
-
-export const buildComponentTool = {
-  name: "build_component",
-  label: "Build Single Component",
-  description:
-    "Phase B: build a single component inside the sandbox. Cooks, verifies geometry health, " +
-    "confirms @component_id tagging.",
-  promptSnippet: "Build a single procedural component",
-  parameters: Type.Object({
-    recipe: Type.Record(Type.String(), Type.Unknown()),
-    component_id: Type.String(),
-    sandbox_root_path: Type.String(),
-    catalog_path: Type.Optional(Type.String()),
-  }),
-  async execute(_toolCallId: string, params: { recipe: Record<string,unknown>; component_id: string; sandbox_root_path: string; catalog_path?: string }) {
-    return forwardTool("build_component", params);
-  },
-};
-
-export const assembleComponentsTool = {
-  name: "assemble_components",
-  label: "Assemble Components",
-  description:
-    "Phase C: assemble all passed components into the final asset with anchors, CTP, merge, and postprocess.",
-  promptSnippet: "Assemble verified components into final asset",
-  parameters: Type.Object({
-    recipe: Type.Record(Type.String(), Type.Unknown()),
-    sandbox_root_path: Type.String(),
-    cache_root: Type.String(),
-  }),
-  async execute(_toolCallId: string, params: { recipe: Record<string,unknown>; sandbox_root_path: string; cache_root: string }) {
-    return forwardTool("assemble_components", params);
   },
 };
 
@@ -516,8 +483,6 @@ export const harnessTools = [
   houdiniCollectDiagnostics,
   buildProceduralAssetTool,
   validateRecipeTool,
-  buildComponentTool,
-  assembleComponentsTool,
   houdiniRunPythonSandbox,
   houdiniVerifyAsset,
   verifyOrientationTool,
