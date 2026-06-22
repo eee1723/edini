@@ -161,6 +161,41 @@ def test_python_sop_template_deprecates_network_mode():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  Guard 4d: builder must default tube/cylinder type to polygon
+# ═══════════════════════════════════════════════════════════════════════════
+# H21 tube/cylinder default type=0 (Primitive) emits 1 primitive; procedural
+# workflows need polygon meshes. The builder must default type to 1 when the
+# recipe omits it. This guard prevents that fix from being reverted.
+
+def test_builder_defaults_tube_cylinder_to_polygon():
+    h = read("python3.11libs/edini/harness.py")
+    # The fix lives in _build_native_chain_component. Look for the type=1
+    # default on tube/cylinder creation.
+    assert 'canonical in ("tube", "cylinder")' in h, (
+        "harness.py must default tube/cylinder 'type' to 1 (Polygon). "
+        "H21 defaults to 0 (Primitive) which emits 1 prim and breaks CTP.")
+    assert 'node.parm("type").set(1)' in h, (
+        "harness.py must set type=1 on tube/cylinder when 'type' is omitted.")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Guard 4e: prebuilt tube templates must set type:1 (correctness of examples)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_prebuilt_tube_templates_set_type():
+    import re
+    for f in ("scripts/prebuilt-templates.md",
+              "references/declarative-builder.md"):
+        text = read(f"{SKILL}/procedural-modeling/{f}")
+        # Find every tube node spec and check it has type:1.
+        for m in re.finditer(r'"type":\s*"tube"[^}]*\}', text):
+            spec = m.group(0)
+            assert '"type": 1' in spec or '"type":1' in spec, (
+                f"{f}: tube spec without type:1 → degenerate geometry in H21. "
+                f"Spec: {spec}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  Guard 5: the verification_receipt must be documented where commit is taught
 # ═══════════════════════════════════════════════════════════════════════════
 # Stage 4 made commit_sandbox return a tamper-evident receipt; Stage 7 made

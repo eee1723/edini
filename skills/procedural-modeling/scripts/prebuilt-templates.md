@@ -13,6 +13,12 @@ All templates use `attribwrangle` (Detail mode) for component_id tagging.
 Always verify parm names with `query_parms(type)` before using a template
 with unfamiliar SOP types.
 
+**`tube` / `cylinder` `type` parameter:** H21 defaults these to `type=0`
+(Primitive), which emits a single primitive instead of a polygon mesh —
+procedural workflows always want polygons. The builder now defaults `type`
+to `1` (Polygon) when you omit it, but templates below set it explicitly
+for clarity.
+
 ## How to use
 
 In your `build_procedural_asset` recipe, reference a template like:
@@ -22,7 +28,7 @@ In your `build_procedural_asset` recipe, reference a template like:
   "id": "hub",
   "backend": "native_chain",
   "nodes": [
-    {"type": "tube", "params": {"rad": [0.03, 0.03], "height": 0.06, "rows": 3, "cols": 16}},
+    {"type": "tube", "params": {"rad": [0.03, 0.03], "height": 0.06, "rows": 3, "cols": 16, "type": 1}},
     {"type": "fuse", "params": {}},
     {"type": "attribwrangle", "params": {"class": 1, "snippet": "s@component_id = \"hub\";"}}
   ]
@@ -41,7 +47,7 @@ Never hand-write the geometry in Python when a native SOP template exists.
   "backend": "native_chain",
   "anchors": [/* anchor specs here (optional) */],
   "nodes": [
-    {"type": "tube", "params": {"rad": [0.025, 0.025], "height": 0.06, "rows": 3, "cols": 16}},
+    {"type": "tube", "params": {"rad": [0.025, 0.025], "height": 0.06, "rows": 3, "cols": 16, "type": 1}},
     {"type": "fuse", "params": {"dist": 0.0001}},
     {"type": "attribwrangle", "params": {"class": 1, "snippet": "s@component_id = \"hub\";"}}
   ]
@@ -58,7 +64,7 @@ Never hand-write the geometry in Python when a native SOP template exists.
   "backend": "native_chain",
   "anchors": [/* scatter wrangle fills these */],
   "nodes": [
-    {"type": "tube", "params": {"rad": [0.001, 0.001], "height": 0.34, "rows": 2, "cols": 8}},
+    {"type": "tube", "params": {"rad": [0.001, 0.001], "height": 0.34, "rows": 2, "cols": 8, "type": 1}},
     {"type": "attribwrangle", "params": {"class": 1, "snippet": "s@component_id = \"spoke\";"}}
   ]
 }
@@ -139,7 +145,7 @@ Pair with `make_gear_profile()` in a `vex_skeleton` component for toothed disc:
   "id": "bb_shell",
   "backend": "native_chain",
   "nodes": [
-    {"type": "tube", "params": {"rad": [0.018, 0.022], "height": 0.07, "rows": 4, "cols": 20}},
+    {"type": "tube", "params": {"rad": [0.018, 0.022], "height": 0.07, "rows": 4, "cols": 20, "type": 1}},
     {"type": "fuse", "params": {"dist": 0.0001}},
     {"type": "attribwrangle", "params": {"class": 1, "snippet": "s@component_id = \"bb_shell\";"}}
   ]

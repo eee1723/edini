@@ -143,7 +143,7 @@ For cylinders, boxes, hubs, pedals — combine native Houdini SOPs:
   "id": "hub",
   "backend": "native_chain",
   "nodes": [
-    {"type": "tube", "params": {"rad": [0.025, 0.025], "height": 0.06, "rows": 3, "cols": 16}},
+    {"type": "tube", "params": {"rad": [0.025, 0.025], "height": 0.06, "rows": 3, "cols": 16, "type": 1}},
     {"type": "fuse", "params": {"dist": 0.0001}},
     {"type": "attribwrangle", "params": {"class": 1, "snippet": "s@component_id = \"hub\";"}}
   ]

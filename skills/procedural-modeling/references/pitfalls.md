@@ -2,6 +2,24 @@
 
 Mistakes that waste 30-50% of procedural generation time. Avoid them.
 
+## `tube` / `cylinder` need `type:1` (Polygon) — default `type:0` emits 1 primitive
+
+H21 `tube` and `cylinder` SOPs default `type` to `0` (Primitive), which emits
+a SINGLE primitive — not a polygon mesh. Copy-to-Points then instances that
+single primitive as a degenerate point, and the geometry silently "disappears"
+(`geometry_inventory` shows `prim_count: 1, size: [0,0,0]` for the instance).
+
+The builder now **defaults `type` to `1` (Polygon)** when you omit it on
+`tube`/`cylinder` in a `native_chain`, so you don't have to remember. But if
+you ever set these SOPs by hand (raw network_mode), always set `type:1`.
+
+```jsonc
+// ✅ CORRECT — type:1 gives a 12-sided polygon cylinder (real geometry)
+{"type": "tube", "params": {"rad": [0.03, 0.03], "height": 0.7, "cols": 12, "type": 1}}
+// ❌ WRONG — type defaults to 0 (Primitive), 1 prim, geometry vanishes on CTP
+{"type": "tube", "params": {"rad": [0.03, 0.03], "height": 0.7, "cols": 12}}
+```
+
 ## Raw `network_mode` cannot pass commit (G3 bake gate)
 
 A hand-written `houdini_run_python_sandbox(network_mode=true)` build that emits

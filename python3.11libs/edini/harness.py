@@ -2643,6 +2643,18 @@ def _build_native_chain_component(
             node.setInput(0, prev)
         # Set parameters
         params = node_spec.get("params") or {}
+        # Node-type sensible defaults: procedural workflows ALWAYS want polygon
+        # geometry, not Houdini primitives. H21 tube/cylinder default 'type' to
+        # 0 (Primitive), which emits a SINGLE primitive instead of a polygon
+        # mesh — Copy-to-Points then instances that single primitive as a
+        # degenerate point, and the geometry silently "disappears" (caught by
+        # real-H21 e2e; the mock does not cook SOPs so it missed this). If the
+        # recipe does not explicitly set 'type', default it to 1 (Polygon).
+        if canonical in ("tube", "cylinder") and "type" not in params:
+            try:
+                node.parm("type").set(1)
+            except Exception:
+                pass  # node may not have 'type' — best-effort
         # attribwrangle special handling: 'class' sets run-over mode,
         # 'snippet' sets the VEX code
         if canonical == "attribwrangle":
