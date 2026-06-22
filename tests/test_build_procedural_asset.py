@@ -1214,5 +1214,44 @@ class TestVariantScatterPointsCode(unittest.TestCase):
         self.assertNotIn("setAttribValue('variant'", wrapper)
 
 
+class TestPostprocessNodeNames(unittest.TestCase):
+    """postprocess 节点名必须清洗掉 :: 等非法字符。
+
+    真实 Houdini 拒绝含 :: 的节点名（InvalidNodeName），导致整个
+    postprocess 节点被跳过 → 非流形边残留（公路车 Phase 1 实跑留了
+    652 条）。mock 应模拟同样的校验，让这类 bug 在单元测试阶段暴露。
+    """
+
+    def test_fuse_versioned_postprocess_node_name_is_sanitized(self):
+        """postprocess 的 fuse::2.0 等带 :: 的类型，节点名必须清洗掉 ::。
+        真实 Houdini 拒绝含 :: 的节点名（InvalidNodeName），导致整个
+        postprocess 节点被跳过 → 非流形边残留（公路车 Phase 1 实跑留了
+        652 条）。"""
+        recipe = {
+            "asset_name": "fuse_test",
+            "components": [{"id": "x", "code": _geo_code("x"), "anchors": []}],
+            "postprocess": [
+                {"type": "fuse::2.0"},
+                {"type": "clean"},
+            ],
+        }
+        result = harness.build_procedural_asset(recipe, sandbox_name="fuse_test")
+        self.assertTrue(result.get("success"), f"build failed: {result.get('error')}")
+        root = _mock_hou.node(result["root_path"])
+        names = [c.name() for c in root.children() if c.name().startswith("post_")]
+        bad = [n for n in names if "::" in n]
+        self.assertEqual(bad, [], f"postprocess 节点名含非法字符 :: : {bad}")
+        self.assertTrue(any("fuse" in n for n in names),
+                        f"未找到 fuse postprocess 节点，children: {names}")
+
+    def test_mock_setName_rejects_colon_names(self):
+        """mock 应模拟真实 Houdini 的节点名校验。"""
+        from tests.test_node_utils import _mock_hou as mock_hou
+        root = mock_hou.node("/obj")
+        node = root.createNode("geo", "test_node_ok")
+        with self.assertRaises(Exception):
+            node.setName("fuse::2.0")
+
+
 if __name__ == "__main__":
     unittest.main()

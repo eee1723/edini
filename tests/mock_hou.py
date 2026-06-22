@@ -657,6 +657,15 @@ class MockNode:
         return self._name
 
     def setName(self, name: str, unique_name: bool = False) -> None:
+        # Mirror real Houdini's node-name validation: names may only contain
+        # letters, digits, underscores. :: and . are illegal. This makes
+        # dynamic-naming bugs (e.g. postprocess node names built from a type
+        # string like "fuse::2.0") fail in unit tests, not only under hython.
+        import re as _re
+        if not isinstance(name, str) or not _re.fullmatch(r"[A-Za-z0-9_]+", name):
+            raise MockNode._hou_ref.InvalidNodeName(
+                f"Invalid node name: {name!r}. Houdini node names may only "
+                f"contain letters, digits, and underscores.")
         old_paths = {node: node._path for node in self.allSubChildren()}
         self._name = name
 
@@ -738,6 +747,16 @@ class MockNode:
             node._outputs.append(self)
 
     def createNode(self, node_type_name: str, node_name: str | None = None) -> MockNode:
+        # When an explicit node_name is supplied it must be a legal Houdini
+        # node name (letters/digits/underscores only). Type names may legally
+        # contain :: (e.g. "fuse::2.0" is a valid type), and Houdini sanitizes
+        # the default name itself when node_name is None — so we only validate
+        # the explicit case, mirroring real Houdini's behaviour.
+        import re as _re
+        if node_name is not None and not _re.fullmatch(r"[A-Za-z0-9_]+", node_name):
+            raise MockNode._hou_ref.InvalidNodeName(
+                f"Invalid node name: {node_name!r}. Houdini node names may only "
+                f"contain letters, digits, and underscores.")
         actual_name = node_name or node_type_name
         child_path = f"{self._path}/{actual_name}"
         child = MockNode(child_path, actual_name, node_type_name, parent=self)
@@ -1306,6 +1325,14 @@ class MockHou:
         return self._HDA(self._hda_definitions)
 
     class OperationFailed(Exception):
+        pass
+
+    class InvalidNodeName(Exception):
+        """Mock of hou.InvalidNodeName — raised by setName/createNode on
+        illegal node names (containing ::, ., etc). Mirrors real Houdini's
+        node-name validation so dynamic-naming bugs (e.g. postprocess node
+        named ``post_0_fuse::2.0``) surface in unit tests instead of only
+        under real hython."""
         pass
 
 

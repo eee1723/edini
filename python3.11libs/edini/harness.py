@@ -2244,6 +2244,20 @@ def _resolve_anchor_exprs(
     return resolved, errors
 
 
+def _sanitize_node_name(type_str: str) -> str:
+    """Sanitize a node type name into a legal Houdini node name.
+
+    Houdini node names may only contain [A-Za-z0-9_]. Postprocess types often
+    carry a version suffix (e.g. ``fuse::2.0``); using the type directly as a
+    node name triggers ``InvalidNodeName`` in real Houdini, which silently
+    skips the entire postprocess node (observed in a real bicycle build where
+    the fuse was skipped, leaving 652 non-manifold edges). This replaces every
+    non-word character with an underscore.
+    """
+    import re
+    return re.sub(r"[^A-Za-z0-9_]", "_", type_str)
+
+
 def _safe_create_node(parent_path: str, node_type: str, name: str) -> Any:
     """Create a node, returning the node object (or raising on failure).
 
@@ -3230,7 +3244,7 @@ def build_procedural_asset(
                 pp_type = pp["type"]
                 pp_type = NODE_ALIASES.get(pp_type, pp_type)  # resolve alias
                 pp_params = pp.get("params") or {}
-                pp_name = f"post_{i}_{pp_type}"
+                pp_name = f"post_{i}_{_sanitize_node_name(pp_type)}"
                 try:
                     pp_node = _safe_create_node(root_path, pp_type, pp_name)
                 except Exception as e:
@@ -3868,7 +3882,7 @@ def build_variant_scatter(
             if not isinstance(pp_type, str) or not pp_type:
                 warnings.append(f"postprocess[{i}] has no type; skipped")
                 continue
-            pp_name = f"post_{i}_{pp_type}"
+            pp_name = f"post_{i}_{_sanitize_node_name(pp_type)}"
             try:
                 pp_node = _safe_create_node(root_path, pp_type, pp_name)
             except Exception as e:
