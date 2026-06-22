@@ -126,7 +126,7 @@ def _sanitize_node_name(type_str: str) -> str:
     def test_mock_setName_rejects_colon_names(self):
         """mock 应模拟真实 Houdini 的节点名校验，让 :: 类节点名 bug
         能在单元测试阶段暴露，而不是等真 H21。"""
-        from tests.mock_hou import MockNode, hou as mock_hou
+        from tests.test_node_utils import _mock_hou as mock_hou
         root = mock_hou.node("/obj")
         node = root.createNode("geo", "test_node")
         with self.assertRaises(Exception):
@@ -154,7 +154,7 @@ Expected: FAIL — 当前 mock `setName` 不校验名字。
         # postprocess 等动态命名场景的非法名 bug 能在 mock 测试暴露。
         import re as _re
         if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_]+", name):
-            raise hou.InvalidNodeName(
+            raise MockNode._hou_ref.InvalidNodeName(
                 f"Invalid node name: {name!r}. Houdini node names may only "
                 f"contain letters, digits, and underscores.")
         old_paths = {node: node._path for node in self.allSubChildren()}
@@ -175,9 +175,8 @@ Expected: FAIL — 当前 mock `setName` 不校验名字。
         # 节点名校验（与 setName 一致）。注意：type 名可带 :: （如
         # fuse::2.0 是合法的 type），但 node_name 不行。
         import re as _re
-        check_name = node_name if node_name is not None else node_type_name
         if node_name is not None and not re.fullmatch(r"[A-Za-z0-9_]+", node_name):
-            raise hou.InvalidNodeName(
+            raise MockNode._hou_ref.InvalidNodeName(
                 f"Invalid node name: {node_name!r}. Houdini node names may only "
                 f"contain letters, digits, and underscores.")
         child_path = f"{self._path}/{actual_name}"
@@ -251,7 +250,7 @@ class TestParameterFolderConsolidation(unittest.TestCase):
                 "seat_top_y": {"kind": "derived", "from": "bb_height + 0.5 * cos(st_rad)"},
             },
             "components": [
-                {"id": "c1", "code": harness._geo_code("c1") if hasattr(harness, '_geo_code') else _geo_code("c1"),
+                {"id": "c1", "code": _geo_code("c1"),
                  "reads": ["wheel_r"]},
             ],
         }
