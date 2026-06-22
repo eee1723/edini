@@ -2583,10 +2583,33 @@ def _build_python_component(
     cid: str,
     world_axis_by_cid: dict,
     anchors: list,
+    param_values: dict[str, float],
 ) -> Any:
-    """Build a Python-backend component. Returns the cooked python SOP."""
+    """Build a Python-backend component. Returns the cooked python SOP.
+
+    Installs ``reads`` params as spare parms on the python SOP (mirroring
+    vex_skeleton's ``_make_wrangle``), each with a ``ch("../<name>")``
+    expression, so the component's Python code can read asset-level params via
+    ``hou.ch("../param")``. Previously the python backend installed NO spare
+    parms, so ``hou.ch()`` always failed — the bicycle saddle component
+    cooked empty.
+    """
     code = comp.get("code", "")
     py_sop = _safe_create_node(root_path, "python", f"{cid}_python")
+    # Install reads as spare parms (parity with _make_wrangle for vex_skeleton).
+    reads = comp.get("reads") or []
+    for pname in reads:
+        if pname in param_values:
+            try:
+                ptg = py_sop.parmTemplateGroup()
+                if not ptg.find(pname):
+                    t = hou.FloatParmTemplate(pname, pname, 1,
+                        (param_values[pname],), 0, 100)
+                    ptg.append(t)
+                    py_sop.setParmTemplateGroup(ptg)
+                py_sop.parm(pname).setExpression(f'ch("../{pname}")')
+            except Exception:
+                pass
     effective_code = code
     if not anchors and cid in world_axis_by_cid:
         effective_code = code + _direct_component_world_axis_snippet(
@@ -3135,7 +3158,8 @@ def build_procedural_asset(
                         param_values)
                 else:  # python (default)
                     out_sop = _build_python_component(
-                        root_path, comp, cid, world_axis_by_cid, anchors)
+                        root_path, comp, cid, world_axis_by_cid, anchors,
+                        param_values)
             except Exception as e:
                 errors_runtime.append(
                     f"component '{cid}' ({backend}): {e}")

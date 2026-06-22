@@ -1291,5 +1291,27 @@ class TestParameterFolderConsolidation(unittest.TestCase):
                          f"文件夹应含 6 个参数，实际 {len(edini_folders[0].parmTemplates())}")
 
 
+class TestPythonBackendParams(unittest.TestCase):
+    """python 后端的组件代码用 hou.ch('../param') 读参数，builder 必须给
+    python SOP 装 spare parms（与 vex_skeleton 的 _make_wrangle 对齐）。
+    根因：_build_python_component 原本完全不装参数 → hou.ch 失败。"""
+
+    def test_python_backend_installs_read_params(self):
+        recipe = {
+            "asset_name": "pyparam_test",
+            "params": {"wheel_r": {"default": 0.35}},
+            "components": [
+                {"id": "wheel_py", "backend": "python",
+                 "code": _geo_code("wheel_py"), "reads": ["wheel_r"]},
+            ],
+        }
+        result = harness.build_procedural_asset(recipe, sandbox_name="pyparam_test")
+        self.assertTrue(result.get("success"), f"build failed: {result.get('error')}")
+        py_node = _mock_hou.node(f"{result['root_path']}/wheel_py_python")
+        self.assertIsNotNone(py_node, "wheel_py_python 节点未创建")
+        parm = py_node.parm("wheel_r")
+        self.assertIsNotNone(parm, "python SOP 未装 wheel_r spare parm")
+
+
 if __name__ == "__main__":
     unittest.main()
