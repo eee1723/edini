@@ -3082,8 +3082,11 @@ def build_procedural_asset(
     components_built: list[str] = []
     anchors_built: dict[str, int] = {}
     # Non-blocking recipe warnings (e.g. python backend without justification).
-    # Surfaced in the build result so the agent can act on them.
-    warnings.extend(_validate_recipe_warnings(recipe))
+    # Surfaced in the build result so the agent can act on them. Tracked
+    # separately so the result also exposes them under the documented
+    # "validation_warnings" alias.
+    validation_warnings = _validate_recipe_warnings(recipe)
+    warnings.extend(validation_warnings)
     out_path = ""
 
     try:
@@ -3470,6 +3473,7 @@ def build_procedural_asset(
             "diagnostics": diag,
             "structural_checks": structural_checks,
             "warnings": warnings,
+            "validation_warnings": validation_warnings,
             "preserved": True,
             "deleted": False,
         }
@@ -3592,6 +3596,56 @@ def build_procedural_asset(
 # dispatch variants (Houdini 21). Must be int or string — never float.
 _VARIANT_PIECE_ATTR = "variant"
 
+
+def _resolve_rebuild_axes(
+    component_spec: dict,
+    cid: str,
+    anchors: list,
+) -> dict[str, tuple[float, float, float]]:
+    """Resolve edini_world_axis per instance for a rebuild, mirroring
+    build_procedural_asset's tiered resolution but using only
+    component_spec (the full recipe's orientation_asserts are not passed to
+    rebuild_component, so tier-1 assert lookup is unavailable — tiers 2-4
+    apply).
+
+    Tier 2: component-level ``construction_axis`` field.
+    Tier 3: native_chain backend inference.
+    Tier 4: fallback Y.
+
+    Without this, a rebuilt stamped component loses its edini_world_axis and
+    the next commit_sandbox trips G3_NOT_BAKED.
+    """
+    world_axis_by_cid: dict[str, tuple[float, float, float]] = {}
+    comp_caxis = _normalize_axis_spec(component_spec.get("construction_axis"))
+    backend = component_spec.get("backend", "python")
+
+    def _resolve_one(caxis_field_value):
+        caxis = caxis_field_value
+        if caxis is None and backend == "native_chain":
+            for node_spec in (component_spec.get("nodes") or []):
+                bare = (node_spec.get("type") or "").lower().split("::")[0]
+                if bare in ("tube", "cylinder", "torus"):
+                    caxis = "Y"
+                    break
+        if caxis is None:
+            caxis = "Y"
+        return caxis
+
+    if anchors:
+        for anc in anchors:
+            anc_cid = anc.get("component_id", cid)
+            orient = list(anc.get("orient", [0.0, 0.0, 0.0, 1.0]))
+            caxis = _resolve_one(comp_caxis)
+            world_axis_by_cid[anc_cid] = _resolve_construction_world_axis(
+                orient, caxis)
+    else:
+        # Direct-merge: identity frame, axis == declared construction_axis.
+        caxis = _resolve_one(comp_caxis)
+        world_axis_by_cid[cid] = _resolve_construction_world_axis(
+            [0.0, 0.0, 0.0, 1.0], caxis)
+    return world_axis_by_cid
+
+
 def rebuild_component(
     sandbox_root_path: str,
     component_id: str,
@@ -3639,33 +3693,45 @@ def rebuild_component(
         }
 
     cid = component_id
-    # 1. Locate target nodes: {cid}_* and copy_{cid} (the stamped copytopoints
-    #    is named copy_{cid}, outside the {cid}_ prefix).
-    prefix = f"{cid}_"
+    # 1. Locate target nodes by an EXACT node-name vocabulary (not a loose
+    #    prefix). A loose `{cid}_` prefix would also destroy a sibling
+    #    component whose id shares a prefix (e.g. rebuilding "wheel" would
+    #    wipe "wheel_rim_*"). Enumerate the exact names the builder creates
+    #    for any backend: {cid}_path/section/sweep/tag/wrangle/python/nN
+    #    (geometry + native_chain), {cid}_anchors/copy_{cid}/{cid}_idfix
+    #    (stamping layer). Native_chain uses {cid}_n0, {cid}_n1, ... so match
+    #    those via a regex on the suffix.
+    import re as _re
+    own_node_names = {
+        f"{cid}_path", f"{cid}_section", f"{cid}_sweep", f"{cid}_tag",
+        f"{cid}_wrangle", f"{cid}_python", f"{cid}_anchors", f"{cid}_idfix",
+        f"copy_{cid}", cid,
+    }
+    own_node_re = _re.compile(rf"^{_re.escape(cid)}_n\d+$")
     target_nodes = [c for c in root.children()
-                    if c.name().startswith(prefix) or c.name() == f"copy_{cid}"]
+                    if c.name() in own_node_names or own_node_re.match(c.name())]
     if not target_nodes:
         return {
             "success": False,
             "sandbox_root_path": sandbox_root_path,
             "component_id": cid,
-            "error": (f"No nodes with prefix {prefix!r} or name 'copy_{cid}' "
-                      f"found in sandbox (component {cid!r} does not exist)"),
+            "error": (f"No nodes matching the {cid!r} node-name vocabulary "
+                      f"found in sandbox (component does not exist)"),
         }
 
-    # 2. Locate merge + record the input index fed by this component.
+    # 2. Locate merge + record the input index fed by this component. The
+    #    merge is fed by {cid}_tag/python (direct-merge) or {cid}_idfix
+    #    (stamped) — match those exact names.
     merge_node = None
     merge_input_index = None
     for c in root.children():
         if c.name() == "merge_all":
             merge_node = c
             break
+    feed_names = {f"{cid}_tag", f"{cid}_python", f"{cid}_idfix", cid}
     if merge_node is not None:
         for idx, inp in enumerate(merge_node.inputs()):
-            if inp is not None and (
-                    inp.name().startswith(prefix)
-                    or inp.name() == f"copy_{cid}"
-                    or inp.name() == f"{cid}_idfix"):
+            if inp is not None and inp.name() in feed_names:
                 merge_input_index = idx
                 break
 
@@ -3678,7 +3744,6 @@ def rebuild_component(
 
     # 4. Rebuild via the matching backend.
     anchors = component_spec.get("anchors") or []
-    world_axis_by_cid: dict[str, tuple[float, float, float]] = {}
     warnings: list[str] = []
     # Reconstruct param_values from the sandbox root's installed spare parms
     # (includes some transform-folder garbage keys, harmless — backends only
@@ -3694,6 +3759,13 @@ def rebuild_component(
         pass
 
     backend = component_spec.get("backend", "python")
+    # Resolve world axes for this component so stamped instances keep their
+    # edini_world_axis after rebuild (otherwise the next commit's G3 gate
+    # trips G3_NOT_BAKED). Mirrors build_procedural_asset's tiered resolution
+    # but operates only on component_spec (the full recipe's
+    # orientation_asserts are not available here, so tier-1 assert lookup is
+    # best-effort via an optional `construction_axis` field; tiers 2-4 apply).
+    world_axis_by_cid = _resolve_rebuild_axes(component_spec, cid, anchors)
     try:
         if backend == "native_chain":
             out_sop = _build_native_chain_component(

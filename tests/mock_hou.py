@@ -34,6 +34,19 @@ class MockParm:
     def set(self, value: Any) -> None:
         self._value = value
 
+    def setExpression(self, expr: str, language: Any = None) -> None:
+        """Mock of hou.Parm.setExpression — records the expression string.
+
+        Real Houdini evaluates the expression on cook; the mock just stores it
+        so unit tests can verify a channel reference (e.g. ch("../wheel_r"))
+        was wired. Many builder paths call setExpression inside try/except,
+        so without this the unit tests would pass even when the expression
+        fails to install."""
+        self._expression = expr
+
+    def expression(self) -> str:
+        return getattr(self, "_expression", "")
+
     def pressButton(self) -> None:
         pass
 

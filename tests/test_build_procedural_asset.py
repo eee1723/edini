@@ -1311,6 +1311,10 @@ class TestPythonBackendParams(unittest.TestCase):
         self.assertIsNotNone(py_node, "wheel_py_python 节点未创建")
         parm = py_node.parm("wheel_r")
         self.assertIsNotNone(parm, "python SOP 未装 wheel_r spare parm")
+        # Verify the channel-reference expression was wired (not just the
+        # template existing) — the actual behavior that broke (hou.ch failed).
+        self.assertEqual(parm.expression(), 'ch("../wheel_r")',
+                         f"wheel_r 表达式未正确链接: {parm.expression()!r}")
 
     def test_python_backend_without_justification_warns(self):
         """python 后端应用作最后手段，需 justification 说明为何不能用 SOP。
@@ -1480,6 +1484,36 @@ class TestRebuildComponent(unittest.TestCase):
         for name in ("wheel_anchors", "copy_wheel", "wheel_idfix"):
             self.assertIsNotNone(_mock_hou.node(f"{root_path}/{name}"),
                                  f"{name} 未重建")
+
+    def test_rebuild_does_not_touch_prefix_sibling(self):
+        """rebuild 'wheel' must NOT destroy a sibling component 'wheel_rim',
+        even though 'wheel_rim_*' names start with 'wheel_'. The loose
+        {cid}_ prefix match would silently wipe out the sibling. The destroy
+        set must use an exact node-name vocabulary, not a prefix."""
+        recipe = {
+            "asset_name": "rb_prefix",
+            "components": [
+                {"id": "wheel", "code": _geo_code("wheel")},
+                {"id": "wheel_rim", "code": _geo_code("wheel_rim")},
+            ],
+        }
+        result = harness.build_procedural_asset(recipe, sandbox_name="rb_prefix")
+        self.assertTrue(result.get("success"))
+        root_path = result["root_path"]
+        # Record wheel_rim's node identity BEFORE rebuilding wheel.
+        rim_before = _mock_hou.node(f"{root_path}/wheel_rim_python")
+        self.assertIsNotNone(rim_before, "wheel_rim_python 应存在")
+
+        rb = harness.rebuild_component(root_path, "wheel", {"id": "wheel", "code": _geo_code("wheel")})
+        self.assertTrue(rb.get("success"), f"rebuild failed: {rb.get('error')}")
+
+        # wheel_rim_python must be the SAME object (not destroyed+rebuilt).
+        rim_after = _mock_hou.node(f"{root_path}/wheel_rim_python")
+        self.assertIs(rim_before, rim_after,
+                      "wheel_rim_python 被错误销毁（prefix 冲突 bug）")
+        # And wheel's own node should be rebuilt (new identity).
+        self.assertIsNotNone(_mock_hou.node(f"{root_path}/wheel_python"),
+                             "wheel_python 未重建")
 
 
 if __name__ == "__main__":
