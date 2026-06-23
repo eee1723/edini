@@ -27,13 +27,23 @@ from edini.harness import (
     verify_asset,
     commit_sandbox,
     discard_sandbox,
-    build_procedural_asset,
-    rebuild_component,
-    build_variant_scatter,
     dump_parm_catalog,
-    validate_recipe_tool,
     add_parm,
 )
+from edini.recipe_library import (
+    recipe_list,
+    recipe_read,
+    recipe_capture,
+    recipe_rebuild,
+)
+
+# NOTE: The procedural-modeling pipeline (build_procedural_asset,
+# rebuild_component, build_variant_scatter, validate_recipe_tool) has been
+# disabled and moved to _disabled_backup/procedural-modeling/. These handlers
+# are intentionally NOT imported/registered. To restore, move the backed-up
+# python/edini/{recipe_validator,vexlib_loader,exprs,component_registry}.py
+# and components/ back into place and re-add the imports + TOOL_HANDLERS
+# entries below.
 
 # Knowledge and eval handlers (available only in Houdini runtime)
 try:
@@ -194,29 +204,10 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     "discard_sandbox": lambda **kw: discard_sandbox(
         kw["sandbox_root_path"],
     ),
-    "build_procedural_asset": lambda **kw: build_procedural_asset(
-        kw["recipe"],
-        sandbox_name=kw.get("sandbox_name"),
-        delete_on_failure=kw.get("delete_on_failure", False),
-    ),
-    "rebuild_component": lambda **kw: rebuild_component(
-        kw["sandbox_root_path"],
-        kw["component_id"],
-        kw["component_spec"],
-    ),
-    "houdini_variant_scatter": lambda **kw: build_variant_scatter(
-        kw["recipe"],
-        sandbox_name=kw.get("sandbox_name"),
-        delete_on_failure=kw.get("delete_on_failure", False),
-    ),
     "edini_search_knowledge": lambda **kw: search_entries(
         query=kw.get("query", ""),
         category=kw.get("category", ""),
         limit=kw.get("limit", 10),
-    ),
-    "validate_recipe": lambda **kw: validate_recipe_tool(
-        kw["recipe"],
-        catalog_path=kw.get("catalog_path"),
     ),
     "dump_parm_catalog": lambda **kw: dump_parm_catalog(
         output_path=kw.get("output_path"),
@@ -234,13 +225,24 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
         max=kw.get("max", 10.0),
         label=kw.get("label", ""),
     ),
+    "recipe_list": lambda **kw: recipe_list(
+        query=kw.get("query", ""),
+        category=kw.get("category", ""),
+    ),
+    "recipe_read": lambda **kw: recipe_read(kw["recipe_id"]),
+    "recipe_capture": lambda **kw: recipe_capture(kw["subnet_path"]),
+    "recipe_rebuild": lambda **kw: recipe_rebuild(
+        kw["recipe_id"],
+        kw["parent_path"],
+        name=kw.get("name"),
+        overrides=kw.get("overrides"),
+    ),
 }
 
 # Backward-compatibility tool aliases (pre-Task-7 rename).
 # Old names map to new canonical handlers so existing Pi extension configs
 # and scripts don't break after the tool-surface cleanup.
 _TOOL_ALIASES: dict[str, str] = {
-    "houdini_build_procedural_asset": "build_procedural_asset",
     "houdini_commit_sandbox": "commit_sandbox",
     "houdini_discard_sandbox": "discard_sandbox",
     "houdini_verify_orientation": "verify_orientation",

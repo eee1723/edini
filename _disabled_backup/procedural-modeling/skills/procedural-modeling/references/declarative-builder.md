@@ -12,6 +12,12 @@
 
 ## The recipe schema
 
+> **New — semantic component references.** Instead of inlining every
+> component's geometry, you can reference a **built-in component** by name.
+> A reference is expanded into a standard inline component *before*
+> validation, so all A1-A9 checks still run. This is the preferred way to
+> reuse repeated parts (two wheels, N spokes) — see § Semantic Components below.
+
 ```jsonc
 {
   "asset_name": "bicycle",
@@ -189,6 +195,62 @@ For cylinders, boxes, hubs, pedals — combine native Houdini SOPs:
 - `nodes` is an ordered chain of SOPs, wired input-0 to previous.
 - The last node's output enters the merge or CTP chain.
 - `attribwrangle` with `s@component_id` tags all prims.
+
+## Semantic Components (reuse + Copy-to-Points)
+
+Instead of inlining geometry for every component, reference a **built-in
+component** by name. The registry expands the reference into a standard
+inline component before validation runs. This is the preferred pattern for
+**any repeated part** — two wheels, N spokes, a bolt array — because:
+
+* **one definition, N instances** → real Copy-to-Points (not N copies)
+* the recipe stays small and declarative
+* the geometry is shared, so changing the wheel changes both instances
+
+### Available built-in components
+
+Query with the registry, or see `python3.11libs/edini/components/*.json`:
+
+| Name | Backend | Use for | Key params |
+|---|---|---|---|
+| `wheel` | vex_skeleton (sweep) | bicycle/motorcycle wheels, rollers | `rim_r`, `tire_r` |
+| `tube` | native_chain | straight frame tubes, stays, struts | `tube_od` |
+| `hub` | native_chain | axle housings, cylindrical bosses | `hub_r`, `hub_len` |
+| `spoke` | native_chain | thin wires, unit-scale for scatter | `spoke_r`, `spoke_len` |
+| `chain_link` | native_chain | chain plates, repeated flat pieces | `link_w`, `link_h` |
+| `bolt` | native_chain | fasteners (shaft + hex head) | `shaft_r`, `shaft_len`, `head_r` |
+
+### Reference syntax — multi-instance (Copy-to-Points)
+
+```jsonc
+{
+  "component": "wheel",
+  "id": "wheels",                          // the component's own id
+  "instances": [                            // → each becomes a CTP anchor
+    {"position_expr": ["front_axle_x", "wheel_r", 0], "component_id": "wheel_front"},
+    {"position_expr": ["rear_axle_x",  "wheel_r", 0], "component_id": "wheel_rear"}
+  ]
+}
+```
+
+This expands to **one** component carrying **two** anchors — the harness
+then stamps it twice via Copy-to-Points (one shared wheel mesh, two
+placements). `position_expr` / `orient_expr` / `pscale_expr` are the same
+anchor fields used by hand-written stamped components (each accepts a
+param-expression list or literal).
+
+### Reference syntax — single instance
+
+```jsonc
+{"component": "hub", "id": "front_hub", "component_id": "front_hub"}
+```
+
+### When to inline vs. reference
+
+- **Reference** when the part is generic/repeated or already exists in the library.
+- **Inline** (`"code"`/`"nodes"`) when the part is one-off or needs geometry
+  the library doesn't offer. Inline and reference components can be freely
+  mixed in the same recipe's `components` array.
 
 ## Derived Parameters (computed once, shared globally)
 

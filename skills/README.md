@@ -43,16 +43,17 @@ Instructions for the agent...
 
 ## Current skills
 
-### Pipeline skills (in workflow order)
-
-- `edini-brainstorm` — Design router for Houdini procedural asset creation. Ask clarifying questions, decompose components, produce design spec.
-- `procedural-modeling` — Lightweight pipeline router. Determines which phase you're in and loads the correct specialized skill.
-- `recipe-authoring` — Writing valid procedural asset Recipes. Param three-state system, anchor design, pre-flight checklist (A1-A9).
-- `component-building` — Diagnosing build_procedural_asset failures and fixing the recipe. Backend red lines, VEX rules, template usage, error-code triage (A8/A9/cook/G2), repair discipline.
-- `assembly-wiring` — Reference for designing anchors, Copy-to-Points layout, and variant scatter in a recipe (assembly itself is automatic inside build_procedural_asset).
-- `verification` — Verification protocol (health + orientation + inventory), G3 commit gate, verification_receipt reporting rules, debug discipline.
-- `parametric-testing` — Parameter boundary testing before commit. Test scenarios, intersection detection, constraint verification.
-
-### Utility skills
+### General skills
 
 - `grill-me` — Interview the user relentlessly about a plan or design until reaching shared understanding.
+- `recipe-library` — Reuse before authoring. Query a library of human-built subnet recipes (pre-validated node networks) and rebuild them deterministically with parameter overrides, instead of hand-authoring nodes. Captures new subnets from the scene to grow the library.
+
+> **Note:** The procedural-modeling pipeline skills (`procedural-modeling`,
+> `edini-brainstorm`, `recipe-authoring`, `component-building`,
+> `assembly-wiring`, `verification`, `parametric-testing`) and their backing
+> tools (`build_procedural_asset`, `validate_recipe`, `rebuild_component`,
+> `houdini_variant_scatter`) have been **disabled** and moved to
+> `_disabled_backup/procedural-modeling/`. The general geometry workflow
+> (sandbox, commit_sandbox, verify_asset, orientation/health/inventory
+> checks) remains available. To restore, see the NOTE block in
+> `python3.11libs/edini/tool_executor.py`.

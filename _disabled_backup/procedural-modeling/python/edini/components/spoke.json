@@ -1,0 +1,16 @@
+{
+  "name": "spoke",
+  "description": "A thin wire spoke, unit-scale for Copy-to-Points. Migrated from prebuilt-templates.md. Typically scattered N times around a hub→rim.",
+  "geometry": {
+    "backend": "native_chain",
+    "construction_axis": "Z",
+    "nodes": [
+      {"type": "tube", "params": {"rad": [0.001, 0.001], "height": 0.34, "rows": 2, "cols": 8, "type": 1}},
+      {"type": "attribwrangle", "params": {"class": 1, "snippet": "s@component_id = \"$component_id\";"}}
+    ]
+  },
+  "param_schema": {
+    "spoke_r": {"default": 0.001, "min": 0.0005, "max": 0.003},
+    "spoke_len": {"default": 0.34, "min": 0.10, "max": 0.50}
+  }
+}

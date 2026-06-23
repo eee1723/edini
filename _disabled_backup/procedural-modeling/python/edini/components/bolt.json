@@ -1,0 +1,20 @@
+{
+  "name": "bolt",
+  "description": "A generic fastener bolt: cylindrical shaft with a hex head. Unit-scale, instanced via Copy-to-Points. construction_axis Z (along the shaft).",
+  "geometry": {
+    "backend": "native_chain",
+    "construction_axis": "Z",
+    "nodes": [
+      {"type": "tube", "params": {"rad": [0.004, 0.004], "height": 0.020, "rows": 3, "cols": 12, "type": 1}},
+      {"type": "xform", "params": {"t": [0, 0, 0.020]}},
+      {"type": "tube", "params": {"rad": [0.007, 0.007], "height": 0.004, "rows": 2, "cols": 6, "type": 1}},
+      {"type": "fuse", "params": {"dist": 0.0001}},
+      {"type": "attribwrangle", "params": {"class": 1, "snippet": "s@component_id = \"$component_id\";"}}
+    ]
+  },
+  "param_schema": {
+    "shaft_r": {"default": 0.004, "min": 0.001, "max": 0.012},
+    "shaft_len": {"default": 0.020, "min": 0.005, "max": 0.060},
+    "head_r": {"default": 0.007, "min": 0.002, "max": 0.020}
+  }
+}

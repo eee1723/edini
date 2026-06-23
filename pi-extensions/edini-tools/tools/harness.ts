@@ -58,10 +58,9 @@ export const houdiniRunPythonSandbox = {
     "Two modes: single-SOP (default) for code that emits geometry from one Python SOP, and network_mode for building a multi-node modular network (body_generate + copytopoints + merge + OUT).",
   promptSnippet: "Run Python code in a Houdini procedural sandbox",
   promptGuidelines: [
-    "⚠️ DO NOT use this for multi-component assets with tubes, paths, hubs, or repeated parts. Use build_procedural_asset (declarative recipe) instead — it is the PREFERRED and CORRECT path for vehicles, furniture, bicycles, and any asset with swappable/repeated components. This tool is ONLY for non-standard topology that truly CANNOT be expressed as a recipe (fractal surfaces, generative art, one-off organic shapes). If you can decompose the asset into component_ids + anchors + postprocess, you MUST use build_procedural_asset.",
+    "Prefer the recipe library (recipe_list / recipe_rebuild) for geometry that matches an existing subnet recipe before writing custom Python — recipes are pre-validated and rebuild deterministically.",
     "Single-SOP mode (network_mode=false, default): the code runs as the cook body of ONE edini_generate Python SOP. It MUST NOT call createNode() on child SOPs — doing so triggers Houdini's 'Infinite recursion in evaluation' guard. Only emit geometry via node.geometry().createPoint()/createPolygon() on the cooking node.",
-    "Network mode (network_mode=true): use this ONLY when build_procedural_asset's recipe system genuinely cannot express the network topology. The code runs in the sandbox geo CONTAINER, so it can build a multi-node network: container.createNode('python','body_generate'), container.createNode('copytopoints',...), container.createNode('merge'), container.createNode('null','OUT').",
-    "If you are building a bicycle, vehicle, furniture, or any asset with tubes, hubs, wheels, spokes, or repeated parts, STOP — you MUST use build_procedural_asset with a recipe. Do NOT use network_mode for these assets.",
+    "Network mode (network_mode=true): use when a recipe does not exist for the topology you need and building it from scratch is genuinely required. The code runs in the sandbox geo CONTAINER, so it can build a multi-node network: container.createNode('python','body_generate'), container.createNode('copytopoints',...), container.createNode('merge'), container.createNode('null','OUT').",
     "In network mode, use the injected `sandbox_root` variable (the geo container) or hou.node(sandbox_root_path) to create children, and end with a null/merge node named 'OUT' (or pass output_node_name). The harness auto-finds OUT, cooks it, and runs diagnostics on it.",
     "The sandbox result includes diagnostics and structural_checks (has_geometry, point_count, bounds_nonzero) — no need for separate inspect_geo or check_errors calls.",
     "Do not delete a failed sandbox before reviewing the diagnostics in the result.",
@@ -145,8 +144,7 @@ export const verifyOrientationTool = {
     "kind=planar: surface normal = smallest eigenvalue's vector (fender, saddle, body panel).",
     "When a check fails, the result includes a 'hint' field with the exact hou.Quaternion to apply.",
     "Set signed=true ONLY when direction matters (e.g. saddle normal must point +Y, not just be along Y).",
-    "PREFERRED (B-station): declare construction_axis on each assert — the local-space axis the component is generated around. The builder then derives the world axis deterministically from the anchor @orient (no PCA, no point-sampling noise) and bakes it as the edini_world_axis prim attr. verify_orientation reads that directly (method='construction'). Without construction_axis the check falls back to PCA (method='pca').",
-    "construction_axis is the ground-truth path: declare it for any asset you build via houdini_build_procedural_asset so orientation becomes a deterministic check, not an estimate.",
+    "construction_axis (optional): declare the local-space axis a component was generated around, so verify_orientation derives the world axis deterministically instead of falling back to PCA (which can be noisy on sparse geometry).",
   ],
   parameters: Type.Object({
     node_path: Type.String({
@@ -283,84 +281,6 @@ export const discardSandboxTool = {
   },
 };
 
-export const buildProceduralAssetTool = {
-  name: "build_procedural_asset",
-  label: "Build Procedural Asset (Declarative Recipe)",
-  description:
-    "Build a modular procedural asset from a declarative JSON recipe. The harness deterministically assembles the multi-node network (component python SOPs -> anchor generators -> Copy-to-Points -> merge -> postprocess -> OUT), cooks it, and runs the structure/orientation gate previews. The agent authors only per-component geometry code — never createNode/wiring/blockpath. This is the PREFERRED path for any multi-component asset.",
-  promptSnippet: "Build a modular asset from a declarative recipe",
-  promptGuidelines: [
-    "PREFERRED for multi-component assets. Use this instead of network_mode hand-writing when the asset fits the body + Copy-to-Points decomposition (vehicles, furniture, any asset with swappable/repeated parts).",
-    "You only write PER-COMPONENT geometry code: a single Python SOP cook body that emits geometry on its own node (node = hou.pwd(); geo = node.geometry()) and tags every prim with component_id. NEVER call createNode inside component code.",
-    "Every component code MUST: geo.addAttrib(hou.attribType.Prim, 'component_id', '') before geometry, then poly.setAttribValue('component_id', '<id>') on each prim. The builder checks component_id presence post-cook and reports missing ids.",
-    "Components with anchors get Copy-to-Points automatically: provide anchors=[{position:[x,y,z], orient:[x,y,z,w], pscale:1.0, component_id:'wheel_fl'}, ...]. Components with empty/omitted anchors go straight into the merge.",
-    "pscale semantics: 1.0 = original source size. Model each stamped component at UNIT scale and set pscale to the real size, OR model at real scale and use pscale=1.0.",
-    "The builder does NOT commit. After build, inspect the returned diagnostics/structure_advisory/orientation_check/component_id_check, then call houdini_commit_sandbox(root_path, name, orientation_checks=recipe.orientation_asserts) to run the hard gates and commit.",
-    "If a component's cook fails, the builder reports which component and preserves the sandbox for diagnostics — do NOT discard before reading the error.",
-    "orientation_asserts in the recipe flow to commit_sandbox's orientation gate automatically. Each needs component_id (matching a prim attr value), kind (radial|elongated|planar), expected_axis (X/Y/Z/-X/-Y/-Z).",
-    "B-station (PREFERRED): add construction_axis to each orientation_assert — the local-space axis the component is generated around (e.g. a wheel generated as a ring in the XZ plane has construction_axis:Y). The builder then derives the world axis DETERMINISTICALLY from the anchor @orient quaternion and bakes it as the edini_world_axis prim attr, so verify_orientation skips PCA entirely (method='construction'). The builder also REJECTS the recipe at build time if construction_axis, the anchor @orient, and expected_axis contradict each other — catching self-consistent errors before any cook.",
-  ],
-  parameters: Type.Object({
-    recipe: Type.Record(Type.String(), Type.Unknown(), {
-      description:
-        "Declarative recipe object. Keys: asset_name (str), units (str, doc only), params? (asset-level shared params {name: {default, min?, max?, label?}} that the builder installs as spare parms on the sandbox root for true cross-component linkage), components (list of {id, code, reads?, anchors?}) where reads lists param names the component references via hou.ch and anchors support position_expr/orient_expr/pscale_expr strings (evaluated against params at build time) OR static position/orient/pscale numbers, postprocess? (list of {type, params?}), orientation_asserts? (list of {component_id, kind, expected_axis, tolerance_deg?, signed?, construction_axis?}) where construction_axis (B-station) declares the local construction axis for deterministic world-axis derivation, expected? (dict). See the Declarative Recipe Builder section of the procedural-modeling skill for the full schema.",
-    }),
-    sandbox_name: Type.Optional(
-      Type.String({ description: "Optional name for the sandbox root (defaults to asset_name)" })
-    ),
-    delete_on_failure: Type.Optional(
-      Type.Boolean({ description: "Delete the sandbox automatically when the build fails" })
-    ),
-  }),
-  async execute(
-    _toolCallId: string,
-    params: {
-      recipe: Record<string, unknown>;
-      sandbox_name?: string;
-      delete_on_failure?: boolean;
-    }
-  ) {
-    return forwardTool("build_procedural_asset", params);
-  },
-};
-
-export const rebuildComponentTool = {
-  name: "rebuild_component",
-  label: "Rebuild Single Component (Incremental)",
-  description:
-    "Rebuild ONE component's subnet in an existing sandbox, leaving all other components untouched. Avoids discarding the whole sandbox + rewriting the whole recipe + full rebuild when only one component changes. Locates the component's nodes ({cid}_* plus copy_{cid} for stamped components), records the merge input index, destroys them, rebuilds via the matching backend (+ stamping layer if it has anchors), and reconnects to the merge at the same index.",
-  promptSnippet: "Rebuild one component without rebuilding the whole sandbox",
-  promptGuidelines: [
-    "Use this INSTEAD of discard_sandbox + build_procedural_asset when you only need to change ONE component's geometry/code and the rest of the sandbox is fine — it preserves the other components and their cook state.",
-    "The sandbox must already exist (built via build_procedural_asset). Pass the sandbox root_path from the original build result.",
-    "component_spec is the FULL new component definition (same shape as one entry in recipe.components) — id must equal component_id. The recipe is NOT stored on the sandbox, so you pass the new spec explicitly.",
-    "Works for both direct-merge components (no anchors) and stamped components (with anchors) — the stamping layer (anchors + copytopoints + idfix) is rebuilt too, preserving per-instance component_ids.",
-    "On failure the sandbox is left in the destroyed state for diagnosis (no rollback). Read the error, fix the spec, and rebuild again.",
-  ],
-  parameters: Type.Object({
-    sandbox_root_path: Type.String({
-      description: "Path to the existing sandbox root (from build_procedural_asset's root_path result field)",
-    }),
-    component_id: Type.String({
-      description: "The component id to rebuild (must match an existing component in the sandbox)",
-    }),
-    component_spec: Type.Record(Type.String(), Type.Unknown(), {
-      description:
-        "Full new component definition (same schema as one recipe.components entry). id must equal component_id. Include backend (python|vex_skeleton|native_chain), code/nodes/section_code as appropriate, reads, anchors, form_node, etc.",
-    }),
-  }),
-  async execute(
-    _toolCallId: string,
-    params: {
-      sandbox_root_path: string;
-      component_id: string;
-      component_spec: Record<string, unknown>;
-    }
-  ) {
-    return forwardTool("rebuild_component", params);
-  },
-};
-
 export const captureReviewTool = {
   name: "capture_review",
   label: "Capture Procedural Review",
@@ -478,34 +398,12 @@ export const houdiniCaptureComponentDetail = {
   },
 };
 
-export const validateRecipeTool = {
-  name: "validate_recipe",
-  label: "Validate Procedural Asset Recipe",
-  description:
-    "Phase A: validate a procedural asset recipe without any Houdini operations. " +
-    "Checks A1-A9 (schema, parm names, node types, VEX lint, construction axes, dependency graph, " +
-    "backend heuristics, A8 mandatory construction_axis on orientation_asserts, A9 hardcoded-size guard). " +
-    "Catches parm-name typos and invalid node types before any cook — zero Houdini cost.",
-  promptSnippet: "Validate a procedural asset recipe before building",
-  parameters: Type.Object({
-    recipe: Type.Record(Type.String(), Type.Unknown(), {
-      description: "The recipe JSON object to validate.",
-    }),
-    catalog_path: Type.Optional(
-      Type.String({ description: "Path to parm-catalog.json. Auto-detected if omitted." })
-    ),
-  }),
-  async execute(_toolCallId: string, params: { recipe: Record<string,unknown>; catalog_path?: string }) {
-    return forwardTool("validate_recipe", params);
-  },
-};
-
 export const dumpParmCatalogTool = {
   name: "dump_parm_catalog",
   label: "Generate Parm Catalog",
   description:
     "Generate the Houdini parameter catalog from the installed Houdini version. " +
-    "Call once per session before using validate_recipe or build_procedural_asset.",
+    "Call once per session so recipe capture can compare live values against type defaults.",
   promptSnippet: "Generate the Houdini parameter catalog",
   parameters: Type.Object({
     output_path: Type.Optional(Type.String()),
@@ -518,9 +416,6 @@ export const dumpParmCatalogTool = {
 
 export const harnessTools = [
   houdiniCollectDiagnostics,
-  buildProceduralAssetTool,
-  rebuildComponentTool,
-  validateRecipeTool,
   houdiniRunPythonSandbox,
   houdiniVerifyAsset,
   verifyOrientationTool,

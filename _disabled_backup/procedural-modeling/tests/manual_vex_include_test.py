@@ -5,9 +5,14 @@ Usage (in Houdini Python Shell or via houdini_run_python):
     run_test()
 
 This script tests whether attribwrangle can #include custom .vfl files
-from the vexlib directory. If #include works, the vexlib functions are
-callable directly. If not, the fallback is "snippet inlining" — the skill
-documentation embeds full function bodies for the LLM to copy.
+from the vexlib directory. It is a DIAGNOSTIC for the include path — the
+production path no longer relies on it: ``edini.vexlib_loader.expand_vexlib``
+inlines the .vfl source directly into each snippet, so vexlib is always
+callable regardless of HOUDINI_VEX_PATH. See ``tests/test_vexlib_loader.py``
+for the automated coverage of that mechanism.
+
+This script is still useful to confirm that hand-written ``#include``
+directives resolve (via the HOUDINI_VEX_PATH that vexlib_loader registers).
 """
 
 import tempfile

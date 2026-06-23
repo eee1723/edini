@@ -1,0 +1,17 @@
+{
+  "name": "hub",
+  "description": "Cylindrical hub/axle housing. Migrated from prebuilt-templates.md. A short tube with a small fuse for clean topology.",
+  "geometry": {
+    "backend": "native_chain",
+    "construction_axis": "Y",
+    "nodes": [
+      {"type": "tube", "params": {"rad": [0.025, 0.025], "height": 0.06, "rows": 3, "cols": 16, "type": 1}},
+      {"type": "fuse", "params": {"dist": 0.0001}},
+      {"type": "attribwrangle", "params": {"class": 1, "snippet": "s@component_id = \"$component_id\";"}}
+    ]
+  },
+  "param_schema": {
+    "hub_r": {"default": 0.025, "min": 0.010, "max": 0.060},
+    "hub_len": {"default": 0.060, "min": 0.020, "max": 0.150}
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "tube",
+  "description": "A straight cylindrical tube between two points, built as a native tube SOP. The canonical frame tube / stay / strut. Orient along Z by default (construction_axis Z); rotate per-instance via orient_expr. Unit height unless sized.",
+  "geometry": {
+    "backend": "native_chain",
+    "construction_axis": "Z",
+    "nodes": [
+      {"type": "tube", "params": {"rad": [0.012, 0.012], "height": 1.0, "rows": 4, "cols": 16, "type": 1}},
+      {"type": "fuse", "params": {"dist": 0.0001}},
+      {"type": "attribwrangle", "params": {"class": 1, "snippet": "s@component_id = \"$component_id\";"}}
+    ]
+  },
+  "param_schema": {
+    "tube_od": {"default": 0.024, "min": 0.004, "max": 0.080, "desc": "outer diameter (rad uses half)"}
+  }
+}

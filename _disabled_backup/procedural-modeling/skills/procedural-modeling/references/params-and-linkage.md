@@ -13,6 +13,19 @@ Top-level `params` with `kind: "primary"` install spare parms on the sandbox roo
 }
 ```
 
+**UI grouping (optional).** Add a `"ui": {"group": "..."}` field to split
+primary controls across multiple parameter folders, keeping a busy panel
+readable:
+```jsonc
+"params": {
+  "wheel_r": {"kind": "primary", "default": 0.34, "ui": {"group": "Wheels"}},
+  "bb_drop": {"kind": "primary", "default": 0.07, "ui": {"group": "Frame"}},
+  "cs_len":  {"kind": "primary", "default": 0.40, "ui": {"group": "Frame"}}
+}
+```
+Params without `ui.group` land in the default "Parameters" folder. Keep
+primary groups small (≤ ~6 each) so the user isn't overwhelmed.
+
 ### Derived (computed once, shared globally)
 Params with `kind: "derived"` are computed from a `from` expression
 referencing primary (or earlier derived) values. The expression is evaluated
@@ -31,6 +44,11 @@ ONCE at build time and installed as a spare parm on the sandbox root.
 
 - Primary params need `default` (and optionally `min`/`max` for sliders).
 - Derived params need `from` — a safe expression (see Expression Grammar below).
+- **Derived params are installed as live channels** (so `hou.ch("../name")`
+  binds and all consumers read the one pre-computed value) **but are routed
+  into a separate "Derived (auto)" folder** in the parameter panel. They are
+  computed from the `from` expression — editing them by hand has no effect, so
+  they're visually separated from the primary controls you actually tune.
 - Dependency graph is validated at build: **cycles are rejected**, orphan params (not consumed by any component) generate warnings.
 - Evaluation order is automatic (topological sort) — you can reference one derived param from another.
 

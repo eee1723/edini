@@ -2,10 +2,78 @@
 
 > **用途**：让新 Agent 或开发者在 Edini 仓库里快速上手。
 
-**最后更新**：2026-06-09（第二十一阶段：知识反思面板 + 去重 + 稳定性修复）
-**当前阶段**：156 单元测试 · ReflectWorker 后台反思 · Jaccard 去重 · 全链路验证通过
-**下一阶段**：Houdini Pane Tab 嵌入 · 场景感知
+**最后更新**：2026-06-23（架构转向：关闭程序化建模 → 新建 Recipe Library + Dashboard HDA）
+**当前阶段**：Recipe Library 核心完成（285 测试全绿）· Dashboard HDA 设计定稿待实现
+**下一步**：真实 Houdini 验证 recipe 闭环 → 实现 Dashboard HDA（scan_tree + Qt 树面板）
 **工作分支**：`master`
+
+---
+
+## 🔴 最重要：2026-06-23 架构转向（必读）
+
+### 发生了什么
+
+旧的程序化建模管道（提示词驱动 + validate_recipe/build_procedural_asset/G1-G3 闸门）
+**已完全关闭并备份**。根因：LLM 对 Houdini 不熟，靠提示词规则无论写多细还是会出错。
+
+### 两件大事
+
+**1. 关闭程序化建模（已备份，可恢复）**
+- 7 个 skill + 5 个 Python 模块 + 23 个测试 → `_disabled_backup/procedural-modeling/`
+- tool_executor.py 移除 4 个工具注册（build_procedural_asset/validate_recipe/rebuild_component/houdini_variant_scatter）
+- harness.ts 移除 3 个 TS 工具定义
+- 恢复方式：见 `python3.11libs/edini/tool_executor.py` 顶部 NOTE 注释
+
+**2. 新建 Recipe Library（核心完成）**
+- `python3.11libs/edini/recipe_library.py`（550 行）：4 个工具
+  - `recipe_capture(subnet_path)` — 捕获 subnet 内部网络→配方 JSON
+  - `recipe_list(query, category)` — 查询索引
+  - `recipe_read(recipe_id)` — 读完整配方
+  - `recipe_rebuild(recipe_id, parent_path, overrides)` — 拓扑排序重建+内置验证
+- 配方 JSON schema：nodes（相对名 inputs）/ changed_params / marked_params / exposed_parms
+- subnet Notes 强制非空作元数据（功能/重要参数/不要用于）
+- `pi-extensions/edini-tools/tools/recipe.ts`：4 工具 TS 定义
+- `skills/recipe-library/SKILL.md`：自动注册的轻量 skill
+- `tests/test_recipe_library.py`：20 测试，全绿
+
+### 当前状态
+
+- **285 测试全绿**（比关程序化建模前多 20 个 recipe 测试）
+- **46 个工具注册**（recipe 4 个 + 共享工具保留）
+- **2 个 skill**（grill-me + recipe-library）
+- **唯一没验证**：真实 Houdini 的 recipe 闭环（捕获/重建）+ Dashboard HDA
+
+### 下一步该做什么（换电脑后优先级）
+
+1. **真实 Houdini 验证 recipe 闭环**（最优先）
+   - 按 `docs/edini/recipe-library-testing.md` 的「测试 2：subnet 直连」操作
+   - 重点验：promote 参数检测（exposed_parms）、changed_params 判定、重建后结构一致
+   - 把 recipe.json 和任何错误反馈给 agent
+
+2. **实现 Dashboard HDA**（验证后）
+   - 设计文档：`docs/edini/recipe-manager-hda-design.md`
+   - 阶段 1：scan_tree + create_recipe_manager（递归读 HDA 内部 subnet 树）
+   - 阶段 3：Qt 树面板（recipe_tree_window.py，QTreeView）
+   - 关键技术点：createDigitalAsset(save_as_locked=False) + PythonModule 调 recipe_library
+
+## 关键文件速查（新增 Recipe Library 部分）
+
+| 文件 | 作用 |
+|------|------|
+| `python3.11libs/edini/recipe_library.py` | **Recipe Library 核心**：4 工具 + 配方 schema + 拓扑排序重建 |
+| `pi-extensions/edini-tools/tools/recipe.ts` | 4 recipe 工具的 TS 定义（LLM 接口） |
+| `skills/recipe-library/SKILL.md` | recipe-library skill（自动注册） |
+| `tests/test_recipe_library.py` | 20 测试（捕获/重建/索引/notes 校验） |
+| `docs/edini/recipe-manager-hda-design.md` | Dashboard HDA 设计文档（定稿） |
+| `docs/edini/recipe-library-testing.md` | 真实 Houdini 测试指南 |
+| `docs/edini/recipe-library-getting-started.md` | 搭建第一个配方指南 |
+| `_disabled_backup/procedural-modeling/` | 旧程序化建模完整备份（7 skill + 5 模块 + 23 测试） |
+
+---
+
+## 历史记录（2026-06-09 之前，保留作参考）
+
+> 以下是架构转向前的交接记录，程序化建模部分已废弃（备份在 _disabled_backup/）。
 
 ## 第二十一阶段修复记录（Houdini 实测后修复 4 个 bug）
 

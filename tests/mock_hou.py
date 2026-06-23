@@ -47,6 +47,10 @@ class MockParm:
     def expression(self) -> str:
         return getattr(self, "_expression", "")
 
+    def hasExpression(self) -> bool:
+        """Mock of hou.Parm.hasExpression — True if setExpression was called."""
+        return bool(getattr(self, "_expression", ""))
+
     def pressButton(self) -> None:
         pass
 
@@ -662,6 +666,9 @@ class MockNode:
         # the node-type PTG; used by parm() for lazy per-instance creation.
         self._multiparm_templates: dict[str, Any] = {}
         self._multiparm_count_parm: dict[str, str] = {}
+        # Node comment (Houdini Notes panel) — the recipe library uses this
+        # as its metadata source, so the mock must support read/write.
+        self._comment: str = ""
 
     def path(self) -> str:
         return self._path
@@ -703,6 +710,14 @@ class MockNode:
 
     def parent(self) -> MockNode | None:
         return self._parent
+
+    def comment(self) -> str:
+        """Mock of hou.Node.comment — the Notes text shown on the node."""
+        return self._comment
+
+    def setComment(self, text: str) -> None:
+        """Mock of hou.Node.setComment."""
+        self._comment = text or ""
 
     def children(self) -> list[MockNode]:
         return list(self._children)

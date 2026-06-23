@@ -1,0 +1,16 @@
+{
+  "name": "chain_link",
+  "description": "A single chain link plate, unit-scale for Copy-to-Points scatter. Migrated from prebuilt-templates.md. Typically instanced many times along a chain path.",
+  "geometry": {
+    "backend": "native_chain",
+    "construction_axis": "Z",
+    "nodes": [
+      {"type": "box", "params": {"sizex": 0.006, "sizey": 0.002, "sizez": 0.012}},
+      {"type": "attribwrangle", "params": {"class": 1, "snippet": "s@component_id = \"$component_id\";"}}
+    ]
+  },
+  "param_schema": {
+    "link_w": {"default": 0.006, "min": 0.002, "max": 0.012},
+    "link_h": {"default": 0.012, "min": 0.004, "max": 0.024}
+  }
+}

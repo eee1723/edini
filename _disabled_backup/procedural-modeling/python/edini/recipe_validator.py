@@ -234,49 +234,68 @@ def _validate_a2_parm_names(recipe: dict, catalog: Any) -> list[dict]:
 #  A3 — Node Type Validation
 # ═══════════════════════════════════════════════════════════════
 
+# Common postprocess SOPs that legitimately have zero or near-zero parms and
+# are sometimes omitted from the auto-generated parm catalog (the catalog is
+# built from parmTemplates(), which can be empty for these). Treating them as
+# blocking A3 errors caused legitimate `clean`/`normal`/`facet` steps to be
+# rejected (logged in the road_bike session). They are well-known Houdini
+# SOPs, so a missing catalog entry is a catalog gap, not a recipe error —
+# downgrade to a warning and let the build attempt them.
+_ZERO_PARM_SOP_ALLOWLIST = frozenset({
+    "clean", "normal", "facet", "divide", "fuse", "subdivide",
+    "polybevel", "polybevel::3.0", "blast", "delete", "dissolve",
+})
+
+
 def _validate_a3_node_types(recipe: dict, catalog: Any) -> list[dict]:
-    """Verify all node type names exist in the catalog (or have an alias)."""
+    """Verify all node type names exist in the catalog (or have an alias).
+
+    Common zero-parm SOPs that are occasionally missing from the catalog
+    (clean/normal/facet/...) are downgraded to warnings rather than blocking,
+    since their absence is a catalog-generation gap, not a recipe error.
+    """
     if catalog is None:
         return []
     errors: list[dict] = []
+    warnings: list[dict] = []
 
-    for i, comp in enumerate(recipe.get("components", [])):
-        cid = comp.get("id", f"@index_{i}")
-        loc: dict[str, Any] = {"component_index": i, "component_id": cid}
+    def _check(ntype: str, where: dict, label: str) -> None:
+        canonical = catalog.resolve_alias(ntype)
+        if catalog.has_node_type(canonical):
+            return
+        if canonical in _ZERO_PARM_SOP_ALLOWLIST:
+            warnings.append(_error(
+                "A3_NODE_TYPE_WARNING",
+                f"{label} '{ntype}' not in catalog but is a known "
+                f"zero-parm SOP — allowing (catalog gap, not a recipe error)",
+                {**where, "canonical_type": canonical}))
+        else:
+            errors.append(_error(
+                "A3_NODE_TYPE",
+                f"{label} '{ntype}' not found in Houdini "
+                f"{catalog._data.get('houdini_version')}",
+                where))
 
+    for ci, comp in enumerate(recipe.get("components", [])):
+        loc: dict[str, Any] = {"component_index": ci, "component_id": comp.get("id")}
         if comp.get("backend") == "native_chain":
             for ni, node in enumerate(comp.get("nodes", [])):
                 ntype = node.get("type", "")
-                nloc: dict[str, Any] = {**loc, "node_index": ni, "node_type": ntype}
-                canonical = catalog.resolve_alias(ntype)
-                if canonical != ntype:
-                    nloc["canonical_type"] = canonical
-                if not catalog.has_node_type(canonical):
-                    errors.append(_error(
-                        "A3_NODE_TYPE",
-                        f"node type '{ntype}' not found in Houdini {catalog._data.get('houdini_version')}",
-                        nloc
-                    ))
-
+                nloc = {**loc, "node_index": ni, "node_type": ntype}
+                _check(ntype, nloc, "node type")
         if comp.get("backend") == "vex_skeleton":
             fn_type = comp.get("form_node", {}).get("type", "")
-            canonical = catalog.resolve_alias(fn_type)
-            floc: dict[str, Any] = {**loc, "field": "form_node.type", "node_type": fn_type}
-            if not catalog.has_node_type(canonical):
-                errors.append(_error(
-                    "A3_NODE_TYPE",
-                    f"form_node type '{fn_type}' not found",
-                    floc
-                ))
+            floc = {**loc, "field": "form_node.type", "node_type": fn_type}
+            _check(fn_type, floc, "form_node type")
 
     for pi, step in enumerate(recipe.get("postprocess", [])):
         ntype = step.get("type", "")
-        canonical = catalog.resolve_alias(ntype)
-        ploc: dict[str, Any] = {"postprocess_index": pi, "node_type": ntype}
-        if not catalog.has_node_type(canonical):
-            errors.append(_error("A3_NODE_TYPE", f"postprocess type '{ntype}' not found", ploc))
+        ploc = {"postprocess_index": pi, "node_type": ntype}
+        _check(ntype, ploc, "postprocess type")
 
-    return errors
+    # Warnings carry code suffix "_WARNING" so _error tags them WARNING (not
+    # BLOCKING); validate_recipe counts only BLOCKING entries as errors.
+    return errors + warnings
 
 
 # ═══════════════════════════════════════════════════════════════

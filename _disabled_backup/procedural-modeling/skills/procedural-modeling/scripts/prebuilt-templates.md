@@ -1,5 +1,13 @@
 # Prebuilt Component Templates
 
+> **Migration note (2026-06):** the reusable templates here have been promoted
+> to a **structured component library** at
+> `python3.11libs/edini/components/*.json`. New recipes should reference them
+> via the `{"component": "<name>"}` syntax (see
+> `references/declarative-builder.md` → Semantic Components) rather than
+> copy-pasting the JSON below. This document remains as a reference for the
+> underlying native_chain recipes and for authoring new library entries.
+
 Copy-paste these `native_chain` recipes into your Builder recipe. Each produces
 one geometric piece with `component_id` already tagged. Combine via CTP anchors
 or direct merge.

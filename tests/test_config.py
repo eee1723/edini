@@ -351,8 +351,10 @@ class TestGetPiCommand(unittest.TestCase):
             any(Path(p).name.lower() == "readme.md" for p in skill_paths),
             skill_paths,
         )
+        # Procedural-modeling skills were disabled and moved to
+        # _disabled_backup/; grill-me is the remaining active skill.
         self.assertTrue(
-            any(Path(p).name == "procedural-modeling" for p in skill_paths),
+            any(Path(p).name == "grill-me" for p in skill_paths),
             skill_paths,
         )
 
@@ -368,11 +370,9 @@ class TestGetPiCommand(unittest.TestCase):
         self.assertIn("pi-visionizer", extension_names)
 
         skill_names = {s["name"] for s in caps["skills"]}
-        self.assertIn("procedural-modeling", skill_names)
-
-        proc = next(s for s in caps["skills"] if s["name"] == "procedural-modeling")
-        # Task 8: skill description updated to English
-        self.assertIn("procedural", proc["description"].lower())
+        # Procedural-modeling skills were disabled and moved to
+        # _disabled_backup/; grill-me is the remaining active skill.
+        self.assertIn("grill-me", skill_names)
 
     def test_root_pi_package_manifest_declares_edini_capabilities(self):
         """Root package.json groups Edini extensions and project skills."""

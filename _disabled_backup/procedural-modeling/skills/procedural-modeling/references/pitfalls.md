@@ -94,6 +94,32 @@ int prim = addprim(0, "polyline");  // curve — PolyExtrude gives zero result
 For dual-wrangle Sweep mode, the path IS `"polyline"` and the cross-section
 IS `"polyline"` (Sweep closes them automatically).
 
+## vex_skeleton: Sweep cross-section MUST be in the XZ plane
+
+**The #1 cause of "Sweep makes a flat/deformed blob instead of a tube".**
+Dual-wrangle Sweep aligns the cross-section perpendicular to the path
+tangent: the section's **Y axis maps to the path up**, and its **Z axis maps
+to the path normal**. So the section must be drawn with **Y=0** (in the XZ
+plane), not Z=0 (in the XY plane).
+
+```vex
+// ✅ CORRECT — XZ plane: set(x, 0, z). Produces a proper tube.
+for(int i=0;i<n;i++){float a=2.0*M_PI*float(i)/n; addpoint(0,set(r*cos(a),0,r*sin(a)));}
+
+// ❌ WRONG — XY plane: set(x, y, 0). Sweep flattens it.
+for(int i=0;i<n;i++){float a=2.0*M_PI*float(i)/n; addpoint(0,set(r*cos(a),r*sin(a),0));}
+```
+
+With vexlib, pass `"XZ"` explicitly:
+```vex
+int prof[] = make_circle_section(0, chf("r"), 16, "XZ", {0,0,0});  // ✅
+int prof[] = make_circle_section(0, chf("r"), 16, "XY", {0,0,0});  // ❌ flat sweep
+```
+
+The builder detects the wrong plane and emits a build warning naming the
+component. (Note: `"XY"` is the correct plane for **PolyExtrude** single-
+wrangle mode — only Sweep wants XZ.)
+
 ## H21 parm names: outputback NOT output_back
 
 Houdini 21 PolyExtrude uses `outputback` (no underscore), not `output_back`.

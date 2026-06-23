@@ -1,10 +1,40 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-22 &nbsp;|&nbsp; 第三十三阶段：单构建路径 + 三道闸门 ✅ &nbsp;|&nbsp; 规划：完整自行车端到端演示
+> 最后更新：2026-06-23 &nbsp;|&nbsp; **架构转向：关闭程序化建模 → 新建 Recipe Library + Dashboard HDA** 🚧 &nbsp;|&nbsp; 规划：真实 Houdini 验证 recipe 闭环
+
+## ⚠️ 架构转向说明（2026-06-23）
+
+**重要**：旧的程序化建模管道（提示词驱动 + validate_recipe/build_procedural_asset/G1-G3 闸门）
+已**完全关闭并备份**到 `_disabled_backup/procedural-modeling/`。根因：LLM 对 Houdini 不熟，
+靠提示词规则无论写多细还是会出错——这是概率模型的本质缺陷。
+
+**新方向 = Recipe Library**：把人类 TD 搭好的 subnet（含正确参数+连线+Notes）沉淀成可被 LLM
+读取、理解、按需重建的配方库。LLM 从「凭空发明节点」降级为「选择并调参」，用人类确定性覆盖
+LLM 不确定性。设计文档见 `docs/edini/recipe-manager-hda-design.md`。
+
+下方旧的「程序化建模」阶段卡片保留作为历史记录，但**已不再是当前架构**。
 
 ## 总览看板
 
 <div class="phase-grid">
+
+<div class="phase-card">
+  <div class="phase-card-header">
+    <span class="phase-card-title">📚 Recipe Library（新架构）</span>
+    <span class="status-tag status-done">核心完成</span>
+  </div>
+  <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:75%"></div></div>
+  <div class="phase-card-detail">替代旧程序化建模管道。4 工具（recipe_list/read/capture/rebuild）：捕获 subnet 内部网络→配方 JSON（区分 changed/marked 参数，inputs 用相对名跨场景可重建）→索引→拓扑排序重建+内置验证。subnet Notes 强制非空作元数据。285 测试全绿。recipe-library skill 自动注册。</div>
+</div>
+
+<div class="phase-card">
+  <div class="phase-card-header">
+    <span class="phase-card-title">🎛️ Dashboard HDA（进行中）</span>
+    <span class="status-tag status-active">设计定稿</span>
+  </div>
+  <div class="progress-bar-bg"><div class="progress-bar-fill" style="width:15%"></div></div>
+  <div class="phase-card-detail">edini_recipe_manager 主 HDA：内部递归 subnet 树（结构即分类）+ 自写 Qt QTreeView 仪表盘（检查/重建/编辑按钮）+ PythonModule 调 recipe_library。不锁定内容，内部透明可读。可扩展新方向（fx/materials）。设计定稿，待真实 Houdini 验证 scan_tree/create_recipe_manager。</div>
+</div>
 
 <div class="phase-card">
   <div class="phase-card-header">
@@ -566,17 +596,28 @@
 
 ## 下一步计划
 
-### 程序化建模架构升级（ABCDE 五站，A 已完成）
+### Recipe Library + Dashboard HDA（当前主线）
 
-基于日志诊断发现的架构瓶颈：gate 只能挡"做错的"，挡不住"不会做的"。agent 的核心问题是 Houdini API 命令式编程能力不足。五站按杠杆排序分站交付，每站独立可验证。
+旧的程序化建模 ABCDE 五站计划已随管道关闭而**废弃**（代码备份在 `_disabled_backup/`）。
+新主线是 Recipe Library 配套的 Dashboard HDA，6 阶段推进：
 
-| 优先级 | 任务 | 说明 | 状态 |
+| 阶段 | 任务 | 说明 | 状态 |
 |------|------|------|------|
-| **P0** | **A. 声明式 Recipe Builder** | agent 只写每组件纯几何代码 + recipe，harness 确定性建网。消灭 createNode/wiring/blockpath 整类错误。真实 Houdini 验证通过。 | ✅ 完成 |
-| **P0** | **B. 构造轴替代 PCA** | 组件在 recipe 里声明自己的构造轴，builder 用 anchor @orient 代数推导世界轴并烘焙 edini_world_axis；verify 直接读构造参数而非事后 PCA 估计。build 时一致性预检拒绝自洽矛盾。把启发式变成 ground truth。寄生在 A 的 orientation_asserts schema 上，向后兼容。 | ✅ 完成 |
-| **P1** | **C. 节点参数 DB** | ① 生成端 `generate_node_parms_manifest` 遍历 `nodeTypeCategories` → `parmTemplateGroup` 落盘 manifest（排除 labs/kinefx/apex 第三方 namespace）；② 查询端 `houdini_node_parms` 工具读 manifest（零 Houdini 依赖、离线可测），未命中回退实时查询；③ build 前 `_validate_recipe` 校验 postprocess 参数名（命中 manifest 但参数不存在→硬报错，带 valid 列表；未命中→软降级）。真实 H21.0.440 manifest 已入库（1076 SOP、6MB），端到端验证 cuspangle（非 cangle）参数名校验联动正确。 | ✅ 完成 |
-| **P1** | **D. 黄金范例检索** | 为每个资产类准备验证过的模块化黄金网络（recipe 格式），agent 接任务时按类检索范例作模板模仿。提升质量天花板。依赖 A 的 recipe 格式。 | ⬜ 待做 |
-| **P2** | **E. 数值代理** | 加不依赖 vision 的感知级反馈：轮廓圆度、对称性分数、截面剖面采样、参考 silhouette IoU。cheap numerical proxy for "看起来对不对"。独立增量。 | ⬜ 待做 |
+| **核心** | Recipe Library 4 工具 | recipe_list/read/capture/rebuild，配方 JSON schema，拓扑排序重建，内置验证 | ✅ 完成（285 测试） |
+| **1** | scan_tree + create_recipe_manager | 递归读 HDA 内部 subnet 树（区分容器/叶子）+ 一键建主 HDA（不锁定） | ⬜ 待做（需真实 Houdini） |
+| **2** | recipe_list 递归支持 | LLM 能查 HDA 内部树（不只读 index.json） | ⬜ 待做 |
+| **3** | Qt 树面板骨架 | recipe_tree_window.py（QTreeView 显示 HDA 内部结构） | ⬜ 待做 |
+| **4** | 按钮接线 | 检查/重建/编辑按钮调 recipe_library | ⬜ 待做 |
+| **5** | 右键菜单 + 拖拽 | 新建/移动 subnet，改分类 | ⬜ 待做 |
+| **6** | LLM 工具接线 | recipe_manager_create/tree_scan/tree_open 工具 | ⬜ 待做 |
+
+**关键阻塞**：阶段 1-6 依赖真实 Houdini 的 HDA/Qt 行为验证（save_as_locked、subnet category 判定、Qt 浮动面板），mock 无法覆盖。设计文档 `docs/edini/recipe-manager-hda-design.md`，测试指南 `docs/edini/recipe-library-testing.md`。
+
+### 旧程序化建模（已废弃，备份可恢复）
+
+ABCDE 五站（A 声明式 Builder / B 构造轴 / C 参数 DB / D 黄金范例 / E 数值代理）随管道关闭废弃。
+A/B/C 已完成的代码备份在 `_disabled_backup/procedural-modeling/`，恢复方式见
+`python3.11libs/edini/tool_executor.py` 顶部 NOTE 注释。
 
 ### 其它规划
 

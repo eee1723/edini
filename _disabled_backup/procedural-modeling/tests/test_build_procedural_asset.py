@@ -1254,10 +1254,15 @@ class TestPostprocessNodeNames(unittest.TestCase):
 
 
 class TestParameterFolderConsolidation(unittest.TestCase):
-    """主参数 + derived 参数必须全部装进同一个 edini_params 文件夹。
+    """主参数 + derived 参数的文件夹组织。
 
-    根因：原代码每个 derived 单独调用 _install_params_via_template_group，
+    原根因：每个 derived 单独调用 _install_params_via_template_group，
     每次新建一个 folder，导致 N 个 derived = N 个单参数文件夹，UI 无法用。
+
+    现行行为（Batch 4 重构后）：primary 参数进入 "Parameters" 文件夹，
+    derived 参数进入独立的 "Derived (auto)" 文件夹——既消灭了"N 个单参数
+    文件夹"的回归，又让用户面板不被 (auto) 参数淹没。derived 仍作为
+    channel 安装（hou.ch 仍可绑定），只是视觉上分离。
     """
 
     def test_derived_params_collapse_into_single_folder(self):
@@ -1284,11 +1289,22 @@ class TestParameterFolderConsolidation(unittest.TestCase):
         # method), so use t.name not t.name().
         edini_folders = [t for t in ptg.entries()
                          if isinstance(t, MockFolderParmTemplate)
-                         and t.name == "edini_params"]
-        self.assertEqual(len(edini_folders), 1,
-                         f"应有 1 个 edini_params 文件夹，实际 {len(edini_folders)}")
-        self.assertEqual(len(edini_folders[0].parmTemplates()), 6,
-                         f"文件夹应含 6 个参数，实际 {len(edini_folders[0].parmTemplates())}")
+                         and t.name.startswith("edini_")]
+        # Primary folder (3 parms) + Derived (auto) folder (3 parms) = 2 folders.
+        # This is strictly fewer than the 6-folder regression we guard against,
+        # and reflects the Batch-4 derived-isolation behaviour.
+        self.assertEqual(len(edini_folders), 2,
+                         f"应有 2 个 edini_ 文件夹（Parameters + Derived auto），"
+                         f"实际 {len(edini_folders)}: {[f.name for f in edini_folders]}")
+        by_label = {f.label: f for f in edini_folders}
+        self.assertIn("Parameters", by_label, "主参数文件夹缺失")
+        self.assertIn("Derived (auto)", by_label, "derived (auto) 文件夹缺失")
+        # Primary folder holds exactly the 3 primary parms
+        primary_names = {t.name for t in by_label["Parameters"].parmTemplates()}
+        self.assertEqual(primary_names, {"wheel_r", "bb_drop", "st_angle"})
+        # Derived folder holds exactly the 3 derived parms (collapsed, not split)
+        derived_names = {t.name for t in by_label["Derived (auto)"].parmTemplates()}
+        self.assertEqual(derived_names, {"bb_height", "st_rad", "seat_top_y"})
 
 
 class TestPythonBackendParams(unittest.TestCase):

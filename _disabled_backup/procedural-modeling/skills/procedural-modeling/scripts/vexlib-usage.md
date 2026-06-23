@@ -1,5 +1,13 @@
 # VEXlib Usage — Node Recipes
 
+## ⚙️ 加载机制（重要）
+
+**vexlib 函数会自动可用 —— 你不需要手写 `#include`。** 当你的 wrangle snippet 调用任意 vexlib 函数（`make_polyline`、`make_circle_section`、`make_gear_profile`、`set_instance_attrs` … 共 15 个），`build_procedural_asset` 会在 cook 前自动把对应的 `.vfl` 源码内联到 snippet 头部。这是可靠的内置机制（不依赖环境变量），所有 15 个函数都覆盖。
+
+- ✅ **直接写函数调用**：`int p[] = make_circle_section(0, chf("r"), 16, "XZ", {0,0,0});`
+- ❌ **不要手写 `#include`**：多余且若路径未配置会失败。下面示例里的 `#include` 行仅为历史参考，实际不需要。
+- 若你在 `attribwrangle` 的 `snippet` 里既调用 vexlib 函数又有自定义逻辑，只需把 vexlib 调用和你的逻辑写在一起即可。
+
 ## 设计理念
 
 vexlib 是**基础工具箱**，不是**唯一选择**。它的作用是：

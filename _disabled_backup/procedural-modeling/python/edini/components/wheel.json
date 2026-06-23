@@ -1,0 +1,16 @@
+{
+  "name": "wheel",
+  "description": "A bicycle-style wheel: torus rim swept along a circular path, with an axle hub. Modeled as a ring in the XZ plane (construction_axis Y). Unit outer radius unless scaled via instance pscale. Designed to be instanced N times (front/rear) via the `instances` field.",
+  "geometry": {
+    "backend": "vex_skeleton",
+    "construction_axis": "Y",
+    "code": "int n=48; int path[];\nfor(int i=0;i<n;i++){float a=2.0*M_PI*float(i)/float(n);\nint pt=addpoint(0,set(chf(\"rim_r\")*cos(a),0,chf(\"rim_r\")*sin(a)));push(path,pt);}\nint prim=addprim(0,\"polyline\");\nfor(int i=0;i<len(path);i++)addvertex(0,prim,path[i]);\naddvertex(0,prim,path[0]);",
+    "section_code": "int m=16; int prof[];\nfor(int i=0;i<m;i++){float a=2.0*M_PI*float(i)/float(m);\nint pt=addpoint(0,set(chf(\"tire_r\")*cos(a),0,chf(\"tire_r\")*sin(a)));push(prof,pt);}\nint pr=addprim(0,\"polyline\");\nfor(int i=0;i<len(prof);i++)addvertex(0,pr,prof[i]);\naddvertex(0,pr,prof[0]);",
+    "form_node": {"type": "sweep::2.0", "params": {"surfacetype": 2, "endcaptype": 1}},
+    "reads": ["rim_r", "tire_r"]
+  },
+  "param_schema": {
+    "rim_r": {"default": 0.335, "min": 0.20, "max": 0.45, "desc": "rim (rolling) radius"},
+    "tire_r": {"default": 0.030, "min": 0.010, "max": 0.060, "desc": "cross-section (tire) radius"}
+  }
+}
