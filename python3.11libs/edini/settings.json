@@ -4,6 +4,6 @@
   "reflection_model": "",
   "theme_color": "purple",
   "font_scale": 0.8,
-  "vision_provider": "aliyun",
+  "vision_provider": "ali",
   "vision_model_id": "qwen3-vl-plus"
 }

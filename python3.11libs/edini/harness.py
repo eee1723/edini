@@ -22,6 +22,56 @@ EXECUTION_MODE_LIVE = "live_sandbox"
 # at the start of each build.
 _SWEEP_SURFACESHAPE_CONFLICTS: list[str] = []
 
+# Dual-wrangle sweep also requires the cross-section to lie in the XZ plane
+# (Y=0, normal=+Y) so Sweep can align it perpendicular to the path tangent.
+# A section generated in the XY plane (Z=0, normal=+Z) is the classic cause
+# of "Sweep produces a flat/deformed blob instead of a tube". Detected
+# offenders are recorded here and surfaced as build warnings. Reset per build.
+_SWEEP_SECTION_PLANE_WARNINGS: list[str] = []
+
+
+def _detect_section_plane(snippet: str) -> str:
+    """Heuristically classify which plane a section snippet's points occupy.
+
+    Returns one of ``"XZ"`` (correct for Sweep), ``"XY"`` (wrong for Sweep),
+    or ``"unknown"`` (can't tell — don't warn). This is a static regex scan;
+    it cannot evaluate VEX, so it only catches the two common authoring
+    patterns, which together cover ~all real recipes:
+
+    * XZ plane (correct): points written as ``set(x, 0, z)`` or
+      ``set(r*cos(a), 0, r*sin(a))`` — the Y component is the literal ``0``.
+    * XY plane (wrong):   points written as ``set(x, y, 0)`` or
+      ``set(r*cos(a), r*sin(a), 0)`` — the Z component is the literal ``0``.
+
+    vexlib calls with an explicit ``"XZ"``/``"XY"`` plane argument are also
+    recognised (``make_circle_section(..., "XZ", ...)``).
+    """
+    if not snippet:
+        return "unknown"
+    s = re.sub(r"//.*", "", snippet)  # strip line comments
+
+    # 1) Explicit vexlib plane argument wins if present.
+    #    look for  "XZ" or "XY" as a string literal in the snippet.
+    has_xz = bool(re.search(r'"XZ"', s))
+    has_xy = bool(re.search(r'"XY"', s))
+    if has_xz and not has_xy:
+        return "XZ"
+    if has_xy and not has_xz:
+        return "XY"
+
+    # 2) set(x, 0, z) pattern — middle component is literal 0 → XZ (correct)
+    #    set(x, y, 0) pattern — last component is literal 0 → XY (wrong)
+    #    Count occurrences to decide the dominant plane.
+    xz_hits = len(re.findall(r"set\(\s*[^,]*,[^,]*\b0\b\s*,\s*[^,)]", s))
+    xy_hits = len(re.findall(r"set\(\s*[^,]*,[^,]*,[^,]*\b0\b\s*\)", s))
+    if xz_hits and not xy_hits:
+        return "XZ"
+    if xy_hits and not xz_hits:
+        return "XY"
+    if xz_hits and xy_hits:
+        return "XZ" if xz_hits >= xy_hits else "XY"
+    return "unknown"
+
 
 def make_job_id(label: str = "job") -> str:
     safe = re.sub(r"[^A-Za-z0-9_]+", "_", label).strip("_").lower() or "job"
@@ -1921,27 +1971,67 @@ def _build_float_parm_template(
 
 def _install_params_via_template_group(
     root: Any, hou_module: Any, templates: list[Any],
+    grouping: list[tuple[str, str, bool]] | None = None,
 ) -> bool:
-    """Install templates as a merge folder on root via setParmTemplateGroup.
+    """Install templates as merge folder(s) on root via setParmTemplateGroup.
 
     Uses the Houdini-official read-merge pattern: read the node's existing
     ParmTemplateGroup (preserving the geo's default Transform etc. folders),
-    add the templates inside a fresh FolderParmTemplate, then write it back.
+    add the templates inside FolderParmTemplate(s), then write it back.
     This is H21-compatible on a non-HDA geo container, unlike
     setSpareParmGroup which is restricted there. Returns True on success.
+
+    Args:
+        templates: ordered FloatParmTemplate list.
+        grouping: optional parallel list of ``(parm_name, group, is_derived)``
+            tuples, same length/order as ``templates``. When provided, parms
+            are placed into per-group folders (a folder per distinct group
+            name). Derived params go into a dedicated folder whose label is
+            suffixed "(auto)" so the user knows not to edit them. When None
+            (legacy callers), everything lands in one ``edini_params`` folder.
 
     Note: this is a REPLACE-style API at the hou level, but because we read
     the current group first and only append our folder, it is merge-safe —
     pre-existing folders and parms are preserved.
     """
     ptg = root.parmTemplateGroup()
-    folder = hou_module.FolderParmTemplate(
-        "edini_params", "Parameters",
-        folder_type=getattr(hou_module.folderType, "Tabs", 0),
-    )
-    for tmpl in templates:
-        folder.addParmTemplate(tmpl)
-    ptg.append(folder)
+    if grouping is not None and len(grouping) == len(templates):
+        # Build folders: primary groups in declared order, then a trailing
+        # "(auto)" folder for derived params so they're visually separated
+        # and the main controls stay uncluttered.
+        primary_order: list[str] = []
+        seen: set[str] = set()
+        derived_group = "Derived (auto)"
+        buckets: dict[str, list[Any]] = {}
+        for (pname, group, is_derived), tmpl in zip(grouping, templates):
+            g = derived_group if is_derived else (group or "Parameters")
+            if is_derived:
+                g = derived_group
+            if g not in seen:
+                seen.add(g)
+                if not is_derived:
+                    primary_order.append(g)
+                buckets[g] = []
+            buckets[g].append(tmpl)
+        # Append primary folders first (in first-seen order), derived last.
+        ordered_groups = primary_order + (
+            [derived_group] if derived_group in buckets else [])
+        for g in ordered_groups:
+            folder = hou_module.FolderParmTemplate(
+                f"edini_{_sanitize_folder_name(g)}", g,
+                folder_type=getattr(hou_module.folderType, "Tabs", 0),
+            )
+            for tmpl in buckets[g]:
+                folder.addParmTemplate(tmpl)
+            ptg.append(folder)
+    else:
+        folder = hou_module.FolderParmTemplate(
+            "edini_params", "Parameters",
+            folder_type=getattr(hou_module.folderType, "Tabs", 0),
+        )
+        for tmpl in templates:
+            folder.addParmTemplate(tmpl)
+        ptg.append(folder)
     root.setParmTemplateGroup(ptg)
     return True
 
@@ -1987,6 +2077,9 @@ def _install_spare_params(
     if not params_spec and not derived_values:
         return result
     templates: list[Any] = []
+    # Parallel metadata: (parm_name, group, is_derived) per template, so the
+    # installer can build per-group folders and isolate derived params.
+    grouping: list[tuple[str, str, bool]] = []
     # Primary params (skip derived — handled below from derived_values).
     for name, spec in params_spec.items():
         if spec.get("kind") == "derived":
@@ -1995,12 +2088,18 @@ def _install_spare_params(
         mn = spec.get("min")
         mx = spec.get("max")
         label = spec.get("label", name)
+        # UI grouping: optional "ui": {"group": "..."} on the param spec lets
+        # the author split primary controls across multiple folders. Absent
+        # group → the default "Parameters" folder.
+        ui = spec.get("ui") or {}
+        group = ui.get("group") if isinstance(ui, dict) else None
         min_v = float(mn) if mn is not None else 0.0
         max_v = float(mx) if mx is not None else 10.0
         try:
             tmpl = _build_float_parm_template(
                 _hou, name, label, default, min_v, max_v)
             templates.append(tmpl)
+            grouping.append((name, group or "Parameters", False))
         except Exception:
             # Template construction failed for this one; skip it (the value is
             # still recorded for expression evaluation).
@@ -2009,10 +2108,12 @@ def _install_spare_params(
             "value": default,
             "channel_path": f"{root.path()}/{name}",
             "label": label if label != name else None,
+            "group": group,
             "installed": False,  # set True only if a group install succeeds
         }
-    # Derived params — merged into the SAME template batch so a single
-    # setParmTemplateGroup call produces one edini_params folder for all.
+    # Derived params — still installed as channels (so hou.ch("../name") binds
+    # and all consumers read the one pre-computed value), but routed into a
+    # separate "Derived (auto)" folder so the main control panel stays clean.
     for name, dspec in derived_values.items():
         value = float(dspec.get("value", 0.0))
         label = dspec.get("label", name)
@@ -2022,20 +2123,24 @@ def _install_spare_params(
             tmpl = _build_float_parm_template(
                 _hou, name, label, value, min_v, max_v)
             templates.append(tmpl)
+            grouping.append((name, "Derived (auto)", True))
         except Exception:
             pass
         result[name] = {
             "value": value,
             "channel_path": f"{root.path()}/{name}",
             "label": label if label != name else None,
+            "group": "Derived (auto)",
             "installed": False,
         }
     if templates:
         installed = False
         # 1. Preferred: read-merge folder params (H21-compatible on geo).
+        #    Pass grouping so primary params split into ui.group folders and
+        #    derived params land in a separate "Derived (auto)" folder.
         try:
             installed = _install_params_via_template_group(
-                root, _hou, templates)
+                root, _hou, templates, grouping=grouping)
         except Exception:
             installed = False
         # 2. Legacy fallback: setSpareParmGroup (older Houdini).
@@ -2295,6 +2400,17 @@ def _sanitize_node_name(type_str: str) -> str:
     """
     import re
     return re.sub(r"[^A-Za-z0-9_]", "_", type_str)
+
+
+def _sanitize_folder_name(label: str) -> str:
+    """Sanitize a UI group label into a legal FolderParmTemplate symbol name.
+
+    Folder symbol names (the first FolderParmTemplate arg) must be identifiers;
+    the label (second arg) can be any display text. We sanitize the symbol so
+    group names like "Wheels & Frame" become a stable ``edini_Wheels___Frame``.
+    """
+    import re
+    return re.sub(r"[^A-Za-z0-9_]", "_", label)
 
 
 def _safe_create_node(parent_path: str, node_type: str, name: str) -> Any:
@@ -2732,12 +2848,15 @@ def _build_native_chain_component(
             except Exception:
                 pass  # node may not have 'type' — best-effort
         # attribwrangle special handling: 'class' sets run-over mode,
-        # 'snippet' sets the VEX code
+        # 'snippet' sets the VEX code. Expand any vexlib functions the
+        # snippet calls (parity with _make_wrangle for vex_skeleton) so the
+        # full library is usable from native_chain wrangles too.
         if canonical == "attribwrangle":
+            from edini.vexlib_loader import expand_vexlib
             if "class" in params:
                 node.parm("class").set(params["class"])
             if "snippet" in params:
-                node.parm("snippet").set(params["snippet"])
+                node.parm("snippet").set(expand_vexlib(params["snippet"]))
         else:
             for pname, pvalue in params.items():
                 try:
@@ -2800,11 +2919,12 @@ def _build_vex_skeleton_component(
     def _make_wrangle(name, vex_code, extra_reads=None):
         wr = _safe_create_node(root_path, "attribwrangle", name)
         wr.parm("class").set("detail")
-        if "#include" not in vex_code and ("make_polyline" in vex_code or "make_circle" in vex_code):
-            vex_code = (
-                "#include <vexlib/skeleton.vfl>\n"
-                "#include <vexlib/sections.vfl>\n" + vex_code
-            )
+        # Inline-expand any vexlib functions the snippet actually calls.
+        # expand_vexlib reads the real .vfl source and prepends only the files
+        # whose functions are used — reliable (no HOUDINI_VEX_PATH dependency)
+        # and covers all 15 vexlib functions, not just make_polyline/make_circle.
+        from edini.vexlib_loader import expand_vexlib
+        vex_code = expand_vexlib(vex_code)
         all_reads = reads + (extra_reads or [])
         for pname in all_reads:
             if pname in param_values:
@@ -2840,6 +2960,21 @@ def _build_vex_skeleton_component(
         if fn_params.get("surfaceshape", 0) != 0:
             _SWEEP_SURFACESHAPE_CONFLICTS.append(cid)
         fn_params["surfaceshape"] = 0
+
+        # Cross-section plane check. Sweep requires the section to lie in the
+        # XZ plane (Y=0, normal=+Y) so it can be oriented perpendicular to the
+        # path tangent. A section in the XY plane (Z=0) is the classic cause
+        # of a flat/deformed sweep instead of a tube — flag it so the author
+        # gets an actionable warning rather than silent bad geometry.
+        plane = _detect_section_plane(section_code)
+        if plane == "XY":
+            _SWEEP_SECTION_PLANE_WARNINGS.append(
+                f"{cid}: cross-section appears to be drawn in the XY plane "
+                f'(Z=0). Sweep needs it in the XZ plane (Y=0), e.g. '
+                f'set(r*cos(a), 0, r*sin(a)) or '
+                f'make_circle_section(0, r, sides, "XZ", {{0,0,0}}). '
+                f"Otherwise the sweep produces a flat/deformed result."
+            )
         for pname, pvalue in fn_params.items():
             if isinstance(pvalue, str) and ('ch(' in pvalue or 'chf(' in pvalue):
                 try:
@@ -2975,6 +3110,16 @@ def build_procedural_asset(
     Returns a dict shaped like run_python_sandbox plus builder-specific fields
     (components_built, anchors_built, component_id_check).
     """
+    # ── Expand semantic component references ──
+    # {"component": "wheel", "instances": [...]} → inline spec with anchors.
+    # Runs before validation so A1-A9 see the fully-expanded components. Pure
+    # data transform; recipes without component refs are unchanged.
+    try:
+        from edini.component_registry import resolve as _resolve_components
+        recipe = _resolve_components(recipe)
+    except Exception:
+        pass  # registry unavailable — proceed with raw recipe
+
     # ── Validate recipe ──
     errors = _validate_recipe(recipe)
     if errors:
@@ -3074,8 +3219,9 @@ def build_procedural_asset(
 
     # Reset the per-build sweep-surfaceshape conflict log so warnings reflect
     # only this build's components.
-    global _SWEEP_SURFACESHAPE_CONFLICTS
+    global _SWEEP_SURFACESHAPE_CONFLICTS, _SWEEP_SECTION_PLANE_WARNINGS
     _SWEEP_SURFACESHAPE_CONFLICTS = []
+    _SWEEP_SECTION_PLANE_WARNINGS = []
 
     warnings: list[str] = []
     errors_runtime: list[str] = []
@@ -3450,6 +3596,8 @@ def build_procedural_asset(
                 f"is incompatible with roundtube/extrude surface shapes; the "
                 f"section_code defines the shape. Remove 'surfaceshape' from "
                 f"form_node.params to silence this warning.")
+        # Sweep cross-section plane warnings (section in XY instead of XZ).
+        warnings.extend(_SWEEP_SECTION_PLANE_WARNINGS)
         diag = _safe_collect_diagnostics(out_path, include_geometry=True)
         geo_stats = diag.get("geometry") or {}
         structural_checks = {
