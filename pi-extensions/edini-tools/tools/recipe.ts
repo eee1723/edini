@@ -44,7 +44,7 @@ export const recipeList = {
   parameters: Type.Object({
     query: Type.Optional(
       Type.String({
-        description: "Keyword to match against recipe id/function/category/parms (empty = list all).",
+        description: "Keyword to match against recipe id/function/category/tree_path/parms (empty = list all).",
       })
     ),
     category: Type.Optional(
@@ -52,8 +52,13 @@ export const recipeList = {
         description: "Filter by category (tube|extrude|copy|boolean|postprocess|deform|misc).",
       })
     ),
+    kind: Type.Optional(
+      Type.String({
+        description: "Filter by kind: 'network' (node-network recipes) or 'vex' (VEX-snippet recipes).",
+      })
+    ),
   }),
-  async execute(_toolCallId: string, params: { query?: string; category?: string }) {
+  async execute(_toolCallId: string, params: { query?: string; category?: string; kind?: string }) {
     return forwardTool("recipe_list", params);
   },
 };
@@ -103,6 +108,35 @@ export const recipeCapture = {
   },
 };
 
+export const recipeCaptureTree = {
+  name: "recipe_capture_tree",
+  label: "Capture All Leaf Recipes Under a Tree",
+  description:
+    "Recursively capture every leaf subnet under a root into the recipe library. " +
+    "Walks the tree: container subnets (whose children are all subnets) are descended into; " +
+    "leaf subnets (whose children include real SOP nodes like curve/sweep/wrangle) are captured. " +
+    "Each leaf gets a tree-path-based recipe_id (e.g. 'Procedural_Modeling.Base_Sweep') so " +
+    "same-named leaves in different branches never collide. VEX wrangle snippets are extracted " +
+    "into vex_snippets (kind='vex'); output/stashed nodes are ignored. Empty Notes are auto-filled. " +
+    "Use this to ingest a hand-built category tree (e.g. /obj/sopnet1) in one call.",
+  promptSnippet: "Capture all leaf recipes under a category tree root",
+  promptGuidelines: [
+    "Pass the root of the category tree (e.g. /obj/sopnet1), NOT an individual leaf. The tool recurses.",
+    "Container vs leaf is decided by node-type composition: all-subnet children = container; any SOP child = leaf.",
+    "recipe_ids become tree paths (e.g. Procedural_Modeling.Base_Sweep) — use these exact ids in recipe_read/recipe_rebuild.",
+    "Each captured entry has 'kind' ('network' or 'vex') and a 'warnings' list (auto-notes, manifest gaps, etc.).",
+    "Check 'skipped' in the result for any leaves that failed (rare — only if Notes rejects even auto-fill).",
+  ],
+  parameters: Type.Object({
+    root_path: Type.String({
+      description: "Root subnet path to recurse from, e.g. /obj/sopnet1",
+    }),
+  }),
+  async execute(_toolCallId: string, params: { root_path: string }) {
+    return forwardTool("recipe_capture_tree", params);
+  },
+};
+
 export const recipeRebuild = {
   name: "recipe_rebuild",
   label: "Rebuild Subnet from Recipe",
@@ -140,4 +174,4 @@ export const recipeRebuild = {
   },
 };
 
-export const recipeTools = [recipeList, recipeRead, recipeCapture, recipeRebuild];
+export const recipeTools = [recipeList, recipeRead, recipeCapture, recipeCaptureTree, recipeRebuild];

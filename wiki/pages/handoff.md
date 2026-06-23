@@ -2,9 +2,9 @@
 
 > **用途**：让新 Agent 或开发者在 Edini 仓库里快速上手。
 
-**最后更新**：2026-06-23（架构转向：关闭程序化建模 → 新建 Recipe Library + Dashboard HDA）
-**当前阶段**：Recipe Library 核心完成（285 测试全绿）· Dashboard HDA 设计定稿待实现
-**下一步**：真实 Houdini 验证 recipe 闭环 → 实现 Dashboard HDA（scan_tree + Qt 树面板）
+**最后更新**：2026-06-23（Recipe Library schema v2：tree capture + VEX + 真实 Houdini 验证）
+**当前阶段**：Recipe Library 核心 + 递归树抓取 + VEX 配方支持已落地，**真实 Houdini 闭环已验证**
+**下一步**：给高价值配方补 Notes → 验证 recipe_rebuild → 实现 Dashboard HDA
 **工作分支**：`master`
 
 ---
@@ -24,33 +24,39 @@
 - harness.ts 移除 3 个 TS 工具定义
 - 恢复方式：见 `python3.11libs/edini/tool_executor.py` 顶部 NOTE 注释
 
-**2. 新建 Recipe Library（核心完成）**
-- `python3.11libs/edini/recipe_library.py`（550 行）：4 个工具
-  - `recipe_capture(subnet_path)` — 捕获 subnet 内部网络→配方 JSON
-  - `recipe_list(query, category)` — 查询索引
-  - `recipe_read(recipe_id)` — 读完整配方
-  - `recipe_rebuild(recipe_id, parent_path, overrides)` — 拓扑排序重建+内置验证
-- 配方 JSON schema：nodes（相对名 inputs）/ changed_params / marked_params / exposed_parms
-- subnet Notes 强制非空作元数据（功能/重要参数/不要用于）
-- `pi-extensions/edini-tools/tools/recipe.ts`：4 工具 TS 定义
-- `skills/recipe-library/SKILL.md`：自动注册的轻量 skill
-- `tests/test_recipe_library.py`：20 测试，全绿
+**2. 新建 Recipe Library（核心完成 + schema v2 + 真实验证）**
+- `python3.11libs/edini/recipe_library.py`（~900 行）：**5 个工具**
+  - `recipe_capture(subnet_path, ...)` — 捕获 subnet 内部网络→配方 JSON（支持 kind/tree_path/vex_snippets）
+  - `recipe_capture_tree(root_path)` — **递归扫整棵分类树，自动抓所有叶子 subnet**（一次抓完用户手搭的分类树）
+  - `recipe_list(query, category, kind)` — 查询索引（按关键词/分类/kind 检索，支持 tree_path 组件命中）
+  - `recipe_read(recipe_id)` — 读完整配方（含 vex_snippets 代码）
+  - `recipe_rebuild(recipe_id, parent_path, overrides)` — 拓扑排序重建+内置验证+还原 VEX snippet
+- **配方 JSON schema v2**：nodes（相对名 inputs）/ changed_params / marked_params / exposed_parms / **kind**（network|vex）/ **tree_path**（分类面包屑）/ **vex_snippets**（wrangle 代码+runover）
+- subnet Notes 强制非空作元数据（功能/重要参数/不要用于）；tree_capture 时空 Notes 自动生成
+- `pi-extensions/edini-tools/tools/recipe.ts`：5 工具 TS 定义
+- `skills/recipe-library/SKILL.md`：自动注册的轻量 skill（含 tree capture + 两 kind 说明）
+- `tests/test_recipe_library.py`：30 测试 + 2 subtests，全绿
 
 ### 当前状态
 
-- **285 测试全绿**（比关程序化建模前多 20 个 recipe 测试）
-- **46 个工具注册**（recipe 4 个 + 共享工具保留）
+- **30 + 2 subtests recipe 测试全绿**（VEX 抓取/还原、output 过滤、递归树、kind、popnet 防穿透回归）
+- **47 个工具注册**（recipe 5 个 + 共享工具保留）
 - **2 个 skill**（grill-me + recipe-library）
-- **唯一没验证**：真实 Houdini 的 recipe 闭环（捕获/重建）+ Dashboard HDA
+- **真实 Houdini 闭环已验证**：用户手搭 `/obj/subnet1/sopnet1` 分类树（Procedural_Modeling/Vex/Sim 三大类，6 叶子），`recipe_capture_tree` 一次性成功抓取，kind/tree_path/vex 全部正确。已发现并修复 1 个真实 bug（popnet 网络容器被误当分类层穿透）。
+- **配方库已有 4 个真实配方**（`recipes/` 下）：Procedural_Modeling.Base_Copy / Base_Sweep / Sim.RBD.Voronoi_Fracture / Vex.Covar_Matrix。Pop_Force 因 bug 已删除，待重抓。
 
 ### 下一步该做什么（换电脑后优先级）
 
-1. **真实 Houdini 验证 recipe 闭环**（最优先）
-   - 按 `docs/edini/recipe-library-testing.md` 的「测试 2：subnet 直连」操作
-   - 重点验：promote 参数检测（exposed_parms）、changed_params 判定、重建后结构一致
-   - 把 recipe.json 和任何错误反馈给 agent
+1. **重抓 Pop_Force + 给高价值配方补 Notes**（最优先）
+   - 真实 Houdini 里重跑 `recipe_capture_tree("/obj/subnet1/sopnet1")`，确认 Pop_Force 这次作为完整配方被抓
+   - 给 Base_Sweep/Voronoi_Fracture 等常用配方按 `C` 写 `功能：...` + `重要参数：...`，再单独 `recipe_capture` 重抓
+   - Notes 是搜索质量的根本——auto-generated 占位文本搜索效果差
 
-2. **实现 Dashboard HDA**（验证后）
+2. **验证 recipe_rebuild**（补完 Notes 后）
+   - 聊天面板发「用 tube 配方重建一个」测真实重建
+   - 重点验：exposed_parms override 生效、vex_snippet 还原、verify.mismatches 为空
+
+3. **实现 Dashboard HDA**（验证后）
    - 设计文档：`docs/edini/recipe-manager-hda-design.md`
    - 阶段 1：scan_tree + create_recipe_manager（递归读 HDA 内部 subnet 树）
    - 阶段 3：Qt 树面板（recipe_tree_window.py，QTreeView）

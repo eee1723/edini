@@ -35,6 +35,7 @@ from edini.recipe_library import (
     recipe_read,
     recipe_capture,
     recipe_rebuild,
+    recipe_capture_tree,
 )
 
 # NOTE: The procedural-modeling pipeline (build_procedural_asset,
@@ -228,9 +229,11 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     "recipe_list": lambda **kw: recipe_list(
         query=kw.get("query", ""),
         category=kw.get("category", ""),
+        kind=kw.get("kind", ""),
     ),
     "recipe_read": lambda **kw: recipe_read(kw["recipe_id"]),
     "recipe_capture": lambda **kw: recipe_capture(kw["subnet_path"]),
+    "recipe_capture_tree": lambda **kw: recipe_capture_tree(kw["root_path"]),
     "recipe_rebuild": lambda **kw: recipe_rebuild(
         kw["recipe_id"],
         kw["parent_path"],

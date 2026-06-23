@@ -1,6 +1,6 @@
 # 📊 仪表盘
 
-> **当前阶段**：第三十阶段 — Harness 两 Bug 修复（参数挂载 + degenerate 误报，真实 Houdini 验证）&nbsp;|&nbsp; **状态**：声明式 Builder + 构造轴 + 双 Bug 修复已落地，382 测试通过 &nbsp;|&nbsp; **最后更新**：2026-06-16
+> **当前阶段**：Recipe Library schema v2 — 递归树抓取 + VEX 配方 + 真实 Houdini 闭环验证 &nbsp;|&nbsp; **状态**：5 工具 + 真实分类树已抓取，30+2 subtests 全绿 &nbsp;|&nbsp; **最后更新**：2026-06-23
 
 ## 快速导航
 
@@ -39,7 +39,8 @@
 | 知识检索 | ✅ edini_search_knowledge 工具已实现 |
 | 知识→Skills | ⬜ Traces → Skills 自动提取（规划中） |
 | 评估系统 | ✅ 5 维度评分 · LogParser · SQLite · EvalDashboard · edini_get_eval_stats · LLM-as-Judge (deepseek-chat) |
-| Procedural Harness | ✅ `houdini_run_python_sandbox` · 声明式 Recipe Builder（`houdini_build_procedural_asset`）· 构造轴（construction_axis 替代 PCA）· asset 参数 read-merge 文件夹挂载（H21 兼容）· diagnostics before delete · modular structure gate · orientation gate · commit/discard lifecycle · safe capture · [手测清单](procedural-harness.html) |
+| Recipe Library | ✅ **schema v2** · 5 工具（list/read/capture/**capture_tree**/rebuild）· 递归树抓取（树路径 recipe_id 防撞名）· kind（network\|vex）· vex_snippets（wrangle 代码+runover 可搜）· tree_path 分类面包屑 · 自动忽略 output/stashed 节点 · 空 Notes 自动生成 · 真实 Houdini 闭环已验证（6 叶子分类树一次性抓取）· popnet 穿透 bug 已修 · 30+2 subtests 全绿 |
+| Procedural Harness（已关闭） | ⚰️ **已备份到 `_disabled_backup/`**，不再维护。旧版：`houdini_run_python_sandbox` · 声明式 Recipe Builder（`houdini_build_procedural_asset`）· 构造轴 · commit/discard lifecycle · [手测清单](procedural-harness.html) |
 
 ## 技术栈
 

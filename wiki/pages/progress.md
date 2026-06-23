@@ -1,6 +1,6 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-23 &nbsp;|&nbsp; **架构转向：关闭程序化建模 → 新建 Recipe Library + Dashboard HDA** 🚧 &nbsp;|&nbsp; 规划：真实 Houdini 验证 recipe 闭环
+> 最后更新：2026-06-23 &nbsp;|&nbsp; **架构转向：关闭程序化建模 → 新建 Recipe Library + Dashboard HDA** 🚧 &nbsp;|&nbsp; 进展：Recipe Library schema v2 落地 + 真实 Houdini 闭环已验证
 
 ## ⚠️ 架构转向说明（2026-06-23）
 
@@ -20,11 +20,11 @@ LLM 不确定性。设计文档见 `docs/edini/recipe-manager-hda-design.md`。
 
 <div class="phase-card">
   <div class="phase-card-header">
-    <span class="phase-card-title">📚 Recipe Library（新架构）</span>
-    <span class="status-tag status-done">核心完成</span>
+    <span class="phase-card-title">📚 Recipe Library（新架构 · schema v2）</span>
+    <span class="status-tag status-done">核心完成 + 真实验证</span>
   </div>
-  <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:75%"></div></div>
-  <div class="phase-card-detail">替代旧程序化建模管道。4 工具（recipe_list/read/capture/rebuild）：捕获 subnet 内部网络→配方 JSON（区分 changed/marked 参数，inputs 用相对名跨场景可重建）→索引→拓扑排序重建+内置验证。subnet Notes 强制非空作元数据。285 测试全绿。recipe-library skill 自动注册。</div>
+  <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:95%"></div></div>
+  <div class="phase-card-detail">替代旧程序化建模管道。<strong>5 工具</strong>（recipe_list/read/capture/<strong>capture_tree</strong>/rebuild）：捕获 subnet 内部网络→配方 JSON（区分 changed/marked 参数，inputs 用相对名跨场景可重建）→索引→拓扑排序重建+内置验证。<strong>schema v2 新增</strong>：recipe_capture_tree 递归扫整棵分类树自动抓叶子（recipe_id 用树路径防撞名）、kind（network|vex）、vex_snippets（wrangle 代码+runover 可搜）、tree_path 分类面包屑、自动忽略 output/stashed 节点、空 Notes 自动生成。<strong>真实 Houdini 闭环已验证</strong>：用户手搭 6 叶子分类树一次性抓取成功，发现并修复 popnet 网络容器穿透 bug。配方库已有 4 个真实配方。30 测试 + 2 subtests 全绿。</div>
 </div>
 
 <div class="phase-card">

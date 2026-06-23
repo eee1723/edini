@@ -36,6 +36,33 @@ from typing import Any
 SCHEMA_VERSION = 1
 GENERATOR_VERSION = "0.1.0"
 
+# Node types that are NOT user-authored recipe nodes — they are Houdini's
+# internal plumbing or cooked geometry stashes. Capture skips them entirely.
+_IGNORED_NODE_TYPES = {"output", "stashed_geo", "subnetconnector"}
+
+# VEX-wrangling node types whose `snippet` is the real payload, not just a param.
+_VEX_NODE_TYPES = {"attribwrangle", "pointwrangle", "primwrangle",
+                   "vertexwrangle", "detailwrangle"}
+
+# Attrib Wrangle run-over parm name (H21).
+_WRANGLE_RUNOVER_PARM = "class"
+
+# Node types that are pure organizational containers — a tree category layer.
+# ONLY plain subnets (and the obj-level geo) count as descent targets. Network
+# containers (popnet/dopnet/sopnet/ropnet) are NOT here: they are part of a
+# recipe's content (a popnet IS the recipe, the same way a sweep node is), so
+# capturing a leaf that contains one must grab the whole leaf, not pierce into
+# the network container's internals.
+_CONTAINER_TYPES = {"subnet", "geo"}
+
+# Network container node types (popnet/dopnet/sopnet/ropnet). These ARE
+# descendable in the sense that they hold child networks, but they must NEVER
+# be treated as a category layer — they're leaf content. Listed separately so
+# the tree walker can short-circuit: a subnet containing one of these is a
+# leaf, full stop.
+_NETWORK_CONTAINER_TYPES = {"popnet", "dopnet", "sopnet", "ropnet", "copnet",
+                            "chopnet", "driver", "shop"}
+
 # Substrings that, if they're the entire (stripped) Notes content, mark it as a
 # placeholder rather than real documentation. Capture refuses these.
 _PLACEHOLDER_NOTES = {
@@ -269,17 +296,23 @@ def _collect_subnet_nodes(subnet) -> list[dict[str, Any]]:
     """Walk a subnet's direct children and return per-node capture dicts.
 
     Only the immediate children are captured as recipe nodes (a recipe is one
-    flat layer). Each node records its type, relative-name input wiring, and
-    the changed/marked/expression param buckets.
+    flat layer). Nodes whose type is in ``_IGNORED_NODE_TYPES`` (output,
+    stashed_geo, ...) are skipped — they are Houdini plumbing, not user content.
+    Each node records its type, relative-name input wiring, and the
+    changed/marked/expression param buckets.
     """
     nodes: list[dict[str, Any]] = []
     for child in subnet.children():
+        if _is_ignored_node(child):
+            continue
         nodes.append({
             "_node": child,
             "name": child.name(),
             "type": child.type().name(),
         })
-    # Index by name for relative input resolution.
+    # Index by name for relative input resolution (use ALL children, including
+    # ignored ones, so a wire FROM an ignored node still resolves — but in
+    # practice ignored nodes are sinks so this is defensive).
     by_name = {n["name"]: n["_node"] for n in nodes}
 
     for n in nodes:
@@ -287,6 +320,8 @@ def _collect_subnet_nodes(subnet) -> list[dict[str, Any]]:
         # Inputs: index → upstream node NAME (relative), or None. Use
         # inputs() (returns a positional list) for cross-runtime compat —
         # real Houdini also exposes input(i), but the list form is universal.
+        # Skip inputs whose source is an ignored node (e.g. an `output` node
+        # wired upstream of a real node — rare, but be defensive).
         in_list = child.inputs()
         inputs: dict[str, str | None] = {}
         for i, src in enumerate(in_list):
@@ -297,6 +332,15 @@ def _collect_subnet_nodes(subnet) -> list[dict[str, Any]]:
         n["inputs"] = inputs
         del n["_node"]
     return nodes
+
+
+def _is_ignored_node(node) -> bool:
+    """True if the node is Houdini plumbing, not a user-authored recipe node."""
+    try:
+        t = node.type().name()
+    except Exception:
+        return False
+    return t in _IGNORED_NODE_TYPES
 
 
 def _classify_parms(node, node_type: str, manifest_defaults: dict[str, Any],
@@ -310,15 +354,30 @@ def _classify_parms(node, node_type: str, manifest_defaults: dict[str, Any],
     - marked: parm name appears in the Notes "重要参数" list (recorded even if
       equal to default).
     - expressions: parms carrying an expression (hasExpression()).
+
+    For VEX wrangle nodes, the ``snippet`` and ``class`` (run-over) parms are
+    deliberately EXCLUDED from changed/marked — they are captured separately
+    into ``vex_snippets`` by the caller so the code is searchable and so it is
+    not treated as an ordinary value on rebuild.
     """
     changed: dict[str, Any] = {}
     marked: dict[str, Any] = {}
     expressions: dict[str, Any] = {}
     warnings: list[str] = []
 
+    is_vex = node_type in _VEX_NODE_TYPES
+    # On wrangle nodes, snippet+class are extracted elsewhere; skip them here.
+    vex_skip = _WRANGLE_RUNOVER_PARM if is_vex else None
+
     for p in node.parms():
         pname = p.name()
         if _is_auto_param(pname):
+            continue
+        if pname == "snippet":
+            # snippet is always special-cased on wrangles; even on non-wrangle
+            # nodes it's a code blob, keep it out of the generic param stream.
+            continue
+        if vex_skip and pname == vex_skip:
             continue
         try:
             live = p.eval()
@@ -352,6 +411,52 @@ def _classify_parms(node, node_type: str, manifest_defaults: dict[str, Any],
     if not manifest_available:
         warnings.append(f"manifest unavailable — all parms recorded for '{node.name()}'")
     return changed, marked, expressions, warnings
+
+
+def _extract_vex_snippets(subnet_or_nodes, hou_nodes: dict[str, Any]) -> list[dict]:
+    """Pull VEX snippets from wrangle nodes inside a captured recipe.
+
+    Returns a list of ``{node, code, runover}`` dicts, one per wrangle node
+    that has a non-empty snippet. ``runover`` is the integer class index
+    (0=detail,1=point,2=prim,3=vertex) or None if unreadable. The snippet text
+    is searchable via recipe_list since it's folded into the recipe function.
+    """
+    snippets: list[dict] = []
+    if isinstance(subnet_or_nodes, list):
+        # We were passed the recipe-node specs (already captured dicts).
+        items = subnet_or_nodes
+    else:
+        items = None
+    if items is not None:
+        for spec in items:
+            if spec.get("type") not in _VEX_NODE_TYPES:
+                continue
+            node = hou_nodes.get(spec["name"])
+            if node is None:
+                continue
+            code, runover = _read_wrangle(node)
+            if code:
+                snippets.append({"node": spec["name"], "code": code,
+                                 "runover": runover})
+    return snippets
+
+
+def _read_wrangle(node) -> tuple[str, Any]:
+    """Read a wrangle node's snippet + run-over class. Returns (code, runover)."""
+    code, runover = "", None
+    try:
+        p = node.parm("snippet")
+        if p is not None:
+            code = p.eval() or ""
+    except Exception:
+        pass
+    try:
+        cp = node.parm(_WRANGLE_RUNOVER_PARM)
+        if cp is not None:
+            runover = cp.eval()
+    except Exception:
+        pass
+    return code, runover
 
 
 def _is_auto_param(name: str) -> bool:
@@ -440,12 +545,189 @@ def _capture_io_ports(subnet) -> tuple[list[dict], list[dict]]:
     return inputs, outputs
 
 
-def recipe_capture(subnet_path: str) -> dict[str, Any]:
+# ─────────────────────────────────────────────────────────────────────────────
+# Tree navigation (for recipe_capture_tree)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _is_container_subnet(node) -> bool:
+    """A subnet is a *container* (pure organization) iff all its non-ignored
+    children are themselves pure organizational subnets (subnet/geo), with no
+    work nodes AND no network containers (popnet/dopnet/...).
+
+    The user-built tree uses nested subnets as a category taxonomy:
+    sopnet1/Procedural_Modeling/Base_Sweep — the first two are containers,
+    Base_Sweep (whose children include curve/sweep SOPs) is a leaf. A subnet
+    that holds a popnet is ALSO a leaf: the popnet IS the recipe's content.
+    """
+    try:
+        kids = [c for c in node.children() if not _is_ignored_node(c)]
+    except Exception:
+        return False
+    if not kids:
+        return False  # empty subnet — neither container nor leaf
+    for c in kids:
+        try:
+            t = c.type().name()
+        except Exception:
+            return False
+        if t in _NETWORK_CONTAINER_TYPES:
+            return False  # network container = leaf content, not a category
+        if t not in _CONTAINER_TYPES:
+            return False
+    return True
+
+
+def _is_leaf_subnet(node) -> bool:
+    """A subnet is a *leaf* (a real recipe) iff it has at least one non-ignored
+    child that is a work node OR a network container (popnet/dopnet/...).
+
+    A network container counts as "work" because it IS the recipe — capturing
+    the subnet must grab it as one node, not pierce into its internals.
+    """
+    try:
+        kids = [c for c in node.children() if not _is_ignored_node(c)]
+    except Exception:
+        return False
+    if not kids:
+        return False
+    for c in kids:
+        try:
+            t = c.type().name()
+        except Exception:
+            continue
+        if t in _NETWORK_CONTAINER_TYPES:
+            return True  # popnet/dopnet present → this subnet is a leaf
+        if t not in _CONTAINER_TYPES:
+            return True  # SOP/work node present → leaf
+    return False
+
+
+def _tree_path_from(root_name: str, leaf_node) -> list[str]:
+    """Walk up from a leaf subnet's PARENT to ``root_name`` (inclusive),
+    collecting ancestor names = the category path. The leaf itself is excluded.
+
+    e.g. for leaf Base_Sweep under /obj/sopnet1/Procedural_Modeling/Base_Sweep
+    with root_name='sopnet1', returns ['sopnet1', 'Procedural_Modeling'].
+    """
+    names: list[str] = []
+    # Start at the leaf's parent — the leaf name is NOT part of tree_path.
+    try:
+        cur = leaf_node.parent()
+    except Exception:
+        cur = None
+    while cur is not None:
+        try:
+            nm = cur.name()
+        except Exception:
+            break
+        names.append(nm)
+        if nm == root_name:
+            break
+        try:
+            cur = cur.parent()
+        except Exception:
+            break
+    names.reverse()
+    return names
+
+
+def _find_leaf_subnets(root, root_name: str) -> list[tuple[Any, list[str]]]:
+    """Recursively collect (leaf_node, tree_path) pairs under ``root``.
+
+    Walks the tree: container subnets are descended into; leaf subnets are
+    harvested; empty subnets are skipped. The root itself is never harvested
+    (it's the entry point).
+    """
+    leaves: list[tuple[Any, list[str]]] = []
+
+    def walk(node, in_root_subtree: bool):
+        try:
+            kids = [c for c in node.children() if not _is_ignored_node(c)]
+        except Exception:
+            return
+        for c in kids:
+            try:
+                t = c.type().name()
+            except Exception:
+                continue
+            if t not in _CONTAINER_TYPES:
+                continue  # not a subnet at all — skip
+            if _is_leaf_subnet(c):
+                path = _tree_path_from(root_name, c)
+                leaves.append((c, path))
+            elif _is_container_subnet(c):
+                walk(c, in_root_subtree=True)
+            # else: empty subnet — skip silently
+
+    walk(root, in_root_subtree=False)
+    return leaves
+
+
+def _make_recipe_id(tree_path: list[str]) -> str:
+    """Build a non-colliding recipe_id from the category path + leaf name.
+
+    ['sopnet1', 'Procedural_Modeling'] → 'Procedural_Modeling.Base_Sweep' would
+    be wrong (leaf name is in tree_path). Actually tree_path EXCLUDES the leaf,
+    so id = '.'.join(tree_path[1:]) + '.' + leaf_name. But tree_path INCLUDES
+    the root (sopnet1) which we drop for readability.
+    """
+    # tree_path = [root_name, cat1, cat2, ...] (leaf excluded, root included)
+    # id = cat1.cat2.<leaf>
+    if not tree_path:
+        return "unnamed"
+    # Drop the root (first element = the entry node like 'sopnet1').
+    parts = tree_path[1:]
+    if not parts:
+        # tree_path had only the root → leaf IS the root child path; use last
+        return tree_path[-1]
+    return ".".join(parts)
+
+
+def _auto_notes(leaf_node, tree_path: list[str], recipe_id: str) -> str:
+    """Generate default Notes for a leaf with no user-written Notes.
+
+    Keeps capture_tree unblocked while still producing searchable metadata.
+    Format: tree path + leaf name + the inner node types, so recipe_list can
+    match on both category and node vocabulary.
+    """
+    leaf_name = leaf_node.name()
+    try:
+        kids = [c for c in leaf_node.children() if not _is_ignored_node(c)]
+        types = []
+        for c in kids:
+            try:
+                types.append(c.type().name())
+            except Exception:
+                pass
+    except Exception:
+        types = []
+    type_str = ", ".join(types) if types else "(no nodes)"
+    cat_str = " / ".join(tree_path[1:]) if len(tree_path) > 1 else leaf_name
+    return (f"功能：{cat_str} / {leaf_name}（节点: {type_str}）\n"
+            f"（auto-generated notes — 请手动补充用途/重要参数）")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Capture
+# ─────────────────────────────────────────────────────────────────────────────
+
+def recipe_capture(subnet_path: str, recipe_id: str | None = None,
+                   tree_path: list[str] | None = None,
+                   allow_auto_notes: bool = False) -> dict[str, Any]:
     """Capture a subnet's internal network into a recipe JSON.
 
-    Reads the subnet at ``subnet_path``, validates its Notes, walks children,
-    classifies params, and writes ``recipes/<id>/recipe.json`` + rebuilds the
-    index. Returns ``{success, recipe_id, warnings}`` on success or
+    Reads the subnet at ``subnet_path``, walks children, classifies params,
+    extracts VEX snippets (if any wrangle nodes), and writes
+    ``recipes/<id>/recipe.json`` + rebuilds the index.
+
+    ``recipe_id`` overrides the id (defaults to the subnet's name). Used by
+    recipe_capture_tree to give each leaf a tree-path-based unique id.
+    ``tree_path`` is stored verbatim as the category breadcrumb.
+    ``allow_auto_notes``: when True, an empty/placeholder Notes is replaced
+    with auto-generated metadata instead of failing capture (used by
+    capture_tree so a fresh tree can be ingested wholesale).
+
+    Returns ``{success, recipe_id, warnings}`` on success or
     ``{success: False, error}`` on failure.
     """
     hou = _hou()
@@ -457,24 +739,32 @@ def recipe_capture(subnet_path: str) -> dict[str, Any]:
         return {"success": False, "error": f"subnet not found: {subnet_path}"}
 
     notes = subnet.comment() or ""
+    auto_notes_used = False
     ok, reason = validate_notes(notes)
     if not ok:
-        return {"success": False, "error": reason}
+        if not allow_auto_notes:
+            return {"success": False, "error": reason}
+        # Auto-generate so capture_tree isn't blocked by empty Notes.
+        notes = _auto_notes(subnet, tree_path or [], recipe_id or subnet.name())
+        auto_notes_used = True
 
     parsed = parse_notes(notes)
-    # marked_set applies subnet-wide: any inner parm named in "重要参数" is
-    # recorded even if at default.
     marked_set = set(parsed["marked"])
-    recipe_id = subnet.name()
+    rid = recipe_id or subnet.name()
     all_warnings: list[str] = []
+    if auto_notes_used:
+        all_warnings.append("auto-generated notes (subnet Notes was empty/placeholder)")
 
     manifest = _load_manifest()
     manifest_available = manifest is not None
 
     raw_nodes = _collect_subnet_nodes(subnet)
     recipe_nodes: list[dict[str, Any]] = []
+    # Map node-name → live hou node, for VEX snippet extraction after the loop.
+    hou_nodes: dict[str, Any] = {}
     for rn in raw_nodes:
         child = hou.node(f"{subnet_path}/{rn['name']}")
+        hou_nodes[rn["name"]] = child
         defaults = _manifest_defaults(rn["type"], manifest)
         changed, marked, expressions, warns = _classify_parms(
             child, rn["type"], defaults, marked_set, manifest_available)
@@ -488,24 +778,28 @@ def recipe_capture(subnet_path: str) -> dict[str, Any]:
             "expressions": expressions,
         })
 
+    # VEX snippets: pull from every wrangle node with a non-empty snippet.
+    vex_snippets = _extract_vex_snippets(recipe_nodes, hou_nodes)
+    kind = "vex" if vex_snippets else "network"
+
     exposed, exp_warns = _capture_exposed_parms(subnet, marked_set)
     all_warnings.extend(exp_warns)
     inputs, outputs = _capture_io_ports(subnet)
 
-    # category: infer from first line of function, or "uncategorized".
-    func_first = (parsed["function"].splitlines() or [""])[0] if isinstance(
-        parsed["function"], str) else ""
-    category = _infer_category(parsed["function"], recipe_id)
+    category = _infer_category(parsed["function"], rid)
 
     recipe = {
         "schema_version": SCHEMA_VERSION,
-        "id": recipe_id,
-        "name": recipe_id,
+        "id": rid,
+        "name": subnet.name(),
         "notes": notes,
         "function": parsed["function"],
         "use_case": parsed["use_case"],
         "avoid": parsed["avoid"],
         "category": category,
+        "kind": kind,
+        "tree_path": tree_path or [],
+        "vex_snippets": vex_snippets,
         "nodes": recipe_nodes,
         "exposed_parms": exposed,
         "inputs": inputs,
@@ -514,17 +808,67 @@ def recipe_capture(subnet_path: str) -> dict[str, Any]:
         "generator_version": GENERATOR_VERSION,
     }
 
-    d = recipe_dir(recipe_id)
+    d = recipe_dir(rid)
     os.makedirs(d, exist_ok=True)
-    _atomic_write_json(recipe_json_path(recipe_id), recipe)
+    _atomic_write_json(recipe_json_path(rid), recipe)
     rebuild_index()
 
     return {
         "success": True,
-        "recipe_id": recipe_id,
+        "recipe_id": rid,
         "node_count": len(recipe_nodes),
         "exposed_parm_count": len(exposed),
+        "kind": kind,
         "warnings": all_warnings,
+    }
+
+
+def recipe_capture_tree(root_path: str) -> dict[str, Any]:
+    """Recursively capture every leaf subnet under ``root_path``.
+
+    Walks the tree: container subnets are descended into; leaf subnets (those
+    whose non-ignored children include real SOP nodes) are captured. Each leaf
+    gets a tree-path-based recipe_id (e.g. 'Procedural_Modeling.Base_Sweep') so
+    same-named leaves in different branches never collide. Empty Notes are
+    auto-filled rather than blocking capture.
+
+    Returns ``{success, captured_count, skipped_count, captured[], skipped[]}``.
+    """
+    hou = _hou()
+    if hou is None:
+        return {"success": False, "error": "Houdini (hou module) unavailable."}
+
+    root = hou.node(root_path)
+    if root is None:
+        return {"success": False, "error": f"root not found: {root_path}"}
+
+    root_name = root.name()
+    leaves = _find_leaf_subnets(root, root_name)
+
+    captured: list[dict] = []
+    skipped: list[dict] = []
+    for leaf_node, leaf_path in leaves:
+        # leaf_path includes the root name as first element; leaf name is the
+        # last segment of the leaf's own path. Build recipe_id from the
+        # category portion (root dropped) + leaf name.
+        leaf_name = leaf_node.name()
+        rid = _make_recipe_id(leaf_path) + "." + leaf_name if leaf_path[1:] else leaf_name
+        result = recipe_capture(
+            leaf_node.path(), recipe_id=rid, tree_path=leaf_path,
+            allow_auto_notes=True)
+        if result.get("success"):
+            captured.append(result)
+        else:
+            skipped.append({"recipe_id": rid, "path": leaf_node.path(),
+                            "error": result.get("error", "unknown")})
+
+    return {
+        "success": True,
+        "root": root_path,
+        "captured_count": len(captured),
+        "skipped_count": len(skipped),
+        "captured": captured,
+        "skipped": skipped,
     }
 
 
@@ -566,8 +910,11 @@ def rebuild_index() -> dict[str, Any]:
         entries.append({
             "id": rj["id"],
             "category": rj.get("category", "misc"),
+            "kind": rj.get("kind", "network"),
             "function": rj.get("function", ""),
             "avoid": rj.get("avoid", ""),
+            "tree_path": rj.get("tree_path", []),
+            "vex_snippet_count": len(rj.get("vex_snippets", [])),
             "node_count": len(rj.get("nodes", [])),
             "inputs": len(rj.get("inputs", [])),
             "outputs": len(rj.get("outputs", [])),
@@ -584,12 +931,13 @@ def rebuild_index() -> dict[str, Any]:
     return index
 
 
-def recipe_list(query: str = "", category: str = "") -> dict[str, Any]:
-    """Query the recipe index by keyword and/or category.
+def recipe_list(query: str = "", category: str = "", kind: str = "") -> dict[str, Any]:
+    """Query the recipe index by keyword and/or category and/or kind.
 
     Pure file I/O — safe to call without Houdini. Matching is case-insensitive
-    substring over the function text + id + category. An empty query returns
-    all entries.
+    substring over the function text + id + category + tree_path components +
+    exposed parm names. An empty query returns all entries.
+    ``kind`` filters to 'network' or 'vex'.
     """
     index = _safe_read_json(index_path())
     if not isinstance(index, dict):
@@ -599,25 +947,33 @@ def recipe_list(query: str = "", category: str = "") -> dict[str, Any]:
 
     q = (query or "").strip().lower()
     cat = (category or "").strip().lower()
+    knd = (kind or "").strip().lower()
     matches = []
     for e in entries:
         if cat and e.get("category", "").lower() != cat:
             continue
+        if knd and e.get("kind", "network").lower() != knd:
+            continue
         if q:
             haystack = " ".join([
                 e.get("id", ""), e.get("function", ""),
-                e.get("category", ""), " ".join(e.get("exposed_parms", [])),
+                e.get("category", ""), e.get("kind", ""),
+                " ".join(e.get("tree_path", [])),
+                " ".join(e.get("exposed_parms", [])),
             ]).lower()
             if q not in haystack:
                 continue
         matches.append({
             "id": e["id"],
             "category": e.get("category", "misc"),
+            "kind": e.get("kind", "network"),
             "summary": e.get("function", "").splitlines()[0]
                        if e.get("function") else "",
+            "tree_path": e.get("tree_path", []),
             "inputs": e.get("inputs", 0),
             "outputs": e.get("outputs", 0),
             "exposed_parms": e.get("exposed_parms", []),
+            "vex_snippet_count": e.get("vex_snippet_count", 0),
             "node_count": e.get("node_count", 0),
         })
     return {
@@ -746,6 +1102,22 @@ def recipe_rebuild(recipe_id: str, parent_path: str,
                 missing.append(f"{pname}(expr)")
         if missing:
             warnings.append(f"{spec['name']}: parm not found: {missing}")
+
+    # Restore VEX snippets (snippet + run-over class) on wrangle nodes. These
+    # were deliberately excluded from changed_params during capture so the code
+    # stays searchable; here we write them back to the rebuilt nodes.
+    for snip in recipe_data.get("vex_snippets", []):
+        node_name = snip.get("node")
+        code = snip.get("code", "")
+        runover = snip.get("runover")
+        target = created.get(node_name)
+        if target is None:
+            warnings.append(f"vex snippet: node '{node_name}' missing")
+            continue
+        if not _set_parm_safe(target, "snippet", code):
+            warnings.append(f"{node_name}.snippet: parm missing")
+        if runover is not None:
+            _set_parm_safe(target, _WRANGLE_RUNOVER_PARM, runover)
 
     # Wire inputs (now that all inner nodes exist).
     for spec in ordered:

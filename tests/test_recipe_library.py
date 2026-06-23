@@ -292,5 +292,270 @@ class TestIndexQueries(unittest.TestCase):
         self.assertFalse(r["success"])
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# New schema: kind / tree_path / vex_snippets / output-node filtering /
+# recursive tree capture. These all use the same hou-mock fixture as above.
+# ─────────────────────────────────────────────────────────────────────────────
+class TestVexCapture(unittest.TestCase):
+    """Wrangle nodes: snippet extracted into vex_snippets[] (not changed_params),
+    runover recorded alongside. kind flips to 'vex' when a wrangle is present."""
+
+    def setUp(self):
+        self._tmp = _fresh_recipes_dir()
+        self._orig_root = rl._project_root
+        rl._project_root = lambda: self._tmp  # type: ignore
+        from tests.mock_hou import MockNode
+        self._prev_hou = sys.modules.get("hou")
+        self._prev_hou_ref = MockNode._hou_ref
+        global _mock_hou
+        _mock_hou = create_mock_hou()
+        sys.modules["hou"] = _mock_hou
+
+    def tearDown(self):
+        rl._project_root = self._orig_root  # type: ignore
+        from tests.mock_hou import MockNode
+        MockNode._hou_ref = self._prev_hou_ref
+        sys.modules["hou"] = self._prev_hou
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def _make_subnet(self, name, notes, children):
+        parent = sys.modules["hou"].node("/obj")
+        subnet = parent.createNode("subnet", name)
+        subnet.setComment(notes)
+        MockParm = __import__("tests.mock_hou", fromlist=["MockParm"]).MockParm
+        for spec in children:
+            child = subnet.createNode(spec["type"], spec["name"])
+            for pname, val in spec.get("changed", {}).items():
+                child._parms[pname] = MockParm(pname, val)
+        return subnet
+
+    def test_wrangle_snippet_goes_to_vex_snippets(self):
+        subnet = self._make_subnet("vex_demo", "功能：协方差矩阵", [
+            {"name": "wr1", "type": "attribwrangle",
+             "changed": {"snippet": "v@P += 0;", "class": 1}},
+        ])
+        r = rl.recipe_capture(subnet.path())
+        self.assertTrue(r["success"], r.get("error"))
+        rj = json.load(open(os.path.join(self._tmp, "recipes", "vex_demo", "recipe.json"),
+                            encoding="utf-8"))
+        # snippet must NOT pollute changed_params
+        wr = next(n for n in rj["nodes"] if n["name"] == "wr1")
+        self.assertNotIn("snippet", wr.get("changed_params", {}))
+        # snippet must appear in vex_snippets with runover
+        self.assertTrue(any("v@P" in s["code"] for s in rj.get("vex_snippets", [])))
+        snip = rj["vex_snippets"][0]
+        self.assertIn("runover", snip)
+        # kind must be 'vex'
+        self.assertEqual(rj["kind"], "vex")
+
+    def test_network_kind_when_no_wrangle(self):
+        subnet = self._make_subnet("net_demo", "功能：管材", [
+            {"name": "c1", "type": "null", "changed": {}},
+        ])
+        r = rl.recipe_capture(subnet.path())
+        rj = json.load(open(os.path.join(self._tmp, "recipes", "net_demo", "recipe.json"),
+                            encoding="utf-8"))
+        self.assertEqual(rj["kind"], "network")
+        self.assertEqual(rj.get("vex_snippets"), [])
+
+    def test_rebuild_restores_snippet(self):
+        subnet = self._make_subnet("vex_reb", "功能：测试", [
+            {"name": "wr1", "type": "attribwrangle",
+             "changed": {"snippet": "v@P.x = 1;", "class": 0}},
+        ])
+        rl.recipe_capture(subnet.path())
+        r = rl.recipe_rebuild("vex_reb", "/obj", name="vex_reb_inst")
+        self.assertTrue(r["success"], r.get("verify", {}).get("mismatches"))
+        rebuilt = sys.modules["hou"].node("/obj/vex_reb_inst")
+        wr = rebuilt.children()[0]
+        self.assertEqual(wr._parms["snippet"].eval(), "v@P.x = 1;")
+        self.assertEqual(wr._parms["class"].eval(), 0)
+
+
+class TestOutputNodeFiltering(unittest.TestCase):
+    """output/stashed_geo nodes must NOT be captured as recipe nodes."""
+
+    def setUp(self):
+        self._tmp = _fresh_recipes_dir()
+        self._orig_root = rl._project_root
+        rl._project_root = lambda: self._tmp  # type: ignore
+        from tests.mock_hou import MockNode
+        self._prev_hou = sys.modules.get("hou")
+        self._prev_hou_ref = MockNode._hou_ref
+        global _mock_hou
+        _mock_hou = create_mock_hou()
+        sys.modules["hou"] = _mock_hou
+
+    def tearDown(self):
+        rl._project_root = self._orig_root  # type: ignore
+        from tests.mock_hou import MockNode
+        MockNode._hou_ref = self._prev_hou_ref
+        sys.modules["hou"] = self._prev_hou
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def test_output_node_not_captured(self):
+        parent = sys.modules["hou"].node("/obj")
+        subnet = parent.createNode("subnet", "with_out")
+        subnet.setComment("功能：测试输出节点过滤")
+        c1 = subnet.createNode("null", "real1")
+        out = subnet.createNode("output", "output0")
+        out.setInput(0, c1)
+        r = rl.recipe_capture(subnet.path())
+        self.assertTrue(r["success"])
+        self.assertEqual(r["node_count"], 1)  # only real1, not output0
+        rj = json.load(open(os.path.join(self._tmp, "recipes", "with_out", "recipe.json"),
+                            encoding="utf-8"))
+        names = {n["name"] for n in rj["nodes"]}
+        self.assertEqual(names, {"real1"})
+
+
+class TestTreeCapture(unittest.TestCase):
+    """recipe_capture_tree: recursive leaf capture with tree_path-based id."""
+
+    def setUp(self):
+        self._tmp = _fresh_recipes_dir()
+        self._orig_root = rl._project_root
+        rl._project_root = lambda: self._tmp  # type: ignore
+        from tests.mock_hou import MockNode
+        self._prev_hou = sys.modules.get("hou")
+        self._prev_hou_ref = MockNode._hou_ref
+        global _mock_hou
+        _mock_hou = create_mock_hou()
+        sys.modules["hou"] = _mock_hou
+
+    def tearDown(self):
+        rl._project_root = self._orig_root  # type: ignore
+        from tests.mock_hou import MockNode
+        MockNode._hou_ref = self._prev_hou_ref
+        sys.modules["hou"] = self._prev_hou
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def _build_tree(self):
+        """Build a 2-level tree mirroring the user's structure:
+        /obj/sopnet1/Procedural_Modeling/Base_Sweep  (leaf: curve+circle+sweep)
+        /obj/sopnet1/Sim/RBD/Voronoi_Fracture         (leaf: box+scatter+voro)
+        """
+        hou = sys.modules["hou"]
+        obj = hou.node("/obj")
+        sopnet = obj.createNode("subnet", "sopnet1")
+        pm = sopnet.createNode("subnet", "Procedural_Modeling")
+        bs = pm.createNode("subnet", "Base_Sweep")
+        bs.createNode("curve::2.0", "guide_curve")
+        bs.createNode("circle", "profile")
+        sweep = bs.createNode("sweep::2.0", "sweep1")
+        sweep.setInput(0, bs.children()[0])
+        sweep.setInput(1, bs.children()[1])
+        sim = sopnet.createNode("subnet", "Sim")
+        rbd = sim.createNode("subnet", "RBD")
+        voro = rbd.createNode("subnet", "Voronoi_Fracture")
+        box = voro.createNode("box", "box1")
+        scat = voro.createNode("scatter::2.0", "scatter1")
+        scat.setInput(0, box)
+        return sopnet
+
+    def test_capture_tree_finds_all_leaves(self):
+        sopnet = self._build_tree()
+        r = rl.recipe_capture_tree("/obj/sopnet1")
+        self.assertTrue(r["success"])
+        self.assertEqual(r["captured_count"], 2)
+        self.assertEqual(r["skipped_count"], 0)
+        ids = {c["recipe_id"] for c in r["captured"]}
+        self.assertEqual(ids, {"Procedural_Modeling.Base_Sweep",
+                               "Sim.RBD.Voronoi_Fracture"})
+
+    def test_capture_tree_tree_path_stored(self):
+        self._build_tree()
+        rl.recipe_capture_tree("/obj/sopnet1")
+        rj = json.load(open(os.path.join(self._tmp, "recipes",
+                                         "Procedural_Modeling.Base_Sweep", "recipe.json"),
+                            encoding="utf-8"))
+        self.assertEqual(rj["tree_path"], ["sopnet1", "Procedural_Modeling"])
+
+    def test_capture_tree_auto_generates_notes(self):
+        """Empty Notes → auto-generated default, recorded as warning."""
+        self._build_tree()
+        r = rl.recipe_capture_tree("/obj/sopnet1")
+        # every captured recipe should have auto-notes warning
+        for c in r["captured"]:
+            self.assertTrue(any("auto-generated notes" in w.lower()
+                                or "auto" in w.lower() for w in c.get("warnings", [])),
+                            f"no auto-notes warning for {c['recipe_id']}")
+        rj = json.load(open(os.path.join(self._tmp, "recipes",
+                                         "Procedural_Modeling.Base_Sweep", "recipe.json"),
+                            encoding="utf-8"))
+        # generated notes must contain tree path + node types
+        self.assertIn("Base_Sweep", rj["notes"])
+
+    def test_capture_tree_skips_empty_subnet(self):
+        """A subnet with no children at all is neither container nor leaf."""
+        hou = sys.modules["hou"]
+        obj = hou.node("/obj")
+        sopnet = obj.createNode("subnet", "sopnet1")
+        # empty container (no children)
+        sopnet.createNode("subnet", "Empty_Cat")
+        # real leaf
+        pm = sopnet.createNode("subnet", "Procedural_Modeling")
+        bs = pm.createNode("subnet", "Base_Sweep")
+        bs.createNode("null", "n1")
+        r = rl.recipe_capture_tree("/obj/sopnet1")
+        self.assertEqual(r["captured_count"], 1)
+
+    def test_capture_tree_query_by_tree_path(self):
+        self._build_tree()
+        rl.recipe_capture_tree("/obj/sopnet1")
+        # query by category component
+        r = rl.recipe_list(query="Sim")
+        self.assertEqual(r["matched"], 1)
+        self.assertEqual(r["matches"][0]["id"], "Sim.RBD.Voronoi_Fracture")
+
+    def test_capture_tree_does_not_pierce_network_containers(self):
+        """Regression: a leaf subnet containing a *network container* node
+        (popnet/dopnet/sopnet) must be captured as ONE recipe — the network
+        container is part of the recipe's content, NOT a category layer to
+        descend into.
+
+        Real-world failure: in actual Houdini, a popnet node's type().name()
+        returns a value the walker treated as a descendable container, so a
+        leaf like Pop_Force (containing a popnet) was wrongly pierced:
+        Pop_Force was treated as a container and the popnet's internals were
+        captured as a bogus 'Sim.Pop.Pop_Force.popnet1' recipe.
+
+        We simulate BOTH possible real-world type-name shapes by parametrising
+        the popnet node's reported type name, since Houdini network containers
+        may report 'popnet' OR 'subnet' depending on context. The fix must hold
+        for both."""
+        from tests.mock_hou import MockNodeType
+
+        for reported_type in ("popnet", "subnet"):
+            with self.subTest(reported_type=reported_type):
+                hou = create_mock_hou()
+                sys.modules["hou"] = hou
+                # Register popnet under whatever name it reports, so createNode
+                # + type().name() yield `reported_type`.
+                sop_cat = hou.sopNodeTypeCategory()
+                sop_cat._node_types["popnet"] = MockNodeType(
+                    reported_type, "POP Network", "Sop", 4, 0)
+                obj = hou.node("/obj")
+                sopnet = obj.createNode("subnet", "sopnet1")
+                sim = sopnet.createNode("subnet", "Sim")
+                pop = sim.createNode("subnet", "Pop")
+                popforce = pop.createNode("subnet", "Pop_Force")
+                # Pop_Force's direct child is a popnet node; its children are
+                # solver nodes INSIDE popnet, not direct children of Pop_Force.
+                popnet = popforce.createNode("popnet", "popnet1")
+                popnet.createNode("null", "solver_node")
+                r = rl.recipe_capture_tree("/obj/sopnet1")
+                self.assertTrue(r["success"])
+                ids = {c["recipe_id"] for c in r["captured"]}
+                self.assertIn("Sim.Pop.Pop_Force", ids,
+                              f"type={reported_type!r}: missing correct leaf")
+                self.assertNotIn("Sim.Pop.Pop_Force.popnet1", ids,
+                                 f"type={reported_type!r}: pierced into popnet")
+                rj = json.load(open(os.path.join(
+                    self._tmp, "recipes", "Sim.Pop.Pop_Force", "recipe.json"),
+                    encoding="utf-8"))
+                self.assertEqual(rj["tree_path"], ["sopnet1", "Sim", "Pop"])
+
+
 if __name__ == "__main__":
     unittest.main()
