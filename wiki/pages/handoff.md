@@ -2,9 +2,9 @@
 
 > **用途**：让新 Agent 或开发者在 Edini 仓库里快速上手。
 
-**最后更新**：2026-06-23（Recipe Library schema v2：tree capture + VEX + 真实 Houdini 验证）
-**当前阶段**：Recipe Library 核心 + 递归树抓取 + VEX 配方支持已落地，**真实 Houdini 闭环已验证**
-**下一步**：给高价值配方补 Notes → 验证 recipe_rebuild → 实现 Dashboard HDA
+**最后更新**：2026-06-24（recipe_rebuild 4 bug 修复 + 架构清理：harness.py 死代码删除 + edini-context system prompt 更新）
+**当前阶段**：Recipe Library 核心 + 递归树抓取 + VEX 配方 + **recipe_rebuild 真实 Houdini 验证通过** + 旧程序化死代码清理完成
+**下一步**：给高价值配方补 Notes → 实现 Dashboard HDA（scan_tree + Qt 树面板）
 **工作分支**：`master`
 
 ---
@@ -39,17 +39,22 @@
 
 ### 当前状态
 
-- **30 + 2 subtests recipe 测试全绿**（VEX 抓取/还原、output 过滤、递归树、kind、popnet 防穿透回归）
+- **35 recipe 测试全绿**（30 schema v2 + 5 新增回归：dopnet 分类层下钻、multiparm 名字归一化、scalar/list 默认值比较、ramp dict 往返、harness 死代码移除后无回归）。完整套件 **300 passed**。
 - **47 个工具注册**（recipe 5 个 + 共享工具保留）
 - **2 个 skill**（grill-me + recipe-library）
-- **真实 Houdini 闭环已验证**：用户手搭 `/obj/subnet1/sopnet1` 分类树（Procedural_Modeling/Vex/Sim 三大类，6 叶子），`recipe_capture_tree` 一次性成功抓取，kind/tree_path/vex 全部正确。已发现并修复 1 个真实 bug（popnet 网络容器被误当分类层穿透）。
-- **配方库已有 4 个真实配方**（`recipes/` 下）：Procedural_Modeling.Base_Copy / Base_Sweep / Sim.RBD.Voronoi_Fracture / Vex.Covar_Matrix。Pop_Force 因 bug 已删除，待重抓。
+- **recipe_rebuild 真实 Houdini 端到端验证通过**：Base_Sweep（spiral+circle→sweep）重建成功，`verify.ok=True, mismatches=[]`。修复 4 个真实 bug：①dopnet 分类层不下钻（noise_forece 抓不到）②rebuild 用 subnet 容器致 SOP 节点创建失败（改用 geo）③multiparm 实例名 vs manifest 模板名不匹配（heightprofile2pos vs #pos）④Ramp 序列化为字符串 + scalar/list 默认值不等。
+- **架构清理完成（2026-06-24）**：
+  - `harness.py` 4644→**1810 行**（删 2834 行死代码：build_procedural_asset/rebuild_component/build_variant_scatter/validate_recipe_tool 整条 builder 链 + _validate_recipe/_build_*_component/_safe_create_node 等），7 个共享工具 import 不变、功能不变
+  - `edini-context/index.ts` system prompt 从「强制 build_procedural_asset」改为「recipe-library 优先 + 通用几何验证」
+  - `node_utils.py`/`mock_hou.py` 移除过时的 procedural-modeling-bugs.md/build_procedural_asset 引用
+  - 2 个纯 vexlib 手动脚本移到 `_disabled_backup/procedural-modeling/tests/`
+  - commit `ce7431b`（4 bug 修复）+ 后续清理 commit
+- **配方库配方是 Houdini 本地产物**（随 .hip 存，不随 git）—— 新环境需在 Houdini 里重抓。
 
-### 下一步该做什么（换电脑后优先级）
+### 下一步该做什么
 
-1. **重抓 Pop_Force + 给高价值配方补 Notes**（最优先）
-   - 真实 Houdini 里重跑 `recipe_capture_tree("/obj/subnet1/sopnet1")`，确认 Pop_Force 这次作为完整配方被抓
-   - 给 Base_Sweep/Voronoi_Fracture 等常用配方按 `C` 写 `功能：...` + `重要参数：...`，再单独 `recipe_capture` 重抓
+1. **给高价值配方补 Notes**（最优先，需真实 Houdini）
+   - 给 Base_Sweep / noise_forece 等选中 subnet → 按 `C` 写 `功能：...` + `重要参数：...` → `recipe_capture` 重抓
    - Notes 是搜索质量的根本——auto-generated 占位文本搜索效果差
 
 2. **验证 recipe_rebuild**（补完 Notes 后）

@@ -121,10 +121,8 @@ def _init_copytopoints_attribs(node) -> bool:
     copies every non-transform target-point attribute — which already covers
     ``id`` (and ``variant``). So pressing the button is sufficient.
 
-    Kept in node_utils (not harness) so both creation paths share one
-    implementation: ``node_utils.create_node`` (hand-written network_mode
-    scripts) and ``harness._post_create_init`` (build_procedural_asset /
-    variant_scatter).
+    Kept in node_utils so all node-creation paths share one implementation
+    (``node_utils.create_node`` and the recipe rebuild path).
 
     Best-effort: returns False (never raises) if the button is missing or the
     press fails — the caller already has a usable node; a missing transfer is
@@ -2149,7 +2147,7 @@ def capture_component_detail(
         # the display-set API are H21 UI plumbing that must never abort a
         # capture. (An unguarded viewport.settings() call here previously
         # turned a shading-setup hiccup into a full capture failure at the
-        # "get_viewer" stage — see procedural-modeling-bugs.md Bug 1.)
+        # "get_viewer" stage.)
         try:
             vp_settings = viewport.settings()
             shading_map = {
@@ -2209,7 +2207,7 @@ def capture_component_detail(
             # unpacks (historically raised on a plain list, swallowed by the
             # old bare `except` as the opaque "bbox build failed"). Passing
             # explicit floats sidesteps Vector3 entirely and is the documented
-            # constructor signature. See procedural-modeling-bugs.md Bug 1.
+            # constructor signature.
             try:
                 mn = bnds["min"]
                 mx = bnds["max"]
@@ -2659,8 +2657,8 @@ def verify_orientation(
             # radial axle the assert expects. With the fallback gone there is no
             # estimation path left, so a prim without a baked axis fails
             # outright and points the agent at the fix: the asset must be built
-            # via build_procedural_asset (which bakes edini_world_axis from the
-            # declared construction_axis) or, if the component genuinely has no
+            # by a builder that bakes edini_world_axis from the declared
+            # construction_axis, or, if the component genuinely has no
             # construction axis, the orientation_assert should be removed.
             entry.update({
                 "method": "no_axis",
@@ -2670,11 +2668,10 @@ def verify_orientation(
                     f"{cid} has no edini_world_axis prim attribute. Orientation "
                     f"verification requires a baked construction axis (decision 3 "
                     f"— PCA estimation was removed because it misclassifies "
-                    f"elongated cylinders). Build this asset via "
-                    f"build_procedural_asset (it bakes edini_world_axis from the "
-                    f"declared construction_axis), or remove this "
-                    f"orientation_assert if the component has no meaningful "
-                    f"construction axis."
+                    f"elongated cylinders). Build this asset via a builder that "
+                    f"bakes edini_world_axis from the declared construction_axis, "
+                    f"or remove this orientation_assert if the component has no "
+                    f"meaningful construction axis."
                 ),
             })
             results.append(entry)

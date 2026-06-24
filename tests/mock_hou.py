@@ -1216,7 +1216,7 @@ class MockHou:
 
     # Vector3 / BoundingBox — exposed as hou.Vector3 / hou.BoundingBox so
     # code paths that build bboxes (e.g. capture_component_detail) are
-    # exercisable under the mock. See procedural-modeling-bugs.md Bug 1.
+    # exercisable under the mock.
     Vector3 = MockVector3
     BoundingBox = MockBoundingBox
 

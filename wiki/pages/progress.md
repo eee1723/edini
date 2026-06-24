@@ -1,6 +1,6 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-23 &nbsp;|&nbsp; **架构转向：关闭程序化建模 → 新建 Recipe Library + Dashboard HDA** 🚧 &nbsp;|&nbsp; 进展：Recipe Library schema v2 落地 + 真实 Houdini 闭环已验证
+> 最后更新：2026-06-24 &nbsp;|&nbsp; **架构转向：关闭程序化建模 → Recipe Library（recipe_rebuild 真实验证通过）+ 旧死代码清理完成** 🚧 &nbsp;|&nbsp; 进展：35 测试全绿，harness.py 4644→1810 行
 
 ## ⚠️ 架构转向说明（2026-06-23）
 
