@@ -104,35 +104,37 @@ class RecipeManagerWindow(QtWidgets.QMainWindow):
         tb = QtWidgets.QToolBar("main")
         tb.setMovable(False)
         tb.setIconSize(QtCore.QSize(16, 16))
+        # Show text on tool buttons (emoji icons don't render reliably across
+        # platforms; the Chinese labels are the primary identifier).
+        tb.setToolButtonStyle(QtCore.Qt.ToolButtonTextOnly)
         self.addToolBar(QtCore.Qt.TopToolBarArea, tb)
 
-        self.act_scan = QtWidgets.QAction("⟳ 扫描刷新", self)
+        self.act_scan = QtGui.QAction("扫描刷新", self)
         self.act_scan.setToolTip("重新扫描配方树")
         tb.addAction(self.act_scan)
 
-        tb.addWidget(QtWidgets.QLabel("  根节点: "))
+        tb.addWidget(QtWidgets.QLabel(" 根节点: "))
         self.input_root = QtWidgets.QLineEdit(self._root_path)
         self.input_root.setFixedWidth(240)
         tb.addWidget(self.input_root)
 
-        self.act_set_root = QtWidgets.QAction("应用", self)
+        self.act_set_root = QtGui.QAction("应用", self)
         tb.addAction(self.act_set_root)
 
         tb.addSeparator()
-        tb.addWidget(QtWidgets.QLabel("  搜索: "))
+        tb.addWidget(QtWidgets.QLabel(" 搜索: "))
         self.input_search = QtWidgets.QLineEdit()
         self.input_search.setPlaceholderText("过滤配方...")
         self.input_search.setFixedWidth(160)
         tb.addWidget(self.input_search)
 
-        body = tb.widgetForAction(self.act_set_root)
         tb.addSeparator()
-        self.act_capture_sel = QtWidgets.QAction("📥 捕获选中", self)
+        self.act_capture_sel = QtGui.QAction("捕获选中", self)
         self.act_capture_sel.setToolTip("捕获当前选中的 subnet 为配方")
         tb.addAction(self.act_capture_sel)
-        self.act_new_cat = QtWidgets.QAction("＋ 新建分类", self)
+        self.act_new_cat = QtGui.QAction("新建分类", self)
         tb.addAction(self.act_new_cat)
-        self.act_create_hda = QtWidgets.QAction("🏗 建主 HDA", self)
+        self.act_create_hda = QtGui.QAction("建主 HDA", self)
         self.act_create_hda.setToolTip("一键创建 edini_recipe_manager HDA")
         tb.addAction(self.act_create_hda)
 
@@ -303,7 +305,8 @@ class RecipeManagerWindow(QtWidgets.QMainWindow):
 
     def _make_tree_item(self, node_dict: dict, is_root=False) -> QtWidgets.QTreeWidgetItem:
         ntype = node_dict.get("type", "ignored")
-        icon = "📦" if is_root else ("📁" if ntype == "container" else "📄")
+        # ASCII markers (emoji rendering is unreliable in Houdini's Qt build).
+        icon = "[HDA]" if is_root else ("[+]" if ntype == "container" else "[*]")
         name = node_dict.get("name", "?")
         # Search filter: hide non-matching leaves by greying (we keep them so
         # the tree structure stays intact, but dim them).
