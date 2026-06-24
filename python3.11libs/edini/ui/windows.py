@@ -8,6 +8,7 @@ except Exception:
 
 _main_window = None
 _settings_dialog = None
+_recipe_manager_window = None
 
 
 def _main_parent():
@@ -51,3 +52,26 @@ def open_settings():
     _settings_dialog.raise_()
     _settings_dialog.activateWindow()
     return _settings_dialog
+
+
+def open_recipe_manager(toggle=False):
+    """Open the Recipe Manager dashboard (singleton floating window)."""
+    global _recipe_manager_window
+    if _recipe_manager_window is None:
+        from edini.ui.recipe_manager_window import RecipeManagerWindow
+        _recipe_manager_window = RecipeManagerWindow(_main_parent())
+
+    if toggle:
+        if _recipe_manager_window.isMinimized():
+            _recipe_manager_window.showNormal()
+            _recipe_manager_window.raise_()
+            _recipe_manager_window.activateWindow()
+            return _recipe_manager_window
+        if _recipe_manager_window.isVisible() and _recipe_manager_window.isActiveWindow():
+            _recipe_manager_window.showMinimized()
+            return _recipe_manager_window
+
+    _recipe_manager_window.showNormal()
+    _recipe_manager_window.raise_()
+    _recipe_manager_window.activateWindow()
+    return _recipe_manager_window

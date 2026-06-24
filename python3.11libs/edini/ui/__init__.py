@@ -6,4 +6,8 @@ def open_settings(**kwargs):
     from edini.ui.windows import open_settings as _open
     return _open(**kwargs)
 
-__all__ = ["open_chat_window", "open_settings"]
+def open_recipe_manager(**kwargs):
+    from edini.ui.windows import open_recipe_manager as _open
+    return _open(**kwargs)
+
+__all__ = ["open_chat_window", "open_settings", "open_recipe_manager"]

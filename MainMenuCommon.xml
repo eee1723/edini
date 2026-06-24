@@ -10,6 +10,13 @@ from edini.ui import open_chat_window
 open_chat_window()
         ]]></scriptCode>
       </scriptItem>
+      <scriptItem id="edini_open_recipe_manager">
+        <label>Open Recipe Manager (Alt+Shift+R)</label>
+        <scriptCode><![CDATA[
+from edini.ui import open_recipe_manager
+open_recipe_manager()
+        ]]></scriptCode>
+      </scriptItem>
       <separatorItem/>
       <scriptItem id="edini_settings">
         <label>Settings</label>

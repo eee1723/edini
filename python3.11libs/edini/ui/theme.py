@@ -101,6 +101,21 @@ QListWidget     {{ background-color:#0a0a10; border:1px solid #141420; border-ra
 QListWidget::item {{ padding:8px 12px; border-bottom:1px solid #101018; }}
 QListWidget::item:selected {{ background-color:rgba(0,188,212,0.10); color:{a}; border-left:2px solid {a}; padding-left:10px; }}
 QListWidget::item:hover {{ background-color:#141420; }}
+QTreeWidget     {{ background-color:#0a0a10; border:1px solid #141420; border-radius:4px; color:#9ea2aa; font-size:{fs(12)}; outline:none; }}
+QTreeWidget::item {{ padding:4px 6px; border-bottom:1px solid #101018; }}
+QTreeWidget::item:selected {{ background-color:rgba(0,188,212,0.10); color:{a}; border-left:2px solid {a}; }}
+QTreeWidget::item:hover {{ background-color:#141420; }}
+QTreeView::branch {{ background-color:#0a0a10; }}
+QHeaderView     {{ background-color:#0a0a10; border:none; }}
+QHeaderView::section {{ background-color:#101018; color:#6a6e76; padding:4px 8px; border:none; border-right:1px solid #141420; font-size:{fs(11)}; }}
+QTableWidget    {{ background-color:#0a0a10; border:1px solid #141420; border-radius:4px; color:#9ea2aa; font-size:{fs(12)}; gridline-color:#101018; outline:none; }}
+QTableWidget::item {{ padding:3px 6px; }}
+QTableWidget::item:selected {{ background-color:rgba(0,188,212,0.10); color:{a}; }}
+QGroupBox      {{ color:#8a8f98; border:1px solid #1e1e2c; border-radius:6px; margin-top:10px; padding-top:8px; font-size:{fs(11)}; }}
+QGroupBox::title {{ subcontrol-origin:margin; left:10px; padding:0 4px; color:#6a6e76; }}
+QSlider::groove:horizontal {{ background:#10101a; height:4px; border-radius:2px; }}
+QSlider::handle:horizontal {{ background:{a}; width:14px; margin:-6px 0; border-radius:7px; }}
+QSlider::handle:horizontal:hover {{ background:{_lighter(a,0.3)}; }}
 QProgressBar    {{ background-color:#0e0e18; border:1px solid #1a1a28; border-radius:3px; text-align:center; color:#c8ccd4; font-size:{fs(10)}; height:12px; }}
 QProgressBar::chunk {{ background-color:{a}; border-radius:2px; }}
 QTabWidget::pane {{ border:1px solid #1e1e2c; background-color:#0c0c14; top:-1px; }}

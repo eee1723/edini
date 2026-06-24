@@ -174,4 +174,57 @@ export const recipeRebuild = {
   },
 };
 
-export const recipeTools = [recipeList, recipeRead, recipeCapture, recipeCaptureTree, recipeRebuild];
+export const recipeTreeScan = {
+  name: "recipe_tree_scan",
+  label: "Scan Recipe Tree",
+  description:
+    "Read-only scan of a subnet tree (the recipe manager HDA or any root), returning a nested " +
+    "structure of containers and leaf recipes WITHOUT writing any files. Use this to browse what " +
+    "recipes exist in the live Houdini scene before deciding which to capture/rebuild.",
+  promptSnippet: "Browse the live recipe tree without capturing",
+  parameters: Type.Object({
+    root_path: Type.String({ description: "Root node path to scan, e.g. /obj/edini_recipe_manager" }),
+  }),
+  async execute(_toolCallId: string, params: { root_path: string }) {
+    return forwardTool("recipe_tree_scan", params);
+  },
+};
+
+export const recipeManagerCreate = {
+  name: "recipe_manager_create",
+  label: "Create Recipe Manager HDA",
+  description:
+    "Create the main edini_recipe_manager HDA (unlocked contents) with an initial procedural_modeling " +
+    "category container. Call once to bootstrap the recipe library structure. The HDA holds the " +
+    "subnet recipe tree that the dashboard panel and recipe tools operate on.",
+  promptSnippet: "Create the recipe manager HDA",
+  parameters: Type.Object({
+    parent_path: Type.Optional(Type.String({ description: "Where to create it (default /obj)" })),
+    name: Type.Optional(Type.String({ description: "HDA node name (default edini_recipe_manager)" })),
+  }),
+  async execute(_toolCallId: string, params: { parent_path?: string; name?: string }) {
+    return forwardTool("recipe_manager_create", params);
+  },
+};
+
+export const recipeSetNotes = {
+  name: "recipe_set_notes",
+  label: "Set Recipe Notes",
+  description:
+    "Write Notes (comment) back to a recipe subnet node, after validating non-empty/non-placeholder. " +
+    "Notes is the recipe's metadata source (function / important params / avoid). " +
+    "Use after editing a subnet's Notes in the dashboard to persist it.",
+  promptSnippet: "Write validated Notes to a recipe subnet",
+  parameters: Type.Object({
+    node_path: Type.String({ description: "Full path of the subnet node" }),
+    notes: Type.String({ description: "The Notes text to write" }),
+  }),
+  async execute(_toolCallId: string, params: { node_path: string; notes: string }) {
+    return forwardTool("recipe_set_notes", params);
+  },
+};
+
+export const recipeTools = [
+  recipeList, recipeRead, recipeCapture, recipeCaptureTree, recipeRebuild,
+  recipeTreeScan, recipeManagerCreate, recipeSetNotes,
+];

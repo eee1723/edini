@@ -36,6 +36,9 @@ from edini.recipe_library import (
     recipe_capture,
     recipe_rebuild,
     recipe_capture_tree,
+    scan_recipe_tree,
+    create_recipe_manager,
+    set_node_notes,
 )
 
 # NOTE: The procedural-modeling pipeline (build_procedural_asset,
@@ -240,6 +243,13 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
         name=kw.get("name"),
         overrides=kw.get("overrides"),
     ),
+    "recipe_tree_scan": lambda **kw: scan_recipe_tree(kw["root_path"]),
+    "recipe_manager_create": lambda **kw: create_recipe_manager(
+        kw.get("parent_path", "/obj"),
+        kw.get("name", "edini_recipe_manager"),
+    ),
+    "recipe_set_notes": lambda **kw: set_node_notes(
+        kw["node_path"], kw["notes"]),
 }
 
 # Backward-compatibility tool aliases (pre-Task-7 rename).
