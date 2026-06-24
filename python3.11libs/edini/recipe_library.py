@@ -63,6 +63,43 @@ _CONTAINER_TYPES = {"subnet", "geo"}
 _NETWORK_CONTAINER_TYPES = {"popnet", "dopnet", "sopnet", "ropnet", "copnet",
                             "chopnet", "driver", "shop"}
 
+# Node-type-name substrings that indicate SOP-context geometry work. A recipe
+# whose nodes match any of these must be rebuilt inside a `geo` (Geometry)
+# container, NOT a bare `subnet` — SOP nodes (spiral, sweep, circle, ...) can
+# only be created in a Geometry's SOP context. Stripping a trailing ::version
+# (sweep::2.0 → sweep) before matching.
+_SOP_NODE_HINTS = (
+    "spiral", "sweep", "circle", "curve", "box", "sphere", "grid", "tube",
+    "torus", "polyextrude", "polywire", "polypatch", "polybevel",
+    "attribwrangle", "pointwrangle", "primwrangle", "detailwrangle",
+    "attribvop", "vop", "copytopoints", "copytopoints::", "scatter",
+    "transform", "blast", "fuse", "peak", "polyreduce", "remesh",
+    "subdivide", "divide", "ray", "project", "boolean", "polybool",
+    "normal", "faceted", "smooth", "vellum", "vdb", "volumerasterize",
+    "filecache", "file", "alembic", "null", "merge", "switch",
+    "groupexpression", "groupfrombbox", "grouprange", "delete",
+    "timeshift", "trail", "resample", "polypath", "ends", "fuse",
+    "measure", "uvunwrap", "uvtexture", "uvspline", "uvflatten",
+    "skin", "loft", "rail", "sweep", "extrude", "revolve",
+    "surfsect", "stitch",
+)
+
+
+def _infer_container_type(nodes: list[dict]) -> str:
+    """Pick the Houdini container type for a rebuild based on node context.
+
+    SOP nodes (geometry generators/modifiers like spiral/sweep/circle) can only
+    be created inside a Geometry (``geo``) container's SOP context, never inside
+    a bare ``subnet`` (Object context). Since most recipes are SOP networks, we
+    return ``geo`` as soon as ANY node looks like SOP work. Only fall back to
+    ``subnet`` for recipes that contain purely non-SOP nodes.
+    """
+    for spec in nodes:
+        t = (spec.get("type", "") or "").split("::", 1)[0].lower()
+        if any(t == h or t.startswith(h.rstrip(":")) for h in _SOP_NODE_HINTS):
+            return "geo"
+    return "subnet"
+
 # Substrings that, if they're the entire (stripped) Notes content, mark it as a
 # placeholder rather than real documentation. Capture refuses these.
 _PLACEHOLDER_NOTES = {
@@ -240,9 +277,20 @@ def _manifest_defaults(node_type: str, manifest: dict | None) -> dict[str, Any]:
 
 
 def _values_equal(a: Any, b: Any) -> bool:
-    """Loose equality for default comparison (float drift, list/tuple)."""
+    """Loose equality for default comparison (float drift, list/tuple, scalar-vs-list).
+
+    The manifest stores numeric defaults as single-element lists (e.g. ``[4]``
+    for an Int parm, ``[3.0]`` for a Float) while ``parm.eval()`` returns bare
+    scalars. Normalize a scalar against a 1-element list/tuple before comparing
+    so a parm at its default isn't wrongly flagged as changed.
+    """
     if a == b:
         return True
+    # Normalize scalar <-> single-element list/tuple (manifest wraps numbers).
+    if isinstance(a, (int, float)) and isinstance(b, (list, tuple)) and len(b) == 1:
+        return _values_equal(a, b[0])
+    if isinstance(b, (int, float)) and isinstance(a, (list, tuple)) and len(a) == 1:
+        return _values_equal(a[0], b)
     # numeric drift
     if isinstance(a, (int, float)) and isinstance(b, (int, float)):
         try:
@@ -255,6 +303,35 @@ def _values_equal(a: Any, b: Any) -> bool:
             return False
         return all(_values_equal(x, y) for x, y in zip(a, b))
     return False
+
+
+import re as _re
+
+_MULTIPARM_INSTANCE_RE = _re.compile(r"^(.+?)(\d+)([A-Za-z_]\w*)?$")
+
+
+def _manifest_lookup(pname: str, manifest_defaults: dict[str, Any]) -> Any:
+    """Look up a parm's default in the manifest, handling multiparm instance names.
+
+    Manifest stores multiparm template names with a literal '#' (e.g.
+    ``heightprofile#pos``), but live nodes report instance names with the
+    instance index in place of '#' (``heightprofile2pos``). So a direct lookup
+    by the live name misses, and the parm is wrongly recorded as 'changed'.
+
+    We try the literal name first; if that misses, we attempt to map the live
+    name back to its template by replacing the first embedded digit-run with '#'
+    and re-querying. Returns the default (which may be None if truly unknown).
+    """
+    default = manifest_defaults.get(pname)
+    if default is not None:
+        return default
+    # Try multiparm normalization: insert '#' for the first digit-run that sits
+    # between two alphabetic parts. 'heightprofile2pos' -> 'heightprofile#pos'.
+    m = _MULTIPARM_INSTANCE_RE.match(pname)
+    if m and m.group(1) and m.group(3):
+        template = f"{m.group(1)}#{m.group(3)}"
+        default = manifest_defaults.get(template)
+    return default
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -271,12 +348,18 @@ def _hou():
 
 
 def _json_safe(value: Any) -> Any:
-    """Coerce a Houdini value (vector/enum) into JSON-serializable form."""
+    """Coerce a Houdini value (vector/enum/ramp) into JSON-serializable form."""
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
+    # hou.Ramp — serialize to a structured dict so it can be restored on rebuild.
+    # Detected by duck type (keys/values/basis/isColor methods) since hou may not
+    # be importable in test environments.
+    if (hasattr(value, "keys") and hasattr(value, "values")
+            and hasattr(value, "basis") and hasattr(value, "isColor")):
+        return _ramp_to_dict(value)
     if isinstance(value, (list, tuple)):
         return [_json_safe(v) for v in value]
-    # Vector3/Vector2/Vector4 — duck-typed by indexing.
+    # Vector3/Vector2/Vector4 — duck-typed by indexing. (Ramp is caught above.)
     if hasattr(value, "__getitem__"):
         try:
             return [_json_safe(value[i]) for i in range(len(value))]
@@ -290,6 +373,77 @@ def _json_safe(value: Any) -> Any:
         except Exception:
             pass
     return str(value)
+
+
+_RAMP_MARKER = "__edini_ramp__"
+
+
+def _ramp_to_dict(ramp) -> dict:
+    """Serialize a hou.Ramp into a JSON-safe dict: keys, values, basis, is_color.
+
+    ``basis`` is the per-segment interpolation type (a hou.rampBasis enum per
+    key). We store its int value so rebuild can reconstruct via hou.Ramp().
+    """
+    try:
+        keys = list(ramp.keys())
+        values = [_json_safe(v) for v in ramp.values()]
+        try:
+            basis = [int(b) for b in ramp.basis()]
+        except Exception:
+            basis = []
+        try:
+            is_color = bool(ramp.isColor())
+        except Exception:
+            is_color = False
+        return {
+            "__type__": _RAMP_MARKER,
+            "keys": keys,
+            "values": values,
+            "basis": basis,
+            "is_color": is_color,
+        }
+    except Exception:
+        return str(ramp)
+
+
+def _dict_to_ramp(data: dict):
+    """Reconstruct a hou.Ramp from a _ramp_to_dict dict. Returns hou.Ramp."""
+    hou = _hou()
+    if hou is None:
+        return None
+    keys = data.get("keys", [])
+    values = data.get("values", [1.0] * len(keys))
+    basis_ints = data.get("basis", [])
+    is_color = data.get("is_color", False)
+    # Normalize values to tuples-of-floats (color ramps → Vector3 per key).
+    if is_color:
+        vals = []
+        for v in values:
+            if isinstance(v, (list, tuple)):
+                vals.append(hou.Vector3(float(v[0]), float(v[1]), float(v[2])))
+            else:
+                vals.append(hou.Vector3(float(v), float(v), float(v)))
+        values = vals
+    else:
+        values = [float(v) for v in values]
+    # Basis: per-key interpolation enum. Default to Linear (1) if unspecified.
+    bases = []
+    for b in (basis_ints or [1] * len(keys)):
+        try:
+            bases.append(hou.rampBasis.Values[b] if hasattr(hou, "rampBasis")
+                         else b)
+        except Exception:
+            bases.append(b)
+    if not bases:
+        bases = [1] * len(keys)
+    try:
+        return hou.Ramp(bases, keys, values)
+    except Exception:
+        return None
+
+
+def _is_ramp_dict(value: Any) -> bool:
+    return isinstance(value, dict) and value.get("__type__") == _RAMP_MARKER
 
 
 def _collect_subnet_nodes(subnet) -> list[dict[str, Any]]:
@@ -397,7 +551,7 @@ def _classify_parms(node, node_type: str, manifest_defaults: dict[str, Any],
             marked[pname] = live_safe
 
         if manifest_available:
-            default = manifest_defaults.get(pname)
+            default = _manifest_lookup(pname, manifest_defaults)
             if default is not None and not _values_equal(live_safe, default):
                 changed[pname] = live_safe
             elif default is None:
@@ -602,6 +756,35 @@ def _is_leaf_subnet(node) -> bool:
     return False
 
 
+def _is_container_network(node) -> bool:
+    """A network container (dopnet/popnet/sopnet...) is a *category layer* iff
+    all its non-ignored children are themselves organizational (subnet/geo/
+    another container network) with NO work nodes (no SOP/DOP/VOP etc.).
+
+    This lets us descend a dopnet that the user used as a taxonomy folder
+    (e.g. /obj/hda/dopnet holding recipe subnets) WITHOUT piercing a dopnet
+    that holds DOP work nodes (which is a leaf's content). The companion
+    _is_leaf_subnet treats a subnet that contains such a work-filled network
+    container as a leaf.
+    """
+    try:
+        kids = [c for c in node.children() if not _is_ignored_node(c)]
+    except Exception:
+        return False
+    if not kids:
+        return False  # empty network — treat as non-category, skip
+    for c in kids:
+        try:
+            t = c.type().name()
+        except Exception:
+            return False
+        # Only organizational types may live in a category-layer network.
+        if t in _CONTAINER_TYPES or t in _NETWORK_CONTAINER_TYPES:
+            continue
+        return False  # any work node → not a pure category layer
+    return True
+
+
 def _tree_path_from(root_name: str, leaf_node) -> list[str]:
     """Walk up from a leaf subnet's PARENT to ``root_name`` (inclusive),
     collecting ancestor names = the category path. The leaf itself is excluded.
@@ -650,8 +833,24 @@ def _find_leaf_subnets(root, root_name: str) -> list[tuple[Any, list[str]]]:
                 t = c.type().name()
             except Exception:
                 continue
+            # Network containers (dopnet/popnet/sopnet...) serve two roles in a
+            # user tree: (1) a CATEGORY LAYER whose children are subnets (the
+            # user organizes recipes under a dopnet the way they would under a
+            # subnet), and (2) a LEAF's CONTENT (a subnet that holds a dopnet
+            # IS the recipe — its dopnet must be captured whole, not pierced).
+            # _is_leaf_subnet already treats a subnet containing a network
+            # container as a leaf, so here we only need to descend network
+            # containers that themselves are pure category layers.
+            if t in _NETWORK_CONTAINER_TYPES:
+                # Descend only if all non-ignored kids are themselves subnets/
+                # containers (category role). If the network container holds
+                # work nodes, it is itself a leaf's content and its parent
+                # subnet (handled by _is_leaf_subnet) is the harvested leaf.
+                if _is_container_network(c):
+                    walk(c, in_root_subtree=True)
+                continue
             if t not in _CONTAINER_TYPES:
-                continue  # not a subnet at all — skip
+                continue  # plain work node — not harvestable, not a category
             if _is_leaf_subnet(c):
                 path = _tree_path_from(root_name, c)
                 leaves.append((c, path))
@@ -1028,12 +1227,23 @@ def _topo_sort(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _set_parm_safe(node, pname: str, value: Any) -> bool:
-    """Set a parm, returning False if the parm doesn't exist."""
+    """Set a parm, returning False if the parm doesn't exist or fails.
+
+    Handles ramp parms: if ``value`` is a serialized ramp dict (from
+    _ramp_to_dict), reconstruct a hou.Ramp and set it via set() — Houdini's
+    parm.set() accepts a hou.Ramp for ramp-type parms.
+    """
     p = node.parm(pname)
     if p is None:
         return False
     try:
-        p.set(value)
+        if _is_ramp_dict(value):
+            ramp = _dict_to_ramp(value)
+            if ramp is None:
+                return False
+            p.set(ramp)
+        else:
+            p.set(value)
         return True
     except Exception:
         return False
@@ -1074,7 +1284,13 @@ def recipe_rebuild(recipe_id: str, parent_path: str,
         return {"success": False, "error": f"parent not found: {parent_path}"}
 
     container_name = name or f"{recipe_id}_1"
-    container = parent.createNode("subnet", container_name)
+    container_type = _infer_container_type(recipe_data.get("nodes", []))
+    try:
+        container = parent.createNode(container_type, container_name)
+    except Exception:
+        # Fallback: if the inferred container type fails in this parent's
+        # context, fall back to subnet (the most permissive container).
+        container = parent.createNode("subnet", container_name)
     container.setComment(recipe_data.get("notes", ""))
     warnings: list[str] = []
 

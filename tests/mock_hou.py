@@ -1296,6 +1296,14 @@ class MockHou:
             "subnet": MockNodeType("subnet", "Subnetwork", "Object", 1, 0),
             "cam": MockNodeType("cam", "Camera", "Object", 0, 0),
             "light": MockNodeType("light", "Light", "Object", 0, 0),
+            # Network containers — used as category layers in a recipe tree
+            # (e.g. a dopnet holding recipe subnets). recipe_library must
+            # descend them as categories but NOT pierce their work nodes.
+            "dopnet": MockNodeType("dopnet", "DOP Network", "Object", 1, 0),
+            "popnet": MockNodeType("popnet", "POP Network", "Object", 1, 0),
+            "sopnet": MockNodeType("sopnet", "SOP Network", "Object", 1, 0),
+            "ropnet": MockNodeType("ropnet", "ROP Network", "Object", 1, 0),
+            "copnet": MockNodeType("copnet", "COP Network", "Object", 1, 0),
         })
         dop_cat = MockCategory("Dop", {
             "smoke": MockNodeType("smoke", "Smoke Object", "Dop", 1, 0),

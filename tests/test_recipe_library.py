@@ -115,6 +115,44 @@ class TestTopoSort(unittest.TestCase):
         self.assertEqual(set(ordered), {"a", "b"})
 
 
+class TestParamNormalization(unittest.TestCase):
+    """Pure-function tests for default comparison + multiparm lookup + ramp dict.
+    No hou required."""
+
+    def test_scalar_equals_single_element_list(self):
+        # manifest wraps numeric defaults as [N]; parm.eval() returns N.
+        self.assertTrue(rl._values_equal(4, [4]))
+        self.assertTrue(rl._values_equal([4], 4))
+        self.assertTrue(rl._values_equal(3.0, [3.0]))
+        self.assertTrue(rl._values_equal(0.125, [0.125]))
+
+    def test_scalar_not_equal_wrong_list(self):
+        self.assertFalse(rl._values_equal(4, [5]))
+        self.assertFalse(rl._values_equal(4, [4, 5]))
+
+    def test_multiparm_lookup_template_name(self):
+        # manifest key 'heightprofile#pos' should match live 'heightprofile2pos'
+        defs = {"heightprofile#pos": [0.0], "order": [4]}
+        self.assertEqual(rl._manifest_lookup("heightprofile2pos", defs), [0.0])
+        self.assertEqual(rl._manifest_lookup("scaleramp3value", defs), None)
+        self.assertEqual(rl._manifest_lookup("order", defs), [4])
+
+    def test_ramp_dict_roundtrip_shape(self):
+        # _ramp_to_dict needs a duck-typed ramp; build a fake.
+        class FakeRamp:
+            def keys(self): return (0.0, 1.0)
+            def values(self): return (0.5, 1.0)
+            def basis(self): return (1, 1)
+            def isColor(self): return False
+        d = rl._ramp_to_dict(FakeRamp())
+        self.assertEqual(d["__type__"], rl._RAMP_MARKER)
+        self.assertEqual(d["keys"], [0.0, 1.0])
+        self.assertEqual(d["values"], [0.5, 1.0])
+        self.assertTrue(rl._is_ramp_dict(d))
+        self.assertFalse(rl._is_ramp_dict({"keys": [0.0]}))
+        self.assertFalse(rl._is_ramp_dict("not a dict"))
+
+
 class TestCaptureRebuild(unittest.TestCase):
     """Full capture→rebuild round-trip using the hou mock.
 
@@ -555,6 +593,34 @@ class TestTreeCapture(unittest.TestCase):
                     self._tmp, "recipes", "Sim.Pop.Pop_Force", "recipe.json"),
                     encoding="utf-8"))
                 self.assertEqual(rj["tree_path"], ["sopnet1", "Sim", "Pop"])
+
+    def test_capture_tree_descends_network_container_category(self):
+        """Regression: a network container (dopnet/popnet/sopnet) used as a
+        CATEGORY LAYER (its children are subnets, not work nodes) MUST be
+        descended — recipes organized under a dopnet must be captured.
+
+        Real-world failure: walk() only descended 'subnet'/'geo', so a dopnet
+        holding recipe subnets (e.g. /obj/hda/dopnet/noise_forece) was skipped
+        entirely and its recipes were never captured. This is the mirror image
+        of the pierce bug: there we wrongly descend work-filled networks, here
+        we wrongly skip subnet-filled networks.
+
+        A dopnet that is a pure category layer (all kids are subnets) descends;
+        a dopnet whose kids are DOP work nodes is a leaf's content (handled by
+        _is_leaf_subnet on the parent subnet)."""
+        hou = create_mock_hou()
+        sys.modules["hou"] = hou
+        obj = hou.node("/obj")
+        # /obj/hda/dopnet/noise_forece  (dopnet = category, noise_forece = leaf)
+        hda = obj.createNode("subnet", "hda")
+        dopnet = hda.createNode("dopnet", "dopnet")
+        nf = dopnet.createNode("subnet", "noise_forece")
+        nf.createNode("null", "popsolver")   # work node → noise_forece is a leaf
+        r = rl.recipe_capture_tree("/obj/hda")
+        self.assertTrue(r["success"], r)
+        ids = {c["recipe_id"] for c in r["captured"]}
+        self.assertIn("dopnet.noise_forece", ids,
+                      "dopnet category layer must be descended to find noise_forece")
 
 
 if __name__ == "__main__":
