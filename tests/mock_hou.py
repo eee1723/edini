@@ -722,6 +722,27 @@ class MockNode:
     def children(self) -> list[MockNode]:
         return list(self._children)
 
+    def node(self, rel_path: str) -> MockNode | None:
+        """Look up a descendant by relative path (e.g. 'child' or 'a/b').
+
+        Mirrors hou.Node.node(): strips a leading './' or '/', then walks by
+        name segments through children. Returns None if not found. Used by
+        recipe_library's 'does this child already exist?' guard.
+        """
+        if not rel_path:
+            return None
+        p = rel_path.lstrip("./").lstrip("/")
+        if not p:
+            return self
+        parts = p.split("/")
+        cur = self
+        for seg in parts:
+            nxt = next((c for c in cur._children if c.name() == seg), None)
+            if nxt is None:
+                return None
+            cur = nxt
+        return cur
+
     def allSubChildren(self) -> list[MockNode]:
         result = [self]
         for child in self._children:
@@ -917,7 +938,11 @@ class MockNode:
         pass
 
     def createDigitalAsset(self, name: str, hda_file_name: str = "",
-                           description: str = "") -> MockNodeType:
+                           description: str = "",
+                           save_as_locked: bool = True) -> MockNodeType:
+        # The mock doesn't model content locking — it always behaves as if
+        # unlocked (children() stays readable). save_as_locked is accepted
+        # so create_recipe_manager's call signature works under test.
         return MockNodeType(name, description)
 
     def definition(self):

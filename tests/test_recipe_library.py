@@ -623,5 +623,120 @@ class TestTreeCapture(unittest.TestCase):
                       "dopnet category layer must be descended to find noise_forece")
 
 
+class TestDashboardFunctions(unittest.TestCase):
+    """Tests for scan_recipe_tree / create_recipe_manager / set_node_notes.
+
+    Uses the hou mock like TestCaptureRebuild, with per-test scene isolation.
+    """
+
+    def setUp(self):
+        from tests.mock_hou import MockNode
+        self._prev_hou = sys.modules.get("hou")
+        self._prev_hou_ref = MockNode._hou_ref
+        self._orig_rl_hou = rl._hou  # save the real lazy-import function
+        self._hou = create_mock_hou()
+        sys.modules["hou"] = self._hou
+        # Point recipe_library at this mock's hou.
+        rl._hou = lambda: sys.modules["hou"]
+
+    def tearDown(self):
+        from tests.mock_hou import MockNode
+        MockNode._hou_ref = self._prev_hou_ref
+        sys.modules["hou"] = self._prev_hou
+        rl._hou = self._orig_rl_hou  # restore the real lazy-import function
+
+    def _build_tree(self):
+        """Build /obj/mgr/procedural_modeling/[tube, copy] + sim/noise."""
+        hou = self._hou
+        obj = hou.node("/obj")
+        mgr = obj.createNode("subnet", "mgr")
+        pm = mgr.createNode("subnet", "procedural_modeling")
+        tube = pm.createNode("subnet", "tube_along_curve")
+        tube.createNode("null", "n1")          # work node → leaf
+        tube.setComment("功能：沿曲线管材")
+        ctp = pm.createNode("subnet", "copy_to_points")
+        ctp.createNode("null", "n2")
+        sim = mgr.createNode("subnet", "sim")
+        noise = sim.createNode("subnet", "noise_forcece")
+        noise.createNode("null", "solver")
+        return mgr
+
+    def test_scan_returns_nested_structure(self):
+        self._build_tree()
+        r = rl.scan_recipe_tree("/obj/mgr")
+        self.assertTrue(r["success"], r)
+        tree = r["tree"]
+        self.assertEqual(tree["name"], "mgr")
+        self.assertEqual(tree["type"], "container")
+        # procedural_modeling + sim are children
+        child_names = {c["name"] for c in tree["children"]}
+        self.assertEqual(child_names, {"procedural_modeling", "sim"})
+        # procedural_modeling is a container holding 2 leaves
+        pm = next(c for c in tree["children"] if c["name"] == "procedural_modeling")
+        self.assertEqual(pm["type"], "container")
+        leaf_names = {c["name"] for c in pm["children"]}
+        self.assertEqual(leaf_names, {"tube_along_curve", "copy_to_points"})
+        # tube_along_curve is a leaf with node_count + category
+        tube = next(c for c in pm["children"] if c["name"] == "tube_along_curve")
+        self.assertEqual(tube["type"], "leaf")
+        self.assertEqual(tube["node_count"], 1)
+        self.assertEqual(tube["category"], "tube")
+        self.assertIn("管材", tube["notes"])
+
+    def test_scan_missing_root(self):
+        r = rl.scan_recipe_tree("/obj/does_not_exist")
+        self.assertFalse(r["success"])
+        self.assertIn("not found", r["error"])
+
+    def test_scan_is_readonly(self):
+        """scan must not write any recipe.json files."""
+        self._build_tree()
+        rl.scan_recipe_tree("/obj/mgr")
+        # No recipes dir should have been created under a temp project root.
+        # (recipe_library writes to <project>/recipes — scanning shouldn't.)
+        import os
+        root = rl._project_root()
+        recipes = os.path.join(root, "recipes")
+        # The default project root IS the repo; just confirm no new recipe dirs
+        # were created for our mock tree nodes.
+        for rid in ("tube_along_curve", "copy_to_points", "noise_forcece"):
+            self.assertFalse(os.path.exists(os.path.join(recipes, rid, "recipe.json")),
+                             f"scan wrote {rid}/recipe.json — not read-only!")
+
+    def test_set_node_notes_validates_and_writes(self):
+        hou = self._hou
+        obj = hou.node("/obj")
+        n = obj.createNode("subnet", "n")
+        r = rl.set_node_notes(n.path(), "功能：测试配方")
+        self.assertTrue(r["success"])
+        self.assertEqual(n.comment(), "功能：测试配方")
+
+    def test_set_node_notes_rejects_empty(self):
+        hou = self._hou
+        n = hou.node("/obj").createNode("subnet", "n")
+        r = rl.set_node_notes(n.path(), "")
+        self.assertFalse(r["success"])
+        self.assertIn("为空", r["error"])
+
+    def test_create_recipe_manager_builds_hda(self):
+        r = rl.create_recipe_manager("/obj", "test_mgr")
+        self.assertTrue(r["success"], r)
+        self.assertTrue(r["hda_path"].endswith("test_mgr"))
+        mgr = self._hou.node(r["hda_path"])
+        self.assertIsNotNone(mgr)
+        # Initial procedural_modeling category container exists
+        kids = {c.name() for c in mgr.children()}
+        self.assertIn("procedural_modeling", kids)
+        # Comment set
+        self.assertIn("Recipe Manager", mgr.comment())
+
+    def test_create_recipe_manager_refuses_existing(self):
+        hou = self._hou
+        hou.node("/obj").createNode("subnet", "dup")  # pre-existing
+        r = rl.create_recipe_manager("/obj", "dup")
+        self.assertFalse(r["success"])
+        self.assertIn("already exists", r["error"])
+
+
 if __name__ == "__main__":
     unittest.main()

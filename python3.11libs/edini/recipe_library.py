@@ -1413,3 +1413,191 @@ def _verify_rebuild(container, recipe: dict, created: dict) -> dict[str, Any]:
         "param_checks": param_checks,
         "mismatches": mismatches,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dashboard support: read-only tree scan, HDA creation, Notes editing
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _classify_node_for_scan(node) -> str:
+    """Classify a node as 'container' | 'leaf' | 'ignored' for the dashboard tree.
+
+    Reuses the capture predicates so the scan view matches what capture_tree
+    would actually harvest. 'ignored' = output/stashed_geo plumbing.
+    """
+    try:
+        if _is_ignored_node(node):
+            return "ignored"
+    except Exception:
+        return "ignored"
+    try:
+        t = node.type().name()
+    except Exception:
+        return "ignored"
+    # Only organizational subnet/geo and network containers are tree nodes.
+    if t not in _CONTAINER_TYPES and t not in _NETWORK_CONTAINER_TYPES:
+        return "ignored"
+    if t in _NETWORK_CONTAINER_TYPES:
+        # A network container is a category layer iff pure-org kids, else leaf.
+        if _is_container_network(node):
+            return "container"
+        return "leaf"
+    if _is_leaf_subnet(node):
+        return "leaf"
+    if _is_container_subnet(node):
+        return "container"
+    return "ignored"  # empty subnet — neither
+
+
+def _scan_node(node) -> dict[str, Any]:
+    """Recursively build a display dict for one node (read-only)."""
+    entry: dict[str, Any] = {
+        "name": node.name(),
+        "path": node.path(),
+        "type": "ignored",
+        "notes": "",
+        "children": [],
+    }
+    try:
+        entry["notes"] = node.comment() or ""
+    except Exception:
+        pass
+    kind = _classify_node_for_scan(node)
+    entry["type"] = kind
+    if kind == "leaf":
+        try:
+            kids = [c for c in node.children() if not _is_ignored_node(c)]
+            entry["node_count"] = len(kids)
+        except Exception:
+            entry["node_count"] = 0
+        # Infer kind (network|vex) + category from notes for display.
+        parsed = parse_notes(entry["notes"])
+        entry["category"] = _infer_category(parsed["function"], node.name())
+        entry["kind"] = "vex" if _looks_like_vex_leaf(node) else "network"
+    # Recurse into containers (and the root) to build the full nested tree.
+    if kind in ("container", "leaf"):
+        # Even leaves get children=[] (empty) — we don't pierce into leaf
+        # internals here (that's recipe_read's job). Containers recurse.
+        pass
+    if kind == "container":
+        try:
+            for c in node.children():
+                ck = _classify_node_for_scan(c)
+                if ck == "ignored":
+                    continue
+                entry["children"].append(_scan_node(c))
+        except Exception:
+            pass
+    return entry
+
+
+def _looks_like_vex_leaf(node) -> bool:
+    """True if a leaf subnet contains any wrangle node (kind=vex)."""
+    try:
+        for c in node.children():
+            if _is_ignored_node(c):
+                continue
+            if c.type().name() in _VEX_NODE_TYPES:
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def scan_recipe_tree(root_path: str) -> dict[str, Any]:
+    """Read-only scan of a subnet tree for dashboard display.
+
+    Returns a nested structure (containers contain children, leaves carry
+    node_count/kind/category) WITHOUT writing any recipe.json. This is the
+    dashboard's data source — call on a QTimer to keep the tree in sync.
+
+    The root itself is classified (container/leaf/missing) and returned as the
+    top of the tree. Missing root → success=False.
+    """
+    hou = _hou()
+    if hou is None:
+        return {"success": False, "error": "Houdini (hou module) unavailable."}
+    root = hou.node(root_path)
+    if root is None:
+        return {"success": False, "error": f"root not found: {root_path}",
+                "root": root_path, "tree": None}
+    tree = _scan_node(root)
+    return {"success": True, "root": root_path, "tree": tree}
+
+
+def set_node_notes(node_path: str, notes: str) -> dict[str, Any]:
+    """Write Notes (comment) back to a node, after validation.
+
+    Used by the dashboard's Notes editor. Validates non-empty/non-placeholder
+    before writing. Returns {success, node_path, valid} or {success:False, error}.
+    """
+    hou = _hou()
+    if hou is None:
+        return {"success": False, "error": "Houdini (hou module) unavailable."}
+    node = hou.node(node_path)
+    if node is None:
+        return {"success": False, "error": f"node not found: {node_path}"}
+    ok, reason = validate_notes(notes)
+    if not ok:
+        return {"success": False, "error": reason, "valid": False}
+    try:
+        node.setComment(notes)
+    except Exception as e:
+        return {"success": False, "error": f"setComment failed: {e}"}
+    return {"success": True, "node_path": node_path, "valid": True}
+
+
+def create_recipe_manager(parent_path: str = "/obj",
+                          name: str = "edini_recipe_manager") -> dict[str, Any]:
+    """Create the main recipe-manager HDA (unlocked contents) + initial tree.
+
+    Builds a subnet, adds an initial ``procedural_modeling`` category container,
+    then packages it as a digital asset with save_as_locked=False so the
+    internal subnet tree stays readable/editable (the dashboard and
+    recipe_capture walk its children).
+
+    Returns {success, hda_path, hda_file} or {success:False, error}.
+    """
+    hou = _hou()
+    if hou is None:
+        return {"success": False, "error": "Houdini (hou module) unavailable."}
+    parent = hou.node(parent_path)
+    if parent is None:
+        return {"success": False, "error": f"parent not found: {parent_path}"}
+    # Refuse if a same-named node already exists (avoid clobbering).
+    existing = parent.node(name)
+    if existing is not None:
+        return {"success": False,
+                "error": f"node already exists: {existing.path()} — "
+                         f"use a different name or remove it first"}
+
+    try:
+        subnet = parent.createNode("subnet", name)
+        subnet.setComment("Edini Recipe Manager — 配方仓库与仪表盘")
+        # Initial category container so the tree isn't empty.
+        cat = subnet.createNode("subnet", "procedural_modeling")
+        cat.setComment("分类容器：程序化建模配方")
+        try:
+            subnet.layoutChildren()
+        except Exception:
+            pass
+        # Package as HDA with UNLOCKED contents — the critical flag.
+        hip_dir = hou.hipFile.dirName() or hou.homeHoudiniDirectory()
+        hda_file = f"{hip_dir}/{name}.hda"
+        subnet.createDigitalAsset(
+            name=name,
+            hda_file_name=hda_file,
+            description="Edini Recipe Manager",
+            save_as_locked=False,
+        )
+    except Exception as e:
+        # Clean up the half-built subnet on failure.
+        try:
+            if "subnet" in locals() and subnet is not None:
+                subnet.destroy()
+        except Exception:
+            pass
+        return {"success": False, "error": f"createDigitalAsset failed: {e}"}
+
+    return {"success": True, "hda_path": subnet.path(), "hda_file": hda_file}
+
