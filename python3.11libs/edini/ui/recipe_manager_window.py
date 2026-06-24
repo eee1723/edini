@@ -693,8 +693,42 @@ class RecipeManagerWindow(QtWidgets.QMainWindow):
         return None
 
     def _on_create_hda(self):
+        # Ask whether to seed the HDA from an existing scene subtree.
+        source_root = None
+        msg = QtWidgets.QMessageBox(self)
+        msg.setWindowTitle("建主 HDA")
+        msg.setText("是否从场景中已有的节点树导入配方？\n（选「从选中导入」会用当前选中节点作为源）")
+        btn_empty = msg.addButton("建空 HDA", QtWidgets.QMessageBox.RejectRole)
+        btn_seed_sel = msg.addButton("从选中导入", QtWidgets.QMessageBox.AcceptRole)
+        btn_seed_path = msg.addButton("输入路径导入", QtWidgets.QMessageBox.AcceptRole)
+        btn_cancel = msg.addButton("取消", QtWidgets.QMessageBox.RejectRole)
+        msg.setDefaultButton(btn_empty)
+        msg.exec()
+        clicked = msg.clickedButton()
+
+        if clicked is btn_cancel:
+            return
+        if clicked is btn_empty:
+            source_root = None
+        elif clicked is btn_seed_sel:
+            if hou is None:
+                return
+            sel = hou.selectedNodes()
+            if not sel:
+                self.statusBar().showMessage("没有选中节点", 2000)
+                return
+            source_root = sel[0].path()
+        elif clicked is btn_seed_path:
+            path, ok = QtWidgets.QInputDialog.getText(
+                self, "导入源", "源节点路径:", text="/obj/hda")
+            if not ok or not path.strip():
+                return
+            source_root = path.strip()
+
         self.statusBar().showMessage("创建主 HDA...", 0)
-        worker = RecipeWorker(rl.create_recipe_manager)
+        worker = RecipeWorker(rl.create_recipe_manager,
+                              source_root=source_root) if source_root \
+            else RecipeWorker(rl.create_recipe_manager)
         worker.finished_ok.connect(self._on_hda_created)
         worker.failed.connect(lambda e: self.statusBar().showMessage(
             f"创建失败: {e}", 4000))
@@ -705,7 +739,13 @@ class RecipeManagerWindow(QtWidgets.QMainWindow):
         path = result.get("hda_path", DEFAULT_ROOT)
         self._root_path = path
         self.input_root.setText(path)
-        self.statusBar().showMessage(f"已创建: {path}", 3000)
+        seeded = result.get("seeded")
+        if seeded:
+            self.statusBar().showMessage(
+                f"已创建并导入: {path} (移入 {seeded.get('moved',0)} 节点, "
+                f"捕获 {seeded.get('captured',0)} 配方)", 5000)
+        else:
+            self.statusBar().showMessage(f"已创建: {path}", 3000)
         self.refresh_tree()
 
     # ── helpers ────────────────────────────────────────────────────────────

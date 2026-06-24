@@ -876,6 +876,40 @@ class MockNode:
         nt = cat.nodeType(node_type_name.split("::")[0])
         return nt
 
+    def moveTo(self, new_parent) -> None:
+        """Reparent this node (and its subtree) to new_parent.
+
+        Mirrors hou.Node.moveTo: removes from old parent, appends to new,
+        and recomputes paths for the whole subtree (paths are parent-derived).
+        """
+        if self._parent is not None and self in self._parent._children:
+            self._parent._children.remove(self)
+        self._parent = new_parent
+        if new_parent is not None:
+            # ensure unique name under the new parent
+            base = self._name
+            names = {c.name() for c in new_parent._children if c is not self}
+            nm = base
+            i = 1
+            while nm in names:
+                nm = f"{base}{i}"
+                i += 1
+            self._name = nm
+            new_parent._children.append(self)
+        self._recompute_paths()
+
+    def _recompute_paths(self) -> None:
+        """Recompute self._path and all descendants' paths after a reparent."""
+        if self._parent is None:
+            self._path = "/" + self._name
+        else:
+            self._path = self._parent.path() + "/" + self._name
+        # Update the global registry.
+        if MockNode._hou_ref is not None:
+            MockNode._hou_ref._nodes[self._path] = self
+        for child in self._children:
+            child._recompute_paths()
+
     def destroy(self) -> None:
         self._destroyed = True
         for child in list(self._children):

@@ -1548,15 +1548,23 @@ def set_node_notes(node_path: str, notes: str) -> dict[str, Any]:
 
 
 def create_recipe_manager(parent_path: str = "/obj",
-                          name: str = "edini_recipe_manager") -> dict[str, Any]:
+                          name: str = "edini_recipe_manager",
+                          source_root: str | None = None) -> dict[str, Any]:
     """Create the main recipe-manager HDA (unlocked contents) + initial tree.
 
-    Builds a subnet, adds an initial ``procedural_modeling`` category container,
-    then packages it as a digital asset with save_as_locked=False so the
-    internal subnet tree stays readable/editable (the dashboard and
-    recipe_capture walk its children).
+    Two modes:
+      * **empty** (source_root=None): builds a subnet + an initial
+        ``procedural_modeling`` category container.
+      * **seeded** (source_root set): builds the HDA, then MOVES the entire
+        subtree under ``source_root`` into the HDA, and serializes every leaf
+        into recipes/<id>/recipe.json (the database). Use this to turn a scene
+        tree you already built (e.g. /obj/hda with procedural_modeling/...
+        subnets) into a full Recipe Manager HDA in one shot.
 
-    Returns {success, hda_path, hda_file} or {success:False, error}.
+    The HDA is packaged with save_as_locked=False so the internal subnet tree
+    stays readable/editable (the dashboard and recipe_capture walk children).
+
+    Returns {success, hda_path, hda_file, seeded?} or {success:False, error}.
     """
     hou = _hou()
     if hou is None:
@@ -1564,19 +1572,26 @@ def create_recipe_manager(parent_path: str = "/obj",
     parent = hou.node(parent_path)
     if parent is None:
         return {"success": False, "error": f"parent not found: {parent_path}"}
-    # Refuse if a same-named node already exists (avoid clobbering).
     existing = parent.node(name)
     if existing is not None:
         return {"success": False,
                 "error": f"node already exists: {existing.path()} — "
                          f"use a different name or remove it first"}
 
+    source_node = None
+    if source_root:
+        source_node = hou.node(source_root)
+        if source_node is None:
+            return {"success": False,
+                    "error": f"source_root not found: {source_root}"}
+
     try:
         subnet = parent.createNode("subnet", name)
         subnet.setComment("Edini Recipe Manager — 配方仓库与仪表盘")
-        # Initial category container so the tree isn't empty.
-        cat = subnet.createNode("subnet", "procedural_modeling")
-        cat.setComment("分类容器：程序化建模配方")
+        if source_node is None:
+            # Empty mode: one initial category container.
+            cat = subnet.createNode("subnet", "procedural_modeling")
+            cat.setComment("分类容器：程序化建模配方")
         try:
             subnet.layoutChildren()
         except Exception:
@@ -1591,7 +1606,6 @@ def create_recipe_manager(parent_path: str = "/obj",
             save_as_locked=False,
         )
     except Exception as e:
-        # Clean up the half-built subnet on failure.
         try:
             if "subnet" in locals() and subnet is not None:
                 subnet.destroy()
@@ -1599,5 +1613,44 @@ def create_recipe_manager(parent_path: str = "/obj",
             pass
         return {"success": False, "error": f"createDigitalAsset failed: {e}"}
 
-    return {"success": True, "hda_path": subnet.path(), "hda_file": hda_file}
+    # ── Seeded mode: move source subtree in + serialize database ──────────
+    seeded_summary = None
+    if source_node is not None:
+        try:
+            seeded_summary = _seed_from_source(subnet, source_node)
+        except Exception as e:
+            seeded_summary = {"moved": 0, "captured": 0, "error": str(e)}
+
+    result = {"success": True, "hda_path": subnet.path(), "hda_file": hda_file}
+    if seeded_summary is not None:
+        result["seeded"] = seeded_summary
+    return result
+
+
+def _seed_from_source(hda_root, source_root) -> dict:
+    """Move source_root's children into hda_root, then capture every leaf.
+
+    Returns {moved, captured, skipped, errors}. The source_root itself is NOT
+    moved (only its children) so the original scene node remains as a marker.
+    """
+    moved = 0
+    errors: list[str] = []
+    for child in list(source_root.children()):
+        try:
+            child.moveTo(hda_root)
+            moved += 1
+        except Exception as e:
+            errors.append(f"{child.path()}: {e}")
+    try:
+        hda_root.layoutChildren()
+    except Exception:
+        pass
+    # Now serialize: capture every leaf under the HDA into recipes/.
+    cap = recipe_capture_tree(hda_root.path())
+    captured = cap.get("captured_count", 0) if cap.get("success") else 0
+    skipped = cap.get("skipped_count", 0) if cap.get("success") else 0
+    if not cap.get("success"):
+        errors.append(f"capture_tree: {cap.get('error', '?')}")
+    return {"moved": moved, "captured": captured, "skipped": skipped,
+            "errors": errors}
 

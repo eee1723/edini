@@ -737,6 +737,50 @@ class TestDashboardFunctions(unittest.TestCase):
         self.assertFalse(r["success"])
         self.assertIn("already exists", r["error"])
 
+    def test_create_recipe_manager_seeded_from_source(self):
+        """Seeded mode: move a scene subtree into the HDA + serialize leaves."""
+        import os, shutil
+        tmp = tempfile.mkdtemp(prefix="recipes_seed_")
+        orig_root = rl._project_root
+        rl._project_root = lambda: tmp  # type: ignore
+        try:
+            hou = self._hou
+            # Build a source tree: /obj/myroot/procedural_modeling/tube + noise
+            obj = hou.node("/obj")
+            src = obj.createNode("subnet", "myroot")
+            pm = src.createNode("subnet", "procedural_modeling")
+            tube = pm.createNode("subnet", "tube_x")
+            tube.createNode("null", "inner")  # work node → leaf
+            tube.setComment("功能：测试管材配方")
+            sim = src.createNode("subnet", "sim")
+            noise = sim.createNode("subnet", "noise_x")
+            noise.createNode("null", "solver")
+            noise.setComment("功能：噪声力场")
+            # Seed the HDA from this source.
+            r = rl.create_recipe_manager("/obj", "seeded_mgr", source_root=src.path())
+            self.assertTrue(r["success"], r)
+            self.assertIn("seeded", r)
+            seeded = r["seeded"]
+            self.assertEqual(seeded["moved"], 2, "2 top-level children moved")
+            self.assertGreaterEqual(seeded["captured"], 2, "leaves captured")
+            # HDA now contains the moved children.
+            mgr = hou.node(r["hda_path"])
+            kids = {c.name() for c in mgr.children()}
+            self.assertIn("procedural_modeling", kids)
+            self.assertIn("sim", kids)
+            # Source root is now empty (children moved out).
+            self.assertEqual(len(src.children()), 0)
+            # recipe.json database was written for the leaves.
+            entries = []
+            for d in os.listdir(os.path.join(tmp, "recipes")):
+                if os.path.isdir(os.path.join(tmp, "recipes", d)):
+                    entries.append(d)
+            self.assertTrue(any("tube_x" in e or "tube" in e for e in entries),
+                            f"tube recipe in DB: {entries}")
+        finally:
+            rl._project_root = orig_root  # type: ignore
+            shutil.rmtree(tmp, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()
