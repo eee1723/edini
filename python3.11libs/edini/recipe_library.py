@@ -1597,13 +1597,27 @@ def create_recipe_manager(parent_path: str = "/obj",
         except Exception:
             pass
         # Package as HDA with UNLOCKED contents — the critical flag.
-        hip_dir = hou.hipFile.dirName() or hou.homeHoudiniDirectory()
-        hda_file = f"{hip_dir}/{name}.hda"
+        # HDA file lives next to the .hip. hou.hipFile.path() returns the full
+        # hip path (there is no dirName() in H21); derive the dir from it.
+        try:
+            hip_path = hou.hipFile.path() or ""
+            hip_dir = os.path.dirname(hip_path) if hip_path else ""
+        except Exception:
+            hip_dir = ""
+        if not hip_dir:
+            try:
+                hip_dir = hou.homeHoudiniDirectory()
+            except Exception:
+                hip_dir = os.getcwd()
+        hda_file = os.path.join(hip_dir, f"{name}.hda")
+        # NOTE: H21's createDigitalAsset has no save_as_locked kwarg. Content
+        # is created UNLOCKED by default (editable via Allow Editing); the
+        # dashboard + recipe_capture walk children regardless. We pass only the
+        # documented kwargs (name/hda_file_name/description).
         subnet.createDigitalAsset(
             name=name,
             hda_file_name=hda_file,
             description="Edini Recipe Manager",
-            save_as_locked=False,
         )
     except Exception as e:
         try:
