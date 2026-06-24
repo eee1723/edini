@@ -638,12 +638,19 @@ class TestDashboardFunctions(unittest.TestCase):
         sys.modules["hou"] = self._hou
         # Point recipe_library at this mock's hou.
         rl._hou = lambda: sys.modules["hou"]
+        # Isolate project root so scan/write tests don't collide with the real
+        # recipe library (e.g. a real recipe.json named like a mock node).
+        self._orig_root = rl._project_root
+        self._tmp = tempfile.mkdtemp(prefix="recipes_dash_")
+        rl._project_root = lambda: self._tmp  # type: ignore
 
     def tearDown(self):
         from tests.mock_hou import MockNode
         MockNode._hou_ref = self._prev_hou_ref
         sys.modules["hou"] = self._prev_hou
         rl._hou = self._orig_rl_hou  # restore the real lazy-import function
+        rl._project_root = self._orig_root  # type: ignore
+        shutil.rmtree(self._tmp, ignore_errors=True)
 
     def _build_tree(self):
         """Build /obj/mgr/procedural_modeling/[tube, copy] + sim/noise."""

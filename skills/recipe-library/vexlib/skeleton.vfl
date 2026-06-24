@@ -1,0 +1,229 @@
+// skeleton.vfl — VEX skeleton-generation functions.
+// All functions run Over: Detail (Numbers). They produce point sequences
+// (polyline / closed polyline / point cloud) — NEVER closed geometry.
+// Closed geometry is the job of downstream native SOPs (Sweep/PolyExtrude/Cap).
+//
+// IRON RULES:
+//   1. Run Over: Detail — otherwise addpoint multiplies geometry per-element.
+//   2. Never produce polygons here — return point_ids[] for downstream wiring.
+//   3. All sizing reads from ch() — parametric, HDA-safe.
+
+// ── make_polyline ─────────────────────────────────────────────────────
+// Emit a series of points forming an open polyline.
+// Returns the point IDs in order (for downstream addvertex / wiring).
+//
+//   geohandle      — geometry handle (always 0 in Detail mode)
+//   positions[]    — array of vectors: the world-space point positions
+//
+// Example (stair path):
+//   vector pts[] = array({0,0,0},{0.3,0.18,0},{0.6,0.36,0},...);
+//   int pids[] = make_polyline(0, pts);
+int[] make_polyline(const int geohandle; const vector positions[])
+{
+    int result[] = array();
+    for (int i = 0; i < len(positions); i++)
+    {
+        int pt = addpoint(geohandle, positions[i]);
+        // Tag with curve_u so downstream Sweep can use it
+        setpointattrib(geohandle, "curveu", pt,
+            float(i) / max(float(len(positions) - 1), 1.0));
+        append(result, pt);
+    }
+    // Build the polyline by connecting sequential points AS ONE PRIMITIVE.
+    // Use addprim with a point array to create a single continuous polyline.
+    int prim = addprim(geohandle, "polyline");
+    for (int i = 0; i < len(result); i++)
+    {
+        addvertex(geohandle, prim, result[i]);
+    }
+    return result;
+}
+
+// ── make_closed_polyline ───────────────────────────────────────────────
+// Like make_polyline, but closes the loop (last point connects back to first).
+// Use this as a cross-section for PolyExtrude or Sweep.
+//
+//   geohandle      — geometry handle (always 0)
+//   positions[]    — array of vectors forming a closed loop
+//
+// Example (rectangular beam section):
+//   float w = chf("width"); float h = chf("height");
+//   vector prof[] = array({-w/2,-h/2,0},{w/2,-h/2,0},{w/2,h/2,0},{-w/2,h/2,0});
+//   int pids[] = make_closed_polyline(0, prof);
+int[] make_closed_polyline(const int geohandle; const vector positions[])
+{
+    int result[] = array();
+    int n = len(positions);
+    if (n < 3) return result;
+    for (int i = 0; i < n; i++)
+    {
+        int pt = addpoint(geohandle, positions[i]);
+        setpointattrib(geohandle, "curveu", pt,
+            float(i) / float(n));
+        append(result, pt);
+    }
+    // Single closed polyline: all points + close back to first
+    int prim = addprim(geohandle, "polyline");
+    for (int i = 0; i < n; i++)
+    {
+        addvertex(geohandle, prim, result[i]);
+    }
+    addvertex(geohandle, prim, result[0]);  // close the loop
+    return result;
+}
+
+// ── make_helix ─────────────────────────────────────────────────────────
+// Emit a helical path (spiral staircase, spring, screw thread).
+//
+//   geohandle      — geometry handle (always 0)
+//   n              — number of sample points along the helix
+//   radius         — helix radius
+//   height         — total vertical rise
+//   turns          — number of full rotations
+//
+// Example:
+//   int pids[] = make_helix(0, 200, chf("radius"), chf("height"), chi("turns"));
+int[] make_helix(const int geohandle;
+                 const int n;
+                 const float radius;
+                 const float height;
+                 const float turns)
+{
+    int result[] = array();
+    if (n < 2) return result;
+    for (int i = 0; i < n; i++)
+    {
+        float t = float(i) / float(n - 1);
+        float angle = t * turns * 2.0 * M_PI;
+        float x = radius * cos(angle);
+        float z = radius * sin(angle);
+        float y = t * height;
+        int pt = addpoint(geohandle, set(x, y, z));
+        setpointattrib(geohandle, "curveu", pt, t);
+        append(result, pt);
+    }
+    // Single continuous polyline
+    int prim = addprim(geohandle, "polyline");
+    for (int i = 0; i < len(result); i++)
+    {
+        addvertex(geohandle, prim, result[i]);
+    }
+    return result;
+}
+
+// ── make_stair_path ────────────────────────────────────────────────────
+// Emit a stair-step path: horizontal treads + vertical risers.
+// Each step = 2 points (tread end + riser top). Total = 2*n points.
+//
+//   geohandle      — geometry handle (always 0)
+//   n              — number of steps
+//   tread          — tread depth (horizontal distance per step)
+//   riser          — riser height (vertical distance per step)
+//   start          — origin of the first step (bottom of first riser)
+//   direction      — direction vector for the stair run (e.g. {1,0,0} for +X)
+//
+// Example:
+//   int pids[] = make_stair_path(0, chi("steps"), chf("tread"), chf("riser"),
+//                                {0,0,0}, {1,0,0});
+int[] make_stair_path(const int geohandle;
+                      const int n;
+                      const float tread;
+                      const float riser;
+                      const vector start;
+                      const vector direction)
+{
+    int result[] = array();
+    vector dir = normalize(direction);
+    vector up = {0, 1, 0};
+    // Side vector (perpendicular to direction, in XZ plane)
+    vector side = normalize(cross(up, dir));
+    // True normal for stair path points
+    vector normal = normalize(cross(dir, side));
+    vector pos = start;
+
+    for (int i = 0; i < n; i++)
+    {
+        // Tread start (bottom of riser for this step)
+        int p0 = addpoint(geohandle, pos);
+        setpointattrib(geohandle, "curveu", p0, float(2*i) / float(2*n));
+        // Set orient/up/N for proper sweep cross-section alignment
+        setpointattrib(geohandle, "N", p0, normal);
+        setpointattrib(geohandle, "up", p0, up);
+        setpointattrib(geohandle, "pscale", p0, 1.0);
+        append(result, p0);
+
+        // Move up by riser height -> tread end / riser top
+        pos += up * riser;
+        int p1 = addpoint(geohandle, pos);
+        setpointattrib(geohandle, "curveu", p1, float(2*i + 1) / float(2*n));
+        setpointattrib(geohandle, "N", p1, normal);
+        setpointattrib(geohandle, "up", p1, up);
+        setpointattrib(geohandle, "pscale", p1, 1.0);
+        append(result, p1);
+
+        // Move forward by tread depth -> next riser bottom
+        pos += dir * tread;
+    }
+
+    // Single continuous polyline
+    int prim = addprim(geohandle, "polyline");
+    for (int i = 0; i < len(result); i++)
+    {
+        addvertex(geohandle, prim, result[i]);
+    }
+    return result;
+}
+
+// ── make_grid ──────────────────────────────────────────────────────────
+// Emit a 2D grid of points (for brick walls, tile floors, scatter grids).
+// Row-major order: inner loop over cols.
+//
+//   geohandle      — geometry handle (always 0)
+//   rows           — number of rows
+//   cols           — number of columns
+//   spacing_x      — X spacing between columns
+//   spacing_y      — Y spacing between rows
+//   stagger        — if true, offset every other row by spacing_x/2 (running bond)
+//   origin         — bottom-left corner position
+//   plane          — "XY" | "XZ" | "YZ" — which plane the grid lies in
+//
+// Example (brick wall on XZ plane):
+//   int pts[] = make_grid(0, 10, 20, 0.25, 0.1, true, {0,0,0}, "XZ");
+int[] make_grid(const int geohandle;
+                const int rows;
+                const int cols;
+                const float spacing_x;
+                const float spacing_y;
+                const int stagger;
+                const vector origin;
+                const string plane)
+{
+    int result[] = array();
+    vector ax = {1,0,0};
+    vector ay = {0,1,0};
+    if (plane == "XZ")
+    {
+        ax = {1,0,0};
+        ay = {0,0,1};
+    }
+    else if (plane == "YZ")
+    {
+        ax = {0,1,0};
+        ay = {0,0,1};
+    }
+    // else default XY
+
+    for (int r = 0; r < rows; r++)
+    {
+        float x_off = stagger ? (r % 2) * spacing_x * 0.5 : 0.0;
+        for (int c = 0; c < cols; c++)
+        {
+            vector pos = origin + ax * (float(c) * spacing_x + x_off)
+                                 + ay * float(r) * spacing_y;
+            int pt = addpoint(geohandle, pos);
+            setpointattrib(geohandle, "id", pt, r * cols + c);
+            append(result, pt);
+        }
+    }
+    return result;
+}

@@ -1077,6 +1077,9 @@ def _infer_category(function_text: str, recipe_id: str) -> str:
     rules = [
         (("管", "tube", "pipe", "圆柱", "沿曲线"), "tube"),
         (("挤出", "extrude", "截面", "beam"), "extrude"),
+        (("旋转", "revolve", "回转", "绕轴"), "revolve"),
+        (("镜像", "mirror", "对称", "reflect"), "deform"),
+        (("阵列", "array", "辐条", "spoke", "均布", "环形"), "array"),
         (("散布", "copy", "scatter", "重复", "ctp", "复制"), "copy"),
         (("布尔", "boolean", "切割", "cut"), "boolean"),
         (("法线", "normal", "fuse", "clean", "清理"), "postprocess"),
