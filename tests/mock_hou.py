@@ -715,6 +715,24 @@ class MockNode:
         """Mock of hou.Node.comment — the Notes text shown on the node."""
         return self._comment
 
+    def setGenericFlag(self, flag, value: bool) -> None:
+        """Mock of hou.Node.setGenericFlag. Records flag state per node."""
+        if not hasattr(self, "_generic_flags"):
+            self._generic_flags = {}
+        # flag may be a named-int (real hou) or a stub object whose .name is a
+        # string attribute (this mock). Normalize to a string key.
+        nm = getattr(flag, "name", None)
+        key = nm() if callable(nm) else (nm if nm is not None else str(flag))
+        self._generic_flags[key] = bool(value)
+
+    def isGenericFlagSet(self, flag) -> bool:
+        """Mock of hou.Node.isGenericFlagSet."""
+        if not hasattr(self, "_generic_flags"):
+            return False
+        nm = getattr(flag, "name", None)
+        key = nm() if callable(nm) else (nm if nm is not None else str(flag))
+        return self._generic_flags.get(key, False)
+
     def setComment(self, text: str) -> None:
         """Mock of hou.Node.setComment."""
         self._comment = text or ""
@@ -1266,6 +1284,14 @@ class MockHou:
     paneTabType = type("paneTabType", (), {
         "SceneViewer": 1,
         "NetworkEditor": 2,
+    })()
+
+    # hou.nodeFlag — only the members we use need to be present. Each is a
+    # named-int so setGenericFlag's getattr(flag,'name') works in the mock.
+    nodeFlag = type("nodeFlag", (), {
+        "DisplayComment": type("DisplayComment", (), {"name": "DisplayComment"})(),
+        "Display": type("Display", (), {"name": "Display"})(),
+        "Bypass": type("Bypass", (), {"name": "Bypass"})(),
     })()
 
     class Ramp:
