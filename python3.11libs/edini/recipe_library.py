@@ -1542,6 +1542,10 @@ def set_node_notes(node_path: str, notes: str) -> dict[str, Any]:
         return {"success": False, "error": reason, "valid": False}
     try:
         node.setComment(notes)
+        # Auto-show the comment in the network editor (the "Show Comment in
+        # Network Editor" checkbox) so the Notes are visible by default without
+        # the user having to tick it per node.
+        node.setGenericFlag(hou.nodeFlag.DisplayComment, True)
     except Exception as e:
         return {"success": False, "error": f"setComment failed: {e}"}
     return {"success": True, "node_path": node_path, "valid": True}
