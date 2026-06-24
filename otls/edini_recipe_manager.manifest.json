@@ -1,0 +1,27 @@
+{
+  "hda": "edini_recipe_manager",
+  "type": "Object/edini_recipe_manager",
+  "description": "Edini Recipe Manager — pure container HDA holding the subnet recipe tree",
+  "lib_path": "otls/edini_recipe_manager.hda",
+  "created": "2026-06-24",
+  "state": {
+    "content_locked": false,
+    "children_readable": true,
+    "initial_children": ["procedural_modeling"],
+    "procedural_modeling_notes": "分类容器：程序化建模配方"
+  },
+  "params": {
+    "total": 52,
+    "hidden_by_user": 50,
+    "visible": ["stdswitcher1", "stdswitcher31"],
+    "note": "All transform/display/picking parms (Object base template) are hidden by the user so the parameter panel stays clean. The 2 visible stdswitcher entries are empty folder tabs (their contents are all hidden) — cosmetic, harmless. The real interaction surface is the Qt Recipe Manager panel, not this HDA's parameter interface."
+  },
+  "global_registration": {
+    "method": "HOUDINI_OTLSCAN_PATH via edini package",
+    "package_file": "~/houdiniXX/packages/edini.json",
+    "scan_path": "$EDINI_PATH/otls"
+  },
+  "rebuild_notes": {
+    "create_recipe_manager": "scripts/create via recipe_library.create_recipe_manager() writes .hda to otls/. After manual hide-all-parms in Type Properties, run updateFromNode + save + reloadFile to persist (see git history for the one-shot script)."
+  }
+}
