@@ -1597,19 +1597,12 @@ def create_recipe_manager(parent_path: str = "/obj",
         except Exception:
             pass
         # Package as HDA with UNLOCKED contents — the critical flag.
-        # HDA file lives next to the .hip. hou.hipFile.path() returns the full
-        # hip path (there is no dirName() in H21); derive the dir from it.
-        try:
-            hip_path = hou.hipFile.path() or ""
-            hip_dir = os.path.dirname(hip_path) if hip_path else ""
-        except Exception:
-            hip_dir = ""
-        if not hip_dir:
-            try:
-                hip_dir = hou.homeHoudiniDirectory()
-            except Exception:
-                hip_dir = os.getcwd()
-        hda_file = os.path.join(hip_dir, f"{name}.hda")
+        # Store the .hda in the repo's otls/ dir (created on demand) so it is
+        # registered globally via HOUDINI_OTLSCAN_PATH and travels with git —
+        # not trapped inside a single .hip file.
+        otls_dir = os.path.join(_project_root(), "otls")
+        os.makedirs(otls_dir, exist_ok=True)
+        hda_file = os.path.join(otls_dir, f"{name}.hda")
         # NOTE: H21's createDigitalAsset has no save_as_locked kwarg. Content
         # is created UNLOCKED by default (editable via Allow Editing); the
         # dashboard + recipe_capture walk children regardless. We pass only the

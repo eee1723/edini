@@ -52,6 +52,15 @@ def install() -> None:
                 {"EDINI_PATH": path_forward}
             ],
             "path": "$EDINI_PATH",
+            "hpath": {
+                # Scan the repo's otls/ for HDA definitions (e.g.
+                # edini_recipe_manager) so they're available in every Houdini
+                # session, not just the .hip they were created in.
+                "HOUDINI_OTLSCAN_PATH": {
+                    "value": "$EDINI_PATH/otls",
+                    "method": "append"
+                }
+            },
             "houdini": {
                 "python3.11libs": "$EDINI_PATH/python3.11libs"
             }
@@ -60,6 +69,7 @@ def install() -> None:
     print(f"Edini installed!")
     print(f"  Package file: {package_file}")
     print(f"  Project root: {root}")
+    print(f"  OTL scan path: {root}/otls")
     print()
     print("Next steps:")
     print("  1. Restart Houdini")
