@@ -320,22 +320,40 @@ def _values_equal(a: Any, b: Any) -> bool:
 
 import re as _re
 
-_MULTIPARM_INSTANCE_RE = _re.compile(r"^(.+?)(\d+)([A-Za-z_]\w*)?$")
+# Multiparm instance names come in two shapes:
+#   * base + index + suffix:  'heightprofile2pos' -> template 'heightprofile#pos'
+#   * base + index (no tail): 'value0' / 'useapply1' -> template 'value#' / 'useapply#'
+_MULTIPARM_INSTANCE_RE = _re.compile(r"^(.+?)(\d+)([A-Za-z_]\w*)$")
+_MULTIPARM_INDEX_TAIL_RE = _re.compile(r"^([A-Za-z_][A-Za-z_0-9]*?)(\d+)$")
 # Vector component expansions. Houdini splits a vector parm into component
 # parms two ways: 'upvectorx/y/z' (xyzw suffix) and 'uvscale1/2' (numeric
 # suffix). Match both so a component maps back to its parent vector default.
 _VECTOR_XYZW_RE = _re.compile(r"^(.+?)([xyzw])$")
 _VECTOR_NUM_RE = _re.compile(r"^(.+?)([12])$")
 
-# Collapsible-folder state parms (e.g. 'up_folder', 'uv_folder'). The manifest
-# generator skips folder templates, so these are never catalogued; their value
-# is the collapse state (0/1), not an authored setting. Treat the identity
-# value (0) as the default so they don't pollute changed_params as noise.
-_FOLDER_STATE_SUFFIXES = ("_folder", "_folder1", "_switcher")
+# Collapsible-folder / tab-switcher state parms. The manifest generator skips
+# these UI templates, so they're never catalogued; their value is the collapse
+# or active-tab state (0/1), not an authored setting. Recognize every naming
+# variant Houdini uses so they don't pollute changed_params as noise.
+_FOLDER_STATE_SUFFIXES = (
+    "_folder", "_folder1", "_folder2",
+    "_switcher", "_switcher1",
+    "section",  # polyextrude::2.0: xformsection, outputsection, uvssection...
+    "folder",   # attribrandomize: folder, folder01
+)
+# Exact-name folder/tab state parms that don't fit a suffix rule.
+_FOLDER_STATE_EXACT = {"stdswitcher1", "folder", "folder01", "values"}
 
 
 def _is_folder_state_parm(pname: str) -> bool:
-    """True for collapsible-folder state parms the manifest never catalogs."""
+    """True for collapsible-folder / tab-switcher UI state parms.
+
+    These are never authored and never catalogued by the manifest; their value
+    encodes which tab is open / whether a folder is collapsed, so recording
+    them as 'changed' is pure noise.
+    """
+    if pname in _FOLDER_STATE_EXACT:
+        return True
     return pname.endswith(_FOLDER_STATE_SUFFIXES)
 
 
@@ -361,6 +379,15 @@ def _manifest_lookup(pname: str, manifest_defaults: dict[str, Any]) -> Any:
         default = manifest_defaults.get(template)
         if default is not None:
             return default
+
+    # Multiparm normalization, index-only tail: 'value0' / 'useapply1' ->
+    # 'value#' / 'useapply#'. These are the common Nth-instance parms
+    # (attribrandomize value0..value3, copytopoints useapply1..useapply3).
+    mt = _MULTIPARM_INDEX_TAIL_RE.match(pname)
+    if mt:
+        template = f"{mt.group(1)}#"
+        if template in manifest_defaults:
+            return manifest_defaults[template]
 
     # Vector component, xyzw suffix: 'upvectorx' -> 'upvector', take slot.
     vm = _VECTOR_XYZW_RE.match(pname)

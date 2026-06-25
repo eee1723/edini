@@ -212,8 +212,28 @@ class TestParamNormalization(unittest.TestCase):
         # never catalogued — it must be recognized so capture skips it.
         self.assertTrue(rl._is_folder_state_parm("up_folder"))
         self.assertTrue(rl._is_folder_state_parm("uv_folder"))
+        # polyextrude::2.0 uses 'xformsection', 'outputsection' for tab state.
+        self.assertTrue(rl._is_folder_state_parm("xformsection"))
+        self.assertTrue(rl._is_folder_state_parm("outputsection"))
+        # attribrandomize uses bare 'folder' / 'folder01'.
+        self.assertTrue(rl._is_folder_state_parm("folder"))
+        self.assertTrue(rl._is_folder_state_parm("folder01"))
+        self.assertTrue(rl._is_folder_state_parm("stdswitcher1"))
+        # Real authored parms must NOT be flagged.
         self.assertFalse(rl._is_folder_state_parm("surfacetype"))
+        self.assertFalse(rl._is_folder_state_parm("dist"))
         self.assertFalse(rl._is_folder_state_parm("foldercount"))
+
+    def test_multiparm_index_tail_matches_template(self):
+        # 'value0' -> manifest template 'value#' (attribrandomize value0..3).
+        # 'useapply1' -> 'useapply#' (copytopoints). Only matches when the '#'
+        # template actually exists in the manifest — no false positives.
+        defs = {"value#": [0.0], "useapply#": [0]}
+        self.assertEqual(rl._manifest_lookup("value0", defs), [0.0])
+        self.assertEqual(rl._manifest_lookup("value3", defs), [0.0])
+        self.assertEqual(rl._manifest_lookup("useapply1", defs), [0])
+        # A plain 'cols8' whose 'cols#' template doesn't exist stays unknown.
+        self.assertIsNone(rl._manifest_lookup("cols8", defs))
 
 
 class TestPythonScriptGeneration(unittest.TestCase):

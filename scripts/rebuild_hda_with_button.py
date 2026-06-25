@@ -27,10 +27,10 @@ BUTTON_PARM = "capture_all_recipes"
 BUTTON_LABEL = "Capture All Recipes"
 
 # The callback script itself. Kept as a string so it is embedded in the HDA
-# definition (no external file dependency). It captures the whole tree, then
-# surfaces a short summary so the user knows what happened.
+# definition's parm tags (no external file dependency). Houdini button callbacks
+# receive a kwargs dict; kwargs['node'] is the HDA instance being clicked.
 CALLBACK_SCRIPT = r"""
-node = hou.node('.')
+node = kwargs['node']
 try:
     import sys
     edini_lib = r"E:\\edini\\python3.11libs"
@@ -95,7 +95,12 @@ def _replace_or_add_button(group):
         "Each leaf's node network + author-marked parameters + Notes are "
         "serialized to recipe.json with a readable python_script for edini to "
         "use as reference material. Run this after adding/editing subnets.")
-    btn.setScript(CALLBACK_SCRIPT, script_type="python")
+    # Houdini button callbacks are set via tags, not a setScript method.
+    # script_callback holds the code; script_callback_language picks Python.
+    btn.setTags({
+        "script_callback": CALLBACK_SCRIPT,
+        "script_callback_language": "python",
+    })
     group.append(btn)
 
 
