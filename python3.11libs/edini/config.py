@@ -156,6 +156,10 @@ _EDINI_DEFAULTS: dict[str, Any] = {
     "knowledge_enabled": True,
     "reflection_provider": "",
     "reflection_model": "",
+    # Names of project skills (under EDINI_SKILLS_DIR) the user has toggled off
+    # in Settings → Pi Capabilities. Filtered out of `--skill` args at pi spawn,
+    # so a change takes effect after a pi restart.
+    "disabled_skills": [],
 }
 
 
@@ -303,6 +307,14 @@ def _discover_skill_records() -> list[dict[str, Any]]:
                 "exists": skill_file.is_file(),
                 "source": "project",
             })
+
+    # Honor user-disabled skills (Settings → Pi Capabilities toggles). A
+    # disabled name is dropped here so BOTH `get_pi_command` (no `--skill`) and
+    # `get_pi_capabilities` (hidden from the table) reflect the toggle from a
+    # single filter point.
+    disabled = set(_load_edini_settings().get("disabled_skills", []))
+    if disabled:
+        records = [r for r in records if r["name"] not in disabled]
 
     return records
 

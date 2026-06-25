@@ -390,6 +390,89 @@ class TestGetPiCommand(unittest.TestCase):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# TestSkillToggle
+# ═══════════════════════════════════════════════════════════════════════
+
+def _make_skill_dir(root: Path, name: str, description: str = "") -> Path:
+    """Create a fake project skill subdir with SKILL.md frontmatter."""
+    d = root / name
+    d.mkdir(parents=True, exist_ok=True)
+    desc = description or f"{name} skill"
+    (d / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: {desc}\n---\n# {name}\n",
+        encoding="utf-8")
+    return d
+
+
+class TestSkillToggle(unittest.TestCase):
+    """Tests for the disabled_skills filter (Settings → Pi Capabilities toggle).
+
+    Verifies that a skill name in settings.disabled_skills is dropped from
+    BOTH the pi spawn command and the capabilities inventory.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        self.skills_root = Path(self.tmpdir.name) / "skills"
+        self.skills_root.mkdir()
+        self.settings_path = Path(self.tmpdir.name) / "settings.json"
+        # Two skills on disk: one will be toggled off per-test.
+        _make_skill_dir(self.skills_root, "recipe-library")
+        _make_skill_dir(self.skills_root, "grill-me")
+        self._patches = [
+            patch.object(cfg, "EDINI_SKILLS_DIR", self.skills_root),
+            patch.object(cfg, "EDINI_SETTINGS_FILE", self.settings_path),
+        ]
+        for p in self._patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _write_settings(self, disabled: list[str]) -> None:
+        self.settings_path.write_text(
+            json.dumps({"disabled_skills": disabled}), encoding="utf-8")
+
+    def _skill_names_in_command(self) -> list[str]:
+        cmd = cfg.get_pi_command()
+        return [
+            Path(cmd[i + 1]).name
+            for i, part in enumerate(cmd[:-1]) if part == "--skill"
+        ]
+
+    def test_all_skills_loaded_when_none_disabled(self):
+        """With an empty disabled set, both skills reach the pi command."""
+        self._write_settings([])
+        names = self._skill_names_in_command()
+        self.assertIn("recipe-library", names)
+        self.assertIn("grill-me", names)
+
+    def test_disabled_skill_excluded_from_command(self):
+        """A disabled skill is dropped from the --skill args."""
+        self._write_settings(["recipe-library"])
+        names = self._skill_names_in_command()
+        self.assertNotIn("recipe-library", names)
+        # The other skill is unaffected.
+        self.assertIn("grill-me", names)
+
+    def test_disabled_skills_default_empty_when_key_absent(self):
+        """Missing disabled_skills key behaves as 'all enabled'."""
+        # Settings file exists but has no disabled_skills key.
+        self.settings_path.write_text(
+            json.dumps({"knowledge_enabled": True}), encoding="utf-8")
+        names = self._skill_names_in_command()
+        self.assertIn("recipe-library", names)
+        self.assertIn("grill-me", names)
+
+    def test_capabilities_reflects_disabled(self):
+        """The capabilities inventory also hides disabled skills."""
+        self._write_settings(["recipe-library"])
+        caps = cfg.get_pi_capabilities()
+        skill_names = {s["name"] for s in caps["skills"]}
+        self.assertNotIn("recipe-library", skill_names)
+        self.assertIn("grill-me", skill_names)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # TestGetPiEnv
 # ═══════════════════════════════════════════════════════════════════════
 

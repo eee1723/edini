@@ -803,20 +803,29 @@ class SettingsDialog(QtWidgets.QDialog):
         layout.addWidget(_section_label("Project Skills Available on Demand"))
         self._skills_table = QtWidgets.QTableWidget(0, 5)
         self._skills_table.setHorizontalHeaderLabels(
-            ["Status", "Skill", "Description", "Path", "Usage"])
+            ["Enabled", "Skill", "Description", "Path", "Usage"])
         _configure_capability_table(self._skills_table)
-        self._populate_capability_table(
+        # Per-skill on/off toggle. Captures the disabled set from settings at
+        # build time; the user flips checkboxes, _on_save persists the diff and
+        # restarts pi so the change takes effect.
+        self._skill_toggle_states: dict[str, bool] = {}
+        disabled_skills = set(get_settings().get("disabled_skills", []))
+        self._populate_skills_table(
             self._skills_table,
             caps.get("skills", []),
+            disabled_skills,
             usage_text="Not tracked",
         )
+        self._skills_table.itemChanged.connect(self._on_skill_toggled)
         layout.addWidget(self._skills_table)
 
         hint = QtWidgets.QLabel(
             "Extensions are executable Pi tools loaded at startup. "
             "Skills are workflow documents loaded by Pi when their trigger "
-            "description matches the task. Skill usage counts will appear "
-            "after Edini records skill activation events in session logs.")
+            "description matches the task. Toggle a skill off to keep it from "
+            "loading on the next session (useful for A/B testing). Skill usage "
+            "counts will appear after Edini records skill activation events in "
+            "session logs.")
         hint.setWordWrap(True)
         hint.setStyleSheet(f"color:#71717a;font-size:{fs(10)};padding:4px 0;")
         layout.addWidget(hint)
@@ -846,6 +855,68 @@ class SettingsDialog(QtWidgets.QDialog):
                 table.setItem(row, 4, _table_item(usage_text))
 
         table.resizeRowsToContents()
+
+    def _populate_skills_table(
+        self,
+        table: QtWidgets.QTableWidget,
+        rows: list[dict],
+        disabled_skills: set[str],
+        usage_text: str,
+    ) -> None:
+        """Populate the skills table with a per-row enabled checkbox.
+
+        Column 0 is a checkbox (checked = enabled, i.e. NOT in the disabled
+        set). Column 1 carries the skill name as item text so _on_skill_toggled
+        can read it back. Checkbox state is the source of truth; the
+        self._skill_toggle_states map mirrors it for _on_save.
+        """
+        # itemChanged fires while we populate; silence it until the table is
+        # built so we don't pollute toggle states with build-time rows.
+        table.blockSignals(True)
+        try:
+            table.setRowCount(0)
+            for item in rows:
+                row = table.rowCount()
+                table.insertRow(row)
+
+                name = item.get("name", "")
+                enabled = name not in disabled_skills
+
+                check = QtWidgets.QTableWidgetItem()
+                check.setFlags(
+                    QtCore.Qt.ItemIsUserCheckable
+                    | QtCore.Qt.ItemIsEnabled
+                    | QtCore.Qt.ItemIsSelectable)
+                check.setCheckState(
+                    QtCore.Qt.Checked if enabled else QtCore.Qt.Unchecked)
+                table.setItem(row, 0, check)
+
+                # Name in col 1 (also used as the row's identity in toggles).
+                name_item = _table_item(name)
+                table.setItem(row, 1, name_item)
+                table.setItem(row, 2, _table_item(item.get("description", "")))
+                path_item = _table_item(item.get("path", ""))
+                path_item.setToolTip(item.get("path", ""))
+                table.setItem(row, 3, path_item)
+                table.setItem(row, 4, _table_item(usage_text))
+
+                self._skill_toggle_states[name] = enabled
+
+            table.resizeRowsToContents()
+        finally:
+            table.blockSignals(False)
+
+    def _on_skill_toggled(self, item: QtWidgets.QTableWidgetItem) -> None:
+        """React to a skill checkbox flip: update the toggle-state map."""
+        # Only column 0 (the checkbox) should drive state.
+        if item.column() != 0:
+            return
+        name_item = self._skills_table.item(item.row(), 1)
+        if name_item is None:
+            return
+        name = name_item.text()
+        self._skill_toggle_states[name] = (
+            item.checkState() == QtCore.Qt.Checked)
 
     # ═══════════════════════════════════════════════════════════════════
     # Save
@@ -877,12 +948,23 @@ class SettingsDialog(QtWidgets.QDialog):
                 or old_settings.get("vision_model_id", "") != vision_model_id):
             self._needs_restart = True
 
+        # Skill toggles — `--skill` args are baked into the pi command at
+        # spawn, so a flip only takes effect after a pi restart (same model as
+        # vision above). Compare against the saved disabled set.
+        new_disabled_skills = [
+            name for name, enabled in self._skill_toggle_states.items()
+            if not enabled]
+        if set(new_disabled_skills) != set(
+                old_settings.get("disabled_skills", [])):
+            self._needs_restart = True
+
         save_settings({
             "knowledge_enabled": self._knowledge_check.isChecked(),
             "vision_provider": vision_prov_id,
             "vision_model_id": vision_model_id,
             "reflection_provider": self._reflect_provider_combo.currentData(),
             "reflection_model": self._reflect_model_edit.text().strip(),
+            "disabled_skills": new_disabled_skills,
         })
 
         # Theme + font
