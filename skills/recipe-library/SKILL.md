@@ -96,25 +96,26 @@ LLM composes them at the layout layer. Reuse these before hand-authoring:
 | `bevel_edges` | round/chamfer sharp edges by angle (mechanical fillets) | bevel, weight, segments, group |
 | `Base_Copy` | scatter randomly-scaled instances on a surface (rivets/grass) | npts, scale, group |
 
-> Note: `exposed_parms` are not yet promoted on these recipes. Until they are,
-> rebuilding yields the authored defaults; for now vary the result by editing
-> the rebuilt subnet's internal `marked_params` directly (the `重要参数` names).
+> Note: `exposed_parms` are not yet promoted on these recipes. That's fine —
+> the primary path is reading `python_script` (via recipe_read) and authoring
+> your own network, not mechanical override. If you want a faithful copy,
+> `recipe_rebuild` reproduces the authored setup verbatim; to vary it, edit the
+> rebuilt subnet directly or — preferably — adapt the python_script idiom.
 
 ### Capturing a whole category tree at once
 
 When the user has organized subnets into a nested category taxonomy (e.g.
-`/obj/sopnet1/Procedural_Modeling/Base_Sweep`, `.../Sim/RBD/Voronoi_Fracture`),
-ingest them all in one call:
+`/obj/sopnet1/Procedural_Modeling/tube_along_curve`), ingest them all in one
+call (or click the "Capture All Recipes" button on the recipe-manager HDA):
 - `recipe_capture_tree(root_path)` — recurses from the root, capturing every
   *leaf* subnet (one whose children include real SOP nodes) and descending
   into *container* subnets (whose children are all subnets).
-- recipe_ids become tree paths (`Procedural_Modeling.Base_Sweep`) so
+- recipe_ids become tree paths (`Procedural_Modeling.tube_along_curve`) so
   same-named leaves in different branches never collide. Query with
-  `recipe_list(query="Sim")` or `recipe_list(query="Procedural_Modeling")` to
-  find them by category component.
+  `recipe_list(query="Procedural_Modeling")` to find them by category component.
 - VEX wrangle nodes inside a leaf are captured as `vex_snippets` (with their
-  run-over class), and the recipe's `kind` flips to `"vex"`. The snippet code
-  is NOT folded into changed_params — it lives in its own searchable field.
+  run-over class), and inlined into the recipe's `python_script`. The recipe's
+  `kind` flips to `"vex"`.
 - `output` / `stashed_geo` nodes are ignored automatically (Houdini plumbing,
   not user content).
 - Empty Notes are auto-filled (root path + leaf name + inner node types) rather
@@ -124,7 +125,7 @@ ingest them all in one call:
 
 | kind | what it is | how to read it |
 |------|-----------|----------------|
-| `network` | A node network (curve+sweep, grid+scatter+copytopoints) | `nodes[]` with changed_params + wiring |
-| `vex` | Contains one or more wrangle nodes whose VEX is the real payload | `vex_snippets[]` (code + runover); nodes[] still has the topology |
+| `network` | A node network (curve+sweep, grid+scatter+copytopoints) | `python_script` (primary) — readable createNode/setInput/parm.set; `nodes[]` for the structured detail |
+| `vex` | Contains one or more wrangle nodes whose VEX is the real payload | `python_script` (inlines the VEX as a triple-quoted string); `vex_snippets[]` for the raw code + runover |
 
 Both are searched uniformly via `recipe_list`; pass `kind` to narrow.

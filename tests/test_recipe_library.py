@@ -477,7 +477,13 @@ class TestIndexQueries(unittest.TestCase):
             with open(os.path.join(d, "recipe.json"), "w", encoding="utf-8") as f:
                 json.dump({"schema_version": 1, "id": rid, "name": rid,
                            "notes": func, "function": func, "category": cat,
-                           "nodes": [], "exposed_parms": [],
+                           # tube marks endcaptype (a convention); extrude marks dist.
+                           "nodes": [{"name": "core", "type": "sweep",
+                                      "changed_params": {}, "marked_params": (
+                                          {"endcaptype": 1} if "tube" in cat
+                                          else {"dist": 0.5}),
+                                      "expressions": {}, "inputs": {}}],
+                           "exposed_parms": [],
                            "inputs": [], "outputs": []}, f)
         rl.rebuild_index()
 
@@ -500,6 +506,15 @@ class TestIndexQueries(unittest.TestCase):
         r = rl.recipe_list(category="extrude")
         self.assertEqual(r["matched"], 1)
         self.assertEqual(r["matches"][0]["id"], "extrude_one")
+
+    def test_list_search_by_marked_parm(self):
+        # marked_parms are the author's convention signal (e.g. endcaptype).
+        # Searching by a convention name must find the recipe that encodes it.
+        r = rl.recipe_list(query="endcaptype")
+        self.assertEqual(r["matched"], 1)
+        self.assertEqual(r["matches"][0]["id"], "tube_one")
+        # The marked_parms should also surface in the match summary.
+        self.assertIn("endcaptype", r["matches"][0].get("marked_parms", []))
 
     def test_read_returns_full_recipe(self):
         r = rl.recipe_read("tube_one")

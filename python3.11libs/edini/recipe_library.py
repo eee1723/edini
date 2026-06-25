@@ -1362,6 +1362,15 @@ def rebuild_index() -> dict[str, Any]:
         rj = _safe_read_json(os.path.join(child, "recipe.json"))
         if not isinstance(rj, dict) or rj.get("id") != entry:
             continue
+        # Collect the author-marked parm names across all nodes — these are the
+        # signal parms (the ones the recipe deliberately sets) and must be
+        # searchable so recipe_list(query="endcaptype") can find a recipe by
+        # the convention it encodes.
+        marked_parms: list[str] = []
+        for n in rj.get("nodes", []):
+            marked_parms.extend(
+                p for p in (n.get("marked_params") or {}).keys()
+                if p not in marked_parms)
         entries.append({
             "id": rj["id"],
             "category": rj.get("category", "misc"),
@@ -1374,6 +1383,7 @@ def rebuild_index() -> dict[str, Any]:
             "inputs": len(rj.get("inputs", [])),
             "outputs": len(rj.get("outputs", [])),
             "exposed_parms": [e.get("subnet_parm", "") for e in rj.get("exposed_parms", [])],
+            "marked_parms": marked_parms,
             "generated_at": rj.get("generated_at", ""),
         })
     index = {
@@ -1415,6 +1425,7 @@ def recipe_list(query: str = "", category: str = "", kind: str = "") -> dict[str
                 e.get("category", ""), e.get("kind", ""),
                 " ".join(e.get("tree_path", [])),
                 " ".join(e.get("exposed_parms", [])),
+                " ".join(e.get("marked_parms", [])),
             ]).lower()
             if q not in haystack:
                 continue
@@ -1428,6 +1439,7 @@ def recipe_list(query: str = "", category: str = "", kind: str = "") -> dict[str
             "inputs": e.get("inputs", 0),
             "outputs": e.get("outputs", 0),
             "exposed_parms": e.get("exposed_parms", []),
+            "marked_parms": e.get("marked_parms", []),
             "vex_snippet_count": e.get("vex_snippet_count", 0),
             "node_count": e.get("node_count", 0),
         })

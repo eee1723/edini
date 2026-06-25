@@ -1,12 +1,13 @@
 // pi-extensions/edini-tools/tools/recipe.ts
 // Recipe library tool definitions — query, read, capture, and rebuild subnet recipes.
 //
-// A *recipe* is a JSON serialization of a Houdini subnet's internal node
-// network (nodes, connections, changed parameters) plus the subnet's Notes as
-// metadata. The library lives under recipes/ at the project root. The agent
-// queries the index (recipe_list), reads a recipe to understand it
-// (recipe_read), and rebuilds it deterministically with parameter overrides
-// (recipe_rebuild) — preferring reuse over hand-building nodes.
+// A *recipe* is a reference sample: a JSON serialization of a Houdini subnet's
+// internal node network plus a readable `python_script` reconstruction. The
+// agent searches the index (recipe_list), reads a recipe to learn the
+// node-authoring idiom + conventions from its python_script (recipe_read),
+// then authors its own network — optionally using recipe_rebuild for a quick
+// verbatim copy. Recipes lower authoring error rates; they do not bound the
+// agent's ability.
 
 import { Type } from "typebox";
 
@@ -30,15 +31,16 @@ export const recipeList = {
   name: "recipe_list",
   label: "Query Recipe Library",
   description:
-    "Search the recipe library index for subnet recipes that match a keyword or category. " +
-    "Each recipe is a pre-built, pre-validated Houdini subnet (e.g. tube_along_curve, copy_to_points) " +
-    "that can be rebuilt deterministically with recipe_rebuild. ALWAYS call this before hand-building " +
-    "nodes — a matching recipe is faster and more reliable than authoring from scratch.",
-  promptSnippet: "Search the recipe library for a reusable subnet recipe",
+    "Search the recipe library index for subnet recipes that match a keyword, category, or kind. " +
+    "Each recipe is a pre-built reference sample (e.g. tube_along_curve, copy_to_points) whose " +
+    "python_script field shows the authoring idiom + the marked conventions. ALWAYS call this before " +
+    "hand-authoring nodes — a matching recipe gives you verified node syntax and wiring to adapt, " +
+    "cutting authoring errors (wrong node versions, missing connections).",
+  promptSnippet: "Search the recipe library for a reusable subnet reference",
   promptGuidelines: [
-    "Call recipe_list FIRST when the user wants geometry — a matching recipe rebuilds deterministically and avoids LLM node-authoring errors.",
-    "Matching is case-insensitive substring over the recipe id, function description, category, and exposed parm names. Pass a concise intent keyword (e.g. 'tube', 'copy', 'extrude').",
-    "The returned summaries include inputs/outputs counts and exposed_parms — use these to judge fit before reading the full recipe.",
+    "Call recipe_list FIRST when the user wants geometry — a matching recipe provides a python_script you can mine for correct node syntax and conventions, then adapt to the task.",
+    "Matching is case-insensitive substring over the recipe id, function description, category, exposed parm names, and marked_parms (the author's key conventions). Pass a concise intent keyword (e.g. 'tube', 'copy', 'extrude') or a convention name (e.g. 'endcaptype').",
+    "The returned summaries include marked_parms (the signal conventions) and inputs/outputs counts — use these to judge fit before reading the full recipe's python_script.",
     "If no recipe matches, fall back to houdini_run_python_sandbox or houdini_create_node; after hand-building a reusable pattern, consider recipe_capture to add it to the library.",
   ],
   parameters: Type.Object({
@@ -143,14 +145,17 @@ export const recipeCaptureTree = {
 
 export const recipeRebuild = {
   name: "recipe_rebuild",
-  label: "Rebuild Subnet from Recipe",
+  label: "Rebuild Subnet from Recipe (verbatim copy)",
   description:
-    "Rebuild a subnet's node network at a target parent from its recipe, deterministically. " +
-    "Creates a subnet container, topologically creates the inner nodes, applies changed parameters, " +
-    "wires inputs, applies exposed-parameter overrides, and runs a built-in structural verification. " +
-    "Prefer this over hand-authoring nodes whenever a matching recipe exists.",
-  promptSnippet: "Rebuild a recipe's subnet network with parameter overrides",
+    "Rebuild a subnet's node network at a target parent from its recipe, deterministically — a " +
+    "quick VERBATIM copy of the author's setup. This is the OPTIONAL fast path. The PRIMARY path " +
+    "is to read recipe_read's python_script and author your own network adapted to the task. Use " +
+    "recipe_rebuild when the user wants exactly this recipe reproduced (e.g. 'just make a tube like " +
+    "the library one'), not when the task merely resembles it. Creates nodes topologically, applies " +
+    "changed params + exposed-parm overrides, wires inputs, and runs a structural verify.",
+  promptSnippet: "Verbatim-copy rebuild a recipe (the optional fast path; prefer authoring from python_script)",
   promptGuidelines: [
+    "This is a faithful COPY, not the main authoring path. Prefer reading python_script (recipe_read) and building your own network when the task differs from the recipe at all.",
     "Pass overrides for exposed_parms only (see recipe_read output) — never try to set internal node parms directly.",
     "The built-in verify step reports mismatches; if verify fails, read the mismatches and the warnings rather than ignoring them.",
     "The rebuilt subnet is fully editable (it is NOT a locked HDA) — you can inspect_health, verify_orientation, and commit_sandbox on it like any hand-built network.",
