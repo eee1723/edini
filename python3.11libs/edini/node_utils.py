@@ -275,8 +275,109 @@ def connect_nodes(
         return {"success": False, "error": str(e)}
 
 
+def _parm_menu_items(parm) -> list[str] | None:
+    """Return the menu tokens for a menu parm, or None if it isn't a menu.
+
+    Real Houdini exposes them via parm.parmTemplate().menuItems(); some menu
+    templates also carry a different type tag. We probe defensively so a
+    non-menu parm (Float/Int/String) returns None and the caller skips
+    coercion entirely. Mock parms lack parmTemplate(), so this returns None
+    there too — and since the mock's .set() never raises, coercion is moot.
+    """
+    try:
+        tmpl = parm.parmTemplate()
+    except Exception:
+        return None
+    if tmpl is None:
+        return None
+    try:
+        # Only Menu / String-menu templates have menuItems().
+        items = tmpl.menuItems()
+    except Exception:
+        return None
+    if not items:
+        return None
+    return [str(i) for i in items]
+
+
+def _coerce_menu_value(parm, value, menu_items: list[str]):
+    """Translate an agent-supplied menu value into something .set() accepts.
+
+    Houdini menu parms accept either a valid menu *token* (str) or a numeric
+    *index* (int). But agents pass values straight from JSON, where:
+      - the manifest's ``default: 0`` round-trips as the string ``"0"``
+      - ``set("0")`` is then treated as a token lookup → "Invalid menu item".
+
+    We resolve the value against the known token list:
+      1. exact token match            → use the token string
+      2. numeric string in index range → use the integer index
+      3. already an int in range       → use it as-is
+    Returns the coerced value, or None if no mapping was found (caller then
+    surfaces a clear error naming the valid tokens).
+    """
+    # 1. Exact token match (case-sensitive, the Houdini default).
+    token = str(value)
+    if token in menu_items:
+        return token
+
+    # 2. Numeric string / int → interpret as a menu index.
+    try:
+        idx = int(value)
+    except (TypeError, ValueError):
+        return None
+    if 0 <= idx < len(menu_items):
+        return idx
+    return None
+
+
+def _set_parm_value(parm, value) -> tuple[bool, Any, str | None]:
+    """Set a parm value with menu-token coercion fallback.
+
+    Returns (ok, applied_value, error). On a plain .set() success the applied
+    value equals the input. If .set() raises a menu error and the parm is a
+    menu, we coerce the value (e.g. "0" → index 0 or the matching token) and
+    retry once. This absorbs the common "agent sends default-as-string" trap
+    without changing behaviour for non-menu parms.
+    """
+    try:
+        parm.set(value)
+        return True, value, None
+    except Exception as first_err:
+        msg = str(first_err)
+        # Only attempt coercion when the failure looks menu-related; avoids
+        # masking unrelated errors (e.g. type mismatches on Float parms).
+        if "menu" not in msg.lower():
+            return False, value, msg
+
+        menu_items = _parm_menu_items(parm)
+        if not menu_items:
+            return False, value, msg
+
+        coerced = _coerce_menu_value(parm, value, menu_items)
+        if coerced is None:
+            return (
+                False,
+                value,
+                f"{msg}. Valid menu tokens for this parm: {menu_items}",
+            )
+        try:
+            parm.set(coerced)
+            return True, coerced, None
+        except Exception as second_err:
+            return (
+                False,
+                coerced,
+                f"{second_err}. Valid menu tokens for this parm: {menu_items}",
+            )
+
+
 def set_param(node_path: str, param_name: str, value: Any) -> dict[str, Any]:
-    """Set a parameter value on a node."""
+    """Set a parameter value on a node.
+
+    Menu parms are coerced automatically: if a numeric value like ``"0"``
+    (stringified from the manifest default) is rejected as "Invalid menu
+    item", it is remapped to the menu index or matching token and retried.
+    """
     try:
         node = hou.node(node_path)
         if node is None:
@@ -286,14 +387,21 @@ def set_param(node_path: str, param_name: str, value: Any) -> dict[str, Any]:
         if parm is None:
             return {"success": False, "error": f"Parameter '{param_name}' not found on {node_path}"}
 
-        parm.set(value)
-        return {"success": True, "path": node_path, "param": param_name, "value": value}
+        ok, applied, err = _set_parm_value(parm, value)
+        if not ok:
+            return {"success": False, "error": err}
+        return {"success": True, "path": node_path, "param": param_name, "value": applied}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 
 def set_params_batch(node_path: str, params: dict[str, Any]) -> dict[str, Any]:
-    """Set multiple parameters on a node in a single call."""
+    """Set multiple parameters on a node in a single call.
+
+    Each value goes through the same menu-coercion fallback as set_param, so
+    batch sets of menu parms (e.g. a whole node's mode toggles) succeed even
+    when values arrive as stringified indices.
+    """
     try:
         node = hou.node(node_path)
         if node is None:
@@ -305,10 +413,9 @@ def set_params_batch(node_path: str, params: dict[str, Any]) -> dict[str, Any]:
             if parm is None:
                 failed.append(name)
                 continue
-            try:
-                parm.set(value)
-            except Exception as e:
-                failed.append(f"{name}: {e}")
+            ok, _applied, err = _set_parm_value(parm, value)
+            if not ok:
+                failed.append(f"{name}: {err}")
 
         if failed:
             return {
@@ -527,6 +634,27 @@ def _extract_parm_spec(tmpl) -> dict[str, Any] | None:
 
     spec: dict[str, Any] = {"name": name, "type": type_name}
 
+    # Multi-component parms (Float/Int vectors) are addressable on a node by
+    # their per-component names — e.g. the circle SOP's radius template is
+    # named "rad" but only "radx"/"rady" exist on the live node. Recording the
+    # group name alone misleads agents: node.parm("rad") returns None and
+    # raises AttributeError. Capture numComponents + the real component names
+    # so the manifest reflects what is actually addressable.
+    ncomp = _attr_or_call(tmpl, "numComponents") or 1
+    try:
+        ncomp = int(ncomp)
+    except Exception:
+        ncomp = 1
+    if ncomp > 1:
+        suffixes = ("x", "y", "z", "w")[:ncomp]
+        comp_names = [name + s for s in suffixes]
+        spec["num_components"] = ncomp
+        spec["component_names"] = comp_names
+        spec["note"] = (
+            f"multi-component: use {', '.join(comp_names)} on the node "
+            f"(not the group name {name!r})"
+        )
+
     lbl = _attr_or_call(tmpl, "label")
     if lbl and lbl != name:
         spec["label"] = lbl
@@ -710,6 +838,49 @@ def generate_node_parms_manifest(
     }
 
 
+def _enrich_manifest_parms(parms: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Backfill component_names/num_components for multi-component parms.
+
+    The manifest was generated before _extract_parm_spec recorded
+    numComponents, so legacy entries store only the ParmTemplate *group* name
+    (e.g. circle's "rad") — but on the live node only the suffixed per-component
+    parms exist ("radx", "rady"). node.parm("rad") returns None and the agent's
+    code crashes with AttributeError. Regenerating the manifest requires a live
+    Houdini, so we heal the data at serve time instead.
+
+    Heuristic: a Float/Int parm whose `default` is a list of length >= 2 (and
+    which isn't already annotated) is treated as a multi-component vector. This
+    matches how _json_safe serialises defaultValue() for FloatParmTemplate with
+    numComponents 2/3/4 (the common Radius/Center/Rotate cases). False positives
+    are low-risk: the worst case is over-annotating a parm that already accepts
+    a tuple via .set((a,b)).
+    """
+    suffixes_by_len = {2: ("x", "y"), 3: ("x", "y", "z"), 4: ("x", "y", "z", "w")}
+    enriched: list[dict[str, Any]] = []
+    for p in parms:
+        if not isinstance(p, dict) or p.get("num_components"):
+            enriched.append(p)
+            continue
+        default = p.get("default")
+        ptype = p.get("type")
+        if (
+            ptype in ("Float", "Int")
+            and isinstance(default, list)
+            and len(default) in suffixes_by_len
+        ):
+            name = p.get("name", "")
+            comps = [name + s for s in suffixes_by_len[len(default)]]
+            p = dict(p)  # copy so we don't mutate the manifest dict in memory
+            p["num_components"] = len(default)
+            p["component_names"] = comps
+            p["note"] = (
+                f"multi-component: use {', '.join(comps)} on the node "
+                f"(not the group name {name!r})"
+            )
+        enriched.append(p)
+    return enriched
+
+
 def _now_iso() -> str:
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -737,11 +908,12 @@ def node_parms(node_type: str, category: str = "Sop") -> dict[str, Any]:
     if manifest is not None:
         nt_entry = manifest.get("node_types", {}).get(node_type)
         if nt_entry is not None:
+            parms = _enrich_manifest_parms(nt_entry.get("parms", []))
             return {
                 "success": True,
                 "node_type": node_type,
                 "category": manifest.get("category", category),
-                "parms": nt_entry.get("parms", []),
+                "parms": parms,
                 "source": "manifest",
                 "houdini_version": manifest.get("houdini_version"),
             }

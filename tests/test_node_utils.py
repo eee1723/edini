@@ -601,6 +601,140 @@ class TestSetParamsBatch(unittest.TestCase):
 
 
 # ===================================================================
+# Menu-parameter coercion (Bug 3)
+# ===================================================================
+
+class _MenuTemplate:
+    """Stand-in for a real Menu ParmTemplate — exposes menuItems()."""
+
+    def __init__(self, items):
+        self._items = list(items)
+
+    def menuItems(self):
+        return list(self._items)
+
+
+class _MenuParm(MockParm):
+    """A mock parm that mimics a Houdini *menu* parm's picky .set().
+
+    Real Houdini raises "Invalid menu item" when .set() is given a string
+    that isn't a menu token; the mock's plain MockParm.set() accepts
+    anything, so we override to reject non-token strings and non-int values,
+    matching the behaviour the coercion fallback is designed to fix. A valid
+    token or a valid int index succeeds.
+    """
+
+    def __init__(self, name, menu_items, current=0):
+        super().__init__(name, current)
+        self._menu_items = list(menu_items)
+
+    def parmTemplate(self):
+        return _MenuTemplate(self._menu_items)
+
+    def set(self, value):
+        items = self._menu_items
+        # Exact token match.
+        if isinstance(value, str) and value in items:
+            self._value = value
+            return
+        # Valid integer index.
+        if isinstance(value, int) and not isinstance(value, bool) and 0 <= value < len(items):
+            self._value = value
+            return
+        # Anything else (incl. numeric strings like "0") → invalid menu item.
+        raise _mock_hou.OperationFailed(
+            "The attempted operation failed.\nInvalid menu item")
+
+
+class TestMenuParamCoercion(unittest.TestCase):
+    """Menu parms accept token OR index; the agent often sends a stringified
+    default like "0", which real Houdini rejects as "Invalid menu item".
+    set_param / set_params_batch must coerce it transparently (Bug 3)."""
+
+    def _make_menu_node(self, menu_items=("detail", "primitive", "point", "vertex", "number")):
+        cr = create_node("attribwrangle", name="menu_test")
+        _register_created_node(cr)
+        node = _mock_hou.node(cr["path"])
+        node._parms["class"] = _MenuParm("class", menu_items, current="vertex")
+        return cr["path"], menu_items
+
+    def test_set_menu_token_string(self):
+        """A direct token string ('detail') sets without coercion."""
+        path, _ = self._make_menu_node()
+        r = set_param(path, "class", "detail")
+        self.assertTrue(r["success"])
+        self.assertEqual(r["value"], "detail")
+
+    def test_set_menu_numeric_string_coerced(self):
+        """The regression case: '0' (string) must map to index 0, not error."""
+        path, _ = self._make_menu_node()
+        r = set_param(path, "class", "0")
+        self.assertTrue(r["success"], msg=str(r))
+        self.assertEqual(r["value"], 0)
+
+    def test_set_menu_int_index(self):
+        """A plain int index (2 → 'point') sets directly."""
+        path, _ = self._make_menu_node()
+        r = set_param(path, "class", 2)
+        self.assertTrue(r["success"])
+        self.assertEqual(r["value"], 2)
+
+    def test_set_menu_invalid_value_lists_tokens(self):
+        """A value that maps to neither token nor index reports valid tokens."""
+        path, items = self._make_menu_node()
+        r = set_param(path, "class", "bogus")
+        self.assertFalse(r["success"])
+        self.assertIn("Invalid menu item", r["error"])
+        # The error should name the valid tokens so the agent can self-correct.
+        self.assertIn("detail", r["error"])
+
+    def test_set_menu_out_of_range_index(self):
+        """An out-of-range numeric string ('99') is rejected with token list."""
+        path, _ = self._make_menu_node()
+        r = set_param(path, "class", "99")
+        self.assertFalse(r["success"])
+
+    def test_set_param_non_menu_unaffected(self):
+        """Non-menu parms must NOT be touched by the coercion path."""
+        from edini.node_utils import _set_parm_value
+        cr = create_node("box", name="float_test")
+        _register_created_node(cr)
+        node = _mock_hou.node(cr["path"])
+        node._parms["size"] = MockParm("size", 1.0)
+        # A plain MockParm has no parmTemplate() → not a menu → set directly.
+        ok, applied, err = _set_parm_value(node._parms["size"], 2.5)
+        self.assertTrue(ok)
+        self.assertEqual(applied, 2.5)
+        self.assertIsNone(err)
+
+    def test_set_params_batch_menu_coercion(self):
+        """Batch set coerces a mixed bag: a token, a numeric string, an int."""
+        path, _ = self._make_menu_node()
+        from edini.node_utils import set_params_batch
+        # 'class' is the menu parm; we also keep it alone to isolate behaviour.
+        result = set_params_batch(path, {"class": "0"})
+        self.assertTrue(result["success"])
+        self.assertEqual(result["set_count"], 1)
+        self.assertNotIn("partial", result)
+
+    def test_coerce_menu_value_direct(self):
+        """Unit-test the coercion helper across all branches."""
+        from edini.node_utils import _coerce_menu_value
+        items = ["detail", "primitive", "point", "vertex", "number"]
+        # exact token
+        self.assertEqual(_coerce_menu_value(None, "detail", items), "detail")
+        # numeric string → index
+        self.assertEqual(_coerce_menu_value(None, "0", items), 0)
+        self.assertEqual(_coerce_menu_value(None, "3", items), 3)
+        # int → int
+        self.assertEqual(_coerce_menu_value(None, 2, items), 2)
+        # out-of-range index → None
+        self.assertIsNone(_coerce_menu_value(None, "9", items))
+        # non-numeric non-token → None
+        self.assertIsNone(_coerce_menu_value(None, "bogus", items))
+
+
+# ===================================================================
 # TestInspectGeometryHealth
 # ===================================================================
 

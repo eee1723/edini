@@ -106,6 +106,13 @@ def geometry_stats(node_path: str) -> dict[str, Any] | None:
     node = hou.node(node_path)
     if node is None:
         return None
+    # Only SopNodes (surface operators) carry a cookable .geometry(). A network
+    # sandbox's root is a geo *container* (ObjNode) — calling .geometry() on it
+    # raises AttributeError: 'ObjNode' object has no attribute 'geometry',
+    # which used to nest a second traceback under the agent's real error. Guard
+    # with hasattr so non-SOP paths degrade cleanly to None instead.
+    if not hasattr(node, "geometry"):
+        return None
     geo = node.geometry()
     if geo is None:
         return None
@@ -1340,8 +1347,22 @@ def run_python_sandbox(
 
         except Exception as e:
             execution_traceback = traceback.format_exc()
+            # On failure, output_node_path is often still "" (the assignment at
+            # line 1281 hasn't run yet). Falling back to root_path diagnoses the
+            # geo *container* (an ObjNode), whose .geometry() call used to raise
+            # a second AttributeError nested under the agent's real traceback.
+            # Instead, try to resolve the most-downstream SOP already built so
+            # the agent sees partial geometry diagnostics; only if none exists
+            # do we fall through to root_path (and geometry_stats now handles
+            # that ObjNode case gracefully via the hasattr guard).
+            diag_path = output_node_path
+            if not diag_path:
+                resolved = _resolve_output_node(sandbox_root)
+                diag_path = (
+                    resolved.path() if resolved is not sandbox_root else root_path
+                )
             diagnostics = _safe_collect_diagnostics(
-                output_node_path or root_path,
+                diag_path,
                 include_geometry=True,
                 include_parms=False,
             )
