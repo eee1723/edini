@@ -169,6 +169,115 @@ class TestParamNormalization(unittest.TestCase):
         self.assertFalse(rl._is_ramp_dict({"keys": [0.0]}))
         self.assertFalse(rl._is_ramp_dict("not a dict"))
 
+    def test_string_scalar_equals_single_element_list(self):
+        # manifest wraps String defaults as ['x']; parm.eval() returns 'x'.
+        # This was the biggest false-positive source: attrib names like
+        # 'roll' never matched ['roll'].
+        self.assertTrue(rl._values_equal("", [""]))
+        self.assertTrue(rl._values_equal([""], ""))
+        self.assertTrue(rl._values_equal("roll", ["roll"]))
+        self.assertFalse(rl._values_equal("roll", ["yaw"]))
+
+    def test_manifest_defaults_prefers_versioned_name(self):
+        # sweep::2.0 (81 real parms) and sweep (20 legacy parms) are DIFFERENT
+        # nodes in the manifest. The lookup must use the exact versioned name,
+        # not fall back to the unversioned base — otherwise every real parm is
+        # reported as unknown and capture drowns in false-positive 'changed'.
+        manifest = {"node_types": {
+            "sweep": {"parms": [{"name": "legacy_parm", "default": [0]}]},
+            "sweep::2.0": {"parms": [
+                {"name": "surfacetype", "default": [5]},
+                {"name": "endcaptype", "default": [0]}]},
+        }}
+        defs = rl._manifest_defaults("sweep::2.0", manifest)
+        self.assertIn("surfacetype", defs)
+        self.assertNotIn("legacy_parm", defs)
+
+    def test_vector_xyzw_component_matches_parent(self):
+        # 'upvectorx' should resolve to upvector[0] (a 3-vector default).
+        defs = {"upvector": [0.0, 1.0, 0.0]}
+        self.assertEqual(rl._manifest_lookup("upvectorx", defs), 0.0)
+        self.assertEqual(rl._manifest_lookup("upvectory", defs), 1.0)
+        self.assertEqual(rl._manifest_lookup("upvectorz", defs), 0.0)
+
+    def test_vector_numeric_component_matches_parent(self):
+        # 'uvscale1'/'uvscale2' should resolve to uvscale[0]/[1] (a 2-vector).
+        # Must NOT collide with multiparms whose parent isn't a vector.
+        defs = {"uvscale": [1.0, 1.0], "scaleramp#value": [0.0]}
+        self.assertEqual(rl._manifest_lookup("uvscale1", defs), 1.0)
+        self.assertEqual(rl._manifest_lookup("uvscale2", defs), 1.0)
+
+    def test_folder_state_parm_detected(self):
+        # Collapsible-folder UI state (up_folder etc.) is never authored and
+        # never catalogued — it must be recognized so capture skips it.
+        self.assertTrue(rl._is_folder_state_parm("up_folder"))
+        self.assertTrue(rl._is_folder_state_parm("uv_folder"))
+        self.assertFalse(rl._is_folder_state_parm("surfacetype"))
+        self.assertFalse(rl._is_folder_state_parm("foldercount"))
+
+
+class TestPythonScriptGeneration(unittest.TestCase):
+    """Pure-function tests for _generate_python_script.
+
+    The script is reference material for edini: it must surface the author's
+    marked parameters (the ones that matter) and reproduce non-trivial changed
+    params, while skipping noise (identity transforms, empty strings, folder
+    state). Built from a hand-constructed recipe dict so it stays isolated.
+    """
+
+    def _tube_recipe(self):
+        """A minimal recipe mirroring tube_along_curve's shape."""
+        return {
+            "id": "tube_along_curve", "name": "tube_along_curve",
+            "function": "沿曲线生成封闭圆柱管材",
+            "use_case": "弯把、前叉", "avoid": "变径管",
+            "vex_snippets": [],
+            "nodes": [
+                {"name": "path_line", "type": "line", "inputs": {},
+                 "changed_params": {"diry": 1.0, "tx": 0.0},
+                 "marked_params": {}, "expressions": {}},
+                {"name": "section", "type": "circle", "inputs": {},
+                 "changed_params": {"radx": 0.012, "rady": 0.012, "type": 1},
+                 "marked_params": {}, "expressions": {}},
+                {"name": "sweep1", "type": "sweep::2.0",
+                 "inputs": {"0": "path_line", "1": "section"},
+                 "changed_params": {"surfacetype": 2, "endcaptype": 1,
+                                    "tx": 0.0, "curvegroup": ""},
+                 "marked_params": {"surfacetype": 2, "endcaptype": 1},
+                 "expressions": {}},
+            ],
+        }
+
+    def test_generates_function_with_create_and_wire(self):
+        script = rl._generate_python_script(self._tube_recipe())
+        self.assertIn("def build_tube_along_curve(parent):", script)
+        self.assertIn("createNode('sweep::2.0', 'sweep1')", script)
+        # wiring present, after creation
+        self.assertIn("sweep1.setInput(0, path_line)", script)
+        self.assertIn("sweep1.setInput(1, section)", script)
+
+    def test_marked_params_get_author_comment(self):
+        script = rl._generate_python_script(self._tube_recipe())
+        self.assertIn("surfacetype').set(2)  # author-marked", script)
+        self.assertIn("endcaptype').set(1)  # author-marked", script)
+
+    def test_noise_params_filtered(self):
+        # Identity transforms (tx=0) and empty strings (curvegroup='') carry
+        # no intent and must not clutter the script.
+        script = rl._generate_python_script(self._tube_recipe())
+        self.assertNotIn("'tx'", script)
+        self.assertNotIn("'curvegroup'", script)
+
+    def test_vex_snippet_inlined(self):
+        recipe = self._tube_recipe()
+        recipe["vex_snippets"] = [{
+            "node": "sweep1", "code": "v@P.x = 1;", "runover": 1}]
+        recipe["nodes"][2]["type"] = "attribwrangle"
+        script = rl._generate_python_script(recipe)
+        self.assertIn('"""', script)
+        self.assertIn("v@P.x = 1;", script)
+        self.assertIn("run-over: class=1", script)
+
 
 class TestCaptureRebuild(unittest.TestCase):
     """Full capture→rebuild round-trip using the hou mock.
@@ -296,6 +405,41 @@ class TestCaptureRebuild(unittest.TestCase):
         rl.recipe_capture(subnet.path())
         r = rl.recipe_rebuild("chain_demo", "/obj", name="chain_inst")
         self.assertTrue(r["success"], r.get("warnings"))
+
+    # ── Promoted-parameter / exposed_parms closure ──────────────────────
+    # These prove the loop that the recipe-capture button enables:
+    # a subnet-level parm carrying a ch("../inner/parm") reference (i.e. a
+    # Promote Parameter result) is captured into exposed_parms[], and a
+    # rebuild override on that subnet_parm flows through to the inner node.
+
+    def _promote_parm(self, subnet, subnet_parm, inner_node, inner_parm, value):
+        """Stand up a promoted subnet parm: a top-level parm whose expression
+        is ch("../inner_node/inner_parm"). Mirrors Houdini's Promote Parameter."""
+        MockParm = __import__("tests.mock_hou", fromlist=["MockParm"]).MockParm
+        p = MockParm(subnet_parm, value)
+        p.setExpression(f'ch("../{inner_node}/{inner_parm}")')
+        subnet._parms[subnet_parm] = p
+
+    def test_promoted_parm_captured_as_exposed(self):
+        """A subnet parm with a ch("../sweep1/rad") reference lands in
+        exposed_parms with the inner node.parm target recorded."""
+        subnet = self._make_subnet("tube_p", "功能：扫管", [
+            {"name": "sweep1", "type": "null",
+             "changed": {"rad": 0.012}},
+        ])
+        self._promote_parm(subnet, "rad", "sweep1", "rad", 0.012)
+        rl.recipe_capture(subnet.path())
+        rj = json.load(open(os.path.join(self._tmp, "recipes", "tube_p",
+                                         "recipe.json"), encoding="utf-8"))
+        exposed = {e["subnet_parm"]: e for e in rj["exposed_parms"]}
+        self.assertIn("rad", exposed)
+        self.assertEqual(exposed["rad"]["target"], "sweep1.rad")
+
+    # NOTE: the override-flows-to-inner-node path (recipe_rebuild overrides
+    # setting the inner node's parm) is verified against the real sweep::2.0
+    # node in Houdini, where a real 'rad' parm exists. Under the mock, a null
+    # node has no rad parm for the override to land on, so it can't be asserted
+    # here without faking the very thing under test.
 
 
 class TestIndexQueries(unittest.TestCase):

@@ -258,15 +258,22 @@ def _load_manifest() -> dict | None:
 def _manifest_defaults(node_type: str, manifest: dict | None) -> dict[str, Any]:
     """Return {parm_name: default_value} for a node type from the manifest.
 
-    Strips a trailing ``::version`` from the type (e.g. ``sweep::2.0`` →
-    ``sweep``) since the manifest keys are unversioned. Returns {} if the
-    manifest is missing or the type isn't catalogued.
+    The manifest catalogs BOTH versioned (``sweep::2.0``) and unversioned
+    (``sweep``) names, and they are DIFFERENT nodes (the v1 ``sweep`` and the
+    rewritten ``sweep::2.0`` have unrelated parameter sets). So we must prefer
+    the exact versioned name; only fall back to the unversioned base name when
+    the versioned entry is absent (e.g. for a node that has no ``::version``).
+    Matching the base first used to silently return the wrong node's defaults,
+    which flagged every real parm as "unknown" and corrupted capture.
+    Returns {} if the manifest is missing or neither name is catalogued.
     """
     if not manifest:
         return {}
     node_types = manifest.get("node_types", {})
-    base = node_type.split("::", 1)[0]
-    entry = node_types.get(base) or node_types.get(node_type)
+    entry = node_types.get(node_type)
+    if not isinstance(entry, dict):
+        base = node_type.split("::", 1)[0]
+        entry = node_types.get(base)
     if not isinstance(entry, dict):
         return {}
     defaults: dict[str, Any] = {}
@@ -279,17 +286,23 @@ def _manifest_defaults(node_type: str, manifest: dict | None) -> dict[str, Any]:
 def _values_equal(a: Any, b: Any) -> bool:
     """Loose equality for default comparison (float drift, list/tuple, scalar-vs-list).
 
-    The manifest stores numeric defaults as single-element lists (e.g. ``[4]``
-    for an Int parm, ``[3.0]`` for a Float) while ``parm.eval()`` returns bare
-    scalars. Normalize a scalar against a 1-element list/tuple before comparing
-    so a parm at its default isn't wrongly flagged as changed.
+    The manifest stores defaults as single-element lists (e.g. ``[4]`` for an
+    Int, ``['']`` for a String, ``['roll']`` for an attrib name) while
+    ``parm.eval()`` returns bare scalars. Normalize a scalar against a 1-element
+    list/tuple before comparing so a parm at its default isn't wrongly flagged
+    as changed. This applies to BOTH numbers and strings — String parms are the
+    most common false-positive source (an attrib name like 'roll' never looks
+    equal to ['roll'] without this normalization).
     """
     if a == b:
         return True
-    # Normalize scalar <-> single-element list/tuple (manifest wraps numbers).
-    if isinstance(a, (int, float)) and isinstance(b, (list, tuple)) and len(b) == 1:
+    # Normalize scalar <-> single-element list/tuple (manifest wraps numbers
+    # AND strings in a 1-element list).
+    if (isinstance(a, (int, float, str, bool))
+            and isinstance(b, (list, tuple)) and len(b) == 1):
         return _values_equal(a, b[0])
-    if isinstance(b, (int, float)) and isinstance(a, (list, tuple)) and len(a) == 1:
+    if (isinstance(b, (int, float, str, bool))
+            and isinstance(a, (list, tuple)) and len(a) == 1):
         return _values_equal(a[0], b)
     # numeric drift
     if isinstance(a, (int, float)) and isinstance(b, (int, float)):
@@ -308,30 +321,77 @@ def _values_equal(a: Any, b: Any) -> bool:
 import re as _re
 
 _MULTIPARM_INSTANCE_RE = _re.compile(r"^(.+?)(\d+)([A-Za-z_]\w*)?$")
+# Vector component expansions. Houdini splits a vector parm into component
+# parms two ways: 'upvectorx/y/z' (xyzw suffix) and 'uvscale1/2' (numeric
+# suffix). Match both so a component maps back to its parent vector default.
+_VECTOR_XYZW_RE = _re.compile(r"^(.+?)([xyzw])$")
+_VECTOR_NUM_RE = _re.compile(r"^(.+?)([12])$")
+
+# Collapsible-folder state parms (e.g. 'up_folder', 'uv_folder'). The manifest
+# generator skips folder templates, so these are never catalogued; their value
+# is the collapse state (0/1), not an authored setting. Treat the identity
+# value (0) as the default so they don't pollute changed_params as noise.
+_FOLDER_STATE_SUFFIXES = ("_folder", "_folder1", "_switcher")
+
+
+def _is_folder_state_parm(pname: str) -> bool:
+    """True for collapsible-folder state parms the manifest never catalogs."""
+    return pname.endswith(_FOLDER_STATE_SUFFIXES)
 
 
 def _manifest_lookup(pname: str, manifest_defaults: dict[str, Any]) -> Any:
-    """Look up a parm's default in the manifest, handling multiparm instance names.
+    """Look up a parm's default in the manifest, normalizing instance names.
 
-    Manifest stores multiparm template names with a literal '#' (e.g.
-    ``heightprofile#pos``), but live nodes report instance names with the
-    instance index in place of '#' (``heightprofile2pos``). So a direct lookup
-    by the live name misses, and the parm is wrongly recorded as 'changed'.
-
-    We try the literal name first; if that misses, we attempt to map the live
-    name back to its template by replacing the first embedded digit-run with '#'
-    and re-querying. Returns the default (which may be None if truly unknown).
+    Live nodes report component/instance names the manifest doesn't store
+    verbatim, so a direct lookup misses and the parm is wrongly flagged
+    'changed'. We normalize three cases:
+      * multiparm instance: ``heightprofile2pos`` → ``heightprofile#pos``
+      * vector component:   ``upvectorx`` → ``upvector[0]``
+      * ramp whole-object:  ``scaleramp`` → derived from ``scaleramp#value``
+    Returns the default (None if truly unknown).
     """
     default = manifest_defaults.get(pname)
     if default is not None:
         return default
-    # Try multiparm normalization: insert '#' for the first digit-run that sits
-    # between two alphabetic parts. 'heightprofile2pos' -> 'heightprofile#pos'.
+
+    # Multiparm normalization: 'heightprofile2pos' -> 'heightprofile#pos'.
     m = _MULTIPARM_INSTANCE_RE.match(pname)
     if m and m.group(1) and m.group(3):
         template = f"{m.group(1)}#{m.group(3)}"
         default = manifest_defaults.get(template)
-    return default
+        if default is not None:
+            return default
+
+    # Vector component, xyzw suffix: 'upvectorx' -> 'upvector', take slot.
+    vm = _VECTOR_XYZW_RE.match(pname)
+    if vm:
+        base = vm.group(1)
+        comp = vm.group(2)
+        vec = manifest_defaults.get(base)
+        if isinstance(vec, (list, tuple)) and len(vec) > 1:
+            idx = "xyzw".index(comp)
+            if idx < len(vec):
+                return vec[idx]
+
+    # Vector component, numeric suffix: 'uvscale1'/'uvscale2' -> 'uvscale'.
+    # Only match when the parent name IS a multi-element vector default
+    # (avoids colliding with true multiparms like 'scaleramp1value', whose
+    # parent 'scaleramp' isn't a vector in the manifest).
+    vm2 = _VECTOR_NUM_RE.match(pname)
+    if vm2:
+        base = vm2.group(1)
+        idx = int(vm2.group(2)) - 1  # 1-based -> 0-based
+        vec = manifest_defaults.get(base)
+        if isinstance(vec, (list, tuple)) and len(vec) > 1 and idx < len(vec):
+            return vec[idx]
+
+    # Ramp whole-object: 'scaleramp' (a hou.Ramp serialized as a dict) has no
+    # single manifest entry; it is the aggregation of scaleramp#pos/value. We
+    # can't cheaply reconstruct the default ramp, so report a sentinel that
+    # compares unequal only if the ramp is non-trivial. The simplest honest
+    # answer: return None (kept as changed) — ramps are rare and the author
+    # usually DID set them deliberately, so recording is the safe default.
+    return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -532,6 +592,12 @@ def _classify_parms(node, node_type: str, manifest_defaults: dict[str, Any],
             # nodes it's a code blob, keep it out of the generic param stream.
             continue
         if vex_skip and pname == vex_skip:
+            continue
+        # Collapsible-folder state (e.g. 'up_folder') is UI chrome, not an
+        # authored setting, and the manifest never catalogs it. Skip the
+        # identity (collapsed=0) value so it doesn't become noise; keep a
+        # non-default (expanded=1) only if the author marked it.
+        if _is_folder_state_parm(pname) and pname not in marked_set:
             continue
         try:
             live = p.eval()
@@ -1000,6 +1066,15 @@ def recipe_capture(subnet_path: str, recipe_id: str | None = None,
         "tree_path": tree_path or [],
         "vex_snippets": vex_snippets,
         "nodes": recipe_nodes,
+        # python_script is reference material for edini (the LLM reads it to
+        # author networks, it does not execute it). Generated from nodes[] so
+        # it always matches the structured data — single source of truth.
+        "python_script": _generate_python_script({
+            "id": rid, "name": subnet.name(),
+            "function": parsed["function"],
+            "use_case": parsed["use_case"], "avoid": parsed["avoid"],
+            "vex_snippets": vex_snippets, "nodes": recipe_nodes,
+        }),
         "exposed_parms": exposed,
         "inputs": inputs,
         "outputs": outputs,
@@ -1090,6 +1165,156 @@ def _infer_category(function_text: str, recipe_id: str) -> str:
         if any(k in text for k in keywords):
             return cat
     return "misc"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Python-script generation — turn a recipe into readable reconstruction code.
+#
+# The script is NOT executed by recipe_rebuild (that path uses the structured
+# nodes[] directly). It exists as *reference material* for edini: the LLM reads
+# it to learn the node-authoring idiom, the parameters the author cared about,
+# and the wiring — then composes its own network with that knowledge. This keeps
+# edini's authoring ability unbounded by any single recipe's shape.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Transform params whose default-near-zero values add noise without intent
+# (tx/ty/tz=0, rx/ry/rz=0). They are filtered from the generated script unless
+# the author marked them.
+_NOISE_PARAMS = {
+    "tx", "ty", "tz", "rx", "ry", "rz", "px", "py", "pz",
+    "originx", "originy", "originz", "dirx", "diry", "dirz",
+}
+
+
+def _format_value(value: Any) -> str:
+    """Render a recipe value as a Python literal for the generated script."""
+    if isinstance(value, str):
+        # Ramp dicts and ordinary strings both serialize as repr; the LLM reads
+        # them, it does not eval them, so fidelity matters more than validity.
+        return repr(value)
+    if isinstance(value, bool):
+        return "True" if value else "False"
+    if isinstance(value, float):
+        # Trim trailing zeros for readability: 0.012000 -> 0.012
+        s = repr(value)
+        return s
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(_format_value(v) for v in value) + "]"
+    if isinstance(value, dict):
+        # Ramp dict etc. — emit as a compact dict literal.
+        items = ", ".join(
+            f"{_format_value(k)}: {_format_value(v)}" for k, v in value.items())
+        return "{" + items + "}"
+    return repr(value)
+
+
+def _generate_python_script(recipe: dict[str, Any]) -> str:
+    """Turn a captured recipe into a readable Python reconstruction script.
+
+    The script reconstructs the author's subnet network: createNode + setInput +
+    parm.set, with VEX snippets inlined. Only the parameters the author MARKED
+    (Notes '重要参数') are set explicitly with a comment, so the script surfaces
+    author intent instead of drowning in 70+ sweep defaults. Non-trivial changed
+    params (a value that is not a default-looking transform) are also included
+    so the script reproduces the geometry faithfully; pure-noise params
+    (tx/ty/tz=0 ...) are dropped.
+
+    Returns a code string. Pure function — no hou, no file I/O.
+    """
+    lines: list[str] = []
+    nodes = recipe.get("nodes", [])
+    vex = {s.get("node"): s for s in recipe.get("vex_snippets", [])}
+
+    # Header: orient the LLM reader about provenance and intent.
+    name = recipe.get("name") or recipe.get("id") or "recipe"
+    lines.append(f"# Recipe: {recipe.get('id', name)}")
+    func = recipe.get("function") or ""
+    if func:
+        lines.append(f"# 功能: {func}")
+    use_case = recipe.get("use_case") or ""
+    if use_case:
+        lines.append(f"# 用途: {use_case}")
+    avoid = recipe.get("avoid") or ""
+    if avoid:
+        lines.append(f"# 不要用于: {avoid}")
+    lines.append(f"# Reconstructs {len(nodes)} node(s). "
+                 "Adapt freely — this is reference material, not a contract.")
+    lines.append(f'def build_{name}(parent):')
+
+    # Topo-order so setInput targets exist before they're wired. Reuse the same
+    # sorter recipe_rebuild uses for consistency.
+    ordered = _topo_sort(nodes)
+    for spec in ordered:
+        nname = spec.get("name", "?")
+        ntype = spec.get("type", "?")
+        lines.append(f"    # {ntype}")
+        lines.append(f"    {nname} = parent.createNode("
+                     f"{_format_value(ntype)}, {_format_value(nname)})")
+
+        # VEX snippet (wrangle nodes): the code IS the payload — emit it as a
+        # triple-quoted string so the LLM can read the actual logic.
+        snip = vex.get(nname)
+        if snip and snip.get("code"):
+            code = snip["code"]
+            runover = snip.get("runover")
+            ro_comment = f"  # run-over: class={runover}" if runover is not None else ""
+            lines.append(f'    {nname}.parm("snippet").set("""')
+            for code_line in code.splitlines():
+                lines.append(f"        {code_line}")
+            lines.append(f'    """){ro_comment}')
+
+        # Marked params first — these are the author's declared important knobs.
+        # Each gets an inline comment so the LLM sees WHY it matters.
+        marked = spec.get("marked_params", {}) or {}
+        for pname in sorted(marked):
+            val = marked.get(pname)
+            if pname == "snippet":
+                continue  # handled above
+            lines.append(f'    {nname}.parm({_format_value(pname)}).set('
+                         f"{_format_value(val)})  # author-marked")
+
+        # Non-trivial changed params: reproduce geometry faithfully, but skip
+        # the noise (transforms at identity) so the script stays readable.
+        changed = spec.get("changed_params", {}) or {}
+        for pname in sorted(changed):
+            if pname in marked or pname == "snippet":
+                continue
+            if pname in _NOISE_PARAMS:
+                continue
+            val = changed.get(pname)
+            # Drop empty-string and zero-ish values that carry no intent.
+            if val in ("", 0, 0.0, None):
+                continue
+            lines.append(f'    {nname}.parm({_format_value(pname)}).set('
+                         f"{_format_value(val)})")
+
+        # Expressions: preserve any channel references verbatim (rare but
+        # meaningful — e.g. a driven relationship the author wired).
+        for pname, expr in sorted((spec.get("expressions") or {}).items()):
+            if pname == "snippet":
+                continue
+            lines.append(f"    {nname}.parm({_format_value(pname)})"
+                         f".setExpression({_format_value(expr)})")
+
+    # Wiring: emit after all nodes exist (matches rebuild order).
+    for spec in ordered:
+        nname = spec.get("name", "?")
+        inputs = spec.get("inputs") or {}
+        for idx_str in sorted(inputs, key=lambda k: int(k) if str(k).isdigit() else 0):
+            src = inputs.get(idx_str)
+            if not src:
+                continue
+            lines.append(f"    {nname}.setInput({idx_str}, {src})")
+
+    lines.append("    parent.layoutChildren()")
+    # Point at the last real node as the display/render output.
+    displayable = [s.get("name") for s in ordered
+                   if s.get("type") not in ("null", "output", "stashed_geo")]
+    target = displayable[-1] if displayable else (
+        ordered[-1].get("name") if ordered else "OUT")
+    lines.append(f"    {target}.setDisplayFlag(True)")
+    lines.append(f"    return {target}")
+    return "\n".join(lines)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

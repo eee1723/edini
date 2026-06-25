@@ -3,45 +3,66 @@ name: recipe-library
 description: Use when the user wants to create or modify geometry in Houdini. BEFORE hand-authoring nodes, query the recipe library (recipe_list) for a pre-built subnet recipe that already solves the task — recipes are pre-validated and rebuild deterministically, which is more reliable than authoring node networks from scratch. Read the recipe (recipe_read) to understand its wiring and exposed parameters, then rebuild it (recipe_rebuild) with overrides. Only fall back to manual houdini_create_node / houdini_run_python_sandbox if no recipe matches.
 ---
 
-# Recipe Library — prefer reuse over hand-authoring
+# Recipe Library — reference patterns that cut authoring errors
 
-The recipe library holds subnet recipes authored by a human TD: each recipe is a
-correctly-wired node network (nodes, connections, and the parameters that were
-changed from type defaults) plus the subnet's Notes as metadata. Recipes rebuild
-deterministically, so reusing one avoids the errors that come from an LLM
-guessing node parameters and wiring.
+The recipe library holds subnet recipes authored by a human TD. Each recipe is a
+**reference sample**, not a rigid template: it records how an expert wired a
+network correctly (node types, connections, the parameters that matter) so you
+can stand on verified syntax instead of guessing Houdini's parameter names and
+node-version quirks.
+
+## The core idea: recipes lower your error rate, they don't limit you
+
+When the user wants geometry, search the library for a matching pattern. Read its
+`python_script` — a readable Python reconstruction of the author's network. Study
+how the nodes are created, wired, and which parameters the author deliberately
+set (annotated `# author-marked`). Then **build your own network**, adapted to
+what the user actually asked for. You may:
+
+- reuse the script nearly verbatim if it fits,
+- modify it (swap nodes, change counts, add stages),
+- or just borrow the idiom (e.g. how `copytopoints` + `attribwrangle` pair up)
+  while building something the recipe never imagined.
+
+The point is to avoid the errors that come from inventing Houdini syntax cold —
+wrong node-version names (`sweep` vs `sweep::2.0`), missing required connections,
+parms that don't exist on the node you used. A recipe pre-validates all of that.
 
 ## Workflow
 
 1. **Search first.** `recipe_list(query="<intent>")` — pass a concise keyword
    (the geometry type or purpose: "tube", "copy", "extrude", "scatter", or a
-   category-path component like "Sim" / "Procedural_Modeling"). Inspect the
-   matched summaries (id, kind, category, tree_path, exposed_parms). You may
-   filter by `kind` ("vex" for VEX-snippet recipes, "network" for node-network
-   recipes) when the user wants a specific type.
-2. **Understand the match.** `recipe_read(recipe_id)` — look at the internal
-   nodes, the `changed_params` on each (these encode the author's intent and
-   conventions, e.g. `endcaptype=1` for closed tubes), the `vex_snippets`
-   (the VEX code for any wrangle nodes — read this to understand a 'vex'
-   recipe), and the `exposed_parms` list (the ONLY parms you may override).
-3. **Rebuild.** `recipe_rebuild(recipe_id, parent_path, overrides={...})` —
-   overrides keys must come from `exposed_parms`. The tool topologically orders
-   nodes, applies params, restores VEX snippets + run-over class on wrangles,
-   wires inputs, and runs a built-in structural verify.
-4. **Verify & report.** Read the returned `verify.mismatches` and `warnings`.
-   For heavy post-build checks use the shared tools on the rebuilt path:
-   `inspect_health`, `verify_orientation`, `geometry_inventory`.
-5. **No match?** Fall back to `houdini_run_python_sandbox` or
+   category-path component like "Procedural_Modeling"). Inspect the matched
+   summaries (id, kind, category, function).
+2. **Read the reference.** `recipe_read(recipe_id)` — the `python_script` field
+   is the primary value. Read it to learn:
+   - the node types and their correct version names (`sweep::2.0`, `copytopoints::2.0`),
+   - the wiring (`node.setInput(0, upstream)`),
+   - the `# author-marked` parameters — these encode the conventions that make
+     the geometry correct (e.g. `endcaptype=1` for closed tubes), and
+   - any inlined VEX (wrangle `snippet` shown as a triple-quoted string).
+   The `notes` field (功能/用途/重要参数/不要用于) tells you when this pattern
+   applies and when it doesn't (respect 不要用于).
+3. **Build, don't just replay.** Using `houdini_run_python_sandbox` (or
+   `recipe_rebuild` for a quick faithful copy), construct the network the user
+   needs. Adapt the recipe's idiom to the real task — combine ideas across
+   multiple recipes if that serves the request.
+4. **Verify & report.** After building, use the shared tools:
+   `inspect_health`, `verify_orientation`, `geometry_inventory`, then capture
+   the viewport if the change is visible.
+5. **No match?** Fall back to `houdini_run_python_sandbox` /
    `houdini_create_node`. If you hand-build a reusable pattern, offer to
    `recipe_capture` it into the library for next time.
 
 ## Rules
 
-- **Override exposed_parms only.** Never set internal node parms directly on a
-  rebuilt subnet — `exposed_parms` are the designed control surface.
-- **Never ignore a failed verify.** If `recipe_rebuild` returns
-  `success: false`, report the mismatches to the user and fix the cause rather
-  than papering over it.
+- **python_script is reference material.** Read it to learn, then author with
+  your own judgment. Never blindly execute a recipe's script when the user's
+  task differs from it — adapt.
+- **marked_params are the signal.** The parameters annotated `# author-marked`
+  are the ones the author deliberately set; they encode the conventions. Get
+  those right; the rest of `changed_params` is supporting detail you can take
+  or leave.
 - **Notes is the contract.** When capturing (`recipe_capture`), the subnet's
   Notes must be non-empty and descriptive. Use the `功能：` (function) and
   `重要参数：` (key params) convention so the index stays searchable.

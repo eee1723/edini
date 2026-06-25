@@ -67,15 +67,19 @@ export const recipeRead = {
   name: "recipe_read",
   label: "Read Recipe Details",
   description:
-    "Read the full recipe JSON for one subnet recipe: its internal node network (which nodes, " +
-    "how they connect, which parameters were changed from type defaults), its Notes metadata, " +
-    "and its exposed parameters (the top-level parms you may override when rebuilding). " +
-    "Call this after recipe_list to understand a recipe before rebuilding it.",
-  promptSnippet: "Read the full recipe to understand its node network and exposed params",
+    "Read the full recipe JSON for one subnet recipe. The most useful field is `python_script`: a " +
+    "readable Python reconstruction of the author's node network (createNode + setInput + parm.set, " +
+    "with the author's marked parameters annotated). TREAT python_script AS REFERENCE MATERIAL — read " +
+    "it to learn the node-authoring idiom, the parameters the author cared about, and the wiring, then " +
+    "compose your OWN network adapted to the user's actual task. Do not blindly execute it; your job is " +
+    "to reduce authoring errors by standing on the author's verified setup, not to be limited by it. " +
+    "Also returned: the structured node network, Notes metadata (功能/用途/重要参数/不要用于), and exposed_parms.",
+  promptSnippet: "Read a recipe — its python_script is reference material for authoring your own network",
   promptGuidelines: [
-    "The changed_params on each node are the parameters that matter — they encode the subnet author's intent and the conventions (e.g. endcaptype=1 for closed tubes).",
-    "exposed_parms are the ONLY parameters you may override on rebuild — do not target internal node parms directly.",
-    "inputs/outputs use relative names (not absolute paths) so the recipe rebuilds identically in any scene.",
+    "python_script is the PRIMARY value: a readable reconstruction showing the node types, wiring, and the author's marked parameters (annotated '# author-marked'). Mine it for the correct node syntax and the conventions that matter, then adapt freely to the task at hand.",
+    "marked_params (annotated in python_script and listed per node) are the parameters the author deliberately set — these encode the conventions (e.g. endcaptype=1 for closed tubes). They are the signal; the rest of changed_params is supporting detail.",
+    "You are NOT bound by the recipe's shape. If the user wants a copy/array setup and recipe_read returns a scatter recipe, study how copytopoints is wired there, then build what the user actually asked for — possibly combining ideas from several recipes.",
+    "notes (功能/用途/不要用于) tell you when this recipe is and isn't the right pattern; respect the 不要用于 (avoid) guidance.",
   ],
   parameters: Type.Object({
     recipe_id: Type.String({ description: "Recipe id (subnet name), e.g. tube_along_curve" }),
