@@ -56,6 +56,29 @@ setup, a wheel), capture it:
   writes `recipe.json`, and rebuilds the index. Capture fails clearly if Notes
   is empty or a placeholder.
 
+### Current primitive library
+
+The library is intentionally a set of *geometry-operation primitives*, not
+finished parts. Each encodes "how to do a class of shape correctly" (closed
+caps, orientation, axis conventions) and never "what shape to make" — so the
+LLM composes them at the layout layer. Reuse these before hand-authoring:
+
+| id | does | key marks |
+|---|---|---|
+| `tube_along_curve` | sweep a closed tube along any curve (frames/handlebars) | surfacetype, endcaptype, rad |
+| `extrude_solid` | extrude a closed 2D profile into a solid (chainring/pedal) | dist, outputfront, outputback |
+| `revolve_profile` | revolve a 2D profile into a lathe solid (tire/grip) | surftype, cap, dir, divs |
+| `radial_copy` | copy a unit template N times around an axis (spokes) | radial_count, radial_radius |
+| `linear_array_copy` | copy a unit template N times along a curve (chain/railing) | array_count |
+| `mirror_bilateral` | mirror half-geometry and weld the seam (symmetric bodies) | dir, keepOriginal, consolidatepts |
+| `boolean_op` | union/subtract/intersect two solids + clean + recompute normals | op, subtractchoices, booleanop |
+| `bevel_edges` | round/chamfer sharp edges by angle (mechanical fillets) | bevel, weight, segments, group |
+| `Base_Copy` | scatter randomly-scaled instances on a surface (rivets/grass) | npts, scale, group |
+
+> Note: `exposed_parms` are not yet promoted on these recipes. Until they are,
+> rebuilding yields the authored defaults; for now vary the result by editing
+> the rebuilt subnet's internal `marked_params` directly (the `重要参数` names).
+
 ### Capturing a whole category tree at once
 
 When the user has organized subnets into a nested category taxonomy (e.g.

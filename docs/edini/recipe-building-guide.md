@@ -144,17 +144,26 @@ attribwrangle(Detail, 布点) ──→ copytopoints::2.0 (第1输入)
 不要用于：沿曲线分布（用 linear_array_copy）、随机散布（用 scatter+copytopoints）
 ```
 
-#### D2. `linear_array_copy` — 沿曲线阵列（链条 100+ 节）
+#### D2. `linear_array_copy` — 沿曲线阵列（链条 100+ 节） ✅ 已实现
 
 **内部结构**：和 D1 类似，但布点沿输入曲线等距分布（resample 后取点，或用 carve 等 u 值）。实例朝向自动对齐曲线切线。
 
+实现见 `scripts/build_recipes_standalone.py::build_linear_array_copy`：
+```
+line(demo_path) ─→ resample(curveu=1, numseg=array_count-1) ─→ pointwrangle(算 orient)
+                                                                       │
+模板(box) ──────────────────────────────────────────────────→ copytopoints::2.0 ─→ OUT
+```
+- `pointwrangle`：从每点 curveu 算切线，写 `@orient`（朝向对齐曲线，对齐 vexlib 的 `set_orient_from_tangent`）
+- 模板是 demo box，布局层替换为真实模板；demo_path 也由布局层换成真实分布曲线
+
 **Notes 模板**：
 ```
-功能：单位模板沿输入曲线均匀阵列 N 份（copytopoints，朝向对齐路径）
+功能：单位模板沿输入曲线均匀阵列 N 份（copytopoints，朝向对齐曲线切线）
 用途：链条、飞轮片排列、栏杆、铆钉沿缝——任何「模板 + 沿曲线等距 = 线性阵列」
 输入：第0输入=模板；第1输入=路径曲线
 重要参数：array_count
-不要用于：绕轴环形（用 radial_copy）、单段弯曲管（用 tube_along_curve）
+不要用于：绕轴环形（用 radial_copy）、单段弯曲管（用 tube_along_curve）、随机散布（用 scatter+copytopoints）
 ```
 
 ---
@@ -182,11 +191,72 @@ attribwrangle(Detail, 布点) ──→ copytopoints::2.0 (第1输入)
 
 ---
 
+### F 组 · 实体布尔组合（开孔/挖槽——当前完全缺）
+
+#### F1. `boolean_op` — 两段几何做布尔运算 ✅ 已实现
+
+这是程序化建模里被严重低估的基础原语：库里有 `tube_along_curve`/`extrude_solid` 能造出实体，
+却没有任何"把两个实体组合成一体"的能力，LLM 只能一个个手搭。布尔运算是开孔、挖槽、拼接零件的唯一通用解。
+
+实现见 `scripts/build_recipes_standalone.py::build_boolean_op`：
+```
+box(input_a) ─┐
+              ├─→ boolean::2.0 (op=subtract) ─→ clean ─→ normal ─→ OUT
+box(input_b) ─┘
+```
+- `boolean::2.0`：**关键约定**——`op` 暴露给布局层（union/intersect/subtract/shatter），
+  `outputedges=1`（保留接缝边，保下游拓扑干净）
+- `clean` + `normal`：**写死的约定**——布尔会留下非流形碎片，不清理会静默腐蚀下游 sweep/boolean，
+  所以 recipe 把"清流形 + 重算法线"封装进去，不让 LLM 漏掉
+- demo 是两个重叠 box，布局层替换为真实 A/B 几何
+
+**Notes 模板**：
+```
+功能：两段输入几何做布尔运算（union/subtract/intersect）并清流形重算法线
+用途：开孔、挖槽、组合实体、拼接零件——任何「两个实体做集合运算成一体」的场景
+输入：第0输入=A 几何；第1输入=B 几何（subtract 时 B 从 A 挖除）
+重要参数：op, subtractchoices, booleanop
+不要用于：曲面缝合（用 merge+fuse）、变形融合（用 metaball）
+```
+
+---
+
+### G 组 · 棱边表面处理（机械圆角）
+
+> 注意：本组是**约定封装**，不是成品参数化。`bevel_edges` 锁的是
+> 「按边角角度自动选边组 + 分段防过密」，而不是"给某个零件倒特定角"。
+> 原则上"倒角成品参数化"仍被禁止，但封装"如何把锐边正确倒圆"的约定是允许的。
+
+#### G1. `bevel_edges` — 给锐边倒圆角/切角 ✅ 已实现
+
+当前所有几何原语 recipe 都是硬边实体。机械感的来源正是棱边圆角——
+手工倒角容易错（边组选错、分段过密导致拓扑爆炸），所以值得封装。
+
+实现见 `scripts/build_recipes_standalone.py::build_bevel_edges`：
+```
+box(input) ─→ groupedges(按角度选锐边) ─→ polybevel(bevel=round, segments=3) ─→ OUT
+```
+- `groupedges`：**写死的约定**——按相邻面夹角 >1° 自动选锐边，避免手填边组出错
+- `polybevel`：`bevel`(round/chamfer)、`distance`(倒角宽度)、`segments`(圆滑分辨率)
+  暴露给布局层；segments 默认 3 防过密
+
+**Notes 模板**：
+```
+功能：给指定边组倒圆角/切角（polybevel），让硬边实体获得机械圆角过渡
+用途：零件棱边圆角、孔口倒角、外观件做机械感——任何「把锐边磨圆/切角」的场景
+输入：第0输入=带锐边的实体几何
+重要参数：bevel, weight, segments, group
+不要用于：整体平滑（用 subdivide）、细分配曲面（用 subdiv）
+```
+
+---
+
 ## 三、不要搭的 recipe（保住 LLM 发挥空间）
 
 - ❌ `bicycle_frame` / `chainring` / `crank` / `handlebar` ——成品零件会锁定设计
 - ❌ `bicycle` 整装配方 ——装配是 LLM 在布局层的核心职责
-- ❌ 倒角/细分等表面处理做成独立 recipe ——那是 finishing，不是 detail
+- ⚠️ 倒角/细分的**成品参数化**不要做独立 recipe ——但"如何把锐边正确倒圆"的
+  **约定封装**允许（见 G1 `bevel_edges`，锁的是边组选择+分段防过密，不是某个零件的特定倒角）
 
 ---
 
@@ -207,11 +277,22 @@ attribwrangle(Detail, 布点) ──→ copytopoints::2.0 (第1输入)
 
 ## 五、和现有 recipe 的关系
 
-| 现有 recipe | 问题 | 建议 |
+| 现有 recipe | 状态 | 说明 |
 |---|---|---|
-| `sopnet.Procedural_Modeling.Base_Sweep` | spiral 耦合，只能造螺旋管，造不了车架直管 | **重构为** `tube_along_curve`（用通用 curve 替代 spiral） |
-| `sopnet.Procedural_Modeling.Base_Copy` | scatter 随机散布 | 保留，覆盖"随机散布"场景（铆钉/草地） |
-| `dopnet.noise_forece` | Notes 为空（用了 auto-notes） | **手写 Notes** 后重新捕获 |
+| `sopnet.Procedural_Modeling.tube_along_curve` | ✅ 保留（替代旧 Base_Sweep） | 通用曲线扫管，旧的 `Base_Sweep`（spiral 耦合版）已删除 |
+| `sopnet.Procedural_Modeling.extrude_solid` | ✅ 保留 | 2D 截面挤出实体 |
+| `sopnet.Procedural_Modeling.revolve_profile` | ✅ 保留 | 回转体 |
+| `sopnet.Procedural_Modeling.radial_copy` | ✅ 保留 | 绕轴环形阵列（与 `linear_array_copy` 成"环形/线性"双子） |
+| `sopnet.Procedural_Modeling.linear_array_copy` | ✅ 新增 | 沿曲线线性阵列 |
+| `sopnet.Procedural_Modeling.mirror_bilateral` | ✅ 保留 | 左右镜像焊缝 |
+| `sopnet.Procedural_Modeling.boolean_op` | ✅ 新增 | 布尔运算（实体组合，填补唯一缺口） |
+| `sopnet.Procedural_Modeling.bevel_edges` | ✅ 新增 | 锐边倒圆/切角（棱边表面处理约定封装） |
+| `sopnet.Procedural_Modeling.Base_Copy` | ✅ 保留 | scatter 随机散布（铆钉/草地/碎片） |
+| ~~`sopnet.Procedural_Modeling.Base_Sweep`~~ | ❌ 已删除 | 与 `tube_along_curve` 重叠且 spiral 耦合 |
+| ~~`dopnet.noise_forece`~~ | ❌ 已删除 | DOP 特效，与程序化建模主题无关，且 Notes 为 auto 占位 |
 
-`Base_Sweep` 的重构是最高 ROI——它已经 90% 就位，只需把 spiral 换成通用 curve 输入，
-就能从"只能造螺旋管"升级为"能造任何管材"。
+当前库覆盖 8 个纯几何操作原语：扫管 / 挤出 / 旋转 / 环形阵列 / 线性阵列 / 镜像 / 布尔 / 倒角，
+加上 1 个随机散布原语（Base_Copy）。全部遵循"锁几何操作约定、不锁成品形状"的心法。
+
+> **待办**：所有 recipe 的 `exposed_parms` 仍为空——LLM 重建后无法通过 overrides 定制管径/数量等。
+> 这需要你在 Houdini 里对每个 subnet 做 Promote Parameter 后重新 capture，是下一阶段的重点。

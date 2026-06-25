@@ -210,11 +210,152 @@ def build_mirror_bilateral(root):
         len(sn.children()), mir.parm("keepOriginal").eval())
 
 
+def build_linear_array_copy(root):
+    sn = _recreate(root, "linear_array_copy")
+    sn.setComment(_notes([
+        "功能：单位模板沿输入曲线均匀阵列 N 份（copytopoints，朝向对齐曲线切线）",
+        "用途：链条、飞轮片排列、栏杆、铆钉沿缝——任何「模板 + 沿曲线等距 N 份 = 线性阵列」的场景",
+        "输入：第0输入=模板几何（单位尺寸）；第1输入=路径曲线（决定分布轨迹）",
+        "重要参数：array_count",
+        "不要用于：绕轴环形（用 radial_copy）、单段弯曲管（用 tube_along_curve）、随机散布（用 scatter+copytopoints）",
+    ]))
+    sn.setGenericFlag(hou.nodeFlag.DisplayComment, True)
+    # Built-in demo path: a straight line so the recipe stands alone. The
+    # layout layer swaps this for the real distribution curve via input 1.
+    path = sn.createNode("line", "demo_path")
+    path.parm("dist").set(1.0)
+    path.parm("dirx").set(1.0)
+    path.parm("diry").set(0.0)
+    path.parm("dirz").set(0.0)
+    # Equally space N points along the curve and keep curveu for tangent calc.
+    resample = sn.createNode("resample", "resample1")
+    resample.setInput(0, path)
+    resample.parm("curveu").set(1)            # write @curveu
+    resample.parm("doptdist").set(0)          # even-length spacing
+    resample.parm("measure").set(0)           # arc
+    resample.parm("lord").set(1)              # even segments
+    resample.parm("numseg").set(5)            # array_count-1 segments → N pts
+    # Drop a unit template: a small box the layout layer replaces.
+    tmpl = sn.createNode("box", "template")
+    tmpl.parm("sizex").set(0.02)
+    tmpl.parm("sizey").set(0.02)
+    tmpl.parm("sizez").set(0.02)
+    # Stamp orient from each point's curve tangent (matches vexlib
+    # set_orient_from_tangent): forward=normalize(next_P-P), up={0,1,0}.
+    orient = sn.createNode("pointwrangle", "orient1")
+    orient.setInput(0, resample)
+    orient.parm("snippet").set(
+        'int n=npoints(0);\n'
+        'for(int i=0;i<n;i++){\n'
+        '  vector p=point(0,"P",i);\n'
+        '  vector pn=point(0,"P",(i+1)%n);\n'
+        '  vector tang=normalize(pn-p);\n'
+        '  vector up={0,1,0};\n'
+        '  vector side=normalize(cross(up,tang));\n'
+        '  vector fwd=normalize(cross(side,up));\n'
+        '  matrix3 m=maketransform(side,fwd,tang);\n'
+        '  setpointattrib(0,"orient",i,quaternion(m));\n'
+        '}'
+    )
+    ctp = sn.createNode("copytopoints::2.0", "copytopoints1")
+    ctp.setInput(0, tmpl)
+    ctp.setInput(1, orient)
+    ctp.parm("pack").set(0)
+    out = sn.createNode("null", "OUT")
+    out.setInput(0, ctp)
+    sn.layoutChildren()
+    _set_display(sn, out)
+    return "linear_array_copy: nodes={}".format(len(sn.children()))
+
+
+def build_boolean_op(root):
+    sn = _recreate(root, "boolean_op")
+    sn.setComment(_notes([
+        "功能：两段输入几何做布尔运算（union/subtract/intersect）并清流形重算法线",
+        "用途：开孔、挖槽、组合实体、拼接零件——任何「两个实体做集合运算成一体」的场景",
+        "输入：第0输入=A 几何；第1输入=B 几何（subtract 时 B 从 A 挖除）",
+        "重要参数：op, subtractchoices, booleanop",
+        "不要用于：曲面缝合（用 merge+fuse）、变形融合（用 metaball）",
+    ]))
+    sn.setGenericFlag(hou.nodeFlag.DisplayComment, True)
+    # Demo inputs: two overlapping boxes so the recipe stands alone.
+    a = sn.createNode("box", "input_a")
+    a.parm("sizex").set(0.2)
+    a.parm("sizey").set(0.2)
+    a.parm("sizez").set(0.2)
+    a.parm("tx").set(-0.05)
+    b = sn.createNode("box", "input_b")
+    b.parm("sizex").set(0.2)
+    b.parm("sizey").set(0.2)
+    b.parm("sizez").set(0.2)
+    b.parm("tx").set(0.05)
+    # boolean::2.0 op: 0=union,1=intersect,2=subtract,3=shatter.
+    booln = sn.createNode("boolean::2.0", "boolean1")
+    booln.setInput(0, a)
+    booln.setInput(1, b)
+    booln.parm("op").set(2)              # subtract — the most common case
+    booln.parm("booleanop").set(0)       # B from A
+    booln.parm("subtractchoices").set(0) # A minus B
+    booln.parm("outputedges").set(1)     # keep seam edges for clean topology
+    # Clean removes the non-manifold/degenerate debris boolean can leave, which
+    # silently corrupts downstream sweep/boolean — locked as a convention.
+    clean = sn.createNode("clean", "clean1")
+    clean.setInput(0, booln)
+    clean.parm(" Consolidatepoints").set(1)
+    nrm = sn.createNode("normal", "normal1")
+    nrm.setInput(0, clean)
+    out = sn.createNode("null", "OUT")
+    out.setInput(0, nrm)
+    sn.layoutChildren()
+    _set_display(sn, out)
+    return "boolean_op: nodes={} op={}".format(
+        len(sn.children()), booln.parm("op").eval())
+
+
+def build_bevel_edges(root):
+    sn = _recreate(root, "bevel_edges")
+    sn.setComment(_notes([
+        "功能：给指定边组倒圆角/切角（polybevel），让硬边实体获得机械圆角过渡",
+        "用途：零件棱边圆角、孔口倒角、外观件做机械感——任何「把锐边磨圆/切角」的场景",
+        "输入：第0输入=带锐边的实体几何",
+        "重要参数：bevel, weight, segments, group",
+        "不要用于：整体平滑（用 subdivide）、细分配曲面（用 subdiv）",
+    ]))
+    sn.setGenericFlag(hou.nodeFlag.DisplayComment, True)
+    # Demo input: a box whose sharp edges get beveled.
+    box = sn.createNode("box", "input_box")
+    box.parm("sizex").set(0.2)
+    box.parm("sizey").set(0.2)
+    box.parm("sizez").set(0.2)
+    # Group the edges to bevel — default to all sharp edges (empty group =
+    # all boundary/锐 edges). The layout layer narrows this.
+    grp = sn.createNode("groupedges", "edges1")
+    grp.setInput(0, box)
+    grp.parm("group").set("bevel_edges")
+    # All edges whose adjacent faces meet at >1° — i.e. the real sharp edges.
+    grp.parm("entity").set(1)            # edge
+    grp.parm("includebyclass").set(1)    # by edge angle
+    grp.parm("angle").set(1.0)
+    bev = sn.createNode("polybevel", "bevel1")
+    bev.setInput(0, grp)
+    bev.parm("group").set("bevel_edges")
+    bev.parm("bevel").set(0)             # 0=round,1=chamfer
+    bev.parm("distance").set(0.005)      # bevel width — exposed as marked
+    bev.parm("segments").set(3)          # roundness resolution — marked
+    out = sn.createNode("null", "OUT")
+    out.setInput(0, bev)
+    sn.layoutChildren()
+    _set_display(sn, out)
+    return "bevel_edges: nodes={} bevel={}".format(
+        len(sn.children()), bev.parm("bevel").eval())
+
+
 def main():
     root = _ensure_root()
     results = []
     for fn in (build_tube_along_curve, build_extrude_solid,
-               build_revolve_profile, build_radial_copy, build_mirror_bilateral):
+               build_revolve_profile, build_radial_copy, build_mirror_bilateral,
+               build_linear_array_copy, build_boolean_op, build_bevel_edges):
         try:
             results.append(fn(root))
         except Exception:

@@ -1082,6 +1082,7 @@ def _infer_category(function_text: str, recipe_id: str) -> str:
         (("阵列", "array", "辐条", "spoke", "均布", "环形"), "array"),
         (("散布", "copy", "scatter", "重复", "ctp", "复制"), "copy"),
         (("布尔", "boolean", "切割", "cut"), "boolean"),
+        (("倒角", "bevel", "圆角", "chamfer", "fillet"), "bevel"),
         (("法线", "normal", "fuse", "clean", "清理"), "postprocess"),
         (("变形", "transform", "lattice", "bend", "twist"), "deform"),
     ]

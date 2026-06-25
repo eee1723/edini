@@ -115,6 +115,23 @@ class TestTopoSort(unittest.TestCase):
         self.assertEqual(set(ordered), {"a", "b"})
 
 
+class TestCategoryInference(unittest.TestCase):
+    """Pure-function tests for _infer_category — the new primitives must land
+    in a useful category so recipe_list filters work."""
+
+    def test_linear_array_is_array(self):
+        cat = rl._infer_category("单位模板沿输入曲线均匀阵列 N 份", "linear_array_copy")
+        self.assertEqual(cat, "array")
+
+    def test_boolean_is_boolean(self):
+        cat = rl._infer_category("两段输入几何做布尔运算", "boolean_op")
+        self.assertEqual(cat, "boolean")
+
+    def test_bevel_is_bevel(self):
+        cat = rl._infer_category("给指定边组倒圆角/切角", "bevel_edges")
+        self.assertEqual(cat, "bevel")
+
+
 class TestParamNormalization(unittest.TestCase):
     """Pure-function tests for default comparison + multiparm lookup + ramp dict.
     No hou required."""
@@ -621,6 +638,69 @@ class TestTreeCapture(unittest.TestCase):
         ids = {c["recipe_id"] for c in r["captured"]}
         self.assertIn("dopnet.noise_forece", ids,
                       "dopnet category layer must be descended to find noise_forece")
+
+
+class TestNewPrimitivesNotesContract(unittest.TestCase):
+    """The three new primitives (linear_array_copy, boolean_op, bevel_edges)
+    are authored in build_recipes_standalone.py as Notes on subnets. Before
+    capture can run (needs real Houdini), their Notes must pass validation and
+    expose the right marked params. These are pure-function checks."""
+
+    LINEAR_ARRAY_NOTES = (
+        "功能：单位模板沿输入曲线均匀阵列 N 份（copytopoints，朝向对齐曲线切线）\n"
+        "用途：链条、飞轮片排列、栏杆、铆钉沿缝——任何「模板 + 沿曲线等距 N 份 = 线性阵列」的场景\n"
+        "输入：第0输入=模板几何（单位尺寸）；第1输入=路径曲线（决定分布轨迹）\n"
+        "重要参数：array_count\n"
+        "不要用于：绕轴环形（用 radial_copy）、单段弯曲管（用 tube_along_curve）、随机散布（用 scatter+copytopoints）"
+    )
+    BOOLEAN_NOTES = (
+        "功能：两段输入几何做布尔运算（union/subtract/intersect）并清流形重算法线\n"
+        "用途：开孔、挖槽、组合实体、拼接零件——任何「两个实体做集合运算成一体」的场景\n"
+        "输入：第0输入=A 几何；第1输入=B 几何（subtract 时 B 从 A 挖除）\n"
+        "重要参数：op, subtractchoices, booleanop\n"
+        "不要用于：曲面缝合（用 merge+fuse）、变形融合（用 metaball）"
+    )
+    BEVEL_NOTES = (
+        "功能：给指定边组倒圆角/切角（polybevel），让硬边实体获得机械圆角过渡\n"
+        "用途：零件棱边圆角、孔口倒角、外观件做机械感——任何「把锐边磨圆/切角」的场景\n"
+        "输入：第0输入=带锐边的实体几何\n"
+        "重要参数：bevel, weight, segments, group\n"
+        "不要用于：整体平滑（用 subdivide）、细分配曲面（用 subdiv）"
+    )
+
+    def test_linear_array_notes_valid_and_marked(self):
+        ok, _ = rl.validate_notes(self.LINEAR_ARRAY_NOTES)
+        self.assertTrue(ok)
+        parsed = rl.parse_notes(self.LINEAR_ARRAY_NOTES)
+        self.assertIn("array_count", parsed["marked"])
+        self.assertIn("均匀阵列", parsed["function"])
+        self.assertEqual(rl._infer_category(parsed["function"], "linear_array_copy"),
+                         "array")
+
+    def test_boolean_notes_valid_and_marked(self):
+        ok, _ = rl.validate_notes(self.BOOLEAN_NOTES)
+        self.assertTrue(ok)
+        parsed = rl.parse_notes(self.BOOLEAN_NOTES)
+        self.assertIn("op", parsed["marked"])
+        self.assertEqual(rl._infer_category(parsed["function"], "boolean_op"),
+                         "boolean")
+
+    def test_bevel_notes_valid_and_marked(self):
+        ok, _ = rl.validate_notes(self.BEVEL_NOTES)
+        self.assertTrue(ok)
+        parsed = rl.parse_notes(self.BEVEL_NOTES)
+        self.assertIn("segments", parsed["marked"])
+        self.assertEqual(rl._infer_category(parsed["function"], "bevel_edges"),
+                         "bevel")
+
+    def test_avoid_clauses_captured(self):
+        """Each new primitive's 不要用于 line must round-trip into the avoid
+        field so recipe_list can warn against misuse."""
+        for notes in (self.LINEAR_ARRAY_NOTES, self.BOOLEAN_NOTES,
+                      self.BEVEL_NOTES):
+            parsed = rl.parse_notes(notes)
+            self.assertTrue(parsed["avoid"],
+                            f"avoid empty for notes: {notes[:30]!r}")
 
 
 class TestDashboardFunctions(unittest.TestCase):
