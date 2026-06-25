@@ -1,16 +1,19 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-24 &nbsp;|&nbsp; **架构转向：关闭程序化建模 → Recipe Library（recipe_rebuild 真实验证通过）+ 旧死代码清理完成** 🚧 &nbsp;|&nbsp; 进展：35 测试全绿，harness.py 4644→1810 行
+> 最后更新：2026-06-25 &nbsp;|&nbsp; **Recipe Library 二次定位：recipe 从「可执行配方」重定义为「参考样本」（python_script + manifest 降噪），HDA 一键捕获按钮上线** 🚧 &nbsp;|&nbsp; 进展：94 测试全绿，sweep 噪音参数 101→6
 
-## ⚠️ 架构转向说明（2026-06-23）
+## ⚠️ 架构转向说明（2026-06-23 → 06-25 二次定位）
 
 **重要**：旧的程序化建模管道（提示词驱动 + validate_recipe/build_procedural_asset/G1-G3 闸门）
 已**完全关闭并备份**到 `_disabled_backup/procedural-modeling/`。根因：LLM 对 Houdini 不熟，
 靠提示词规则无论写多细还是会出错——这是概率模型的本质缺陷。
 
-**新方向 = Recipe Library**：把人类 TD 搭好的 subnet（含正确参数+连线+Notes）沉淀成可被 LLM
-读取、理解、按需重建的配方库。LLM 从「凭空发明节点」降级为「选择并调参」，用人类确定性覆盖
-LLM 不确定性。设计文档见 `docs/edini/recipe-manager-hda-design.md`。
+**方向 = Recipe Library**：把人类 TD 搭好的 subnet 沉淀成配方库。
+
+**2026-06-25 二次定位（关键）**：recipe 从「LLM 用 recipe_rebuild 机械还原的死模板」重定义为
+**「给 LLM 的参考样本」**。捕获时生成 `python_script` 字段（可读 Python 还原代码，marked 参数带
+`# author-marked` 注释）。LLM 读 python_script 学习节点语法和作者的约定，然后**自己重建网络**——
+它的能力不被 recipe 限死。recipe_rebuild 降级为可选的「快速忠实复制」次选路径。
 
 下方旧的「程序化建模」阶段卡片保留作为历史记录，但**已不再是当前架构**。
 
@@ -20,20 +23,20 @@ LLM 不确定性。设计文档见 `docs/edini/recipe-manager-hda-design.md`。
 
 <div class="phase-card">
   <div class="phase-card-header">
-    <span class="phase-card-title">📚 Recipe Library（新架构 · schema v2）</span>
-    <span class="status-tag status-done">核心完成 + 真实验证</span>
+    <span class="phase-card-title">📚 Recipe Library（参考样本架构 · python_script）</span>
+    <span class="status-tag status-done">核心完成 + 真实验证 + HDA 按钮</span>
   </div>
-  <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:95%"></div></div>
-  <div class="phase-card-detail">替代旧程序化建模管道。<strong>5 工具</strong>（recipe_list/read/capture/<strong>capture_tree</strong>/rebuild）：捕获 subnet 内部网络→配方 JSON（区分 changed/marked 参数，inputs 用相对名跨场景可重建）→索引→拓扑排序重建+内置验证。<strong>schema v2 新增</strong>：recipe_capture_tree 递归扫整棵分类树自动抓叶子（recipe_id 用树路径防撞名）、kind（network|vex）、vex_snippets（wrangle 代码+runover 可搜）、tree_path 分类面包屑、自动忽略 output/stashed 节点、空 Notes 自动生成。<strong>真实 Houdini 闭环已验证</strong>：用户手搭 6 叶子分类树一次性抓取成功，发现并修复 popnet 网络容器穿透 bug。配方库已有 4 个真实配方。30 测试 + 2 subtests 全绿。</div>
+  <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:98%"></div></div>
+  <div class="phase-card-detail">recipe = <strong>参考样本</strong>（不是死模板）。<strong>5 工具</strong>（recipe_list/read/capture/capture_tree/rebuild）。捕获时自动生成 <code>python_script</code> 字段（可读 Python 还原代码，Notes 里「重要参数」标为 <code># author-marked</code>）。LLM 读 python_script 学习节点语法和约定，<strong>自己重建网络</strong>——能力不被 recipe 限死。recipe_rebuild 降级为可选的快速忠实复制路径（共存）。<strong>manifest 降噪修复</strong>：sweep::2.0 版本名优先 + 字符串标量↔单元素列表归一化 + vector/ramp/folder 参数名匹配 → 全库 changed_params 528→72（-86%），tube sweep 101→6（仅真实修改）。<strong>HDA 一键捕获按钮</strong>：rebuild_hda_with_button.py 用 setTags API 装到 edini_recipe_manager HDA，点按钮即捕获全部叶子子网。<strong>四个链路环节对齐</strong>：注册管理→检索（marked_parms 可搜）→python_script 生成→message注入（system prompt/工具描述/SKILL.md 统一新方向）。94 测试全绿。6 个 SOP 几何原语 recipe + 1 散布 recipe。</div>
 </div>
 
 <div class="phase-card">
   <div class="phase-card-header">
-    <span class="phase-card-title">🎛️ Dashboard HDA（进行中）</span>
-    <span class="status-tag status-active">设计定稿</span>
+    <span class="phase-card-title">🎛️ Dashboard HDA（捕获按钮已上线 · Qt 树面板待做）</span>
+    <span class="status-tag status-active">捕获按钮完成</span>
   </div>
-  <div class="progress-bar-bg"><div class="progress-bar-fill" style="width:15%"></div></div>
-  <div class="phase-card-detail">edini_recipe_manager 主 HDA：内部递归 subnet 树（结构即分类）+ 自写 Qt QTreeView 仪表盘（检查/重建/编辑按钮）+ PythonModule 调 recipe_library。不锁定内容，内部透明可读。可扩展新方向（fx/materials）。设计定稿，待真实 Houdini 验证 scan_tree/create_recipe_manager。</div>
+  <div class="progress-bar-bg"><div class="progress-bar-fill" style="width:30%"></div></div>
+  <div class="phase-card-detail">edini_recipe_manager 主 HDA：内部递归 subnet 树（结构即分类）+ 不锁定内容。<strong>✅ Capture All Recipes 按钮已装</strong>（hou.HDADefinition setTags API + recipe_capture_tree callback，reload 后真实 Houdini 验证通过）。⬜ Qt QTreeView 仪表盘（检查/重建/编辑按钮）待做。⬜ Skill 开关（Settings → Pi Capabilities 复选框，已完成，可 A/B 测试 recipe-library）。设计定稿见 recipe-manager-hda-design.md。</div>
 </div>
 
 <div class="phase-card">
@@ -129,6 +132,20 @@ LLM 不确定性。设计文档见 `docs/edini/recipe-manager-hda-design.md`。
 </div>
 
 <div class="timeline">
+
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-25</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第三十四阶段：Recipe 二次定位 — 参考样本架构（python_script）+ manifest 降噪 + HDA 捕获按钮</span>
+      <span class="status-tag status-done">完成</span>
+    </div>
+    <div class="timeline-summary">① **定位转向**：recipe 从「LLM 用 recipe_rebuild 机械还原的死模板」重定义为「给 LLM 的参考样本」。根因洞察——机械 rebuild 把 LLM 能力限死在 recipe 形状内，违背「降低出错率而非限定能力」的初衷。参考 EEEAi_Houdini 的 node_tree_extractor 模式（current_value vs default_value 标记 is_modified）。② **python_script 生成器**（_generate_python_script）：捕获时从 nodes[] 生成可读 Python 还原代码（createNode+setInput+parm.set），Notes 里「重要参数」标为 <code># author-marked</code>（核心信号），噪音参数（tx=0/空字符串/folder 折叠态）过滤。LLM 读它学习节点语法和约定，自己重建网络。③ **manifest 降噪（根因修复）**：诊断发现 sweep1 记了 101 个假 changed（用户只改 2 个）。根因三连——_manifest_defaults 优先匹配老 sweep（20参数）而非 sweep::2.0（81参数）；_values_equal 不处理字符串标量↔单元素列表（'roll'≠['roll']）；vector/ramp/folder 参数名不匹配。修复：版本名优先 + 字符串归一化 + vector（upvectorx/uvscale1）+ multiparm（value0/value#）+ folder-state（section/folder01）匹配。全库 changed_params 528→72（-86%），tube sweep 101→6。④ **四链路环节对齐 review**：发现 capture/generation 已转新方向，但 search/injection 还在说旧的「机械 rebuild」——edini 收到矛盾指令。修复 system prompt（Build Path Selection）、recipe_list/recipe_read/recipe_rebuild 三工具描述、SKILL.md 全文统一；marked_parms 进 index+haystack 可搜（recipe_list(query='endcaptype') 命中）。⑤ **HDA 一键捕获按钮**：rebuild_hda_with_button.py 用正确的 setTags({'script_callback':...}) API（初版误用不存在的 setScript）装到 edini_recipe_manager HDA，callback 调 recipe_capture_tree。reload edini 模块后真实 Houdini 验证：捕获产生 python_script + marked + 干净 changed_params。⑥ **Skill 开关**：Settings → Pi Capabilities 每个 skill 加复选框，disabled_skills 过滤，可 A/B 测试 recipe-library。⑦ **新增 3 通用原语 recipe**（linear_array_copy/boolean_op/bevel_edges）+ 清理重复（Base_Sweep/dopnet.noise_forece）。⑧ 94 测试全绿（+13 manifest/python_script/skill-toggle 测试）。</div>
+    <div class="timeline-tags">
+      <span>参考样本</span><span>python_script</span><span>author-marked</span><span>manifest降噪</span><span>版本名优先</span><span>vector匹配</span><span>HDA按钮</span><span>setTags API</span><span>四链路对齐</span><span>marked可搜</span><span>Skill开关</span><span>94测试</span>
+    </div>
+  </div>
+</div>
 
 ### 第三十一阶段：三阶段管道架构 + H21 完整验证
 
@@ -599,19 +616,25 @@ LLM 不确定性。设计文档见 `docs/edini/recipe-manager-hda-design.md`。
 ### Recipe Library + Dashboard HDA（当前主线）
 
 旧的程序化建模 ABCDE 五站计划已随管道关闭而**废弃**（代码备份在 `_disabled_backup/`）。
-新主线是 Recipe Library 配套的 Dashboard HDA，6 阶段推进：
+Recipe Library 已完成「参考样本」定位转向，Dashboard HDA 的捕获按钮已上线，Qt 树面板待做：
 
 | 阶段 | 任务 | 说明 | 状态 |
 |------|------|------|------|
-| **核心** | Recipe Library 4 工具 | recipe_list/read/capture/rebuild，配方 JSON schema，拓扑排序重建，内置验证 | ✅ 完成（285 测试） |
-| **1** | scan_tree + create_recipe_manager | 递归读 HDA 内部 subnet 树（区分容器/叶子）+ 一键建主 HDA（不锁定） | ⬜ 待做（需真实 Houdini） |
+| **核心** | Recipe Library 5 工具 + python_script | recipe_list/read/capture/capture_tree/rebuild + python_script 参考样本生成 | ✅ 完成（94 测试） |
+| **降噪** | manifest 匹配修复 | 版本名优先 + 字符串归一化 + vector/ramp/folder 匹配，changed_params -86% | ✅ 完成 |
+| **捕获** | HDA 一键按钮 | Capture All Recipes 按钮（setTags API），reload 后真实验证通过 | ✅ 完成 |
+| **开关** | Skill on/off | Settings → Pi Capabilities 复选框，可 A/B 测试 recipe-library | ✅ 完成 |
+| **对齐** | 四链路 message 注入 | system prompt/工具描述/SKILL.md/index 统一「参考样本」方向 | ✅ 完成 |
+| **1** | scan_tree + create_recipe_manager | 递归读 HDA 内部 subnet 树 + 一键建主 HDA | ⬜ 待做（需真实 Houdini） |
 | **2** | recipe_list 递归支持 | LLM 能查 HDA 内部树（不只读 index.json） | ⬜ 待做 |
 | **3** | Qt 树面板骨架 | recipe_tree_window.py（QTreeView 显示 HDA 内部结构） | ⬜ 待做 |
 | **4** | 按钮接线 | 检查/重建/编辑按钮调 recipe_library | ⬜ 待做 |
 | **5** | 右键菜单 + 拖拽 | 新建/移动 subnet，改分类 | ⬜ 待做 |
 | **6** | LLM 工具接线 | recipe_manager_create/tree_scan/tree_open 工具 | ⬜ 待做 |
+| **7** | edini 消费 recipe 实测 | 观察真任务里 edini 是否走 list→read python_script→自建 | ⬜ 待真实验证 |
 
-**关键阻塞**：阶段 1-6 依赖真实 Houdini 的 HDA/Qt 行为验证（save_as_locked、subnet category 判定、Qt 浮动面板），mock 无法覆盖。设计文档 `docs/edini/recipe-manager-hda-design.md`，测试指南 `docs/edini/recipe-library-testing.md`。
+**关键阻塞**：阶段 1-6 依赖真实 Houdini 的 HDA/Qt 行为验证，mock 无法覆盖。设计文档
+`docs/edini/recipe-manager-hda-design.md`，操作手册 `docs/edini/recipe-capture-workflow.md`。
 
 ### 旧程序化建模（已废弃，备份可恢复）
 
