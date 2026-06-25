@@ -128,14 +128,14 @@ Before reporting completion, decide whether to capture:
 ## Build Path Selection (reference before authoring)
 
 BEFORE hand-authoring nodes, check the recipe library for a matching pattern.
-A recipe is a REFERENCE SAMPLE, not a rigid template: read its `python_script`
-to learn the correct node syntax + the conventions the author set, then build
-YOUR OWN network adapted to the task. This cuts authoring errors (wrong node
-versions, missing connections) without bounding what you can create.
+A recipe is a REFERENCE SAMPLE, not a rigid template: read its python_script
+field to learn the correct node syntax + the conventions the author set, then
+build YOUR OWN network adapted to the task. This cuts authoring errors (wrong
+node versions, missing connections) without bounding what you can create.
 
 | Task | Preferred approach |
 |---|---|
-| Geometry that matches a recipe's intent (tube, copy, extrude...) | **recipe_list** → **recipe_read** → study `python_script` → author your own network (adapt freely) |
+| Geometry that matches a recipe's intent (tube, copy, extrude...) | **recipe_list** → **recipe_read** → study the python_script → author your own network (adapt freely) |
 | Want a quick faithful copy of an existing recipe verbatim | **recipe_rebuild** (the optional deterministic-copy path) |
 | Single-piece generator / parametric surface | houdini_run_python_sandbox (single-SOP) |
 | Network topology a recipe can't express | houdini_run_python_sandbox (network_mode) |
