@@ -102,18 +102,57 @@ def geometry_bounds(geo) -> dict[str, list[float]] | None:
         return None
 
 
+def _geometry_of(node):
+    """Return a hou.Geometry for ``node``, or None.
+
+    SOP nodes expose ``geometry()`` directly. Object/container nodes (ObjNode,
+    e.g. a sandbox at ``/obj/edini_sandbox_...``) do NOT — calling
+    ``.geometry()`` raises ``'ObjNode' object has no attribute 'geometry'``,
+    which previously crashed ``collect_diagnostics`` and masked the real error
+    in every failed build. For an ObjNode we read the geometry from its
+    display/render child SOP instead.
+    """
+    geo = getattr(node, "geometry", None)
+    if callable(geo):
+        try:
+            return geo()
+        except Exception:
+            pass  # ObjNode: fall through to the child lookup below.
+    # ObjNode / subnet: prefer the display node's geometry (what the user sees
+    # and what downstream cooks consume), then fall back to the first child SOP
+    # that produces geometry.
+    for getter in ("renderNode", "displayNode"):
+        try:
+            dn = getattr(node, getter, None)
+            dn = dn() if callable(dn) else None
+            if dn is not None:
+                dgeo = getattr(dn, "geometry", None)
+                if callable(dgeo):
+                    g = dgeo()
+                    if g is not None:
+                        return g
+        except Exception:
+            continue
+    try:
+        for child in node.children():
+            cgeo = getattr(child, "geometry", None)
+            if callable(cgeo):
+                try:
+                    g = cgeo()
+                    if g is not None:
+                        return g
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return None
+
+
 def geometry_stats(node_path: str) -> dict[str, Any] | None:
     node = hou.node(node_path)
     if node is None:
         return None
-    # Only SopNodes (surface operators) carry a cookable .geometry(). A network
-    # sandbox's root is a geo *container* (ObjNode) — calling .geometry() on it
-    # raises AttributeError: 'ObjNode' object has no attribute 'geometry',
-    # which used to nest a second traceback under the agent's real error. Guard
-    # with hasattr so non-SOP paths degrade cleanly to None instead.
-    if not hasattr(node, "geometry"):
-        return None
-    geo = node.geometry()
+    geo = _geometry_of(node)
     if geo is None:
         return None
     return {
@@ -444,11 +483,16 @@ def commit_sandbox(
                 "committed": False,
                 "refused": True,
                 "error": (
-                    "G3_NOT_BAKED: asset did not go through "
-                    "build_procedural_asset (no edini_world_axis on every "
-                    "prim). Raw houdini_run_python_sandbox(network_mode) "
-                    "builds cannot pass this gate — they bypass the "
-                    f"deterministic axis bake. Missing on: {g3_missing}"
+                    "G3_NOT_BAKED: every prim with a @component_id must carry "
+                    "a NON-ZERO 3-float @edini_world_axis (a unit construction "
+                    "axis). It is read as floatListAttribValue, so a STRING "
+                    "value like \"y\" will NOT work. Bake it with an "
+                    "attribwrangle (class=primitive), e.g.:\n"
+                    "    v@edini_world_axis = {0,1,0};   // pipe along Y\n"
+                    "    // or per-component: "
+                    "if(s@component_id==\"pipe_body\")v@edini_world_axis={0,1,0};\n"
+                    "You do NOT need build_procedural_asset — a valid baked "
+                    f"axis vector passes this gate. Missing/zero on: {g3_missing}"
                 ),
             }
 

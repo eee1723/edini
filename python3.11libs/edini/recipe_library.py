@@ -30,6 +30,7 @@ import fnmatch
 import json
 import os
 import re
+import shutil
 from typing import Any
 
 
@@ -1124,6 +1125,38 @@ def recipe_capture(subnet_path: str, recipe_id: str | None = None,
     }
 
 
+def _prune_orphan_recipes(keep_rids: set[str]) -> list[str]:
+    """Remove recipes NOT captured this run. The recipe library is a single
+    authoritative snapshot of the current manager tree, so any recipe whose id
+    is not in ``keep_rids`` is stale (user deleted/moved/renamed the subnet,
+    or the manager node itself was renamed) and is removed. The index is
+    rebuilt afterwards. Returns the list of removed recipe ids.
+
+    NOTE: this treats the manager tree as the single source of truth — there
+    is no per-manager isolation. Every recipe must be present in the tree at
+    capture time, or it is pruned.
+    """
+    root = recipes_root()
+    removed: list[str] = []
+    if not os.path.isdir(root):
+        return removed
+    for entry in os.listdir(root):
+        child = os.path.join(root, entry)
+        if not os.path.isdir(child):
+            continue
+        if entry in keep_rids:
+            continue  # captured this run — keep it
+        # Stale: not present in the current tree. Remove it.
+        try:
+            shutil.rmtree(child)
+            removed.append(entry)
+        except OSError:
+            pass  # best-effort; leave it rather than aborting
+    if removed:
+        rebuild_index()
+    return removed
+
+
 def recipe_capture_tree(root_path: str) -> dict[str, Any]:
     """Recursively capture every leaf subnet under ``root_path``.
 
@@ -1163,11 +1196,19 @@ def recipe_capture_tree(root_path: str) -> dict[str, Any]:
             skipped.append({"recipe_id": rid, "path": leaf_node.path(),
                             "error": result.get("error", "unknown")})
 
+    # Prune stale recipes: the manager tree is the single source of truth, so
+    # any recipe not captured this run (user deleted/moved/renamed the subnet,
+    # or the manager node itself was renamed) is removed.
+    captured_rids = {c["recipe_id"] for c in captured}
+    pruned = _prune_orphan_recipes(captured_rids)
+
     return {
         "success": True,
         "root": root_path,
         "captured_count": len(captured),
         "skipped_count": len(skipped),
+        "pruned_count": len(pruned),
+        "pruned": pruned,
         "captured": captured,
         "skipped": skipped,
     }
@@ -1396,12 +1437,51 @@ def rebuild_index() -> dict[str, Any]:
     return index
 
 
+# Bilingual synonyms for cross-language recipe search. Recipes store their
+# function text in Chinese (e.g. "沿曲线生成管材"), but the agent often queries
+# in English ("tube pipe curve"). Without these mappings a substring search
+# misses every recipe. Each group lists terms that are treated as equivalent;
+# a query term in any group also matches the haystack if the haystack contains
+# ANY other term from the same group. Maps are applied both to the query terms
+# and (redundantly, for safety) to the haystack so the direction doesn't matter.
+_RECIPE_SYNONYMS: list[set[str]] = [
+    {"tube", "pipe", "管", "管材", "管道", "圆柱", "筒"},
+    {"curve", "path", "曲线", "路径", "沿曲线"},
+    {"sweep", "扫掠", "扫", "sweep::2.0"},
+    {"extrude", "挤出", "拉伸", "polyextrude"},
+    {"revolve", "旋转", "回转", "lathe"},
+    {"copy", "scatter", "散布", "复制", "实例", "instance"},
+    {"mirror", "镜像", "对称", "reflect"},
+    {"array", "radial", "阵列", "环形", "辐条"},
+    {"boolean", "布尔", "cut", "切割"},
+    {"bevel", "倒角", "圆角", "fillet", "chamfer"},
+    {"revolve", "回转体"},
+    {"bolt", "螺栓", "螺钉"},
+    {"flange", "法兰"},
+    {"deform", "变形", "bend", "twist", "lattice"},
+]
+# Precompute a term -> set-of-equivalent-terms lookup for O(1) expansion.
+_SYNONYM_INDEX: dict[str, set[str]] = {}
+for _grp in _RECIPE_SYNONYMS:
+    for _term in _grp:
+        _SYNONYM_INDEX.setdefault(_term, set()).update(_grp)
+
+
+def _expand_query_synonyms(term: str) -> set[str]:
+    """Return the term plus its bilingual synonyms (lowercased)."""
+    t = term.lower()
+    syns = _SYNONYM_INDEX.get(t) or _SYNONYM_INDEX.get(term, set())
+    return {t} | {s.lower() for s in syns}
+
+
 def recipe_list(query: str = "", category: str = "", kind: str = "") -> dict[str, Any]:
     """Query the recipe index by keyword and/or category and/or kind.
 
     Pure file I/O — safe to call without Houdini. Matching is case-insensitive
     substring over the function text + id + category + tree_path components +
-    exposed parm names. An empty query returns all entries.
+    exposed parm names. A multi-word query is split into tokens and matched
+    token-by-token (a recipe matches if ANY token hits), and bilingual synonyms
+    bridge EN<->CN so "tube" matches "管材". An empty query returns all entries.
     ``kind`` filters to 'network' or 'vex'.
     """
     index = _safe_read_json(index_path())
@@ -1414,12 +1494,21 @@ def recipe_list(query: str = "", category: str = "", kind: str = "") -> dict[str
     cat = (category or "").strip().lower()
     knd = (kind or "").strip().lower()
     matches = []
+    # Tokenize the query into terms and expand each with bilingual synonyms.
+    # A multi-word query like "tube pipe curve" must NOT be matched as one
+    # literal string (that matches nothing); each token is matched
+    # independently, and a recipe matches if ANY token hits (with synonyms
+    # bridging EN<->CN, e.g. "tube" matches "管材").
+    query_terms = q.split() if q else []
+    expanded_terms: list[set[str]] = [
+        _expand_query_synonyms(t) for t in query_terms
+    ]
     for e in entries:
         if cat and e.get("category", "").lower() != cat:
             continue
         if knd and e.get("kind", "network").lower() != knd:
             continue
-        if q:
+        if expanded_terms:
             haystack = " ".join([
                 e.get("id", ""), e.get("function", ""),
                 e.get("category", ""), e.get("kind", ""),
@@ -1427,7 +1516,11 @@ def recipe_list(query: str = "", category: str = "", kind: str = "") -> dict[str
                 " ".join(e.get("exposed_parms", [])),
                 " ".join(e.get("marked_parms", [])),
             ]).lower()
-            if q not in haystack:
+            # A recipe matches if ANY query term (or its synonym) is a
+            # substring of the haystack. The original whole-string match
+            # failed whenever the query had >1 word.
+            if not any(any(syn in haystack for syn in syns)
+                       for syns in expanded_terms):
                 continue
         matches.append({
             "id": e["id"],

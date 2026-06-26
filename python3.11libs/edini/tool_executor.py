@@ -40,14 +40,19 @@ from edini.recipe_library import (
     create_recipe_manager,
     set_node_notes,
 )
+from edini.asset_model import validate_asset as _validate_asset_data
+from edini.asset_model import resolve_skeleton as _resolve_skeleton_data
+from edini.asset_model import load_asset as _load_asset_file
 
 # NOTE: The procedural-modeling pipeline (build_procedural_asset,
 # rebuild_component, build_variant_scatter, validate_recipe_tool) has been
-# disabled and moved to _disabled_backup/procedural-modeling/. These handlers
-# are intentionally NOT imported/registered. To restore, move the backed-up
-# python/edini/{recipe_validator,vexlib_loader,exprs,component_registry}.py
-# and components/ back into place and re-add the imports + TOOL_HANDLERS
-# entries below.
+# disabled and moved to _disabled_backup/procedural-modeling/. We are NOT
+# reviving those handlers as-is. Instead, a new declarative-asset pipeline is
+# being built bottom-up: milestone 1 restores the expression engine
+# (exprs.py) and adds a skeleton-point DAG + asset model (asset_model.py,
+# skeleton_resolver.py) + the validate_asset tool below. Component building
+# and assembly will be added in later milestones. Do not re-add the old
+# build_procedural_asset handler — it is superseded by this new pipeline.
 
 # Knowledge and eval handlers (available only in Houdini runtime)
 try:
@@ -91,6 +96,39 @@ def _edini_get_eval_stats(period: int = 10) -> dict[str, Any]:
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+def validate_asset(asset: dict | None = None, asset_path: str | None = None,
+                   resolve: bool = False) -> dict[str, Any]:
+    """Validate a procedural asset description (milestone-1 entry point).
+
+    Accepts either an inline ``asset`` dict or a path to an asset JSON file.
+    Pure-data validation — no Houdini dependency. Checks the param library,
+    the skeleton-point DAG (cycles, dangling refs, expression syntax), and
+    optionally resolves the skeleton to concrete coordinates (when
+    ``resolve=True``) so the agent can preview where every point lands.
+
+    Returns ``{success, errors, warnings, summary, resolved_skeleton?}``.
+    """
+    if asset is None and not asset_path:
+        return {"success": False, "error": "provide 'asset' (dict) or 'asset_path'"}
+    if asset is None:
+        asset = _load_asset_file(asset_path)
+        if asset is None:
+            return {"success": False, "error": f"could not read asset: {asset_path}"}
+    result = _validate_asset_data(asset)
+    if resolve and result["success"]:
+        try:
+            result["resolved_skeleton"] = {
+                k: list(v) for k, v in _resolve_skeleton_data(asset).items()
+            }
+        except Exception as exc:
+            # validate passed but resolve failed — surface as a warning.
+            result["warnings"].append({
+                "code": "RESOLVE_FAILED",
+                "message": f"could not resolve skeleton: {exc}",
+            })
+    return result
 
 
 # Map tool names to handler functions
@@ -250,6 +288,15 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     ),
     "recipe_set_notes": lambda **kw: set_node_notes(
         kw["node_path"], kw["notes"]),
+    # ── Procedural-asset pipeline (milestone 1: skeleton + validation) ──
+    # Pure-data validation of a declarative asset JSON (params + skeleton
+    # point DAG). No Houdini dependency — shift-left validation. Component
+    # building/assembly arrive in later milestones.
+    "validate_asset": lambda **kw: validate_asset(
+        asset=kw.get("asset"),
+        asset_path=kw.get("asset_path"),
+        resolve=kw.get("resolve", False),
+    ),
 }
 
 # Backward-compatibility tool aliases (pre-Task-7 rename).

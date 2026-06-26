@@ -104,9 +104,24 @@ class ParmCatalog:
                         ptype = pt.type().name()
                     except Exception:
                         continue
-                    # Skip folder/separator/button templates
+                    # Skip folder/separator/button templates. NOTE: a Multiparm
+                    # block itself has type "Multiparm"; we record it as an Int
+                    # count channel rather than skipping it (its instances appear
+                    # here too with ``#`` in their names).
                     if ptype in ("FolderSet", "Folder", "Separator", "ButtonStrip",
                                  "Label", "Button", ""):
+                        continue
+                    if ptype == "Multiparm":
+                        try:
+                            default_val = pt.numComponents() or 0
+                        except Exception:
+                            default_val = 0
+                        entry["parms"][pt.name()] = {
+                            "type": "Int",
+                            "label": (pt.label() if callable(pt.label) else pt.label()) or pt.name(),
+                            "default": default_val,
+                            "multiparm": "counter",
+                        }
                         continue
                     try:
                         default_val = pt.defaultValue()
@@ -134,6 +149,31 @@ class ParmCatalog:
                             pdef["menu_items"] = list(pt.menuItems() or [])
                         except Exception:
                             pdef["menu_items"] = []
+                    # Vector / multi-component detection (mirrors node_utils).
+                    # A vector parm like ``line.dir`` is one template with
+                    # numComponents()>1, but ``node.parm('dir')`` returns None —
+                    # you must use ``dirx``/``diry``/``dirz``. Record the size and
+                    # component channel names so consumers don't guess.
+                    if ptype in ("Float", "Int"):
+                        try:
+                            ncomp = int(pt.numComponents())
+                        except Exception:
+                            ncomp = 0
+                        if ncomp <= 1 and isinstance(default_val, (list, tuple)):
+                            ncomp = len(default_val)
+                        if ncomp in (2, 3, 4):
+                            pdef["vector_size"] = ncomp
+                            # Only synth component names for PLAIN vectors — a
+                            # ``#`` instance vector uses a numeric scheme
+                            # (``value1v1``), not ``xyz``. See node_utils for
+                            # the full rationale.
+                            if "#" not in (pt.name() or ""):
+                                pdef["components"] = [
+                                    f"{pt.name()}{s}" for s in ("x", "y", "z", "w")[:ncomp]
+                                ]
+                    # Tag multiparm-instance templates (name carries ``#``).
+                    if "#" in (pt.name() or ""):
+                        pdef["multiparm"] = "instance"
                     entry["parms"][pt.name()] = pdef
                 sops[nt.name()] = entry
         return ParmCatalog._sanitize({
