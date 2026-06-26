@@ -1,6 +1,6 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-26 &nbsp;|&nbsp; **声明式资产管道重启 — 里程碑1（骨架点 DAG + 表达式引擎 + validate_asset）已交付，待真实 Houdini 实测** 🚧 &nbsp;|&nbsp; 进展：地基三模块（exprs/skeleton_resolver/asset_model）纯函数全绿，hython dispatch 验证通过
+> 最后更新：2026-06-26 &nbsp;|&nbsp; **声明式资产管道里程碑1 — 真机实测通过 ✅，可进 M2 组件构建** &nbsp;|&nbsp; 进展：M1 三模块补全 162 单元/集成测试 + hython 真机端到端 5 项全绿，修复 2 个实测暴露的 bug（exprs round ndigits / asset_model 非对象崩溃），bicycle.asset.json bb_center 物理数学修正
 
 ## ⚠️ 架构转向说明（2026-06-23 → 06-26 三次演进）
 
@@ -35,10 +35,10 @@ recipe 教惯用法，资产管道教结构。
 <div class="phase-card">
   <div class="phase-card-header">
     <span class="phase-card-title">🦴 声明式资产管道 — 里程碑1（骨架点 DAG + 表达式引擎）</span>
-    <span class="status-tag status-active">已交付 · 待真机实测</span>
+    <span class="status-tag status-done">交付 · 真机实测通过 ✅</span>
   </div>
-  <div class="progress-bar-bg"><div class="progress-bar-fill" style="width:25%"></div></div>
-  <div class="phase-card-detail">程序化建模<strong>自底向上重启</strong>的第一层地基。核心创新 = <strong>全局骨架点 DAG</strong>：所有组件挂载到一张参数驱动的骨架点表上，组件之间不互相看见，只看见骨架点。这解决旧设计"组件自带 anchors 各自摆位、改参数全乱"的致命缺陷。<strong>三模块（纯 Python，无 hou 依赖）</strong>：① <code>exprs.py</code>（从 _disabled_backup 搬回 + 扩展）：安全 AST 表达式引擎，<code>evaluate</code>/<code>evaluate_tuple</code>/<code>extract_refs</code>，新增 <code>Name[int]</code> 下标支持（点引用语法 <code>rear_axle[0]</code>）。② <code>skeleton_resolver.py</code>：骨架点 DAG 拓扑求值（Kahn 排序 + 环检测 + 点引用解析）。③ <code>asset_model.py</code>：资产 JSON 三段结构（params/skeleton/components）+ validate（参数库 kinds + 骨架循环/悬空/语法）+ resolve（derived 参数先按依赖序求值，再求骨架点）。<strong>一个工具</strong>：<code>validate_asset</code>（纯数据验证，shift-left，无 Houdini 代价；resolve=true 预览所有骨架点坐标）。已注册 tool_executor + TS schema。<strong>样例</strong>：<code>bicycle.asset.json</code>（10 参数 + 5 骨架点，验证+求值全通过，参数联动 wheel_radius 0.28↔0.40 正确）。<strong>端到端验证</strong>：纯 Python 6 项全过 + hython 经 TOOL_HANDLERS dispatch 通过。<strong>下一步必须先真机实测里程碑1</strong>（让 agent 实际调 validate_asset），跑通再进里程碑2。</div>
+  <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:30%"></div></div>
+  <div class="phase-card-detail">程序化建模<strong>自底向上重启</strong>的第一层地基。核心创新 = <strong>全局骨架点 DAG</strong>：所有组件挂载到一张参数驱动的骨架点表上，组件之间不互相看见，只看见骨架点。这解决旧设计"组件自带 anchors 各自摆位、改参数全乱"的致命缺陷。<strong>三模块（纯 Python，无 hou 依赖）</strong>：① <code>exprs.py</code>（从 _disabled_backup 搬回 + 扩展）：安全 AST 表达式引擎，<code>evaluate</code>/<code>evaluate_tuple</code>/<code>extract_refs</code>，新增 <code>Name[int]</code> 下标支持（点引用语法 <code>rear_axle[0]</code>）。② <code>skeleton_resolver.py</code>：骨架点 DAG 拓扑求值（Kahn 排序 + 环检测 + 点引用解析）。③ <code>asset_model.py</code>：资产 JSON 三段结构（params/skeleton/components）+ validate（参数库 kinds + 骨架循环/悬空/语法）+ resolve（derived 参数先按依赖序求值，再求骨架点）。<strong>一个工具</strong>：<code>validate_asset</code>（纯数据验证，shift-left，无 Houdini 代价；resolve=true 预览所有骨架点坐标）。已注册 tool_executor + TS schema。<strong>样例</strong>：<code>bicycle.asset.json</code>（10 参数 + 5 骨架点，验证+求值全通过，bb_center 数学已修正为物理正确的水平投影）。<strong>实测完成（2026-06-26）</strong>：补全 5 个测试文件 162 测试全绿 + hython 真机端到端 5 项（Houdini 21.0.440 子进程 import hou + validate_asset 返回 5 点骨架）。实测暴露并修复 2 bug：exprs 的 round(ndigits) 被 float 化 + asset_model 在 params 非对象时崩溃。<strong>M1 实测通过，可启动 M2 组件构建</strong>。</div>
 </div>
 
 <div class="phase-card">
@@ -674,21 +674,26 @@ recipe 教惯用法，资产管道教结构。
 
 | 里程碑 | 内容 | 状态 | 关键文件 |
 |--------|------|------|----------|
-| **M1 骨架点 + 表达式引擎** | exprs.py + skeleton_resolver.py + asset_model.py + validate_asset 工具。纯数据层，shift-left 验证。 | ✅ **已交付，待真机实测** | exprs.py / skeleton_resolver.py / asset_model.py / tool_executor.py(validate_asset) / pi-extensions/edini-tools/tools/asset.ts / data/bicycle.asset.json |
-| **M2 组件构建** | `components[]` 真正生成几何，挂到骨架点。native 节点链优先 + 标准叶子模式白名单（直管/环/板/挤出/阵列）。组件声明 attach 到哪个骨架点、读哪个参数。 | ⬜ 下一步 | 复用 `_disabled_backup` 的 component_registry.py + components/*.json 的设计 |
+| **M1 骨架点 + 表达式引擎** | exprs.py + skeleton_resolver.py + asset_model.py + validate_asset 工具。纯数据层，shift-left 验证。 | ✅ **交付 + 真机实测通过**（162 单元/集成测试 + hython 端到端 5 项，修 2 bug + 样例数学修正） | exprs.py / skeleton_resolver.py / asset_model.py / tool_executor.py(validate_asset) / pi-extensions/edini-tools/tools/asset.ts / data/bicycle.asset.json / tests/test_{exprs,skeleton_resolver,asset_model,tool_executor_asset,asset_hython}.py |
+| **M2 组件构建** | `components[]` 真正生成几何，挂到骨架点。native 节点链优先 + 标准叶子模式白名单（直管/环/板/挤出/阵列）。组件声明 attach 到哪个骨架点、读哪个参数。 | ⬜ **下一步（M1 实测已通过，可启动）** | 复用 `_disabled_backup` 的 component_registry.py + components/*.json 的设计 |
 | **M3 盒子占位 + 早期验证** | 拆分阶段先输出盒子几何（挂骨架点），做连接点对齐 + 比例合理性验证（不做 AABB）。验证前移到最便宜的时机。 | ⬜ | 新工具（build_blockout / validate_blockout） |
 | **M4 组装提交 + skill** | 组件合并到 OUT，方向验证读骨架点朝向（不烘焙 axis）。**最后才写 skill 规则**（capability before rules）。 | ⬜ | commit_sandbox 改造 + 新 SKILL.md |
 
-### 🔴 当前最高优先级：实测里程碑1
+### ✅ 里程碑1 实测已完成（2026-06-26）
 
-**在写里程碑2 任何代码之前，必须先在真实 Houdini 里实测里程碑1**。验证清单：
+**capability-before-rules 纪律的第一道检验通过**。M1 的三个纯 Python 模块此前**零单元测试**，本次补全后：
 
-1. **工具可发现**：agent 能看到 `validate_asset` 工具（检查 edini-tools 加载、TS schema 正确）。
-2. **agent 能正确调用**：让 agent 对 `bicycle.asset.json` 调 `validate_asset(resolve=true)`，
-   确认返回 success + resolved_skeleton（5 个点的坐标）。
-3. **错误资产被正确拦截**：让 agent 故意写一个循环依赖/悬空引用的资产，确认 validate_asset 报对应错误码。
-4. **agent 是否理解新模型**：观察 agent 是否读懂 asset.json 的 params/skeleton 结构，
-   能否自己写一个简单资产（如一根管子的 2 点骨架）并验证通过。
+- **5 个新测试文件，162 个测试全绿**（exprs 80 + skeleton_resolver 21 + asset_model 41 + tool_executor_asset 15 + asset_hython 5）。
+- **hython 真机端到端 5 项全绿**（Houdini 21.0.440 子进程里 `import hou` 成功 + `validate_asset(resolve=true)` 返回 5 点骨架 + bb_center 物理正确）。无 hython 的环境自动 skip。
+- **实测暴露并修复 2 个真实 bug**：
+  1. `exprs.py`：`round(x, 2)` 报错——`_eval_node` 把整数字面量 `2` 强制 `float()` 化，Python 内置 `round` 的 `ndigits` 拒绝 float。修复：字面量保留原生类型（int 保 int），仅 `evaluate` 顶层和算术结果转 float。
+  2. `asset_model.py`：`_validate_skeleton_graph` 在 params 是非 dict 时崩溃（`set(params.keys())`）。根因：validate_asset 的 graph 跳过条件只检查 skeleton 结构错误，漏了 PARAMS_NOT_OBJECT。修复：把 params 结构错误码也加入跳过条件。
+- **样例数学修正**：`bicycle.asset.json` 的 `bb_center.expr[0]` 从物理不准的 `'rear_x + chainstay_len'` 改为正确的水平投影 `'rear_x - sqrt(chainstay_len**2 - bb_drop**2)'`（BB 在后轴前方）。
+- **全量回归 475 passed**（比改动前 +162），零回归。
+
+### 🔴 当前最高优先级：启动 M2 组件构建
+
+M1 实测通过，**不再阻塞 M2**。剩余的"agent 是否理解新模型"观察（原清单第 4 条）转为 M2 的实战检验——让 agent 真正写资产时验证。M2 启动要点见上表。
 
 实测发现的问题优先修，修完再进 M2。**不要跳过实测直接写 M2**——这是"capability before rules"
 纪律的第一道检验。

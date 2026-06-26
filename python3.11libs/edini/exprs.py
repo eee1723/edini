@@ -84,12 +84,21 @@ _SAFE_CONSTS: dict[str, float] = {
 
 
 def _eval_node(node: ast.AST, params: Mapping[str, float]) -> float:
-    """Recursive AST evaluator. Raises ExprError on anything not whitelisted."""
+    """Recursive AST evaluator. Raises ExprError on anything not whitelisted.
+
+    Note on integer-ness: a numeric literal is returned in its native type
+    (``int`` for ``2``, ``float`` for ``2.0``). Arithmetic and the public
+    ``evaluate`` entry point coerce the final result to ``float``, but an
+    integer literal passed as a *function argument* keeps its ``int`` type.
+    This matters for the whitelisted ``round(x, ndigits)`` — Python's builtin
+    requires ``ndigits`` to be an ``int`` and rejects a ``float``. Returning
+    ``int`` for ``2`` in ``round(3.14, 2)`` is what makes that work.
+    """
     # Number / constant literal.
     if isinstance(node, ast.Constant):
         if isinstance(node.value, bool) or not isinstance(node.value, (int, float)):
             raise ExprError(f"unsupported literal {node.value!r}")
-        return float(node.value)
+        return node.value
 
     # Parameter name or whitelisted constant.
     if isinstance(node, ast.Name):
@@ -202,6 +211,9 @@ def evaluate(expr: str, params: Mapping[str, float]) -> float:
     except SyntaxError as exc:
         raise ExprError(f"expression syntax error: {exc.msg}") from None
     result = _eval_node(tree.body, params)
+    # The public entry point always returns a float, even for an integer
+    # literal (``_eval_node`` keeps ints native so ``round(x, 2)`` works).
+    result = float(result)
     if not math.isfinite(result):
         raise ExprError(f"expression evaluated to non-finite value: {result}")
     return result

@@ -18,7 +18,7 @@
     "base":       {"expr": ["0", "0", "0"]},
     "rear_axle":  {"expr": ["rear_x",         "wheel_radius", "0"]},
     "front_axle": {"expr": ["front_x",        "wheel_radius", "0"]},
-    "bb_center":  {"expr": ["rear_x + chainstay_len", "bb_height", "0"]},
+    "bb_center":  {"expr": ["rear_x - sqrt(chainstay_len**2 - bb_drop**2)", "bb_height", "0"]},
     "ground":     {"expr": ["0",              "0",           "0"]}
   },
   "components": []

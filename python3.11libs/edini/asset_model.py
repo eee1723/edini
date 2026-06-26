@@ -278,10 +278,14 @@ def validate_asset(asset: dict) -> dict:
 
     errors.extend(_validate_params(asset))
     errors.extend(_validate_skeleton_structure(asset))
-    # Graph validation only if structure is sound (avoid noisy cascades).
-    if not any(e["code"].startswith("SKELETON_POINT_BAD") or
-               e["code"] == "SKELETON_NOT_OBJECT"
-               for e in errors):
+    # Graph validation only if the params + skeleton are structurally sound
+    # (avoid noisy cascades AND a crash: _validate_skeleton_graph indexes
+    # params.keys() / skeleton.items(), which raises if either is non-dict).
+    structural_errors = (
+        "SKELETON_POINT_BAD", "SKELETON_NOT_OBJECT",
+        "PARAMS_NOT_OBJECT", "PARAM_SPEC_NOT_OBJECT",
+    )
+    if not any(e["code"] in structural_errors for e in errors):
         errors.extend(_validate_skeleton_graph(asset))
 
     # components are milestone 2; warn if absent but don't fail.
