@@ -1,0 +1,25 @@
+{
+  "asset_schema_version": 1,
+  "id": "bicycle",
+  "params": {
+    "wheel_radius":  {"kind": "primary", "default": 0.34,  "min": 0.28, "max": 0.40, "label": "Wheel Radius"},
+    "wheelbase":      {"kind": "primary", "default": 1.05,  "min": 0.90, "max": 1.20, "label": "Wheelbase"},
+    "bb_drop":        {"kind": "primary", "default": 0.07,  "min": 0.05, "max": 0.09, "label": "BB Drop"},
+    "chainstay_len":  {"kind": "primary", "default": 0.405, "min": 0.38, "max": 0.45, "label": "Chainstay Length"},
+    "seat_angle":     {"kind": "primary", "default": 73.5,  "min": 70.0, "max": 76.0, "label": "Seat Tube Angle"},
+    "head_angle":     {"kind": "primary", "default": 73.0,  "min": 70.0, "max": 76.0, "label": "Head Tube Angle"},
+    "crank_length":   {"kind": "primary", "default": 0.1725,"min": 0.150,"max": 0.185,"label": "Crank Length"},
+
+    "bb_height":      {"kind": "derived", "from": "wheel_radius - bb_drop"},
+    "rear_x":         {"kind": "derived", "from": "0"},
+    "front_x":        {"kind": "derived", "from": "rear_x + wheelbase"}
+  },
+  "skeleton": {
+    "base":       {"expr": ["0", "0", "0"]},
+    "rear_axle":  {"expr": ["rear_x",         "wheel_radius", "0"]},
+    "front_axle": {"expr": ["front_x",        "wheel_radius", "0"]},
+    "bb_center":  {"expr": ["rear_x + chainstay_len", "bb_height", "0"]},
+    "ground":     {"expr": ["0",              "0",           "0"]}
+  },
+  "components": []
+}

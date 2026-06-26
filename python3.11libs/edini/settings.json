@@ -2,6 +2,7 @@
   "knowledge_enabled": true,
   "reflection_provider": "",
   "reflection_model": "",
+  "disabled_skills": [],
   "theme_color": "purple",
   "font_scale": 0.8,
   "vision_provider": "ali",
