@@ -314,6 +314,42 @@ class TestValidateComponents(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertTrue(any(e["code"] == "COMPONENT_NODE_NO_TYPE" for e in result["errors"]))
 
+    # ── python backend code checks ──
+
+    def test_python_backend_needs_code(self):
+        asset = self._table_asset()
+        asset["components"][0] = {
+            "id": "py_comp", "backend": "python",
+            "attach": {"position": "top_center"},
+            # no code
+        }
+        result = validate(asset)
+        self.assertFalse(result["success"])
+        self.assertTrue(any(e["code"] == "COMPONENT_NO_CODE" for e in result["errors"]))
+
+    def test_python_backend_code_syntax_checked(self):
+        # A syntax error in the cook body is caught at validate time, not as an
+        # opaque cook error later.
+        asset = self._table_asset()
+        asset["components"][0] = {
+            "id": "py_comp", "backend": "python",
+            "attach": {"position": "top_center"},
+            "code": "def ( broken",
+        }
+        result = validate(asset)
+        self.assertFalse(result["success"])
+        self.assertTrue(any(e["code"] == "COMPONENT_CODE_SYNTAX" for e in result["errors"]))
+
+    def test_python_backend_valid_code_passes(self):
+        asset = self._table_asset()
+        asset["components"][0] = {
+            "id": "py_comp", "backend": "python",
+            "attach": {"position": "top_center"},
+            "code": "node = hou.pwd()\ngeo = node.geometry()",
+        }
+        result = validate(asset)
+        self.assertTrue(result["success"], result["errors"])
+
     # ── attach checks (the NEW core constraint) ──
 
     def test_attach_position_must_be_known_point(self):
@@ -389,18 +425,19 @@ class TestTableAsset(unittest.TestCase):
         result = validate(self.asset)
         self.assertTrue(result["success"], result["errors"])
 
-    def test_has_six_params(self):
-        # 4 primary + 2 derived.
+    def test_has_seven_params(self):
+        # 4 primary + 3 derived (leg_half, leg_inset, rim_radius).
         result = validate(self.asset)
-        self.assertEqual(result["summary"]["param_count"], 6)
+        self.assertEqual(result["summary"]["param_count"], 7)
 
     def test_has_five_skeleton_points(self):
         result = validate(self.asset)
         self.assertEqual(result["summary"]["skeleton_point_count"], 5)
 
-    def test_has_five_components(self):
+    def test_has_six_components(self):
+        # 5 native_chain (tabletop + 4 legs) + 1 python (tabletop_rim curve).
         result = validate(self.asset)
-        self.assertEqual(result["summary"]["component_count"], 5)
+        self.assertEqual(result["summary"]["component_count"], 6)
 
     def test_param_linkage_top_size_moves_legs(self):
         """Derived param leg_inset = top_size/2 - leg_radius. Increasing

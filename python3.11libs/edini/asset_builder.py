@@ -161,6 +161,124 @@ def _resolve_param_value(value: Any, params: dict[str, float]) -> Any:
     return value
 
 
+# ── Value injection for the python backend ─────────────────────────
+#
+# An agent writes a Python-SOP cook body using asset param NAMES as if they
+# were ordinary variables (``r = rim_r``). The builder rewrites each bare
+# parameter name into its resolved numeric literal (``r = 0.3``) before the
+# code is set on the python SOP. This is "value injection" — the agent never
+# learns Houdini's parameter API (hou.ch, spare parms, ../ paths); every
+# dimension is a plain variable that the builder substitutes.
+#
+# Safety: the rewrite is an AST walk that ONLY substitutes a Name node when:
+#   - it is in Load context (not a write target / del / decorator),
+#   - it is NOT shadowed by a function parameter of the same name,
+#   - it is NOT the base of an attribute access (``math.cos`` — ``math`` is a
+#     module, never a param),
+#   - it is NOT a keyword-argument name (``f(pscale=1)`` — ``pscale`` there is
+#     a kwarg label, not a value).
+# Function-local variables that happen to share a param name are protected by
+# the arg-shadow check; deeper locals are the agent's responsibility (documented).
+
+import ast as _ast
+
+# Names that are NEVER params — the Python-SOP standard header + builtins the
+# agent's code relies on. Substituting these would break the code.
+_INJECT_NEVER = frozenset({
+    "hou", "geo", "node",  # standard Python-SOP header
+    "math",  # common import
+    # Python builtins the cook body commonly calls.
+    "range", "len", "int", "float", "round", "abs", "min", "max", "sum",
+    "sorted", "list", "tuple", "set", "dict", "enumerate", "zip", "True",
+    "False", "None", "self", "print",
+})
+
+
+class _ParamInjector(_ast.NodeTransformer):
+    """AST transformer that substitutes bare parameter Names with literals.
+
+    Tracks function-argument names so a param name reused as a function
+    parameter is NOT substituted inside that function (it shadows the param).
+    Skips attribute bases (``obj.attr``) and keyword-argument labels."""
+
+    def __init__(self, params: dict[str, float], shadowed: set[str] | None = None):
+        self._params = params
+        # Names shadowed by enclosing function args — not substitutable.
+        self._shadowed = shadowed if shadowed is not None else set()
+
+    def _substitute(self, name: str) -> _ast.AST | None:
+        """Return a Constant node if ``name`` is an injectable param, else None."""
+        if (name in self._params
+                and name not in _INJECT_NEVER
+                and name not in self._shadowed):
+            return _ast.Constant(value=float(self._params[name]))
+        return None
+
+    def visit_Name(self, node: _ast.Name) -> _ast.AST:
+        # Only Load-context names are value references. Store/Del are writes.
+        if not isinstance(node.ctx, _ast.Load):
+            return node
+        sub = self._substitute(node.id)
+        return sub if sub is not None else node
+
+    def visit_Attribute(self, node: _ast.Attribute) -> _ast.AST:
+        # Do NOT descend into the attribute base: ``math.cos`` must keep
+        # ``math`` as a name, never substitute it even if a param is named
+        # ``math``. Visit the rest (e.g. nested calls in the value) but skip
+        # the base Name.
+        self.generic_visit(node)
+        return node
+
+    def visit_keyword(self, node: _ast.keyword) -> _ast.AST:
+        # A keyword argument's VALUE is visited normally, but its ``arg`` (the
+        # label, e.g. ``pscale`` in ``f(pscale=1)``) is a string, not a Name —
+        # so it's already safe. generic_visit handles the value.
+        self.generic_visit(node)
+        return node
+
+    def visit_FunctionDef(self, node: _ast.FunctionDef) -> _ast.AST:
+        # Collect this function's arg names, visit its body under the expanded
+        # shadow set, then restore. Nested functions get their own layer.
+        arg_names = {a.arg for a in node.args.args}
+        arg_names |= {a.arg for a in node.args.posonlyargs}
+        arg_names |= {a.arg for a in node.args.kwonlyargs}
+        if node.args.vararg:
+            arg_names.add(node.args.vararg.arg)
+        if node.args.kwarg:
+            arg_names.add(node.args.kwarg.arg)
+        saved = self._shadowed
+        self._shadowed = self._shadowed | arg_names
+        self.generic_visit(node)
+        self._shadowed = saved
+        return node
+
+    def visit_Lambda(self, node: _ast.Lambda) -> _ast.AST:
+        # Lambdas bind args the same way named functions do.
+        arg_names = {a.arg for a in node.args.args}
+        arg_names |= {a.arg for a in node.args.posonlyargs}
+        arg_names |= {a.arg for a in node.args.kwonlyargs}
+        saved = self._shadowed
+        self._shadowed = self._shadowed | arg_names
+        self.generic_visit(node)
+        self._shadowed = saved
+        return node
+
+
+def _inject_param_values(code: str, params: dict[str, float]) -> str:
+    """Rewrite a Python-SOP cook body, substituting each bare asset-parameter
+    name with its resolved numeric literal. Returns the rewritten code.
+
+    Raises SyntaxError if ``code`` is not valid Python. See
+    :class:`_ParamInjector` for the exact safety rules (function-arg shadowing,
+    attribute-base / kwarg-label protection).
+    """
+    tree = _ast.parse(code)
+    injector = _ParamInjector(params)
+    new_tree = injector.visit(tree)
+    _ast.fix_missing_locations(new_tree)
+    return _ast.unparse(new_tree)
+
+
 # ── Per-backend component construction ──────────────────────────────
 
 
@@ -231,6 +349,54 @@ def _build_native_chain_component(
         prev = node
         last_node = node
     return last_node
+
+
+def _build_python_component(
+    root_path: str,
+    comp: dict,
+    cid: str,
+    params: dict[str, float],
+) -> Any:
+    """Build a python backend component: a Python SOP whose cook body is the
+    agent-authored ``code``, with asset params injected as numeric literals.
+
+    The agent writes ordinary Python using param NAMES as variables
+    (``r = rim_r``); the builder rewrites each bare param name to its resolved
+    value (``r = 0.3``) via :func:`_inject_param_values`. This is "value
+    injection": the agent never touches Houdini's parameter API (hou.ch, spare
+    parms, ../ paths). Changing a param rebuilds the network (sufficient for
+    one-shot asset generation; live re-cook is a later concern).
+
+    The cook body must follow the Python-SOP standard contract
+    (``node = hou.pwd(); geo = node.geometry()``) and build geometry with the
+    deterministic hou Geometry API (``geo.createPoint()`` / ``createPolygon()``)
+    — NOT interactive tools (curve needs viewport drawing; the agent must
+    generate points programmatically instead).
+
+    Optional ``imports`` (e.g. ``["math"]``) are prepended so the cook body can
+    use them. Returns the python SOP node (the chain tail; placement + tagging
+    are handled by the shared assembly layer, identical to native_chain).
+    """
+    code = comp.get("code", "")
+    if not code or not code.strip():
+        raise RuntimeError(f"python component '{cid}' has no 'code'")
+
+    # Inject asset-param values into the code (bare name → numeric literal).
+    injected = _inject_param_values(code, params)
+
+    # Prepend declared imports so the cook body can use them.
+    imports = comp.get("imports") or []
+    if imports:
+        import_lines = "\n".join(f"import {m}" for m in imports)
+        injected = import_lines + "\n" + injected
+
+    py_sop = _safe_create_node(root_path, "python", f"{cid}_python")
+    try:
+        _set_parm_safe(py_sop, "python", injected)
+    except Exception as e:
+        raise RuntimeError(
+            f"python component '{cid}' set code failed: {e}") from None
+    return py_sop
 
 
 # ── Assembly ────────────────────────────────────────────────────────
@@ -321,12 +487,16 @@ def build_asset(asset: dict, root_path: str) -> dict[str, Any]:
 
             if backend == "native_chain":
                 tail = _build_native_chain_component(root_path, comp, cid, param_values)
+            elif backend == "python":
+                tail = _build_python_component(root_path, comp, cid, param_values)
             else:
-                # vex_skeleton / python are later milestones; M2 ships
-                # native_chain first to validate the build path.
+                # vex_skeleton is intentionally NOT supported: the VEX-code path
+                # was the root cause of the old pipeline's failures (LLM VEX
+                # error rate). The python backend now covers curve/section
+                # generation with deterministic Geometry-API code instead.
                 raise RuntimeError(
-                    f"component '{cid}' backend {backend!r} not implemented in "
-                    f"milestone 2 (only native_chain); use native_chain nodes")
+                    f"component '{cid}' backend {backend!r} not supported "
+                    f"(use native_chain or python)")
 
             # Place the component at its attach skeleton point.
             attach = comp.get("attach") or {}

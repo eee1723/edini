@@ -481,6 +481,9 @@ class MockPrim:
     def isClosed(self) -> bool:
         return self._closed
 
+    def setIsClosed(self, value: bool) -> None:
+        self._closed = bool(value)
+
 
 class MockPrimType:
     def __init__(self, name: str):

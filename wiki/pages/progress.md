@@ -1,6 +1,6 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-26 &nbsp;|&nbsp; **声明式资产管道里程碑2 — 组件构建交付 ✅，真机生成桌子（5 组件 104 点）** &nbsp;|&nbsp; 进展：M2 native_chain backend 跑通，组件按骨架点名挂载 + 参数表达式求值 + merge→OUT，hython 真机端到端桌子几何生成成功；分层重构（asset_builder.py 独立，避免旧 4644 行全能 harness）
+> 最后更新：2026-06-26 &nbsp;|&nbsp; **声明式资产管道里程碑2 — native_chain + python backend 交付 ✅，真机生成桌子（6 组件 168 点，含 Python 曲线）** &nbsp;|&nbsp; 进展：python backend 让组件用 Python SOP 画曲线（弥补 native_chain 做不了的形状），值注入参数（agent 代码用参数名，builder AST 安全替换成数值，agent 永不碰 hou.ch）；不做 vex_skeleton（VEX 易错，Python 几何 API 更可靠）
 
 ## ⚠️ 架构转向说明（2026-06-23 → 06-26 三次演进）
 
@@ -47,7 +47,7 @@ recipe 教惯用法，资产管道教结构。
     <span class="status-tag status-done">交付 · 真机生成桌子 ✅</span>
   </div>
   <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:45%"></div></div>
-  <div class="phase-card-detail">让 <code>components[]</code> 真正生成几何并挂到 M1 骨架点上。<strong>核心契约</strong>：组件 <code>attach.position</code> 引用骨架点<strong>名</strong>（不是私有坐标表达式）——消灭旧设计"组件自带 anchor 各自摆位、改参数全乱"的缺陷。组件之间不互相连接，统一由骨架点 DAG 决定位置。<strong>分层重构</strong>（避免旧 4644 行全能 harness）：asset_model.py 扩展 <code>_validate_components</code>（纯数据校验：id 唯一/backend 枚举/nodes/attach 骨架点悬空检查/参数引用悬空检查——补旧设计两个洞）+ <strong>新建 asset_builder.py</strong>（几何构造层，依赖 hou）。<strong>native_chain backend</strong>：从 git history 移植助手（_safe_create_node/_set_parm_safe + 8 个 H21 workaround），组件 nodes 参数值字符串走 exprs 求值保持参数化，单实例用 xform transform 移到 attach 点（替代旧 CTP stamping），component_id 用 attribwrangle 打标。<strong>真机实测</strong>：table.asset.json（桌面 box + 4 桌腿 tube，参数联动 top_size→leg_inset→腿距）在 Houdini 21.0.440 生成 104 点 54 面、5 个 component_id、零 cook 错误、非零体积。<strong>测试</strong>：asset_builder mock 13 + asset_model component 校验 20 + tool_executor build handler 4 + hython 桌子 6。vex_skeleton/python backend + 多实例 CTP 留待后续里程碑。</div>
+  <div class="phase-card-detail">让 <code>components[]</code> 真正生成几何并挂到 M1 骨架点上。<strong>核心契约</strong>：组件 <code>attach.position</code> 引用骨架点<strong>名</strong>（不是私有坐标表达式）——消灭旧设计"组件自带 anchor 各自摆位、改参数全乱"的缺陷。组件之间不互相连接，统一由骨架点 DAG 决定位置。<strong>分层重构</strong>（避免旧 4644 行全能 harness）：asset_model.py 扩展 <code>_validate_components</code>（纯数据校验：id 唯一/backend 枚举/nodes/code 语法/attach 骨架点悬空检查/参数引用悬空检查——补旧设计两个洞）+ <strong>新建 asset_builder.py</strong>（几何构造层，依赖 hou）。<strong>两个 backend</strong>：① <code>native_chain</code>——从 git history 移植助手（_safe_create_node/_set_parm_safe + 8 个 H21 workaround），组件 nodes 参数值字符串走 exprs 求值保持参数化，单实例用 xform transform 移到 attach 点，attribwrangle 打 component_id；② <code>python</code>——Python SOP 画曲线/自定义截面（弥补 native_chain 做不了的形状，如轮缘、管路径），<strong>值注入</strong>参数（agent 代码用参数名当变量，builder AST 安全替换成数值——agent 永不碰 hou.ch/spare parm）。<strong>故意不做 vex_skeleton</strong>：VEX 是旧管道失败根因（LLM VEX 出错率高），python 几何 API（createPoint/createPolygon）确定性更强更可靠。<strong>真机实测</strong>：table.asset.json（桌面 box + 4 桌腿 tube + 桌面边缘 python 曲线圆环，参数联动 top_size→rim_radius）在 Houdini 21.0.440 生成 168 点 55 面、6 个 component_id、零 cook 错误。<strong>测试</strong>：值注入 AST 安全性 11 + python backend mock 6 + native_chain mock 13 + asset_model component 校验 23 + tool_executor build handler 4 + hython 桌子 8（含 python 曲线 + 参数化）。多实例 CTP stamping 留待后续里程碑。</div>
 </div>
 
 <div class="phase-card">
@@ -684,7 +684,7 @@ recipe 教惯用法，资产管道教结构。
 | 里程碑 | 内容 | 状态 | 关键文件 |
 |--------|------|------|----------|
 | **M1 骨架点 + 表达式引擎** | exprs.py + skeleton_resolver.py + asset_model.py + validate_asset 工具。纯数据层，shift-left 验证。 | ✅ **交付 + 真机实测通过**（162 单元/集成测试 + hython 端到端 5 项，修 2 bug + 样例数学修正） | exprs.py / skeleton_resolver.py / asset_model.py / tool_executor.py(validate_asset) / pi-extensions/edini-tools/tools/asset.ts / data/bicycle.asset.json / tests/test_{exprs,skeleton_resolver,asset_model,tool_executor_asset,asset_hython}.py |
-| **M2 组件构建** | `components[]` 真正生成几何，挂到骨架点。native 节点链优先 + 标准叶子模式白名单（直管/环/板/挤出/阵列）。组件声明 attach 到哪个骨架点、读哪个参数。 | ✅ **native_chain 交付 + 真机生成桌子**（5 组件 104 点，hython 端到端全绿）。vex_skeleton/python backend + 多实例 CTP 后续 | asset_builder.py（新建，分层重构）/ asset_model.py(_validate_components) / tool_executor.py(build_asset) / pi-extensions asset.ts / data/table.asset.json / tests/test_asset_{builder,model,hython,tool_executor_asset}.py |
+| **M2 组件构建** | `components[]` 真正生成几何，挂到骨架点。native 节点链 + python backend（Python SOP 画曲线/自定义截面）。组件声明 attach 到哪个骨架点、读哪个参数。 | ✅ **native_chain + python backend 交付**（桌子 6 组件 168 点含 Python 曲线，hython 端到端全绿）。vex_skeleton 故意不做（VEX 易错，python 几何 API 替代）；多实例 CTP 后续 | asset_builder.py（_build_native_chain/_build_python_component/_inject_param_values）/ asset_model.py(_validate_components) / tool_executor.py(build_asset) / pi-extensions asset.ts / data/table.asset.json / tests/test_asset_{builder,model,hython,tool_executor_asset}.py |
 | **M3 盒子占位 + 早期验证** | 拆分阶段先输出盒子几何（挂骨架点），做连接点对齐 + 比例合理性验证（不做 AABB）。验证前移到最便宜的时机。 | ⬜ 下一步 | 新工具（build_blockout / validate_blockout） |
 | **M4 组装提交 + skill** | 组件合并到 OUT，方向验证读骨架点朝向（不烘焙 axis）。**最后才写 skill 规则**（capability before rules）。 | ⬜ | commit_sandbox 改造 + 新 SKILL.md |
 

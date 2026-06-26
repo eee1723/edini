@@ -8,7 +8,8 @@
     "leg_radius":    {"kind": "primary", "default": 0.04, "min": 0.02, "max": 0.08, "label": "Leg Radius"},
 
     "leg_half":  {"kind": "derived", "from": "table_height/2"},
-    "leg_inset": {"kind": "derived", "from": "top_size/2 - leg_radius"}
+    "leg_inset": {"kind": "derived", "from": "top_size/2 - leg_radius"},
+    "rim_radius": {"kind": "derived", "from": "top_size/2"}
   },
   "skeleton": {
     "top_center": {"expr": ["0", "table_height", "0"]},
@@ -53,6 +54,13 @@
       "nodes": [
         {"type": "tube", "params": {"rad": ["leg_radius", "leg_radius"], "height": "table_height"}}
       ]
+    },
+    {
+      "id": "tabletop_rim",
+      "backend": "python",
+      "attach": {"position": "top_center"},
+      "imports": ["math"],
+      "code": "node = hou.pwd()\ngeo = node.geometry()\ngeo.clear()\nn = 64\nprim = geo.createPolygon()\nprim.setIsClosed(True)\nfor i in range(n):\n    a = 6.2832 * i / n\n    pt = geo.createPoint()\n    pt.setPosition((rim_radius * math.cos(a), 0.0, rim_radius * math.sin(a)))\n    prim.addVertex(pt)"
     }
   ]
 }

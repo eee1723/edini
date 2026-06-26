@@ -326,6 +326,25 @@ def _validate_components(asset: dict) -> list[dict]:
                             f"non-empty 'type'", {**((loc or {})),
                                                   "node_index": ni}))
 
+        # ── code (python backend requires a Python SOP cook body) ──
+        if backend == "python":
+            code = comp.get("code")
+            if not isinstance(code, str) or not code.strip():
+                errors.append(_err("COMPONENT_NO_CODE",
+                                   f"component {cid!r} (python) needs a "
+                                   f"non-empty 'code' string", loc))
+            else:
+                # Syntax-check the cook body so a typo surfaces here, not as
+                # an opaque cook error in Houdini.
+                import ast
+                try:
+                    ast.parse(code)
+                except SyntaxError as exc:
+                    errors.append(_err(
+                        "COMPONENT_CODE_SYNTAX",
+                        f"component {cid!r} code syntax error: {exc.msg} "
+                        f"(line {exc.lineno})", loc))
+
         # ── attach: the milestone-2 core constraint ──
         # A component MUST hang off a declared skeleton point (by name). This
         # is what makes the design parametric: the point's coordinates are

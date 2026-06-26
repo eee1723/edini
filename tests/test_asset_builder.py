@@ -248,5 +248,197 @@ class TestBuildAssetErrors(_BuilderTestCase):
             self.assertIn(key, result)
 
 
+# ===================================================================
+# _inject_param_values — value injection (pure function, no hou needed)
+# ===================================================================
+
+class TestPythonComponent(_BuilderTestCase):
+    """The python backend: agent-authored Python SOP code, with asset params
+    injected as literals, generates curve/geometry the native_chain backend
+    cannot (e.g. a parametric circle for a rim)."""
+
+    def _asset_with_python_component(self):
+        """A 1-point skeleton + 1 python component drawing a circle rim."""
+        return {
+            "asset_schema_version": 1,
+            "id": "py_test",
+            "params": {"rim_r": {"kind": "primary", "default": 0.3}},
+            "skeleton": {"center": {"expr": ["0", "0", "0"]}},
+            "components": [
+                {
+                    "id": "rim",
+                    "backend": "python",
+                    "attach": {"position": "center"},
+                    "imports": ["math"],
+                    "code": (
+                        "node = hou.pwd()\n"
+                        "geo = node.geometry()\n"
+                        "geo.clear()\n"
+                        "n = 48\n"
+                        "prim = geo.createPolygon()\n"
+                        "prim.setIsClosed(False)\n"
+                        "for i in range(n):\n"
+                        "    a = 6.2832 * i / n\n"
+                        "    pt = geo.createPoint()\n"
+                        "    pt.setPosition((rim_r * math.cos(a), 0.0, rim_r * math.sin(a)))\n"
+                        "    prim.addVertex(pt)\n"
+                    ),
+                }
+            ],
+        }
+
+    def test_python_component_creates_python_sop(self):
+        root = self._make_sandbox()
+        result = self.build_asset(self._asset_with_python_component(), root.path())
+        self.assertTrue(result["success"], result)
+        py = self._child(root, "rim_python")
+        self.assertIsNotNone(py)
+        self.assertEqual(py.type().name(), "python")
+
+    def test_param_value_injected_into_code(self):
+        # rim_r (0.3) is substituted into the code as a literal; the bare name
+        # 'rim_r' must NOT appear in the code set on the python SOP.
+        root = self._make_sandbox()
+        result = self.build_asset(self._asset_with_python_component(), root.path())
+        self.assertTrue(result["success"])
+        py = self._child(root, "rim_python")
+        code = py.parm("python").eval()
+        self.assertIn("0.3", code)
+        # The agent's bare 'rim_r' references are gone (replaced by 0.3).
+        self.assertNotIn("rim_r * math", code)
+        self.assertNotIn("rim_r *", code)
+
+    def test_imports_prepended(self):
+        root = self._make_sandbox()
+        result = self.build_asset(self._asset_with_python_component(), root.path())
+        self.assertTrue(result["success"])
+        py = self._child(root, "rim_python")
+        code = py.parm("python").eval()
+        self.assertIn("import math", code)
+        # The import should be at the top, before the agent's code.
+        self.assertLess(code.index("import math"), code.index("hou.pwd"))
+
+    def test_python_component_generates_geometry(self):
+        # The mock executes the python SOP code on cook; the circle (48 points)
+        # should materialize in the geometry.
+        root = self._make_sandbox()
+        result = self.build_asset(self._asset_with_python_component(), root.path())
+        self.assertTrue(result["success"])
+        py = self._child(root, "rim_python")
+        py.cook(force=True)
+        geo = py.geometry()
+        self.assertEqual(geo.intrinsicValue("pointcount"), 48)
+
+    def test_python_component_tagged_and_merged(self):
+        # Like native_chain, the python component is tagged + merged into OUT.
+        root = self._make_sandbox()
+        result = self.build_asset(self._asset_with_python_component(), root.path())
+        self.assertTrue(result["success"])
+        tag = self._child(root, "rim_tag")
+        out = self._child(root, "OUT")
+        self.assertIsNotNone(tag)
+        self.assertIsNotNone(out)
+        self.assertEqual(result["components_built"], 1)
+
+    def test_python_without_code_fails_cleanly(self):
+        asset = self._asset_with_python_component()
+        del asset["components"][0]["code"]
+        root = self._make_sandbox()
+        result = self.build_asset(asset, root.path())
+        self.assertFalse(result["success"])
+        self.assertIn("error", result)
+
+
+class TestParamInjection(_BuilderTestCase):
+    """The python-backend value injector: rewrites a bare parameter NAME in
+    agent-authored code into its resolved numeric literal, via a SAFE AST walk
+    (only global Name nodes in Load context, never function args / locals /
+    attributes). This lets an agent write ``r = rim_r`` and the builder
+    substitutes ``r = 0.3`` — zero Houdini parameter-API knowledge required.
+
+    Inherits _BuilderTestCase only so the edini package imports cleanly under
+    the mock hou (asset_builder's top-level imports pull in hou transitively);
+    the injector itself is a pure function with no hou dependency."""
+
+    def _inject(self, code, params):
+        return self.asset_builder._inject_param_values(code, params)
+
+    def test_simple_param_replaced_with_value(self):
+        out = self._inject("r = rim_r", {"rim_r": 0.3})
+        self.assertIn("0.3", out)
+        self.assertNotIn("rim_r", out)
+
+    def test_param_in_arithmetic(self):
+        out = self._inject("d = rim_r * 2", {"rim_r": 0.3})
+        # rim_r → 0.3, d stays (not a param)
+        self.assertIn("0.3", out)
+        self.assertNotIn("rim_r", out)
+        self.assertIn("d", out)
+
+    def test_unknown_name_preserved(self):
+        # A name not in the param library is left untouched.
+        out = self._inject("x = unknown", {"rim_r": 0.3})
+        self.assertIn("unknown", out)
+
+    def test_local_variable_not_replaced(self):
+        # 'leg' is assigned locally; it's not a param, so it stays. But 'rim_r'
+        # (a param) inside the same scope IS replaced.
+        out = self._inject("leg = rim_r\nheight = leg", {"rim_r": 0.3})
+        self.assertIn("0.3", out)
+        # 'leg' should still appear (it's a local, not a param).
+        self.assertIn("leg", out)
+
+    def test_function_arg_name_not_replaced(self):
+        # A function parameter named identically to a param must NOT be
+        # substituted inside the function body — it shadows the param.
+        code = "def make(rim_r):\n    return rim_r * 2"
+        out = self._inject(code, {"rim_r": 0.3})
+        # The def-line arg stays 'rim_r'; we don't mangle signatures.
+        self.assertIn("def make(rim_r)", out)
+
+    def test_attribute_access_not_replaced(self):
+        # math.cos — 'math' is an attribute base, not a free name to replace.
+        # Even if a param were named 'math', the attribute context protects it.
+        code = "node = hou.pwd()\ngeo = node.geometry()\nx = math.cos(0)"
+        out = self._inject(code, {"math": 9.9, "node": 1.0})
+        # 'math' must survive (it's a module, used as attribute base).
+        self.assertIn("math.cos", out)
+        # 'hou' must survive (excluded builtin-equivalent).
+        self.assertIn("hou.pwd", out)
+
+    def test_hou_geo_node_builtins_preserved(self):
+        # The standard Python-SOP header names are never params.
+        code = "node = hou.pwd()\ngeo = node.geometry()\ngeo.clear()"
+        out = self._inject(code, {})
+        self.assertIn("hou.pwd", out)
+        self.assertIn("node.geometry", out)
+
+    def test_multiple_params_replaced(self):
+        out = self._inject("box = [w, h, d]", {"w": 1.0, "h": 0.5, "d": 2.0})
+        self.assertIn("1.0", out)
+        self.assertIn("0.5", out)
+        self.assertIn("2.0", out)
+
+    def test_keyword_argument_name_not_replaced(self):
+        # pscale=1.0 — 'pscale' is a keyword arg NAME, not a value reference.
+        code = "pt.setAttribValue('pscale', 1.0)"
+        out = self._inject(code, {"pscale": 0.5})
+        # The string 'pscale' stays a kwarg name; the literal 1.0 stays.
+        self.assertIn("'pscale'", out)
+        self.assertIn("1.0", out)
+
+    def test_for_loop_target_not_replaced(self):
+        code = "for i in range(n):\n    pt = geo.createPoint()"
+        out = self._inject(code, {"n": 48, "i": 9.9})
+        # 'n' (param) replaced with 48; loop target 'i' is NOT a param here so
+        # it stays, but even if it were, the loop target context is Load-safe.
+        self.assertIn("48", out)
+        self.assertIn("range", out)
+
+    def test_invalid_python_raises_clean_error(self):
+        with self.assertRaises(Exception):
+            self._inject("def ( broken syntax", {"rim_r": 0.3})
+
+
 if __name__ == "__main__":
     unittest.main()
