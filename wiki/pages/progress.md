@@ -1,25 +1,45 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-25 &nbsp;|&nbsp; **Recipe Library 二次定位：recipe 从「可执行配方」重定义为「参考样本」（python_script + manifest 降噪），HDA 一键捕获按钮上线** 🚧 &nbsp;|&nbsp; 进展：94 测试全绿，sweep 噪音参数 101→6
+> 最后更新：2026-06-26 &nbsp;|&nbsp; **声明式资产管道重启 — 里程碑1（骨架点 DAG + 表达式引擎 + validate_asset）已交付，待真实 Houdini 实测** 🚧 &nbsp;|&nbsp; 进展：地基三模块（exprs/skeleton_resolver/asset_model）纯函数全绿，hython dispatch 验证通过
 
-## ⚠️ 架构转向说明（2026-06-23 → 06-25 二次定位）
+## ⚠️ 架构转向说明（2026-06-23 → 06-26 三次演进）
 
 **重要**：旧的程序化建模管道（提示词驱动 + validate_recipe/build_procedural_asset/G1-G3 闸门）
-已**完全关闭并备份**到 `_disabled_backup/procedural-modeling/`。根因：LLM 对 Houdini 不熟，
+曾**关闭并备份**到 `_disabled_backup/procedural-modeling/`。根因：LLM 对 Houdini 不熟，
 靠提示词规则无论写多细还是会出错——这是概率模型的本质缺陷。
 
-**方向 = Recipe Library**：把人类 TD 搭好的 subnet 沉淀成配方库。
+但经过多轮会话日志分析（水管/自行车/水管-v2/v3），发现**根因不是"思路错"，而是"规则跑在能力前面"**——
+skill 强制 agent 走 `build_procedural_asset`，但底层工具（组件构建器/骨架点/表达式引擎）没跟上，
+agent 够不着，只能退回 sandbox，再被门禁拒。**门禁编码了正确的领域知识，但 agent 没有满足门禁的手段，
+于是变成死循环。**
 
-**2026-06-25 二次定位（关键）**：recipe 从「LLM 用 recipe_rebuild 机械还原的死模板」重定义为
-**「给 LLM 的参考样本」**。捕获时生成 `python_script` 字段（可读 Python 还原代码，marked 参数带
-`# author-marked` 注释）。LLM 读 python_script 学习节点语法和作者的约定，然后**自己重建网络**——
-它的能力不被 recipe 限死。recipe_rebuild 降级为可选的「快速忠实复制」次选路径。
+**2026-06-26 第三次演进（当前方向）= 声明式资产管道（自底向上重启）**：
+不再先写 skill 规则，而是从地基往上逐层做，每层独立可跑。复用 `_disabled_backup` 里已有的
+高质量前身（`exprs.py` 表达式引擎、`recipe_validator.py` 的 DAG 循环检测、`component_registry.py`），
+但补上**之前缺失的核心创新——全局骨架点 DAG**（旧设计是组件自带 anchors，新设计是所有组件
+挂载到一张共享骨架点表上，组件之间不互相看见，只看见骨架点）。
 
-下方旧的「程序化建模」阶段卡片保留作为历史记录，但**已不再是当前架构**。
+核心流程（6 阶段）：**拆分组件 → 骨架点 DAG → 盒子占位 → 参数库 → native 节点链实现 → 组装提交**。
+详细设计见下方"下一步计划"。里程碑1（骨架点 + 表达式引擎）**已交付，待真实 Houdini 实测**。
+
+**2026-06-25 二次定位（仍有效）**：recipe 定位为「参考样本」（python_script + manifest 降噪），
+recipe 降低 LLM 的语法出错率，但不限死其能力。这条定位在资产管道里继续生效——
+recipe 教惯用法，资产管道教结构。
+
+下方旧的「程序化建模」阶段卡片保留作为历史记录。
 
 ## 总览看板
 
 <div class="phase-grid">
+
+<div class="phase-card">
+  <div class="phase-card-header">
+    <span class="phase-card-title">🦴 声明式资产管道 — 里程碑1（骨架点 DAG + 表达式引擎）</span>
+    <span class="status-tag status-active">已交付 · 待真机实测</span>
+  </div>
+  <div class="progress-bar-bg"><div class="progress-bar-fill" style="width:25%"></div></div>
+  <div class="phase-card-detail">程序化建模<strong>自底向上重启</strong>的第一层地基。核心创新 = <strong>全局骨架点 DAG</strong>：所有组件挂载到一张参数驱动的骨架点表上，组件之间不互相看见，只看见骨架点。这解决旧设计"组件自带 anchors 各自摆位、改参数全乱"的致命缺陷。<strong>三模块（纯 Python，无 hou 依赖）</strong>：① <code>exprs.py</code>（从 _disabled_backup 搬回 + 扩展）：安全 AST 表达式引擎，<code>evaluate</code>/<code>evaluate_tuple</code>/<code>extract_refs</code>，新增 <code>Name[int]</code> 下标支持（点引用语法 <code>rear_axle[0]</code>）。② <code>skeleton_resolver.py</code>：骨架点 DAG 拓扑求值（Kahn 排序 + 环检测 + 点引用解析）。③ <code>asset_model.py</code>：资产 JSON 三段结构（params/skeleton/components）+ validate（参数库 kinds + 骨架循环/悬空/语法）+ resolve（derived 参数先按依赖序求值，再求骨架点）。<strong>一个工具</strong>：<code>validate_asset</code>（纯数据验证，shift-left，无 Houdini 代价；resolve=true 预览所有骨架点坐标）。已注册 tool_executor + TS schema。<strong>样例</strong>：<code>bicycle.asset.json</code>（10 参数 + 5 骨架点，验证+求值全通过，参数联动 wheel_radius 0.28↔0.40 正确）。<strong>端到端验证</strong>：纯 Python 6 项全过 + hython 经 TOOL_HANDLERS dispatch 通过。<strong>下一步必须先真机实测里程碑1</strong>（让 agent 实际调 validate_asset），跑通再进里程碑2。</div>
+</div>
 
 <div class="phase-card">
   <div class="phase-card-header">
@@ -132,6 +152,20 @@
 </div>
 
 <div class="timeline">
+
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-26</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第三十五阶段：声明式资产管道里程碑1 — 骨架点 DAG + 表达式引擎 + validate_asset（自底向上重启）</span>
+      <span class="status-tag status-active">地基交付 · 待真机实测</span>
+    </div>
+    <div class="timeline-summary">① **根因复盘**：分析 4 轮会话日志（水管/自行车/水管-v2/v3），确认旧程序化建模失败的本质 = "规则跑在能力前面"。skill 强制走 build_procedural_asset，但底层工具不存在，agent 够不着→退回 sandbox→被门禁拒→死循环。门禁本身编码了正确的领域知识，问题在 agent 没有满足门禁的手段。② **与用户共同设计新流程**（6 阶段）：拆分组件 → 骨架点 DAG → 盒子占位 → 参数库（边做边加，禁硬编码）→ native 节点链实现（拼不出才用 Python SOP）→ 组装提交。核心创新 = <strong>组件不互相连接，都连接到一张参数驱动的骨架点表（DAG）</strong>——这解了"连接问题"，且和"参数库禁硬编码""盒子占位"天然咬合。③ **地基三模块（纯 Python 无 hou）**：exprs.py（从 _disabled_backup 搬回的安全表达式引擎，新增 Name[int] 下标放行点引用语法）、skeleton_resolver.py（Kahn 拓扑排序 + 环检测 + 点引用求值）、asset_model.py（资产 JSON 三段 + validate + resolve，含 derived 参数 DAG 求值）。④ **接入 validate_asset 工具**（tool_executor 注册 + TS schema），纯数据 shift-left 验证，resolve=true 预览坐标。⑤ **样例 bicycle.asset.json**：10 参数（含 2 个 derived）+ 5 骨架点，验证 + 求值 + 参数联动（wheel_radius 改动，bb_center 正确跟随）全通过。⑥ **教训**：先写 skill 规则再补能力会崩；必须 capability before rules。**下一步明确：先在真实 Houdini 实测里程碑1（agent 调 validate_asset），跑通再进里程碑2**。两个提交已推 GitHub（025ca86 参数系统修复 + eb2cfe1 资产管道里程碑1）。</div>
+    <div class="timeline-tags">
+      <span>骨架点DAG</span><span>表达式引擎</span><span>自底向上</span><span>validate_asset</span><span>shift-left</span><span>纯Python</span><span>capability-before-rules</span><span>待真机实测</span>
+    </div>
+  </div>
+</div>
 
 <div class="timeline-item timeline-done">
   <div class="timeline-date">2026-06-25</div>
@@ -613,34 +647,82 @@
 
 ## 下一步计划
 
-### Recipe Library + Dashboard HDA（当前主线）
+### ⚠️ 接手者必读：当前主线 = 声明式资产管道（自底向上重启）
 
-旧的程序化建模 ABCDE 五站计划已随管道关闭而**废弃**（代码备份在 `_disabled_backup/`）。
+程序化建模经历了三次演进，接手者必须理解这个**上下文转折**：
+
+1. **第一次（已废弃）**：提示词驱动 + ABCDE 五站 + G1-G3 闸门。失败根因 = 规则跑在能力前面。
+   代码备份在 `_disabled_backup/procedural-modeling/`（含 `exprs.py`/`recipe_validator.py`/
+   `component_registry.py` 等高质量前身，里程碑1 已部分复活复用）。
+2. **第二次（仍有效）**：Recipe Library 转向「参考样本」定位。recipe 降低 LLM 语法出错率，
+   不限死能力。**这条定位在资产管道里继续生效**——recipe 教惯用法，资产管道教结构。
+3. **第三次（当前方向）**：声明式资产管道，自底向上逐层做，**capability before rules**（先有工具
+   再写 skill 规则，绝不重蹈"规则要求不存在的能力"的覆辙）。
+
+**新流程 6 阶段**：拆分组件 → 骨架点 DAG → 盒子占位 → 参数库 → native 节点链实现 → 组装提交。
+核心设计决策（与用户共同敲定）：
+- **组件之间不互相连接**，都连接到一张参数驱动的骨架点表（DAG）。轮子不知道车架存在，
+  它们都知道 `rear_axle` 这个点。这是连接问题的解。
+- **参数库禁硬编码**：任何数字必须能在参数库或骨架点找到来源。primary（用户调）+ derived（表达式算）。
+- **盒子占位优先**：先用盒子摆比例朝向，在盒子上做廉价验证（连接点对齐、比例合理性），
+  再做真实几何。**不做 AABB 相交检测**（自行车轮子天然嵌在车架里，AABB 必误报）。
+- **native 节点链优先**：叶子组件能用 circle→sweep/torus/polyextrude 拼就拼，拼不出才用 Python SOP。
+- **方向不靠烘焙**：组装阶段的方向验证直接读骨架点 DAG 的朝向，不再要求 agent 手 bake
+  `edini_world_axis`（这消灭了自行车日志里的死循环）。
+
+### 资产管道里程碑路线图
+
+| 里程碑 | 内容 | 状态 | 关键文件 |
+|--------|------|------|----------|
+| **M1 骨架点 + 表达式引擎** | exprs.py + skeleton_resolver.py + asset_model.py + validate_asset 工具。纯数据层，shift-left 验证。 | ✅ **已交付，待真机实测** | exprs.py / skeleton_resolver.py / asset_model.py / tool_executor.py(validate_asset) / pi-extensions/edini-tools/tools/asset.ts / data/bicycle.asset.json |
+| **M2 组件构建** | `components[]` 真正生成几何，挂到骨架点。native 节点链优先 + 标准叶子模式白名单（直管/环/板/挤出/阵列）。组件声明 attach 到哪个骨架点、读哪个参数。 | ⬜ 下一步 | 复用 `_disabled_backup` 的 component_registry.py + components/*.json 的设计 |
+| **M3 盒子占位 + 早期验证** | 拆分阶段先输出盒子几何（挂骨架点），做连接点对齐 + 比例合理性验证（不做 AABB）。验证前移到最便宜的时机。 | ⬜ | 新工具（build_blockout / validate_blockout） |
+| **M4 组装提交 + skill** | 组件合并到 OUT，方向验证读骨架点朝向（不烘焙 axis）。**最后才写 skill 规则**（capability before rules）。 | ⬜ | commit_sandbox 改造 + 新 SKILL.md |
+
+### 🔴 当前最高优先级：实测里程碑1
+
+**在写里程碑2 任何代码之前，必须先在真实 Houdini 里实测里程碑1**。验证清单：
+
+1. **工具可发现**：agent 能看到 `validate_asset` 工具（检查 edini-tools 加载、TS schema 正确）。
+2. **agent 能正确调用**：让 agent 对 `bicycle.asset.json` 调 `validate_asset(resolve=true)`，
+   确认返回 success + resolved_skeleton（5 个点的坐标）。
+3. **错误资产被正确拦截**：让 agent 故意写一个循环依赖/悬空引用的资产，确认 validate_asset 报对应错误码。
+4. **agent 是否理解新模型**：观察 agent 是否读懂 asset.json 的 params/skeleton 结构，
+   能否自己写一个简单资产（如一根管子的 2 点骨架）并验证通过。
+
+实测发现的问题优先修，修完再进 M2。**不要跳过实测直接写 M2**——这是"capability before rules"
+纪律的第一道检验。
+
+### 关键设计文档 & 前身代码
+
+- **完整设计**：`docs/edini/specs/2026-06-20-pipeline-architecture-design.md`（三阶段管道，
+  资产管道是其演进；§6.3 锚点活通道引用 = 骨架点的前身概念）
+- **被禁用的前身（可复用）**：`_disabled_backup/procedural-modeling/python/edini/`
+  - `exprs.py` ✅ 已搬回（M1）
+  - `recipe_validator.py` — A1-A9 验证 + A6 DAG 循环检测（Kahn），M2 可参考
+  - `component_registry.py` — 组件注册 + `{"component":"wheel"}` 引用展开，M2 直接复用设计
+  - `components/{tube,wheel,spoke,hub,chain_link,bolt}.json` — 6 个组件样板，M2 的起点
+- **资产样例**：`python3.11libs/edini/data/bicycle.asset.json`（M1 测试基础）
+- **禁用说明**：`python3.11libs/edini/tool_executor.py` 顶部 NOTE 注释（说明哪些复活了哪些不复活）
+
+### Recipe Library + Dashboard HDA（次主线，可与资产管道并行）
+
 Recipe Library 已完成「参考样本」定位转向，Dashboard HDA 的捕获按钮已上线，Qt 树面板待做：
 
 | 阶段 | 任务 | 说明 | 状态 |
 |------|------|------|------|
 | **核心** | Recipe Library 5 工具 + python_script | recipe_list/read/capture/capture_tree/rebuild + python_script 参考样本生成 | ✅ 完成（94 测试） |
 | **降噪** | manifest 匹配修复 | 版本名优先 + 字符串归一化 + vector/ramp/folder 匹配，changed_params -86% | ✅ 完成 |
+| **2026-06-26 增强** | manifest 精度大修 + recipe 孤儿清理 + 中英检索 | 向量真实分量名（temp 节点读取）+ multiparm 记录 + 版本别名 + capture_tree 全局清孤儿 + recipe_list 分词+中英同义词 | ✅ 完成（提交 025ca86） |
 | **捕获** | HDA 一键按钮 | Capture All Recipes 按钮（setTags API），reload 后真实验证通过 | ✅ 完成 |
 | **开关** | Skill on/off | Settings → Pi Capabilities 复选框，可 A/B 测试 recipe-library | ✅ 完成 |
 | **对齐** | 四链路 message 注入 | system prompt/工具描述/SKILL.md/index 统一「参考样本」方向 | ✅ 完成 |
 | **1** | scan_tree + create_recipe_manager | 递归读 HDA 内部 subnet 树 + 一键建主 HDA | ⬜ 待做（需真实 Houdini） |
-| **2** | recipe_list 递归支持 | LLM 能查 HDA 内部树（不只读 index.json） | ⬜ 待做 |
-| **3** | Qt 树面板骨架 | recipe_tree_window.py（QTreeView 显示 HDA 内部结构） | ⬜ 待做 |
-| **4** | 按钮接线 | 检查/重建/编辑按钮调 recipe_library | ⬜ 待做 |
-| **5** | 右键菜单 + 拖拽 | 新建/移动 subnet，改分类 | ⬜ 待做 |
-| **6** | LLM 工具接线 | recipe_manager_create/tree_scan/tree_open 工具 | ⬜ 待做 |
-| **7** | edini 消费 recipe 实测 | 观察真任务里 edini 是否走 list→read python_script→自建 | ⬜ 待真实验证 |
+| **2** | Qt 树面板骨架 | recipe_tree_window.py（QTreeView 显示 HDA 内部结构） | ⬜ 待做 |
+| **3** | edini 消费 recipe 实测 | 观察真任务里 edini 是否走 list→read python_script→自建 | ⬜ 待真实验证 |
 
-**关键阻塞**：阶段 1-6 依赖真实 Houdini 的 HDA/Qt 行为验证，mock 无法覆盖。设计文档
+**关键阻塞**：阶段 1-2 依赖真实 Houdini 的 HDA/Qt 行为验证。设计文档
 `docs/edini/recipe-manager-hda-design.md`，操作手册 `docs/edini/recipe-capture-workflow.md`。
-
-### 旧程序化建模（已废弃，备份可恢复）
-
-ABCDE 五站（A 声明式 Builder / B 构造轴 / C 参数 DB / D 黄金范例 / E 数值代理）随管道关闭废弃。
-A/B/C 已完成的代码备份在 `_disabled_backup/procedural-modeling/`，恢复方式见
-`python3.11libs/edini/tool_executor.py` 顶部 NOTE 注释。
 
 ### 其它规划
 
