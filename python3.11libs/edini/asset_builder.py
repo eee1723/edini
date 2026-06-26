@@ -498,18 +498,40 @@ def build_asset(asset: dict, root_path: str) -> dict[str, Any]:
                     f"component '{cid}' backend {backend!r} not supported "
                     f"(use native_chain or python)")
 
-            # Place the component at its attach skeleton point.
-            attach = comp.get("attach") or {}
-            point_name = attach.get("position")
-            if point_name not in skeleton:
-                raise RuntimeError(
-                    f"component '{cid}' attach {point_name!r} is not a resolved "
-                    f"skeleton point (validate should have caught this)")
-            position = skeleton[point_name]
-            moved = _move_to_point(root_path, tail, cid, position)
-            tagged = _tag_component_id(root_path, moved, cid)
-            component_nodes.append(tagged)
-            placements[cid] = [float(c) for c in position]
+            # Place the component onto its skeleton point(s). Two forms:
+            #   - instances[]: geometry built ONCE, then N transform-copies,
+            #     each at its own point with its own component_id.
+            #   - attach.position: one transform (the single-instance case).
+            # Both fan out from the shared geometry tail (one build, N copies),
+            # avoiding the old CTP idfix boundary math entirely.
+            instances = comp.get("instances")
+            if isinstance(instances, list) and instances:
+                for inst in instances:
+                    inst_id = inst.get("id")
+                    point_name = inst.get("position")
+                    if point_name not in skeleton:
+                        raise RuntimeError(
+                            f"instance {inst_id!r} of component {cid!r} attach "
+                            f"{point_name!r} is not a resolved skeleton point "
+                            f"(validate should have caught this)")
+                    position = skeleton[point_name]
+                    moved = _move_to_point(root_path, tail, inst_id, position)
+                    tagged = _tag_component_id(root_path, moved, inst_id)
+                    component_nodes.append(tagged)
+                    placements[inst_id] = [float(c) for c in position]
+            else:
+                attach = comp.get("attach") or {}
+                point_name = attach.get("position")
+                if point_name not in skeleton:
+                    raise RuntimeError(
+                        f"component {cid!r} attach {point_name!r} is not a "
+                        f"resolved skeleton point (validate should have caught "
+                        f"this)")
+                position = skeleton[point_name]
+                moved = _move_to_point(root_path, tail, cid, position)
+                tagged = _tag_component_id(root_path, moved, cid)
+                component_nodes.append(tagged)
+                placements[cid] = [float(c) for c in position]
 
         if not component_nodes:
             raise RuntimeError("asset has no components to build")

@@ -28,31 +28,15 @@
       ]
     },
     {
-      "id": "leg_fl", "backend": "native_chain",
-      "attach": {"position": "leg_fl"},
+      "id": "table_leg", "backend": "native_chain",
       "nodes": [
         {"type": "tube", "params": {"rad": ["leg_radius", "leg_radius"], "height": "table_height"}}
-      ]
-    },
-    {
-      "id": "leg_fr", "backend": "native_chain",
-      "attach": {"position": "leg_fr"},
-      "nodes": [
-        {"type": "tube", "params": {"rad": ["leg_radius", "leg_radius"], "height": "table_height"}}
-      ]
-    },
-    {
-      "id": "leg_bl", "backend": "native_chain",
-      "attach": {"position": "leg_bl"},
-      "nodes": [
-        {"type": "tube", "params": {"rad": ["leg_radius", "leg_radius"], "height": "table_height"}}
-      ]
-    },
-    {
-      "id": "leg_br", "backend": "native_chain",
-      "attach": {"position": "leg_br"},
-      "nodes": [
-        {"type": "tube", "params": {"rad": ["leg_radius", "leg_radius"], "height": "table_height"}}
+      ],
+      "instances": [
+        {"id": "leg_fl", "position": "leg_fl"},
+        {"id": "leg_fr", "position": "leg_fr"},
+        {"id": "leg_bl", "position": "leg_bl"},
+        {"id": "leg_br", "position": "leg_br"}
       ]
     },
     {

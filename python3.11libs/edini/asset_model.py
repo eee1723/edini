@@ -345,16 +345,75 @@ def _validate_components(asset: dict) -> list[dict]:
                         f"component {cid!r} code syntax error: {exc.msg} "
                         f"(line {exc.lineno})", loc))
 
-        # ── attach: the milestone-2 core constraint ──
-        # A component MUST hang off a declared skeleton point (by name). This
-        # is what makes the design parametric: the point's coordinates are
-        # computed by the skeleton DAG, and the component just says "I'm here".
+        # ── placement: attach (single instance) OR instances[] (multi) ──
+        # A component hangs off skeleton point(s) BY NAME. Two forms:
+        #   - attach.position: one instance at one point (the simple case).
+        #   - instances[]: N instances, each at its own point with its own id.
+        #     The geometry is defined ONCE; each instance is a transform copy.
+        # Both forms name skeleton points (never private coordinates) — this is
+        # the milestone-2 contract that replaced the old anchor mechanism.
         attach = comp.get("attach")
-        if not isinstance(attach, dict):
+        instances = comp.get("instances")
+        has_attach = isinstance(attach, dict)
+        has_instances = isinstance(instances, list)
+
+        if has_attach and has_instances:
+            errors.append(_err(
+                "COMPONENT_INSTANCES_AND_ATTACH_CONFLICT",
+                f"component {cid!r} has both 'attach' and 'instances' — use one "
+                f"(attach for a single instance, instances[] for many)", loc))
+        elif has_instances:
+            # Multi-instance: validate each instance's id + point reference.
+            for ii, inst in enumerate(instances):
+                if not isinstance(inst, dict):
+                    errors.append(_err(
+                        "COMPONENT_INSTANCE_NO_ID",
+                        f"component {cid!r} instances[{ii}] must be an object",
+                        {**((loc or {})), "instance_index": ii}))
+                    continue
+                inst_id = inst.get("id")
+                if not inst_id or not isinstance(inst_id, str):
+                    errors.append(_err(
+                        "COMPONENT_INSTANCE_NO_ID",
+                        f"component {cid!r} instances[{ii}] needs a non-empty "
+                        f"string 'id'", {**((loc or {})), "instance_index": ii}))
+                    inst_id = None
+                elif inst_id in seen_ids:
+                    # instance ids are the real component_ids (they enter the
+                    # merge + gates), so they must be globally unique across
+                    # all components AND instances.
+                    errors.append(_err(
+                        "COMPONENT_INSTANCE_DUPLICATE_ID",
+                        f"duplicate id {inst_id!r} (instance of {cid!r}) — every "
+                        f"component/instance id must be unique",
+                        {**((loc or {})), "instance_id": inst_id}))
+                else:
+                    seen_ids.add(inst_id)
+                inst_pos = inst.get("position")
+                if not inst_pos or not isinstance(inst_pos, str):
+                    errors.append(_err(
+                        "COMPONENT_INSTANCE_BAD_POINT",
+                        f"component {cid!r} instance {inst_id!r} needs a "
+                        f"'position' skeleton-point name",
+                        {**((loc or {})), "instance_id": inst_id}))
+                elif inst_pos not in point_names:
+                    errors.append(_err(
+                        "COMPONENT_INSTANCE_BAD_POINT",
+                        f"component {cid!r} instance {inst_id!r} attaches to "
+                        f"{inst_pos!r} which is not a declared skeleton point "
+                        f"(known: {sorted(point_names)})",
+                        {**((loc or {})), "instance_id": inst_id,
+                         "point": inst_pos}))
+        elif not has_attach:
+            # Neither attach nor instances: a component must declare where it
+            # lives. (An empty components list is allowed at the asset level;
+            # this fires only for a present-but-placement-less component.)
             errors.append(_err("COMPONENT_NO_ATTACH",
                                f"component {cid!r} needs an 'attach' object "
-                               f"with a 'position' skeleton-point name", loc))
+                               f"(single instance) or an 'instances' list "
+                               f"(multi-instance)", loc))
         else:
+            # Single-instance attach.position: validate the point reference.
             position = attach.get("position")
             if not position or not isinstance(position, str):
                 errors.append(_err("COMPONENT_NO_ATTACH",

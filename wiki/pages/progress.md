@@ -1,6 +1,6 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-26 &nbsp;|&nbsp; **声明式资产管道里程碑2 — native_chain + python backend 交付 ✅，真机生成桌子（6 组件 168 点，含 Python 曲线）** &nbsp;|&nbsp; 进展：python backend 让组件用 Python SOP 画曲线（弥补 native_chain 做不了的形状），值注入参数（agent 代码用参数名，builder AST 安全替换成数值，agent 永不碰 hou.ch）；不做 vex_skeleton（VEX 易错，Python 几何 API 更可靠）
+> 最后更新：2026-06-26 &nbsp;|&nbsp; **声明式资产管道里程碑2 — native_chain + python + 多实例交付 ✅，真机生成桌子（3 定义/6 实例 168 点）** &nbsp;|&nbsp; 进展：多实例 transform 复制（1 定义 + N 实例挂 N 骨架点），替代旧 CTP stamping（anchor 私有坐标违背 M2 + idfix boundary 数学脆）；桌子 4 桌腿从 4 独立组件收敛为 1 定义+4实例，几何零变化
 
 ## ⚠️ 架构转向说明（2026-06-23 → 06-26 三次演进）
 
@@ -46,8 +46,8 @@ recipe 教惯用法，资产管道教结构。
     <span class="phase-card-title">🧱 声明式资产管道 — 里程碑2（组件构建 · native_chain）</span>
     <span class="status-tag status-done">交付 · 真机生成桌子 ✅</span>
   </div>
-  <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:45%"></div></div>
-  <div class="phase-card-detail">让 <code>components[]</code> 真正生成几何并挂到 M1 骨架点上。<strong>核心契约</strong>：组件 <code>attach.position</code> 引用骨架点<strong>名</strong>（不是私有坐标表达式）——消灭旧设计"组件自带 anchor 各自摆位、改参数全乱"的缺陷。组件之间不互相连接，统一由骨架点 DAG 决定位置。<strong>分层重构</strong>（避免旧 4644 行全能 harness）：asset_model.py 扩展 <code>_validate_components</code>（纯数据校验：id 唯一/backend 枚举/nodes/code 语法/attach 骨架点悬空检查/参数引用悬空检查——补旧设计两个洞）+ <strong>新建 asset_builder.py</strong>（几何构造层，依赖 hou）。<strong>两个 backend</strong>：① <code>native_chain</code>——从 git history 移植助手（_safe_create_node/_set_parm_safe + 8 个 H21 workaround），组件 nodes 参数值字符串走 exprs 求值保持参数化，单实例用 xform transform 移到 attach 点，attribwrangle 打 component_id；② <code>python</code>——Python SOP 画曲线/自定义截面（弥补 native_chain 做不了的形状，如轮缘、管路径），<strong>值注入</strong>参数（agent 代码用参数名当变量，builder AST 安全替换成数值——agent 永不碰 hou.ch/spare parm）。<strong>故意不做 vex_skeleton</strong>：VEX 是旧管道失败根因（LLM VEX 出错率高），python 几何 API（createPoint/createPolygon）确定性更强更可靠。<strong>真机实测</strong>：table.asset.json（桌面 box + 4 桌腿 tube + 桌面边缘 python 曲线圆环，参数联动 top_size→rim_radius）在 Houdini 21.0.440 生成 168 点 55 面、6 个 component_id、零 cook 错误。<strong>测试</strong>：值注入 AST 安全性 11 + python backend mock 6 + native_chain mock 13 + asset_model component 校验 23 + tool_executor build handler 4 + hython 桌子 8（含 python 曲线 + 参数化）。多实例 CTP stamping 留待后续里程碑。</div>
+  <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:55%"></div></div>
+  <div class="phase-card-detail">让 <code>components[]</code> 真正生成几何并挂到 M1 骨架点上。<strong>核心契约</strong>：组件引用骨架点<strong>名</strong>（不是私有坐标表达式）——消灭旧设计"组件自带 anchor 各自摆位、改参数全乱"的缺陷。<strong>分层重构</strong>：asset_model.py 扩展 <code>_validate_components</code>（纯数据校验：id 唯一/backend 枚举/nodes/code 语法/attach 骨架点悬空/参数引用悬空/multi-instance 校验）+ <strong>新建 asset_builder.py</strong>（几何构造层，依赖 hou）。<strong>两个 backend</strong>：① <code>native_chain</code>（native SOP 节点链，从 git 移植助手 + 8 个 H21 workaround）；② <code>python</code>（Python SOP 画曲线/自定义截面，<strong>值注入</strong>参数——agent 代码用参数名当变量，builder AST 安全替换成数值，永不碰 hou.ch）。故意不做 vex_skeleton（VEX 是旧管道失败根因）。<strong>多实例 transform 复制</strong>：1 个组件定义 + <code>instances[]</code> 挂 N 个骨架点，几何只 build 一次、N 个 transform 各移到各点各打 component_id——替代旧 CTP stamping（其 anchor 私有坐标违背 M2 + idfix boundary 数学在"实例几何不同"时会算错）。<strong>真机实测</strong>：table.asset.json（桌面 box + 4 桌腿[1 定义+4实例] + 桌面边缘 python 曲线，3 定义/6 实例）在 Houdini 21.0.440 生成 168 点 55 面、6 个 component_id、零 cook 错误；桌腿从 4 独立组件收敛为 1 定义+4 实例，几何零变化（回归保护）。<strong>测试</strong>：值注入 AST 11 + python backend 6 + native_chain 13 + multi-instance 6 + asset_model 校验 30 + tool_executor 4 + hython 桌子 8 = 全绿。CTP stamping（>50 螺丝高效复制）作为未来优化保留。</div>
 </div>
 
 <div class="phase-card">

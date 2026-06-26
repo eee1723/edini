@@ -372,6 +372,89 @@ class TestValidateComponents(unittest.TestCase):
         result = validate(self._table_asset())
         self.assertTrue(result["success"], result["errors"])
 
+    # ── multi-instance checks ──
+
+    def _dual_wheel_asset(self):
+        """A valid asset with ONE wheel component instanced onto 2 skeleton
+        points (front + rear axle). Used for multi-instance validation tests."""
+        return {
+            "asset_schema_version": 1,
+            "id": "bike_wheels",
+            "params": {"wr": {"kind": "primary", "default": 0.34}},
+            "skeleton": {
+                "front_axle": {"expr": ["1.0", "wr", "0"]},
+                "rear_axle": {"expr": ["0", "wr", "0"]},
+            },
+            "components": [
+                {
+                    "id": "wheel",
+                    "backend": "native_chain",
+                    "nodes": [{"type": "torus", "params": {"r": "wr"}}],
+                    "instances": [
+                        {"id": "wheel_front", "position": "front_axle"},
+                        {"id": "wheel_rear", "position": "rear_axle"},
+                    ],
+                }
+            ],
+        }
+
+    def test_valid_multi_instance_passes(self):
+        result = validate(self._dual_wheel_asset())
+        self.assertTrue(result["success"], result["errors"])
+
+    def test_instances_and_attach_conflict(self):
+        # A component with BOTH instances and attach is ambiguous — reject it.
+        asset = self._dual_wheel_asset()
+        asset["components"][0]["attach"] = {"position": "front_axle"}
+        result = validate(asset)
+        self.assertFalse(result["success"])
+        self.assertTrue(any(
+            e["code"] == "COMPONENT_INSTANCES_AND_ATTACH_CONFLICT"
+            for e in result["errors"]))
+
+    def test_instance_needs_id(self):
+        asset = self._dual_wheel_asset()
+        del asset["components"][0]["instances"][0]["id"]
+        result = validate(asset)
+        self.assertFalse(result["success"])
+        self.assertTrue(any(
+            e["code"] == "COMPONENT_INSTANCE_NO_ID" for e in result["errors"]))
+
+    def test_instance_duplicate_id(self):
+        # Two instances with the same id are ambiguous for the gates.
+        asset = self._dual_wheel_asset()
+        asset["components"][0]["instances"][1]["id"] = "wheel_front"
+        result = validate(asset)
+        self.assertFalse(result["success"])
+        self.assertTrue(any(
+            e["code"] == "COMPONENT_INSTANCE_DUPLICATE_ID"
+            for e in result["errors"]))
+
+    def test_instance_bad_point(self):
+        # instance.position must reference a declared skeleton point.
+        asset = self._dual_wheel_asset()
+        asset["components"][0]["instances"][0]["position"] = "no_such_point"
+        result = validate(asset)
+        self.assertFalse(result["success"])
+        self.assertTrue(any(
+            e["code"] == "COMPONENT_INSTANCE_BAD_POINT" for e in result["errors"]))
+
+    def test_instance_no_attach_required(self):
+        # A component with instances does NOT need a top-level attach (the
+        # instances carry their own positions). This must NOT trigger
+        # COMPONENT_NO_ATTACH.
+        asset = self._dual_wheel_asset()
+        result = validate(asset)
+        self.assertTrue(result["success"], result["errors"])
+        self.assertFalse(any(
+            e["code"] == "COMPONENT_NO_ATTACH" for e in result["errors"]))
+
+    def test_single_instance_still_valid(self):
+        # Backward compat: a single-instance component (attach, no instances)
+        # is unaffected.
+        result = validate(self._table_asset())
+        self.assertTrue(result["success"], result["errors"])
+
     # ── param-ref checks (the hole the old design never closed) ──
 
     def test_node_param_expr_dangling_ref(self):
@@ -434,10 +517,12 @@ class TestTableAsset(unittest.TestCase):
         result = validate(self.asset)
         self.assertEqual(result["summary"]["skeleton_point_count"], 5)
 
-    def test_has_six_components(self):
-        # 5 native_chain (tabletop + 4 legs) + 1 python (tabletop_rim curve).
+    def test_has_three_component_definitions(self):
+        # 3 component DEFINITIONS: tabletop + table_leg (4 instances) +
+        # tabletop_rim. (component_count counts definitions, not instances —
+        # instances_built is reported by build_asset, not validate.)
         result = validate(self.asset)
-        self.assertEqual(result["summary"]["component_count"], 6)
+        self.assertEqual(result["summary"]["component_count"], 3)
 
     def test_param_linkage_top_size_moves_legs(self):
         """Derived param leg_inset = top_size/2 - leg_radius. Increasing

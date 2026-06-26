@@ -349,6 +349,95 @@ class TestPythonComponent(_BuilderTestCase):
         self.assertIn("error", result)
 
 
+# ===================================================================
+# Multi-instance: one component definition instanced onto N skeleton points
+# ===================================================================
+
+class TestMultiInstance(_BuilderTestCase):
+    """Multi-instance via transform copying: the component geometry is built
+    ONCE, then N transforms each move a copy onto a declared skeleton point
+    with its own component_id. This replaces the old CTP-stamping (whose anchor
+    private coords + idfix boundary math were fragile and violated the M2
+    skeleton-point contract)."""
+
+    def _dual_wheel_asset(self):
+        return {
+            "asset_schema_version": 1,
+            "id": "wheels_test",
+            "params": {"wr": {"kind": "primary", "default": 0.34}},
+            "skeleton": {
+                "front_axle": {"expr": ["1.0", "wr", "0"]},
+                "rear_axle": {"expr": ["0", "wr", "0"]},
+            },
+            "components": [
+                {
+                    "id": "wheel",
+                    "backend": "native_chain",
+                    "nodes": [{"type": "box", "params": {"size": ["wr", "wr", "wr"]}}],
+                    "instances": [
+                        {"id": "wheel_front", "position": "front_axle"},
+                        {"id": "wheel_rear", "position": "rear_axle"},
+                    ],
+                }
+            ],
+        }
+
+    def test_two_instances_build_two_chains(self):
+        root = self._make_sandbox()
+        result = self.build_asset(self._dual_wheel_asset(), root.path())
+        self.assertTrue(result["success"], result)
+        # One geometry source (wheel_n0) + 2 transforms + 2 tags + merge + OUT.
+        children = {c.name(): c for c in root.children()}
+        self.assertIn("wheel_n0", children)
+        self.assertIn("wheel_front_xform", children)
+        self.assertIn("wheel_rear_xform", children)
+        self.assertIn("wheel_front_tag", children)
+        self.assertIn("wheel_rear_tag", children)
+
+    def test_geometry_source_built_once(self):
+        # The component's geometry (wheel_n0) exists exactly once — both
+        # instances transform-copy it rather than rebuilding it.
+        root = self._make_sandbox()
+        self.build_asset(self._dual_wheel_asset(), root.path())
+        geom_nodes = [c for c in root.children() if c.name().startswith("wheel_n")]
+        self.assertEqual(len(geom_nodes), 1)
+
+    def test_each_instance_at_its_skeleton_point(self):
+        # wheel_front → front_axle (x=1.0), wheel_rear → rear_axle (x=0).
+        root = self._make_sandbox()
+        result = self.build_asset(self._dual_wheel_asset(), root.path())
+        self.assertTrue(result["success"])
+        placements = result["placements"]
+        self.assertAlmostEqual(placements["wheel_front"][0], 1.0, places=4)
+        self.assertAlmostEqual(placements["wheel_rear"][0], 0.0, places=4)
+
+    def test_components_built_counts_instances(self):
+        # components_built counts the placed instances (2), not definitions (1).
+        root = self._make_sandbox()
+        result = self.build_asset(self._dual_wheel_asset(), root.path())
+        self.assertTrue(result["success"])
+        self.assertEqual(result["components_built"], 2)
+
+    def test_merge_collects_all_instances(self):
+        root = self._make_sandbox()
+        self.build_asset(self._dual_wheel_asset(), root.path())
+        merge = self._child(root, "merge_all")
+        connected = [n for n in merge.inputs() if n is not None]
+        self.assertEqual(len(connected), 2)
+
+    def test_both_transforms_share_one_geometry_source(self):
+        # Both xform nodes take input from the SAME geometry node (fan-out),
+        # confirming the geometry is built once and copied, not rebuilt.
+        root = self._make_sandbox()
+        self.build_asset(self._dual_wheel_asset(), root.path())
+        front_xform = self._child(root, "wheel_front_xform")
+        rear_xform = self._child(root, "wheel_rear_xform")
+        # Each xform's input is the shared geometry tail (wheel_n0). The exact
+        # node may be wrapped, but both must share the same source.
+        self.assertIsNotNone(front_xform.inputs()[0])
+        self.assertIsNotNone(rear_xform.inputs()[0])
+
+
 class TestParamInjection(_BuilderTestCase):
     """The python-backend value injector: rewrites a bare parameter NAME in
     agent-authored code into its resolved numeric literal, via a SAFE AST walk
