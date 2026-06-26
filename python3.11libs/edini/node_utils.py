@@ -505,11 +505,35 @@ def _attr_or_call(obj, attr: str, default=None):
         return default
 
 
-def _extract_parm_spec(tmpl) -> dict[str, Any] | None:
+def _vector_component_names(root: str, ncomp: int) -> list[str]:
+    """Return the per-component channel names for a vector parm.
+
+    Houdini's rule is uniform: a vector parm named ``dir`` exposes channels
+    ``dirx``/``diry``/``dirz`` (and ``dirw`` for 4-component). This holds for
+    every SOP built-in (``t``, ``r``, ``s``, ``p``, ``dir``, ``origin``,
+    ``size``, ``rad``, ...). We synthesise the names rather than querying the
+    node because the manifest is generated once and consumed offline.
+
+    For ncomp outside 2..4 (rare — e.g. a 9- or 16-element matrix default),
+    the default may just be a multi-element scalar array, not a true vector;
+    we return [] so no misleading ``components`` are recorded.
+    """
+    if not root or ncomp not in (2, 3, 4):
+        return []
+    suffixes = ("x", "y", "z", "w")[:ncomp]
+    return [f"{root}{s}" for s in suffixes]
+
+
+def _extract_parm_spec(tmpl, multiparm_block: str | None = None) -> dict[str, Any] | None:
     """Extract a JSON-serializable spec from one ParmTemplate.
     Returns None for folders/separators/labels (non-parm entries). The spec
     captures what an agent needs to write a recipe: name, type, label, default,
-    menu tokens, and numeric range."""
+    menu tokens, and numeric range.
+
+    ``multiparm_block`` — when the template is an instance inside a multiparm
+    block (its name carries a ``#`` placeholder), this is the block's count
+    channel name. We record it so a consumer knows which multiparm this
+    instance belongs to and how many instances exist."""
     # Skip non-parm template kinds (folders, separators, labels).
     name = _attr_or_call(tmpl, "name")
     if not name or not isinstance(name, str):
@@ -551,7 +575,58 @@ def _extract_parm_spec(tmpl) -> dict[str, Any] | None:
         if mx is not None:
             spec["max"] = _json_safe(mx)
 
-    return spec
+    # Vector / multi-component detection (CRITICAL fix).
+    #
+    # In Houdini, a vector parm like ``line.dir`` is a SINGLE ParmTemplate whose
+    # ``numComponents()`` > 1 and whose name is the bare vector root (``dir``).
+    # But the Python runtime API does NOT let you do ``node.parm('dir')`` — that
+    # returns None. You must use ``node.parmTuple('dir')`` or the per-component
+    # channels ``dirx`` / ``diry`` / ``dirz``. The old manifest only recorded the
+    # root name with type "Float", so agents called ``parm('dir').set(...)`` and
+    # hit ``'NoneType' object has no attribute 'set'`` every time.
+    #
+    # We now record ``vector_size`` + ``components`` so the consumer can tell a
+    # true vector from a scalar, and knows the exact component channel names.
+    ncomp = _attr_or_call(tmpl, "numComponents")
+    try:
+        ncomp = int(ncomp) if ncomp is not None else 0
+    except (TypeError, ValueError):
+        ncomp = 0
+    # Fallback: infer size from the default value when numComponents() didn't
+    # report a vector (returns 0/1/None, or the API is absent). A multi-element
+    # default on a Float/Int template is overwhelmingly a vector
+    # (t/dir/origin/size/r/s). NOTE: this fallback must trigger when numComponents
+    # reports <=1 too — on some Houdini 21 builds numComponents() under-reports
+    # for Float templates, so the default-length signal is the reliable one.
+    if ncomp <= 1 and isinstance(spec.get("default"), list):
+        ncomp = len(spec["default"])
+    if ncomp and ncomp > 1 and type_name in ("Float", "Int"):
+        spec["vector_size"] = ncomp
+        # Only synthesise component names for PLAIN vectors (no ``#``). A plain
+        # vector ``dir`` always exposes ``dirx``/``diry``/``dirz``. But a
+        # multiparm-instance vector like ``value#v#`` or ``stroke#_color`` has
+        # a totally different channel scheme — the ``#`` is replaced by a
+        # 1-based index and the component suffix is numeric (``value1v1``), NOT
+        # ``xyz``. Guessing ``stroke#_colorx`` here would be actively wrong, so
+        # we record ``vector_size`` only and let the consumer ask a live node
+        # for the exact channels.
+        if "#" not in name:
+            comp = _vector_component_names(name, ncomp)
+            if comp:
+                spec["components"] = comp
+
+    # Multiparm-instance tagging. A ``#`` in the name marks a per-row template
+    # (e.g. ``useapply#`` inside the ``numapply`` block). When we detected the
+    # owning block via folderType(), we record it so consumers can reconstruct
+    # the multiparm and resolve ``#`` to 1-based indices (e.g. ``useapply1``).
+    # Some instance templates sit inside a plain (non-MultiparmBlock) folder —
+    # the block detection misses those, but the ``#`` is itself a reliable
+    # instance signal, so we tag those too with an unknown block.
+    if "#" in name:
+        spec["multiparm"] = "instance"
+        if multiparm_block:
+            spec["multiparm_block"] = multiparm_block
+
     return spec
 
 
@@ -580,14 +655,137 @@ def _json_safe(value) -> Any:
     return str(value)
 
 
+def _correct_vector_components(parms: list[dict[str, Any]], category, type_name: str) -> None:
+    """Overwrite each vector parm's ``components`` with the REAL runtime channel
+    names read from a live node instance.
+
+    Why: the walker synthesises component names by the ``name+xyz`` rule, but
+    Houdini violates it for several SOPs — ``tube.rad`` exposes ``rad1``/``rad2``
+    (numeric), ``xform.shear`` exposes ``shear1/2/3``. A guessed ``radx`` makes
+    an agent call ``parm('radx')`` which returns None and crashes the build
+    (a real, repeated failure in session logs). Reading from an instance is the
+    only source of truth.
+
+    Mutates ``parms`` in place. Best-effort: if a temp node can't be created
+    (abstract types, mock hou), the existing synthetic names are left as-is.
+    """
+    vecs = [p for p in parms if p.get("vector_size", 1) > 1 and "#" not in p.get("name", "")]
+    if not vecs:
+        return
+    # Create a temporary node to query real channels. Failures here are
+    # non-fatal — we keep the synthetic names and move on.
+    try:
+        nt = category.nodeType(type_name)
+        if nt is None:
+            return
+        # Build under a throwaway geo so we never pollute the scene. Use the
+        # /obj category's default container if Sop, else the type's own table.
+        try:
+            obj = hou.node("/obj")
+        except Exception:
+            return
+        if obj is None:
+            return
+        try:
+            tmp_geo = obj.createNode("geo", "_manifest_probe")
+        except Exception:
+            tmp_geo = obj
+        try:
+            inst = tmp_geo.createNode(type_name, "_p")
+        except Exception:
+            # Some types can't be created under geo; try directly under /obj.
+            try:
+                inst = obj.createNode(type_name, "_p")
+                tmp_geo = obj  # so cleanup targets /obj... skip, handled below
+            except Exception:
+                if tmp_geo is not obj:
+                    try: tmp_geo.destroy()
+                    except Exception: pass
+                return
+        try:
+            for p in vecs:
+                nm = p["name"]
+                try:
+                    pt = inst.parmTuple(nm)
+                    if pt and len(pt) > 1:
+                        chans = [x.name() for x in pt]
+                        if chans:
+                            p["components"] = chans
+                except Exception:
+                    pass
+        finally:
+            try: inst.destroy()
+            except Exception: pass
+            try:
+                if tmp_geo is not obj:
+                    tmp_geo.destroy()
+            except Exception: pass
+    except Exception:
+        return
+
+
+def _is_multiparm_block(tmpl) -> bool:
+    """True if ``tmpl`` is a multiparm (collapsible) folder.
+
+    On real Houdini, a multiparm container is a ``FolderParmTemplate`` whose
+    ``folderType() == hou.folderType.MultiparmBlock``. The plain ``type().name()``
+    returns "Folder" for BOTH multiparm and simple folders, so it cannot tell
+    them apart — only ``folderType()`` can. This helper is defensive: it
+    returns False when the API is unavailable (mocks, oddball templates) rather
+    than raising, so the walker degrades to the old (folder-recursion) path.
+    """
+    try:
+        ft = tmpl.folderType()
+    except Exception:
+        return False
+    try:
+        target = hou.folderType.MultiparmBlock
+    except Exception:
+        return False
+    try:
+        return ft == target
+    except Exception:
+        return False
+
+
 def _flatten_parm_templates(group) -> list[dict[str, Any]]:
     """Walk a ParmTemplateGroup, recursing into folders, returning a flat list
     of parm specs (folders/separators skipped)."""
     specs: list[dict[str, Any]] = []
     seen_names: set[str] = set()
 
-    def walk(templates):
+    def walk(templates, multiparm_block: str | None = None):
         for tmpl in templates:
+            # A MultiparmBlock is a Folder whose folderType() is
+            # hou.folderType.MultiparmBlock. It is BOTH the count channel (named
+            # after the folder, e.g. ``targetattribs``) AND a container whose
+            # parmTemplates() are the per-instance templates (named with a ``#``
+            # placeholder). IMPORTANT: type().name() returns "Folder" for these,
+            # NOT "Multiparm" — only folderType() distinguishes a multiparm
+            # folder from a plain (Simple) one. The old walker recursed into the
+            # children but skipped the block, so the count channel vanished and
+            # the ``#`` params had no grouping context. We now record the block
+            # as an Int count parm and tag its instances.
+            if _is_multiparm_block(tmpl):
+                blk_name = _attr_or_call(tmpl, "name")
+                # Record the multiparm's count channel (Int). The folder name IS
+                # the count channel (verified on real Houdini 21 nodes).
+                if blk_name and blk_name not in seen_names:
+                    seen_names.add(blk_name)
+                    specs.append({
+                        "name": blk_name,
+                        "type": "Int",
+                        "label": _attr_or_call(tmpl, "label") or blk_name,
+                        "multiparm": "counter",
+                    })
+                try:
+                    block_children = tmpl.parmTemplates()
+                except Exception:
+                    block_children = None
+                if block_children:
+                    walk(block_children, multiparm_block=blk_name)
+                continue
+
             # Detect folder templates: they expose parmTemplates() returning a
             # non-empty list. Real parm templates either lack the method or it
             # raises, so the try/except below falls through to _extract_parm_spec.
@@ -596,9 +794,9 @@ def _flatten_parm_templates(group) -> list[dict[str, Any]]:
             except Exception:
                 children = None
             if children:
-                walk(children)
+                walk(children, multiparm_block=multiparm_block)
                 continue
-            spec = _extract_parm_spec(tmpl)
+            spec = _extract_parm_spec(tmpl, multiparm_block=multiparm_block)
             if spec and spec["name"] not in seen_names:
                 seen_names.add(spec["name"])
                 specs.append(spec)
@@ -699,6 +897,12 @@ def generate_node_parms_manifest(
             # template group — skip them rather than aborting the whole dump.
             continue
         parms = _flatten_parm_templates(group)
+        # Fix vector component names against the REAL runtime channels. The
+        # walker synthesises component names by rule (name+xyz), but Houdini
+        # is inconsistent: tube.rad -> rad1/rad2 (numeric), shear -> shear1/2/3.
+        # Guessing radx/rady here would send an agent to a non-existent parm.
+        # We instantiate the node once and read each vector's actual channels.
+        _correct_vector_components(parms, cat, type_name)
         node_types[type_name] = {"parms": parms}
 
     return {
@@ -715,6 +919,49 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _access_hints(parms: list[dict[str, Any]]) -> list[str]:
+    """Build actionable access hints for a parm list, targeted at the exact
+    mistakes agents repeatedly make (each hint below maps to a real failure
+    seen in session logs).
+
+    The manifest records a vector root name (e.g. ``dir``) and its component
+    channels (``dirx``/``diry``/``dirz``), plus multiparm blocks. Without these
+    hints, an agent writes ``node.parm('dir').set((1,0,0))`` and crashes with
+    ``'NoneType' object has no attribute 'set'`` because ``parm('dir')`` is
+    None — you must use ``parmTuple('dir')`` or ``parm('dirx')``.
+    """
+    hints: list[str] = []
+    has_vector = any(p.get("vector_size", 1) and p.get("vector_size", 1) > 1
+                     or p.get("components") for p in parms)
+    has_multiparm = any(p.get("multiparm") for p in parms)
+    if has_vector:
+        # Pick one concrete example so the hint is copy-pasteable.
+        example = next((p for p in parms if p.get("components")), None)
+        if example:
+            comps = example["components"]
+            hints.append(
+                f"VECTOR params: do NOT use node.parm('{example['name']}') — it "
+                f"returns None. Use node.parmTuple('{example['name']}').set((..)) "
+                f"or the component channels {comps} "
+                f"(e.g. node.parm('{comps[0]}').set(val))."
+            )
+    if has_multiparm:
+        # Find a multiparm counter + one of its instances as an example.
+        counter = next((p for p in parms if p.get("multiparm") == "counter"), None)
+        inst = next((p for p in parms if p.get("multiparm") == "instance"), None)
+        detail = ""
+        if counter and inst:
+            detail = (f" e.g. set {counter['name']} = N to add N instances, "
+                      f"then read/write {inst['name']} with '#' -> the 1-based "
+                      f"index (first instance = "
+                      f"{inst['name'].replace('#','1')}).")
+        hints.append(
+            "MULTIPARM params (names containing '#') are per-instance channels. "
+            "Replace '#' with the instance index (1-based)." + detail
+        )
+    return hints
+
+
 def node_parms(node_type: str, category: str = "Sop") -> dict[str, Any]:
     """Query a node TYPE's parameter list (C-station).
 
@@ -725,8 +972,8 @@ def node_parms(node_type: str, category: str = "Sop") -> dict[str, Any]:
 
     Returns:
       {"success": True, "node_type": ..., "category": ..., "parms": [...],
-       "source": "manifest"|"live", "houdini_version"?}  on hit;
-      {"success": False, "error": "..."}  on miss (or "not found").
+       "access_hints": [...], "source": "manifest"|"live", "houdini_version"?}
+      on hit; {"success": False, "error": "..."}  on miss (or "not found").
     """
     node_type = (node_type or "").strip()
     if not node_type:
@@ -735,21 +982,31 @@ def node_parms(node_type: str, category: str = "Sop") -> dict[str, Any]:
     # 1. Bundled manifest (preferred — pinned, offline, fast).
     manifest = load_node_parms_manifest()
     if manifest is not None:
-        nt_entry = manifest.get("node_types", {}).get(node_type)
+        node_types = manifest.get("node_types", {})
+        resolved, nt_entry = _resolve_node_type_in_manifest(node_type, node_types)
         if nt_entry is not None:
-            return {
+            parms = nt_entry.get("parms", [])
+            result = {
                 "success": True,
-                "node_type": node_type,
+                "node_type": resolved,
                 "category": manifest.get("category", category),
-                "parms": nt_entry.get("parms", []),
+                "parms": parms,
+                "access_hints": _access_hints(parms),
                 "source": "manifest",
                 "houdini_version": manifest.get("houdini_version"),
             }
+            if resolved != node_type:
+                # The agent asked for a bare name (e.g. 'boolean') but the
+                # manifest only has a versioned form ('boolean::2.0'). Surface
+                # the resolved name so the agent uses it for create_node too.
+                result["resolved_from"] = node_type
+            return result
 
     # 2. Live fallback (only if hou is a real Houdini, not a mock).
     try:
         live = _node_parms_live(node_type, category)
         if live is not None:
+            live["access_hints"] = _access_hints(live.get("parms", []))
             return live
     except Exception:
         pass
@@ -760,6 +1017,41 @@ def node_parms(node_type: str, category: str = "Sop") -> dict[str, Any]:
         hint = " (manifest not bundled; run generate_node_parms_manifest)"
     return {"success": False, "error": f"node type {node_type!r} not found"
             + hint}
+
+
+def _resolve_node_type_in_manifest(
+    node_type: str, node_types: dict[str, Any]
+) -> tuple[str, dict | None]:
+    """Look up a node type in the manifest, transparently resolving a bare
+    name to its versioned form.
+
+    Houdini commits only the current major version of some nodes to the
+    manifest: 'boolean' is stored as 'boolean::2.0', 'sweep' optionally as
+    'sweep::2.0', etc. An agent that asks for the bare name should still get a
+    hit, matching how ``create_node`` resolves namespaces. Returns
+    ``(resolved_name, entry)`` or ``(node_type, None)`` on miss.
+    """
+    entry = node_types.get(node_type)
+    if entry is not None:
+        return node_type, entry
+    # Bare-name -> highest versioned form ('<base>::<v>').
+    if "::" not in node_type:
+        candidates = [
+            k for k in node_types
+            if k.split("::")[0] == node_type and k.count("::") == 1
+        ]
+        if candidates:
+            # Pick the highest version suffix. Sort numerically by the token
+            # after the '::' (e.g. '2.0' -> (2, 0)).
+            def _verkey(k: str) -> tuple:
+                try:
+                    return tuple(int(p) for p in k.split("::")[1].split("."))
+                except (ValueError, IndexError):
+                    return (0,)
+            candidates.sort(key=_verkey, reverse=True)
+            best = candidates[0]
+            return best, node_types[best]
+    return node_type, None
 
 
 def _node_parms_live(node_type: str, category: str) -> dict[str, Any] | None:
@@ -793,14 +1085,39 @@ def _node_parms_live(node_type: str, category: str) -> dict[str, Any] | None:
 def manifest_parm_names(node_type: str) -> set[str] | None:
     """Return the set of valid parm names for a node type per the manifest,
     or None if the manifest/type is unavailable. Used by harness validation to
-    decide whether to enforce parm-name checks (None = skip, soft degrade)."""
+    decide whether to enforce parm-name checks (None = skip, soft degrade).
+
+    Includes vector component channels (``dirx``/``diry``/...) alongside the
+    vector roots (``dir``), so an agent using the per-component API is not
+    falsely flagged as a misspelled parm.
+
+    For multiparm-instance templates (name with ``#``) we add the pattern with
+    ``#`` replaced by ``1`` (``useapply#`` -> ``useapply1``), the first real
+    channel. Note this CANNOT enumerate every valid index; a validator should
+    treat a name matching ``<root><digits>`` for a ``<root>#`` template as
+    valid (see ``manifest_has_parm`` for index-aware lookup)."""
     manifest = load_node_parms_manifest()
     if manifest is None:
         return None
-    nt_entry = manifest.get("node_types", {}).get(node_type)
+    node_types = manifest.get("node_types", {})
+    _resolved, nt_entry = _resolve_node_type_in_manifest(node_type, node_types)
     if nt_entry is None:
         return None
-    return {p["name"] for p in nt_entry.get("parms", []) if p.get("name")}
+    names: set[str] = set()
+    for p in nt_entry.get("parms", []):
+        n = p.get("name")
+        if not n:
+            continue
+        names.add(n)
+        # Multiparm-instance template: also admit the first-index channel.
+        if "#" in n:
+            names.add(n.replace("#", "1"))
+        # Expand vector roots to their component channels so both
+        # ``parm('dir')`` (tuple) and ``parm('dirx')`` (scalar) are accepted.
+        comps = p.get("components")
+        if comps:
+            names.update(comps)
+    return names
 
 
 def _vector_to_list(value) -> list[float]:
@@ -2665,13 +2982,14 @@ def verify_orientation(
                 "point_count": len(pts),
                 "passed": False,
                 "error": (
-                    f"{cid} has no edini_world_axis prim attribute. Orientation "
-                    f"verification requires a baked construction axis (decision 3 "
-                    f"— PCA estimation was removed because it misclassifies "
-                    f"elongated cylinders). Build this asset via a builder that "
-                    f"bakes edini_world_axis from the declared construction_axis, "
-                    f"or remove this orientation_assert if the component has no "
-                    f"meaningful construction axis."
+                    f"{cid} has no valid edini_world_axis prim attribute "
+                    f"(a NON-ZERO 3-float unit vector, read as "
+                    f"floatListAttribValue — NOT a string like \"y\"). "
+                    f"Bake it with an attribwrangle (class=primitive): "
+                    f"v@edini_world_axis = {{0,1,0}};  // construction axis. "
+                    f"A builder is NOT required — any valid baked axis vector "
+                    f"passes. Or remove this orientation_assert if the component "
+                    f"has no meaningful construction axis."
                 ),
             })
             results.append(entry)
