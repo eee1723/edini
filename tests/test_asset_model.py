@@ -212,6 +212,212 @@ class TestValidateSkeleton(unittest.TestCase):
 
 
 # ===================================================================
+# validate_asset — components (milestone 2)
+# ===================================================================
+
+class TestValidateComponents(unittest.TestCase):
+    """Component validation: the milestone-2 layer. Components attach to
+    skeleton points BY NAME (not private position expressions) and read their
+    dimensions from the param library. These tests lock in the new contract."""
+
+    def _table_asset(self):
+        """A minimal but valid table: 1 skeleton point + 1 box tabletop +
+        1 tube leg, all attaching to skeleton points by name."""
+        return {
+            "asset_schema_version": 1,
+            "id": "table",
+            "params": {
+                "top_size": {"kind": "primary", "default": 1.0},
+                "top_thickness": {"kind": "primary", "default": 0.04},
+                "leg_radius": {"kind": "primary", "default": 0.04},
+            },
+            "skeleton": {
+                "top_center": {"expr": ["0", "0.75", "0"]},
+                "leg_fl": {"expr": ["-0.5", "0.375", "-0.5"]},
+            },
+            "components": [
+                {
+                    "id": "tabletop",
+                    "backend": "native_chain",
+                    "attach": {"position": "top_center"},
+                    "nodes": [
+                        {"type": "box", "params": {
+                            "size": ["top_size", "top_thickness", "top_size"]}},
+                    ],
+                },
+                {
+                    "id": "leg_fl",
+                    "backend": "native_chain",
+                    "attach": {"position": "leg_fl"},
+                    "nodes": [
+                        {"type": "tube", "params": {
+                            "rad": ["leg_radius", "leg_radius"],
+                            "height": "0.75"}},
+                    ],
+                },
+            ],
+        }
+
+    def test_valid_table_passes(self):
+        result = validate(self._table_asset())
+        self.assertTrue(result["success"], result["errors"])
+
+    def test_summary_counts_components(self):
+        result = validate(self._table_asset())
+        self.assertEqual(result["summary"]["component_count"], 2)
+
+    # ── id checks ──
+
+    def test_component_missing_id(self):
+        asset = self._table_asset()
+        del asset["components"][0]["id"]
+        result = validate(asset)
+        self.assertFalse(result["success"])
+        self.assertTrue(any(e["code"] == "COMPONENT_NO_ID" for e in result["errors"]))
+
+    def test_component_duplicate_id(self):
+        asset = self._table_asset()
+        asset["components"][1]["id"] = "tabletop"  # clash
+        result = validate(asset)
+        self.assertFalse(result["success"])
+        self.assertTrue(any(e["code"] == "COMPONENT_DUPLICATE_ID" for e in result["errors"]))
+
+    # ── backend checks ──
+
+    def test_component_bad_backend(self):
+        asset = self._table_asset()
+        asset["components"][0]["backend"] = "magic"
+        result = validate(asset)
+        self.assertFalse(result["success"])
+        self.assertTrue(any(e["code"] == "COMPONENT_BAD_BACKEND" for e in result["errors"]))
+
+    def test_component_default_backend_is_native_chain(self):
+        # Omitting backend defaults to native_chain (the safe/simplest backend).
+        asset = self._table_asset()
+        del asset["components"][0]["backend"]
+        result = validate(asset)
+        self.assertTrue(result["success"], result["errors"])
+
+    # ── nodes checks ──
+
+    def test_native_chain_needs_nodes(self):
+        asset = self._table_asset()
+        del asset["components"][0]["nodes"]
+        result = validate(asset)
+        self.assertFalse(result["success"])
+        self.assertTrue(any(e["code"] == "COMPONENT_NO_NODES" for e in result["errors"]))
+
+    def test_node_entry_needs_type(self):
+        asset = self._table_asset()
+        asset["components"][0]["nodes"][0] = {"params": {"size": 1}}  # no type
+        result = validate(asset)
+        self.assertFalse(result["success"])
+        self.assertTrue(any(e["code"] == "COMPONENT_NODE_NO_TYPE" for e in result["errors"]))
+
+    # ── attach checks (the NEW core constraint) ──
+
+    def test_attach_position_must_be_known_point(self):
+        # attach.position references a skeleton point that doesn't exist.
+        asset = self._table_asset()
+        asset["components"][0]["attach"] = {"position": "nonexistent_point"}
+        result = validate(asset)
+        self.assertFalse(result["success"])
+        self.assertTrue(any(e["code"] == "COMPONENT_ATTACH_BAD_POINT" for e in result["errors"]))
+
+    def test_attach_missing(self):
+        # A component with no attach at all is flagged (it must hang off a point).
+        asset = self._table_asset()
+        del asset["components"][0]["attach"]
+        result = validate(asset)
+        self.assertFalse(result["success"])
+        self.assertTrue(any(e["code"] == "COMPONENT_NO_ATTACH" for e in result["errors"]))
+
+    def test_attach_position_valid_point_passes(self):
+        result = validate(self._table_asset())
+        self.assertTrue(result["success"], result["errors"])
+
+    # ── param-ref checks (the hole the old design never closed) ──
+
+    def test_node_param_expr_dangling_ref(self):
+        # A string param value references a param that isn't declared.
+        asset = self._table_asset()
+        asset["components"][0]["nodes"][0]["params"]["size"] = [
+            "undeclared_param", "0.04", "1.0"]
+        result = validate(asset)
+        self.assertFalse(result["success"])
+        self.assertTrue(any(
+            e["code"] == "COMPONENT_PARAM_REF_DANGLING" for e in result["errors"]))
+
+    def test_node_param_expr_valid_ref_passes(self):
+        # String param values that reference declared params are fine.
+        result = validate(self._table_asset())
+        self.assertTrue(result["success"], result["errors"])
+
+    def test_node_param_numeric_value_passes(self):
+        # A plain numeric param value (no expression) is fine.
+        asset = self._table_asset()
+        asset["components"][1]["nodes"][0]["params"]["height"] = 0.75
+        result = validate(asset)
+        self.assertTrue(result["success"], result["errors"])
+
+    # ── graph validation still runs with components present ──
+
+    def test_skeleton_cycle_still_caught_with_components(self):
+        asset = self._table_asset()
+        asset["skeleton"] = {
+            "a": {"expr": ["b[0]", "0", "0"]},
+            "b": {"expr": ["a[0]", "0", "0"]},
+        }
+        # components now attach to non-existent points -> also flagged, but the
+        # cycle must still appear.
+        result = validate(asset)
+        self.assertTrue(any(e["code"] == "SKELETON_CYCLE" for e in result["errors"]))
+
+
+class TestTableAsset(unittest.TestCase):
+    """The bundled table.asset.json is the milestone-2 sample. Locks in that it
+    validates cleanly and every component attaches to a real skeleton point."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.asset = asset_model.load_asset(
+            os.path.join(DATA_DIR, "table.asset.json"))
+        if cls.asset is None:
+            raise AssertionError("table.asset.json failed to load")
+
+    def test_validates_cleanly(self):
+        result = validate(self.asset)
+        self.assertTrue(result["success"], result["errors"])
+
+    def test_has_six_params(self):
+        # 4 primary + 2 derived.
+        result = validate(self.asset)
+        self.assertEqual(result["summary"]["param_count"], 6)
+
+    def test_has_five_skeleton_points(self):
+        result = validate(self.asset)
+        self.assertEqual(result["summary"]["skeleton_point_count"], 5)
+
+    def test_has_five_components(self):
+        result = validate(self.asset)
+        self.assertEqual(result["summary"]["component_count"], 5)
+
+    def test_param_linkage_top_size_moves_legs(self):
+        """Derived param leg_inset = top_size/2 - leg_radius. Increasing
+        top_size spreads the legs outward — the skeleton DAG propagates it."""
+        import math
+        before = asset_model.resolve_skeleton(self.asset)
+        self.asset["params"]["top_size"]["default"] = 1.5
+        try:
+            after = asset_model.resolve_skeleton(self.asset)
+        finally:
+            self.asset["params"]["top_size"]["default"] = 1.0
+        # leg_fl.x = -leg_inset; larger top_size → larger |leg_inset| → more
+        # negative leg_fl.x (leg moves outward).
+        self.assertLess(after["leg_fl"][0], before["leg_fl"][0])
+
+
+# ===================================================================
 # resolve_params — primary + derived DAG
 # ===================================================================
 

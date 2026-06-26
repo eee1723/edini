@@ -80,4 +80,55 @@ export const validateAsset = {
   },
 };
 
-export const assetTools = [validateAsset];
+export const buildAsset = {
+  name: "build_asset",
+  label: "Build Procedural Asset",
+  description:
+    "Build a validated declarative asset into a Houdini node network (milestone 2). " +
+    "Each component attaches to a skeleton point BY NAME (declared in the asset's skeleton " +
+    "section) and reads its dimensions from the param library — no hardcoded coordinates. " +
+    "The builder merges every component into a display-flagged OUT node inside a sandbox " +
+    "geo container. Pass an inline 'asset' dict OR an 'asset_path'. ALWAYS call validate_asset " +
+    "first to catch param/skeleton errors cheaply; this tool then builds the geometry. " +
+    "Returns the OUT path + sandbox_root so you can inspect, adjust, or commit_sandbox the result. " +
+    "Component shape: {id, backend:'native_chain', attach:{position:'<skeleton_point>'}, " +
+    "nodes:[{type, params:{parm: value|expr}}]}. A node param value that is a STRING is an " +
+    "expression over the param library (e.g. box size ['top_size','top_thickness','top_size']).",
+  promptSnippet: "Build an asset's components into a Houdini network (skeleton-point attach)",
+  promptGuidelines: [
+    "Call validate_asset BEFORE build_asset — it catches param typos and skeleton-point reference errors for free, without creating any nodes.",
+    "Each component attaches to a DECLARED skeleton point by name (attach.position). Components never carry their own coordinates — the skeleton DAG computes positions, so two components can never disagree about a shared feature's location.",
+    "Node param values: a NUMBER is used directly; a STRING is an expression over the param library (e.g. 'wheel_radius', 'top_size/2', 'sqrt(a**2 + b**2)'). This keeps every dimension parametric.",
+    "build_asset returns sandbox_root + out_path. To make the asset permanent, call commit_sandbox(sandbox_root, <final_name>). On failure the sandbox is preserved so you can diagnose the partial build.",
+    "Milestone 2 implements the native_chain backend only (native SOPs: box/tube/torus/...). vex_skeleton and python backends arrive in a later milestone.",
+  ],
+  parameters: Type.Object({
+    asset: Type.Optional(
+      Type.Record(Type.String(), Type.Unknown(), {
+        description:
+          "Inline asset JSON object. Provide this OR asset_path. " +
+          "Must have validated params + skeleton + components already.",
+      })
+    ),
+    asset_path: Type.Optional(
+      Type.String({
+        description: "Path to a validated asset JSON file (alternative to inline 'asset').",
+      })
+    ),
+    sandbox_name: Type.Optional(
+      Type.String({
+        description:
+          "Name hint for the sandbox geo container (default 'asset'). " +
+          "Used in the generated node name and commit defaults.",
+      })
+    ),
+  }),
+  async execute(
+    _toolCallId: string,
+    params: { asset?: Record<string, unknown>; asset_path?: string; sandbox_name?: string }
+  ) {
+    return forwardTool("build_asset", params);
+  },
+};
+
+export const assetTools = [validateAsset, buildAsset];

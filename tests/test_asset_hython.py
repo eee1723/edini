@@ -185,5 +185,134 @@ class TestValidateAssetHython(unittest.TestCase):
         self.assertEqual(result["point_count"], 0)
 
 
+# ── Milestone 2: build_asset (geometry generation) ──────────────────
+#
+# A second hython script that builds the bundled table.asset.json into a real
+# Houdini network and inspects the cooked OUT geometry. This is the milestone-2
+# "实测" gate: the declarative asset produces a genuine multi-component object
+# (tabletop + 4 legs) with correct component_id tagging.
+
+TABLE = os.path.join(PYTHONLIBS, "edini", "data", "table.asset.json")
+
+_BUILD_SCRIPT = r"""
+import sys, os, json, traceback
+
+sys.path.insert(0, {pythonlibs!r})
+
+result = {{}}
+try:
+    import hou
+    result['houdini_version'] = hou.applicationVersionString()
+
+    from edini import asset_builder, asset_model
+
+    table = {table!r}
+    asset = asset_model.load_asset(table)
+
+    # Build into a throwaway geo sandbox.
+    obj = hou.node('/obj')
+    root = obj.createNode('geo', 'edini_m2_test')
+    build = asset_builder.build_asset(asset, root.path())
+    result['build_success'] = build.get('success')
+    result['components_built'] = build.get('components_built')
+    if not build.get('success'):
+        result['error'] = build.get('error', 'build failed')
+    else:
+        out = hou.node(build['out_path'])
+        out.cook(force=True)
+        geo = out.geometry()
+        result['out_path'] = build['out_path']
+        result['point_count'] = geo.intrinsicValue('pointcount')
+        result['prim_count'] = geo.intrinsicValue('primitivecount')
+        result['cook_errors'] = list(out.errors() or [])
+        cid = geo.findPrimAttrib('component_id')
+        if cid is not None:
+            result['component_ids'] = sorted(set(
+                str(p.stringAttribValue('component_id')) for p in geo.prims()))
+        else:
+            result['component_ids'] = []
+        # Bounding box — a table should span a non-zero volume.
+        b = geo.intrinsicValue('bounds')
+        if b and len(b) == 6:
+            result['bounds_size'] = [b[1]-b[0], b[3]-b[2], b[5]-b[4]]
+        # Clean up the sandbox so repeated runs don't accumulate nodes.
+        try:
+            root.destroy()
+        except Exception:
+            pass
+except Exception:
+    result['error'] = traceback.format_exc()
+
+print({start!r})
+print(json.dumps(result, default=str))
+print({end!r})
+"""
+
+
+def _run_build():
+    """Build the table in hython and return the parsed result dict."""
+    script = _BUILD_SCRIPT.format(
+        pythonlibs=PYTHONLIBS, table=TABLE, start=_START, end=_END,
+    )
+    proc = subprocess.run(
+        [HYTHON, "-c", script],
+        capture_output=True, text=True, timeout=180,
+    )
+    output = proc.stdout + proc.stderr
+    if _START not in output or _END not in output:
+        return {
+            "error": "hython produced no result sentinel",
+            "stdout": proc.stdout[-2000:], "stderr": proc.stderr[-2000:],
+        }
+    block = output.split(_START, 1)[1].split(_END, 1)[0].strip()
+    return json.loads(block)
+
+
+@unittest.skipUnless(HYTHON, "hython not found — skip real-Houdini test")
+class TestBuildAssetHython(unittest.TestCase):
+    """End-to-end milestone-2: build_asset generates a real table in Houdini."""
+
+    def test_build_succeeds(self):
+        result = _run_build()
+        self.assertNotIn("error", result, result.get("error", ""))
+        self.assertTrue(result["build_success"])
+
+    def test_builds_all_five_components(self):
+        result = _run_build()
+        self.assertNotIn("error", result, result.get("error", ""))
+        self.assertEqual(result["components_built"], 5)
+
+    def test_out_has_geometry(self):
+        """The OUT node produces non-trivial geometry (not an empty network)."""
+        result = _run_build()
+        self.assertNotIn("error", result, result.get("error", ""))
+        self.assertGreater(result["point_count"], 0)
+        self.assertGreater(result["prim_count"], 0)
+
+    def test_all_components_tagged_with_id(self):
+        """Every component's geometry carries its component_id: the tabletop +
+        4 legs. This is what the orientation/inventory gates key on."""
+        result = _run_build()
+        self.assertNotIn("error", result, result.get("error", ""))
+        self.assertEqual(
+            set(result["component_ids"]),
+            {"tabletop", "leg_fl", "leg_fr", "leg_bl", "leg_br"})
+
+    def test_no_cook_errors(self):
+        """The built network cooks cleanly — no Houdini errors on OUT."""
+        result = _run_build()
+        self.assertNotIn("error", result, result.get("error", ""))
+        self.assertEqual(result["cook_errors"], [])
+
+    def test_table_has_nonzero_volume(self):
+        """A table spans 3D space in all axes (not a degenerate flat shape)."""
+        result = _run_build()
+        self.assertNotIn("error", result, result.get("error", ""))
+        size = result.get("bounds_size", [0, 0, 0])
+        for axis_name, extent in zip("xyz", size):
+            self.assertGreater(extent, 0.01,
+                               f"table is degenerate on {axis_name}: {extent}")
+
+
 if __name__ == "__main__":
     unittest.main()

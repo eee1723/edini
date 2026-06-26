@@ -55,6 +55,31 @@ class MockParm:
         pass
 
 
+class MockParmTuple:
+    """Mock hou.ParmTuple — a vector parm (size/t/rad) exposing .set() that
+    distributes each tuple element to its per-component MockParm. Real Houdini
+    returns one of these from node.parmTuple('size'); _set_parm_safe's
+    multi-component path calls .set((x, y, z)) on it."""
+
+    def __init__(self, parms: list[MockParm]):
+        self._parms = parms
+
+    def __len__(self) -> int:
+        return len(self._parms)
+
+    def __getitem__(self, idx: int) -> MockParm:
+        return self._parms[idx]
+
+    def set(self, values) -> None:
+        vals = list(values)
+        for i, p in enumerate(self._parms):
+            if i < len(vals):
+                p.set(vals[i])
+
+    def eval(self) -> tuple:
+        return tuple(p.eval() for p in self._parms)
+
+
 class MockParmTemplate:
     """Mock base for a Houdini ParmTemplate — stores name/label/default.
 
@@ -797,6 +822,33 @@ class MockNode:
                     return parm
         return None
 
+    def parmTuple(self, name: str):
+        """Mock hou.parmTuple. A vector parm exposes its components under
+        suffixed names. Real Houdini uses two schemes: xyzw suffixes (box
+        'size'→sizex/sizey/sizez, xform 't'→tx/ty/tz) and numeric suffixes
+        (tube 'rad'→rad1/rad2, shear→shear1/2/3). This collects whichever
+        suffix scheme exists for ``name``, mirroring real Houdini where
+        node.parm('size') is None but parmTuple('size') resolves."""
+        components: list[MockParm] = []
+        # Scheme 1: xyzw suffixes.
+        for suf in ("x", "y", "z", "w"):
+            p = self._parms.get(name + suf)
+            if p is not None:
+                components.append(p)
+        # Scheme 2: numeric suffixes (1-based).
+        if not components:
+            i = 1
+            while True:
+                p = self._parms.get(f"{name}{i}")
+                if p is None:
+                    break
+                components.append(p)
+                i += 1
+        if not components:
+            single = self._parms.get(name)
+            return MockParmTuple([single]) if single is not None else None
+        return MockParmTuple(components)
+
     def parms(self) -> list[MockParm]:
         return list(self._parms.values())
 
@@ -1209,6 +1261,34 @@ def _make_sweep_ptg():
     return g
 
 
+def _make_vector_ptg(base_name: str, default_xyz):
+    """Build a parm template group for a vector SOP parm (e.g. box 'size' or
+    xform 't'). Real Houdini exposes these as <base>x/<base>y/<base>z; the mock
+    creates three per-component templates so createNode materializes them as
+    separate parms and parmTuple(base) can collect them."""
+    g = MockParmTemplateGroup()
+    suffixes = ("x", "y", "z", "w")
+    for i, suf in enumerate(suffixes[:len(default_xyz)]):
+        g.append(MockFloatParmTemplate(
+            f"{base_name}{suf}", base_name, 1,
+            default_value=(float(default_xyz[i]),)))
+    return g
+
+
+def _make_tube_ptg():
+    """Tube SOP parm template group (H21). rad is a 2-component vector
+    (rad1/rad2 — top/bottom radius), height/rows/cols are scalars, type is the
+    primitive-vs-polygon menu (0=primitive, 1=polygon — the builder forces 1)."""
+    g = MockParmTemplateGroup()
+    g.append(MockFloatParmTemplate("rad1", "Rad1", 1, default_value=(1.0,)))
+    g.append(MockFloatParmTemplate("rad2", "Rad2", 1, default_value=(1.0,)))
+    g.append(MockFloatParmTemplate("height", "Height", 1, default_value=(1.0,)))
+    g.append(MockIntParmTemplate("rows", "Rows", 1, default_value=(4,)))
+    g.append(MockIntParmTemplate("cols", "Cols", 1, default_value=(16,)))
+    g.append(MockIntParmTemplate("type", "Type", 1, default_value=(0,)))
+    return g
+
+
 def _make_copytopoints_ptg():
     """Copy to Points 2.0 parm template group (H21.0.440 structure).
 
@@ -1346,7 +1426,9 @@ class MockHou:
         self._nodes["/obj"] = obj
 
         sop_cat = MockCategory("Sop", {
-            "box": MockNodeType("box", "Box", "Sop", 2, 0),
+            "box": MockNodeType("box", "Box", "Sop", 1, 0,
+                                parm_template_group=_make_vector_ptg(
+                                    "size", [1.0, 1.0, 1.0])),
             "sphere": MockNodeType("sphere", "Sphere", "Sop", 2, 0),
             "grid": MockNodeType("grid", "Grid", "Sop", 2, 0),
             "null": MockNodeType("null", "Null", "Sop", 1, 0),
@@ -1375,6 +1457,18 @@ class MockHou:
             "sweep": MockNodeType(
                 "sweep::2.0", "Sweep", "Sop", 2, 1,
                 parm_template_group=_make_sweep_ptg()),
+            # Primitive generators used by the asset builder (milestone 2).
+            # tube: rad (rad1/rad2), height, rows, cols, type (0=primitive,
+            # 1=polygon). xform: 't' (tx/ty/tz) translate. These mirror the
+            # real H21 SOP parm shapes so _set_parm_safe's parmTuple path
+            # (multi-component) is exercised.
+            "tube": MockNodeType(
+                "tube", "Tube", "Sop", 1, 0,
+                parm_template_group=_make_tube_ptg()),
+            "xform": MockNodeType(
+                "xform", "Transform", "Sop", 1, 1,
+                parm_template_group=_make_vector_ptg("t", [0.0, 0.0, 0.0])),
+            "torus": MockNodeType("torus", "Torus", "Sop", 1, 0),
         })
         obj_cat = MockCategory("Object", {
             "geo": MockNodeType("geo", "Geometry", "Object", 1, 0),

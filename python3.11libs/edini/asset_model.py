@@ -256,6 +256,144 @@ def _is_numeric(v: Any) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
+# ── Component validation (milestone 2) ──────────────────────────────
+#
+# A component attaches to a skeleton point BY NAME (not a private position
+# expression) and reads its dimensions from the param library. This is the
+# milestone-2 contract that replaces the old anchor/position_expr mechanism:
+# components no longer carry their own coordinates, so two components can never
+# disagree about where a shared feature sits.
+
+_VALID_BACKENDS = ("native_chain", "vex_skeleton", "python")
+_DEFAULT_BACKEND = "native_chain"
+
+
+def _validate_components(asset: dict) -> list[dict]:
+    """Validate the ``components`` list: ids, backends, node shapes, attach
+    references, and param references. Assumes skeleton + params already passed
+    structural validation (the caller gates this)."""
+    errors: list[dict] = []
+    components = asset.get("components")
+    if not isinstance(components, list):
+        return errors  # malformed-list case handled by the caller
+
+    skeleton = asset.get("skeleton", {}) or {}
+    point_names = set(skeleton.keys()) if isinstance(skeleton, dict) else set()
+    params = asset.get("params", {}) or {}
+    param_names = set(params.keys()) if isinstance(params, dict) else set()
+
+    seen_ids: set[str] = set()
+    for comp in components:
+        if not isinstance(comp, dict):
+            errors.append(_err("COMPONENT_NOT_OBJECT",
+                               "each component must be an object"))
+            continue
+
+        # ── id ──
+        cid = comp.get("id")
+        if not cid or not isinstance(cid, str):
+            errors.append(_err("COMPONENT_NO_ID",
+                               "component needs a non-empty string 'id'"))
+            cid = None
+        elif cid in seen_ids:
+            errors.append(_err("COMPONENT_DUPLICATE_ID",
+                               f"duplicate component id {cid!r}",
+                               {"component": cid}))
+        else:
+            seen_ids.add(cid)
+        loc = {"component": cid} if cid else None
+
+        # ── backend ──
+        backend = comp.get("backend", _DEFAULT_BACKEND)
+        if backend not in _VALID_BACKENDS:
+            errors.append(_err("COMPONENT_BAD_BACKEND",
+                               f"component {cid!r} backend {backend!r} must be "
+                               f"one of {list(_VALID_BACKENDS)}", loc))
+
+        # ── nodes (native_chain requires a non-empty node list) ──
+        nodes = comp.get("nodes")
+        if backend == "native_chain":
+            if not isinstance(nodes, list) or not nodes:
+                errors.append(_err("COMPONENT_NO_NODES",
+                                   f"component {cid!r} (native_chain) needs a "
+                                   f"non-empty 'nodes' list", loc))
+            else:
+                for ni, node in enumerate(nodes):
+                    if not isinstance(node, dict) or not node.get("type"):
+                        errors.append(_err(
+                            "COMPONENT_NODE_NO_TYPE",
+                            f"component {cid!r} nodes[{ni}] must have a "
+                            f"non-empty 'type'", {**((loc or {})),
+                                                  "node_index": ni}))
+
+        # ── attach: the milestone-2 core constraint ──
+        # A component MUST hang off a declared skeleton point (by name). This
+        # is what makes the design parametric: the point's coordinates are
+        # computed by the skeleton DAG, and the component just says "I'm here".
+        attach = comp.get("attach")
+        if not isinstance(attach, dict):
+            errors.append(_err("COMPONENT_NO_ATTACH",
+                               f"component {cid!r} needs an 'attach' object "
+                               f"with a 'position' skeleton-point name", loc))
+        else:
+            position = attach.get("position")
+            if not position or not isinstance(position, str):
+                errors.append(_err("COMPONENT_NO_ATTACH",
+                                   f"component {cid!r} attach.position must be a "
+                                   f"skeleton-point name", loc))
+            elif position not in point_names:
+                errors.append(_err(
+                    "COMPONENT_ATTACH_BAD_POINT",
+                    f"component {cid!r} attaches to {position!r} which is not "
+                    f"a declared skeleton point (known: {sorted(point_names)})",
+                    {**((loc or {})), "point": position}))
+
+        # ── param references: a node param value that is a STRING is treated
+        # as an expression over the param library (evaluated at build time by
+        # exprs.evaluate). Every name it references must be a declared param —
+        # otherwise the build fails with an opaque ExprError. This closes a hole
+        # the old design never checked (reads were never validated). ──
+        if isinstance(nodes, list):
+            from edini.exprs import extract_refs
+            for ni, node in enumerate(nodes):
+                if not isinstance(node, dict):
+                    continue
+                node_params = node.get("params")
+                if not isinstance(node_params, dict):
+                    continue
+                for pname, pvalue in node_params.items():
+                    refs = _param_value_refs(pvalue, extract_refs)
+                    for ref in refs:
+                        if ref not in param_names:
+                            errors.append(_err(
+                                "COMPONENT_PARAM_REF_DANGLING",
+                                f"component {cid!r} nodes[{ni}].{pname} "
+                                f"references unknown param {ref!r}",
+                                {**((loc or {})), "node_index": ni,
+                                 "param": pname, "ref": ref}))
+    return errors
+
+
+def _param_value_refs(value: Any, extract_refs) -> list[str]:
+    """Extract param references from a node param value.
+
+    A numeric value contributes none. A string value is an expression → its
+    refs. A list/tuple value (e.g. a vector ``["a", 0.04, "b"]``) contributes
+    the union of refs from each element — this is how a box ``size`` of
+    ``["top_size", "top_thickness", "top_size"]`` resolves.
+    """
+    if isinstance(value, bool) or isinstance(value, (int, float)):
+        return []
+    if isinstance(value, str):
+        return extract_refs(value)
+    if isinstance(value, (list, tuple)):
+        refs: list[str] = []
+        for el in value:
+            refs.extend(_param_value_refs(el, extract_refs))
+        return refs
+    return []
+
+
 def validate_asset(asset: dict) -> dict:
     """Validate a complete asset description.
 
@@ -288,10 +426,22 @@ def validate_asset(asset: dict) -> dict:
     if not any(e["code"] in structural_errors for e in errors):
         errors.extend(_validate_skeleton_graph(asset))
 
-    # components are milestone 2; warn if absent but don't fail.
-    if "components" not in asset:
-        warnings.append({"code": "NO_COMPONENTS",
-                         "message": "asset has no 'components' (milestone 2)"})
+    # components (milestone 2): validate each against the skeleton + param
+    # library. An absent components list is still only a warning (an asset
+    # may be a pure skeleton preview), but a present list is fully checked.
+    components = asset.get("components")
+    if not isinstance(components, list):
+        if "components" in asset:
+            errors.append(_err("COMPONENTS_NOT_LIST",
+                               "components must be a list"))
+        else:
+            warnings.append({"code": "NO_COMPONENTS",
+                             "message": "asset has no 'components' (milestone 2)"})
+    else:
+        # Component attach/param-ref checks depend on the skeleton + param
+        # names; only run them once those layers are structurally sound.
+        if not any(e["code"] in structural_errors for e in errors):
+            errors.extend(_validate_components(asset))
 
     return {
         "success": len(errors) == 0,

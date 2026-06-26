@@ -29,7 +29,9 @@ from edini.harness import (
     discard_sandbox,
     dump_parm_catalog,
     add_parm,
+    _create_sandbox_root,
 )
+from edini.asset_builder import build_asset as _build_asset_network
 from edini.recipe_library import (
     recipe_list,
     recipe_read,
@@ -128,6 +130,37 @@ def validate_asset(asset: dict | None = None, asset_path: str | None = None,
                 "code": "RESOLVE_FAILED",
                 "message": f"could not resolve skeleton: {exc}",
             })
+    return result
+
+
+def build_asset(asset: dict | None = None, asset_path: str | None = None,
+                sandbox_name: str = "asset") -> dict[str, Any]:
+    """Build a validated declarative asset into a Houdini network (milestone 2).
+
+    Validates first (shift-left — rejects bad assets before any node is made),
+    then creates a sandbox geo container and builds the component network into
+    it. The agent receives the OUT path + sandbox root so it can inspect,
+    adjust, or commit_sandbox the result.
+
+    Returns ``{success, out_path, sandbox_root, components_built, placements?}``
+    on success, or ``{success:false, error}`` on validation/build failure. The
+    sandbox is preserved on failure so the agent can diagnose the partial build.
+    """
+    if asset is None and not asset_path:
+        return {"success": False, "error": "provide 'asset' (dict) or 'asset_path'"}
+    if asset is None:
+        asset = _load_asset_file(asset_path)
+        if asset is None:
+            return {"success": False, "error": f"could not read asset: {asset_path}"}
+
+    try:
+        _job_id, root_path = _create_sandbox_root(sandbox_name)
+    except Exception as exc:
+        return {"success": False, "error": f"could not create sandbox: {exc}"}
+
+    result = _build_asset_network(asset, root_path)
+    # Always surface the sandbox root so the agent can commit/discard/inspect.
+    result["sandbox_root"] = root_path
     return result
 
 
@@ -296,6 +329,15 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
         asset=kw.get("asset"),
         asset_path=kw.get("asset_path"),
         resolve=kw.get("resolve", False),
+    ),
+    # Milestone-2: build the asset's components into a Houdini network. Each
+    # component attaches to a skeleton point BY NAME and reads dimensions from
+    # the param library; the builder merges everything into a display-flagged
+    # OUT. Returns the OUT path + sandbox root for follow-up commit/inspect.
+    "build_asset": lambda **kw: build_asset(
+        asset=kw.get("asset"),
+        asset_path=kw.get("asset_path"),
+        sandbox_name=kw.get("sandbox_name", "asset"),
     ),
 }
 

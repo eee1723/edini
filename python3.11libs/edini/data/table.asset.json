@@ -1,0 +1,58 @@
+{
+  "asset_schema_version": 1,
+  "id": "table",
+  "params": {
+    "top_size":     {"kind": "primary", "default": 1.0,   "min": 0.4, "max": 2.0, "label": "Tabletop Size"},
+    "top_thickness": {"kind": "primary", "default": 0.04, "min": 0.02, "max": 0.10, "label": "Tabletop Thickness"},
+    "table_height":  {"kind": "primary", "default": 0.75, "min": 0.40, "max": 1.20, "label": "Table Height"},
+    "leg_radius":    {"kind": "primary", "default": 0.04, "min": 0.02, "max": 0.08, "label": "Leg Radius"},
+
+    "leg_half":  {"kind": "derived", "from": "table_height/2"},
+    "leg_inset": {"kind": "derived", "from": "top_size/2 - leg_radius"}
+  },
+  "skeleton": {
+    "top_center": {"expr": ["0", "table_height", "0"]},
+    "leg_fl":     {"expr": ["-leg_inset", "leg_half", "-leg_inset"]},
+    "leg_fr":     {"expr": ["leg_inset",  "leg_half", "-leg_inset"]},
+    "leg_bl":     {"expr": ["-leg_inset", "leg_half", "leg_inset"]},
+    "leg_br":     {"expr": ["leg_inset",  "leg_half", "leg_inset"]}
+  },
+  "components": [
+    {
+      "id": "tabletop",
+      "backend": "native_chain",
+      "attach": {"position": "top_center"},
+      "nodes": [
+        {"type": "box", "params": {"size": ["top_size", "top_thickness", "top_size"]}}
+      ]
+    },
+    {
+      "id": "leg_fl", "backend": "native_chain",
+      "attach": {"position": "leg_fl"},
+      "nodes": [
+        {"type": "tube", "params": {"rad": ["leg_radius", "leg_radius"], "height": "table_height"}}
+      ]
+    },
+    {
+      "id": "leg_fr", "backend": "native_chain",
+      "attach": {"position": "leg_fr"},
+      "nodes": [
+        {"type": "tube", "params": {"rad": ["leg_radius", "leg_radius"], "height": "table_height"}}
+      ]
+    },
+    {
+      "id": "leg_bl", "backend": "native_chain",
+      "attach": {"position": "leg_bl"},
+      "nodes": [
+        {"type": "tube", "params": {"rad": ["leg_radius", "leg_radius"], "height": "table_height"}}
+      ]
+    },
+    {
+      "id": "leg_br", "backend": "native_chain",
+      "attach": {"position": "leg_br"},
+      "nodes": [
+        {"type": "tube", "params": {"rad": ["leg_radius", "leg_radius"], "height": "table_height"}}
+      ]
+    }
+  ]
+}

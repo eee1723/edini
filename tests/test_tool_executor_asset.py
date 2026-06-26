@@ -56,6 +56,7 @@ class _HouMockTestCase(unittest.TestCase):
         # staticmethod so `self.validate_asset(...)` doesn't pass `self` as the
         # first positional arg (the handler is a plain function, not a method).
         cls.validate_asset = staticmethod(tool_executor.validate_asset)
+        cls.build_asset = staticmethod(tool_executor.build_asset)
 
     @classmethod
     def tearDownClass(cls):
@@ -231,6 +232,59 @@ class TestValidateAssetFileRoundTrip(_HouMockTestCase):
             result = self.validate_asset(asset_path=path, resolve=True)
         self.assertTrue(result["success"], result)
         self.assertIn("resolved_skeleton", result)
+
+
+# ===================================================================
+# build_asset handler (milestone 2)
+# ===================================================================
+
+class TestBuildAssetHandler(_HouMockTestCase):
+    """The build_asset tool handler: validates, creates a sandbox, builds.
+    Geometry correctness is covered by test_asset_hython (real Houdini) and
+    test_asset_builder (network structure); here we verify the HANDLER wiring
+    — argument handling, sandbox creation, and result shape."""
+
+    def _inline_buildable_asset(self):
+        return {
+            "asset_schema_version": 1,
+            "id": "h_test",
+            "params": {"s": {"kind": "primary", "default": 1.0}},
+            "skeleton": {"p": {"expr": ["0", "s", "0"]}},
+            "components": [
+                {"id": "c0", "backend": "native_chain",
+                 "attach": {"position": "p"},
+                 "nodes": [{"type": "box", "params": {"size": ["s", "s", "s"]}}]},
+            ],
+        }
+
+    def test_no_asset_no_path_returns_error(self):
+        result = self.build_asset()
+        self.assertFalse(result["success"])
+        self.assertIn("asset", result["error"].lower())
+
+    def test_inline_asset_builds_with_sandbox_root(self):
+        result = self.build_asset(asset=self._inline_buildable_asset())
+        self.assertTrue(result["success"], result)
+        self.assertIn("out_path", result)
+        self.assertIn("sandbox_root", result)
+        self.assertTrue(result["sandbox_root"].startswith("/obj/"))
+        self.assertEqual(result["components_built"], 1)
+
+    def test_invalid_asset_returns_validation_error(self):
+        asset = self._inline_buildable_asset()
+        asset["components"][0]["attach"] = {"position": "no_such_point"}
+        result = self.build_asset(asset=asset)
+        self.assertFalse(result["success"])
+        # Validation failure surfaces before any sandbox is touched.
+        self.assertIn("error", result)
+
+    def test_sandbox_root_preserved_on_build_failure(self):
+        # On a build error the sandbox is kept so the agent can diagnose it.
+        asset = self._inline_buildable_asset()
+        asset["components"][0]["backend"] = "magic"  # unknown backend
+        result = self.build_asset(asset=asset)
+        self.assertFalse(result["success"])
+        self.assertIn("sandbox_root", result)
 
 
 if __name__ == "__main__":
