@@ -2,14 +2,72 @@
 
 > **用途**：让新 Agent 或开发者在 Edini 仓库里快速上手。
 
-**最后更新**：2026-06-24（recipe_rebuild 4 bug 修复 + 架构清理：harness.py 死代码删除 + edini-context system prompt 更新）
-**当前阶段**：Recipe Library 核心 + 递归树抓取 + VEX 配方 + **recipe_rebuild 真实 Houdini 验证通过** + 旧程序化死代码清理完成
-**下一步**：给高价值配方补 Notes → 实现 Dashboard HDA（scan_tree + Qt 树面板）
-**工作分支**：`master`
+**最后更新**：2026-06-27（声明式资产管道 M2 完整能力交付 + from-to 两点连接原语 + 自行车真机验证）
+**当前阶段**：声明式资产管道里程碑2 全部交付 —— 2 backend（native_chain + python 值注入）+ 3 placement（attach / instances / from-to）+ orient 旋转。真机生成桌子（6 组件）、椅子（含倾斜靠背）、**自行车**（4 from-to 管材 + 2 python 轮子，224 点）。
+**下一步**：M4 组装提交（让 build_asset 结果能 commit_sandbox 固化）+ 真实 Pi agent 端到端（asset-authoring skill 实战检验）
+**工作分支**：`fix/sandbox-diagnostics-and-parm-tooling`（M1/M2 全部工作在此分支，已 push）
 
 ---
 
-## 🔴 最重要：2026-06-23 架构转向（必读）
+## 🔴 最重要：声明式资产管道 M2（2026-06-27，必读）
+
+### 这是当前主线
+
+第三次程序化建模演进，已交付完整的 M2 能力。**核心思想**：agent 写声明式资产 JSON（params + skeleton + components），validate_asset 免费校验，build_asset 生成 Houdini 几何。**capability before rules** 纪律——先证明能力，规则（skill）建立在已验证能力之上。
+
+### M2 完整能力清单
+
+| 能力 | 用途 | 示例资产 |
+|------|------|---------|
+| `native_chain` backend | 声明式 SOP 节点链（box/tube/torus），参数值支持表达式 | table/chair/bike 车架管 |
+| `python` backend | Python SOP 画曲线/截面，**值注入**参数（agent 用参数名，builder AST 替换数值）| table 桌面圆环、bike 轮子 |
+| 多实例 `instances[]` | 1 定义 + N 实例挂 N 骨架点（transform 复制，非 CTP）| 4 桌腿、2 轮子 |
+| `orient` 旋转 | attach.orient / instance.orient（Euler 度）| 椅子倾斜靠背、轮子朝向 |
+| **`from`/`to` 两点连接** | 管材/桁架——builder 自动算长度/中点/朝向，**agent 永不算角度** | 自行车车架 4 管材 |
+
+### 关键文件
+
+```
+python3.11libs/edini/
+  asset_model.py      # 纯数据层：schema + validate（含 component 校验：orient/from-to/instances）
+  asset_builder.py    # 几何构造层：build_asset 主入口 + _build_native_chain/_build_python_component/
+                      #   _from_to_geometry/_move_to_point/_inject_param_values（值注入 AST）
+  tool_executor.py    # validate_asset + build_asset handler（TOOL_HANDLERS 注册）
+  exprs.py            # M1 表达式引擎（safe AST，支持比较/布尔用于约束）
+  skeleton_resolver.py # M1 骨架点 DAG（topo + 环检测）
+pi-extensions/edini-tools/tools/asset.ts  # validateAsset + buildAsset TS schema（含 promptGuidelines）
+skills/asset-authoring/SKILL.md           # agent 写资产的约定文档（实战验证沉淀）
+python3.11libs/edini/data/
+  table.asset.json    # 多实例桌腿 + python 圆环（3 定义/6 实例）
+  chair.asset.json    # 倾斜靠背（orient 实战）
+  bicycle.asset.json  # 完整自行车（from-to 管材 + python 轮子）
+tests/
+  test_asset_builder.py      # mock hou：native_chain/python/instances/orient/from-to
+  test_asset_model.py        # 纯数据：validate 全错误码 + 3 资产端到端
+  test_asset_hython.py       # 真机：table/chair/bicycle 端到端
+  test_tool_executor_asset.py # handler 接入
+```
+
+### 真机验证（Houdini 21.0.440）
+
+桌子 168 点、椅子 112 点、**自行车 224 点（4 管材 + 2 轮子，零 cook 错误）**。上管长度自动 = 两点几何距离（精确）。
+
+### 实战测试的价值（capability-before-rules 兑现）
+
+自行车实战暴露并修复了 3 个真实缺陷（M3 抓不到）：
+1. 组件无朝向 → 加 orient 旋转
+2. orient 被静默忽略 → 加 COMPONENT_BAD_ORIENT 校验
+3. **无两点连接原语** → 加 from-to（管架结构核心，agent 永不算角度）
+
+### 下一步（M2 之后）
+
+1. **M4 组装提交**：build_asset → commit_sandbox，接 G3 门禁，让资产结果能固化成正式节点。
+2. **真实 Pi agent 端到端**：让 Pi agent 用 asset-authoring skill + build_asset 写一个它没见过的资产，验证它能否理解模型（最后的 capability 检验）。
+3. **M3 暂缓**：经分析无必要（历史失败无一是骨架点摆位错；resolve_skeleton 预览已能发现几何错；约束断言会扼杀创造力）。
+
+---
+
+## 🔴 历史架构转向：2026-06-23（保留作参考）
 
 ### 发生了什么
 

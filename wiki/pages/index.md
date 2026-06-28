@@ -1,6 +1,6 @@
 # 📊 仪表盘
 
-> **当前阶段**：声明式资产管道 — 里程碑1（骨架点 DAG + 表达式引擎）已交付，待真机实测 &nbsp;|&nbsp; **状态**：地基三模块 + validate_asset 工具，纯函数全绿，hython dispatch 通过 &nbsp;|&nbsp; **最后更新**：2026-06-26
+> **当前阶段**：声明式资产管道 — 里程碑2 完整能力交付 &nbsp;|&nbsp; **状态**：2 backend + 3 placement + orient，真机生成桌子/椅子/自行车 &nbsp;|&nbsp; **最后更新**：2026-06-27
 
 ## 快速导航
 
@@ -40,7 +40,7 @@
 | 知识→Skills | ⬜ Traces → Skills 自动提取（规划中） |
 | 评估系统 | ✅ 5 维度评分 · LogParser · SQLite · EvalDashboard · edini_get_eval_stats · LLM-as-Judge (deepseek-chat) |
 | Recipe Library | ✅ **schema v2** · 5 工具（list/read/capture/**capture_tree**/rebuild）· 递归树抓取（树路径 recipe_id 防撞名）· kind（network\|vex）· vex_snippets（wrangle 代码+runover 可搜）· tree_path 分类面包屑 · 自动忽略 output/stashed 节点 · 空 Notes 自动生成 · 真实 Houdini 闭环已验证（6 叶子分类树一次性抓取）· popnet 穿透 bug 已修 · 30+2 subtests 全绿 · **2026-06-26 manifest 精度大修**（向量真实分量名/multiparm/版本别名/中英检索/孤儿清理）|
-| 声明式资产管道 | 🚧 **里程碑1 已交付待实测** · 骨架点 DAG + 表达式引擎 + validate_asset 工具（纯数据 shift-left 验证）· 自底向上重启，capability before rules · [路线图](progress.html#下一步计划) |
+| 声明式资产管道 | ✅ **里程碑2 完整交付** · 2 backend（native_chain + python 值注入）· 3 placement（attach / instances / **from-to 两点连接**）· orient 旋转 · 真机生成桌子/椅子/**自行车**（4 管材 + 2 轮子，224 点）· 实战测试暴露并修复 3 真实缺陷 · [路线图](progress.html#下一步计划) |
 | Procedural Harness（已关闭） | ⚰️ **已备份到 `_disabled_backup/`**，部分高质量前身（exprs/component_registry）被资产管道复活复用。旧版：`houdini_run_python_sandbox` · 声明式 Recipe Builder（`houdini_build_procedural_asset`）· 构造轴 · commit/discard lifecycle · [手测清单](procedural-harness.html) |
 
 ## 技术栈

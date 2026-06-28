@@ -43,11 +43,11 @@ recipe 教惯用法，资产管道教结构。
 
 <div class="phase-card">
   <div class="phase-card-header">
-    <span class="phase-card-title">🧱 声明式资产管道 — 里程碑2（组件构建 · native_chain）</span>
-    <span class="status-tag status-done">交付 · 真机生成桌子 ✅</span>
+    <span class="phase-card-title">🧱 声明式资产管道 — 里程碑2（组件构建 · 完整能力）</span>
+    <span class="status-tag status-done">交付 · 真机生成自行车 ✅</span>
   </div>
-  <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:55%"></div></div>
-  <div class="phase-card-detail">让 <code>components[]</code> 真正生成几何并挂到 M1 骨架点上。<strong>核心契约</strong>：组件引用骨架点<strong>名</strong>（不是私有坐标表达式）——消灭旧设计"组件自带 anchor 各自摆位、改参数全乱"的缺陷。<strong>分层重构</strong>：asset_model.py 扩展 <code>_validate_components</code>（纯数据校验：id 唯一/backend 枚举/nodes/code 语法/attach 骨架点悬空/参数引用悬空/multi-instance 校验）+ <strong>新建 asset_builder.py</strong>（几何构造层，依赖 hou）。<strong>两个 backend</strong>：① <code>native_chain</code>（native SOP 节点链，从 git 移植助手 + 8 个 H21 workaround）；② <code>python</code>（Python SOP 画曲线/自定义截面，<strong>值注入</strong>参数——agent 代码用参数名当变量，builder AST 安全替换成数值，永不碰 hou.ch）。故意不做 vex_skeleton（VEX 是旧管道失败根因）。<strong>多实例 transform 复制</strong>：1 个组件定义 + <code>instances[]</code> 挂 N 个骨架点，几何只 build 一次、N 个 transform 各移到各点各打 component_id——替代旧 CTP stamping（其 anchor 私有坐标违背 M2 + idfix boundary 数学在"实例几何不同"时会算错）。<strong>真机实测</strong>：table.asset.json（桌面 box + 4 桌腿[1 定义+4实例] + 桌面边缘 python 曲线，3 定义/6 实例）在 Houdini 21.0.440 生成 168 点 55 面、6 个 component_id、零 cook 错误；桌腿从 4 独立组件收敛为 1 定义+4 实例，几何零变化（回归保护）。<strong>测试</strong>：值注入 AST 11 + python backend 6 + native_chain 13 + multi-instance 6 + asset_model 校验 30 + tool_executor 4 + hython 桌子 8 = 全绿。CTP stamping（>50 螺丝高效复制）作为未来优化保留。</div>
+  <div class="progress-bar-bg"><div class="progress-bar-fill progress-done" style="width:70%"></div></div>
+  <div class="phase-card-detail">让 <code>components[]</code> 真正生成几何并挂到 M1 骨架点上。<strong>核心契约</strong>：组件引用骨架点<strong>名</strong>（不是私有坐标表达式）——消灭旧设计"组件自带 anchor 各自摆位、改参数全乱"的缺陷。<strong>分层重构</strong>：asset_model.py（纯数据校验）+ 新建 asset_builder.py（几何构造层，依赖 hou）。<strong>两个 backend</strong>：① <code>native_chain</code>（native SOP 节点链，从 git 移植助手 + 8 个 H21 workaround）；② <code>python</code>（Python SOP 画曲线/截面，<strong>值注入</strong>参数——agent 代码用参数名当变量，builder AST 安全替换成数值，永不碰 hou.ch）。故意不做 vex_skeleton（VEX 是旧管道失败根因）。<strong>三种 placement</strong>：① <code>attach.position</code>（单实例）；② <code>instances[]</code>（1 定义 + N 实例 transform 复制，替代旧 CTP stamping）；③ <strong><code>from</code>/<code>to</code> 两点连接</strong>（管材/桁架核心原语——builder 自动算中点/长度/朝向，agent 永不算角度，用 axis-angle→四元数→欧拉无万向锁）。<strong>orient 旋转</strong>（attach/instance 的 Euler 度）。<strong>真机实测</strong>（Houdini 21.0.440）：table（168 点，多实例桌腿+python 圆环）、chair（112 点，orient 倾斜靠背）、<strong>bicycle（224 点：4 from-to 车架管材 + 2 python 轮子，零 cook 错误，上管长度自动=两点距离）</strong>。<strong>实战测试价值</strong>：椅子→自行车递进暴露并修复 3 真实缺陷（无朝向→orient / orient 静默忽略→校验 / 无两点连接→from-to），这是 M3 抓不到的。<strong>skill</strong>：asset-authoring/SKILL.md 沉淀实战约定。<strong>测试</strong>：纯 Python + mock hou + hython 真机三层共 240+ 测试全绿，全量回归 581 passed 零回归。</div>
 </div>
 
 <div class="phase-card">
@@ -700,12 +700,30 @@ recipe 教惯用法，资产管道教结构。
 - **样例数学修正**：`bicycle.asset.json` 的 `bb_center.expr[0]` 从物理不准的 `'rear_x + chainstay_len'` 改为正确的水平投影 `'rear_x - sqrt(chainstay_len**2 - bb_drop**2)'`（BB 在后轴前方）。
 - **全量回归 475 passed**（比改动前 +162），零回归。
 
-### 🔴 当前最高优先级：启动 M2 组件构建
+### ✅ 里程碑2 完整交付（2026-06-27）
 
-M1 实测通过，**不再阻塞 M2**。剩余的"agent 是否理解新模型"观察（原清单第 4 条）转为 M2 的实战检验——让 agent 真正写资产时验证。M2 启动要点见上表。
+**capability-before-rules 纪律的核心检验通过**。M2 让 `components[]` 真正生成几何，经过 4 个递进的实施轮次（native_chain → python → 多实例 → from-to），每一轮都用真机实测验证：
 
-实测发现的问题优先修，修完再进 M2。**不要跳过实测直接写 M2**——这是"capability before rules"
-纪律的第一道检验。
+- **2 个 backend**：`native_chain`（声明式 SOP 节点链，从 git history 移植助手 + 8 个 H21 workaround）+ `python`（Python SOP 画曲线，**值注入**参数——agent 用参数名，builder AST 安全替换数值，永不碰 hou.ch）。**故意不做 vex_skeleton**（VEX 是旧管道失败根因）。
+- **3 种 placement**：`attach.position`（单实例）/ `instances[]`（1 定义 + N 实例 transform 复制，替代旧 CTP stamping）/ **`from`/`to` 两点连接**（管材/桁架核心原语）。
+- **orient 旋转**（attach/instance 的 Euler 度）。
+- **实战测试暴露并修复 3 个真实缺陷**（M3 抓不到，递进式发现）：
+  1. 组件无朝向（椅子靠背暴露）→ 加 orient 旋转。
+  2. orient 被静默忽略 → 加 COMPONENT_BAD_ORIENT 校验。
+  3. **无两点连接原语**（自行车车架暴露——agent 要算斜管角度极易错）→ 加 from-to（builder 自动算中点/长度/朝向，用 axis-angle→四元数→欧拉无万向锁）。
+- **真机实测**（Houdini 21.0.440）：table（168 点）/ chair（112 点，倾斜靠背）/ **bicycle（224 点：4 from-to 管材 + 2 python 轮子，零 cook 错误，上管长度自动=两点距离 0.5612）**。
+- **skill 沉淀**：`skills/asset-authoring/SKILL.md`，基于实战验证的约定（不是空想规则）。
+- **全量回归 581 passed**（比 M1 后 +106），零回归。
+
+**核心教训**：实战测试（写真实复杂资产）比设计验证（M3 盒子占位）更能暴露缺陷——椅子暴露 orient 缺失，自行车暴露 from-to 缺失，都是"用的时候才发现缺"的能力。
+
+### 🔴 当前最高优先级：M4 组装提交 + 真实 agent 端到端
+
+M2 已完整交付并通过真机验证（自行车 224 点）。**M3 经分析暂缓**（历史失败无一是骨架点摆位错；resolve_skeleton 预览已能发现几何错；约束断言会扼杀创造力——详见 M2 实战测试的递进发现）。
+
+下一步两条并行线：
+1. **M4 组装提交**：让 `build_asset` 的 sandbox 结果能 `commit_sandbox` 固化成正式节点，接上 G3 门禁。这是资产从"预览"到"产出"的最后一环。
+2. **真实 Pi agent 端到端**：让真正的 Pi agent 用 `asset-authoring` skill + `build_asset` 写一个它没见过的资产（不是手写测试资产），验证它能否理解 params/skeleton/components 模型。这是 capability-before-rules 的最终检验——发现 agent 实际使用的真实缺陷。
 
 ### 关键设计文档 & 前身代码
 
