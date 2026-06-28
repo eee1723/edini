@@ -1,0 +1,55 @@
+{
+  "asset_schema_version": 1,
+  "id": "chair",
+  "params": {
+    "seat_width":   {"kind": "primary", "default": 0.45, "min": 0.30, "max": 0.60, "label": "Seat Width"},
+    "seat_depth":   {"kind": "primary", "default": 0.40, "min": 0.30, "max": 0.55, "label": "Seat Depth"},
+    "seat_thickness": {"kind": "primary", "default": 0.04, "min": 0.02, "max": 0.08, "label": "Seat Thickness"},
+    "seat_height":  {"kind": "primary", "default": 0.45, "min": 0.35, "max": 0.55, "label": "Seat Height"},
+    "leg_radius":   {"kind": "primary", "default": 0.025, "min": 0.015, "max": 0.05, "label": "Leg Radius"},
+    "back_height":  {"kind": "primary", "default": 0.50, "min": 0.20, "max": 0.80, "label": "Backrest Height"},
+    "back_thickness": {"kind": "primary", "default": 0.03, "min": 0.02, "max": 0.06, "label": "Backrest Thickness"},
+
+    "leg_half":      {"kind": "derived", "from": "seat_height/2"},
+    "leg_inset":     {"kind": "derived", "from": "seat_width/2 - leg_radius"},
+    "leg_inset_z":   {"kind": "derived", "from": "seat_depth/2 - leg_radius"},
+    "back_top":      {"kind": "derived", "from": "seat_height + back_height"},
+    "back_z":        {"kind": "derived", "from": "-seat_depth/2 + back_thickness/2"}
+  },
+  "skeleton": {
+    "seat_center": {"expr": ["0", "seat_height", "0"]},
+    "leg_fl":      {"expr": ["-leg_inset", "leg_half", "-leg_inset_z"]},
+    "leg_fr":      {"expr": ["leg_inset",  "leg_half", "-leg_inset_z"]},
+    "leg_bl":      {"expr": ["-leg_inset", "leg_half", "leg_inset_z"]},
+    "leg_br":      {"expr": ["leg_inset",  "leg_half", "leg_inset_z"]},
+    "back_center": {"expr": ["0", "(seat_height + back_top)/2", "back_z"]}
+  },
+  "components": [
+    {
+      "id": "seat", "backend": "native_chain",
+      "attach": {"position": "seat_center"},
+      "nodes": [
+        {"type": "box", "params": {"size": ["seat_width", "seat_thickness", "seat_depth"]}}
+      ]
+    },
+    {
+      "id": "chair_leg", "backend": "native_chain",
+      "nodes": [
+        {"type": "tube", "params": {"rad": ["leg_radius", "leg_radius"], "height": "seat_height"}}
+      ],
+      "instances": [
+        {"id": "leg_fl", "position": "leg_fl"},
+        {"id": "leg_fr", "position": "leg_fr"},
+        {"id": "leg_bl", "position": "leg_bl"},
+        {"id": "leg_br", "position": "leg_br"}
+      ]
+    },
+    {
+      "id": "backrest", "backend": "native_chain",
+      "attach": {"position": "back_center", "orient": [10, 0, 0]},
+      "nodes": [
+        {"type": "box", "params": {"size": ["seat_width", "back_height", "back_thickness"]}}
+      ]
+    }
+  ]
+}

@@ -455,6 +455,51 @@ class TestValidateComponents(unittest.TestCase):
         result = validate(self._table_asset())
         self.assertTrue(result["success"], result["errors"])
 
+    # ── orient (rotation) checks — surfaced by the chair real-world test ──
+
+    def test_valid_orient_passes(self):
+        asset = self._table_asset()
+        asset["components"][0]["attach"]["orient"] = [10, 0, 0]
+        result = validate(asset)
+        self.assertTrue(result["success"], result["errors"])
+
+    def test_instance_valid_orient_passes(self):
+        asset = self._dual_wheel_asset()
+        asset["components"][0]["instances"][0]["orient"] = [0, 90, 0]
+        result = validate(asset)
+        self.assertTrue(result["success"], result["errors"])
+
+    def test_bad_orient_wrong_length(self):
+        asset = self._table_asset()
+        asset["components"][0]["attach"]["orient"] = [10, 0]  # only 2
+        result = validate(asset)
+        self.assertFalse(result["success"])
+        self.assertTrue(any(
+            e["code"] == "COMPONENT_BAD_ORIENT" for e in result["errors"]))
+
+    def test_bad_orient_non_numeric(self):
+        asset = self._table_asset()
+        asset["components"][0]["attach"]["orient"] = [10, "flat", 0]
+        result = validate(asset)
+        self.assertFalse(result["success"])
+        self.assertTrue(any(
+            e["code"] == "COMPONENT_BAD_ORIENT" for e in result["errors"]))
+
+    def test_bad_orient_wrong_type(self):
+        asset = self._table_asset()
+        asset["components"][0]["attach"]["orient"] = 10  # not a list
+        result = validate(asset)
+        self.assertFalse(result["success"])
+        self.assertTrue(any(
+            e["code"] == "COMPONENT_BAD_ORIENT" for e in result["errors"]))
+
+    def test_orient_optional(self):
+        # No orient at all is fine (the default, most components don't rotate).
+        result = validate(self._table_asset())
+        self.assertTrue(result["success"], result["errors"])
+        self.assertFalse(any(
+            e["code"] == "COMPONENT_BAD_ORIENT" for e in result["errors"]))
+
     # ── param-ref checks (the hole the old design never closed) ──
 
     def test_node_param_expr_dangling_ref(self):

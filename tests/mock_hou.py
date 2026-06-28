@@ -1278,6 +1278,18 @@ def _make_vector_ptg(base_name: str, default_xyz):
     return g
 
 
+def _make_transform_ptg():
+    """Transform (xform) SOP parm group: 't' (translate tx/ty/tz) + 'r'
+    (rotate rx/ry/rz, in degrees). The builder writes both — t from the attach
+    skeleton point, r from attach.orient / instance.orient."""
+    g = MockParmTemplateGroup()
+    for base in ("t", "r"):
+        for suf in ("x", "y", "z"):
+            g.append(MockFloatParmTemplate(
+                f"{base}{suf}", base, 1, default_value=(0.0,)))
+    return g
+
+
 def _make_tube_ptg():
     """Tube SOP parm template group (H21). rad is a 2-component vector
     (rad1/rad2 — top/bottom radius), height/rows/cols are scalars, type is the
@@ -1470,7 +1482,7 @@ class MockHou:
                 parm_template_group=_make_tube_ptg()),
             "xform": MockNodeType(
                 "xform", "Transform", "Sop", 1, 1,
-                parm_template_group=_make_vector_ptg("t", [0.0, 0.0, 0.0])),
+                parm_template_group=_make_transform_ptg()),
             "torus": MockNodeType("torus", "Torus", "Sop", 1, 0),
         })
         obj_cat = MockCategory("Object", {

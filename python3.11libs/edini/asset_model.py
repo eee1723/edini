@@ -268,6 +268,34 @@ _VALID_BACKENDS = ("native_chain", "vex_skeleton", "python")
 _DEFAULT_BACKEND = "native_chain"
 
 
+def _validate_orient(orient: Any, cid: str, loc: dict | None) -> list[dict]:
+    """Validate an orient field: [rx, ry, rz] Euler angles in DEGREES.
+
+    Optional everywhere it appears (attach.orient, instance.orient). When
+    present it MUST be a 3-element list of numbers — otherwise the builder
+    would silently drop the rotation (the chair real-world test caught this:
+    orient was ignored with no error). Surface a clear code instead.
+    """
+    errs: list[dict] = []
+    if isinstance(orient, (list, tuple)):
+        if len(orient) != 3:
+            errs.append(_err(
+                "COMPONENT_BAD_ORIENT",
+                f"component {cid!r} orient must be 3 numbers [rx,ry,rz] degrees, "
+                f"got {len(orient)}", loc))
+        elif not all(_is_numeric(a) for a in orient):
+            errs.append(_err(
+                "COMPONENT_BAD_ORIENT",
+                f"component {cid!r} orient must be 3 numbers, got non-numeric "
+                f"value in {list(orient)!r}", loc))
+    else:
+        errs.append(_err(
+            "COMPONENT_BAD_ORIENT",
+            f"component {cid!r} orient must be a list of 3 numbers [rx,ry,rz] "
+            f"degrees, got {type(orient).__name__}", loc))
+    return errs
+
+
 def _validate_components(asset: dict) -> list[dict]:
     """Validate the ``components`` list: ids, backends, node shapes, attach
     references, and param references. Assumes skeleton + params already passed
@@ -425,6 +453,21 @@ def _validate_components(asset: dict) -> list[dict]:
                     f"component {cid!r} attaches to {position!r} which is not "
                     f"a declared skeleton point (known: {sorted(point_names)})",
                     {**((loc or {})), "point": position}))
+            # attach.orient (optional): Euler-angle rotation [rx,ry,rz] degrees.
+            # Validate shape so a typo doesn't silently disable rotation.
+            if "orient" in attach:
+                errors.extend(_validate_orient(attach["orient"], cid, loc))
+
+        # Multi-instance orient: validated per-instance alongside the point.
+        if has_instances and isinstance(instances, list):
+            for ii, inst in enumerate(instances):
+                if isinstance(inst, dict) and "orient" in inst:
+                    inst_loc = {**((loc or {})), "instance_index": ii}
+                    inst_id_ref = inst.get("id")
+                    if inst_id_ref:
+                        inst_loc["instance_id"] = inst_id_ref
+                    errors.extend(_validate_orient(
+                        inst["orient"], cid, inst_loc))
 
         # ── param references: a node param value that is a STRING is treated
         # as an expression over the param library (evaluated at build time by

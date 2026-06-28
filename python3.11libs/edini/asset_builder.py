@@ -403,16 +403,17 @@ def _build_python_component(
 
 
 def _move_to_point(
-    root_path: str, tail_node, cid: str, position: tuple[float, float, float]
+    root_path: str, tail_node, cid: str,
+    position: tuple[float, float, float],
+    orient: tuple[float, float, float] | None = None,
 ) -> Any:
     """Move a component's geometry onto its attach skeleton point.
 
-    A single-instance M2 component is translated (not CTP-stamped) to its
-    declared skeleton point. A Transform (xform) node sits after the chain and
-    sets ``t`` to the resolved point coordinates. This is simpler than
-    Copy-to-Points and avoids the per-instance attribute-transfer workaround
-    (W1) entirely for the per-point case. Multi-instance stamping is a later
-    milestone.
+    A Transform (xform) node sits after the chain: ``t`` = the resolved point
+    coordinates (translation), ``r`` = the optional orient Euler angles in
+    DEGREES (rotation, rx/ry/rz). Without orient a tilted backrest / angled
+    strut is impossible — orient is what lets a chair lean back or a bike
+    frame tube angle off-axis. Default None = no rotation (the simple case).
     """
     xform = _safe_create_node(root_path, "xform", f"{cid}_xform")
     xform.setInput(0, tail_node)
@@ -421,6 +422,12 @@ def _move_to_point(
     except Exception as e:
         raise RuntimeError(
             f"component '{cid}' transform to {position} failed: {e}") from None
+    if orient:
+        try:
+            xform.parmTuple("r").set(tuple(float(a) for a in orient))
+        except Exception as e:
+            raise RuntimeError(
+                f"component '{cid}' orient {orient} failed: {e}") from None
     return xform
 
 
@@ -515,7 +522,10 @@ def build_asset(asset: dict, root_path: str) -> dict[str, Any]:
                             f"{point_name!r} is not a resolved skeleton point "
                             f"(validate should have caught this)")
                     position = skeleton[point_name]
-                    moved = _move_to_point(root_path, tail, inst_id, position)
+                    inst_orient = inst.get("orient")
+                    moved = _move_to_point(
+                        root_path, tail, inst_id, position,
+                        orient=tuple(inst_orient) if inst_orient else None)
                     tagged = _tag_component_id(root_path, moved, inst_id)
                     component_nodes.append(tagged)
                     placements[inst_id] = [float(c) for c in position]
@@ -528,7 +538,10 @@ def build_asset(asset: dict, root_path: str) -> dict[str, Any]:
                         f"resolved skeleton point (validate should have caught "
                         f"this)")
                 position = skeleton[point_name]
-                moved = _move_to_point(root_path, tail, cid, position)
+                comp_orient = attach.get("orient")
+                moved = _move_to_point(
+                    root_path, tail, cid, position,
+                    orient=tuple(comp_orient) if comp_orient else None)
                 tagged = _tag_component_id(root_path, moved, cid)
                 component_nodes.append(tagged)
                 placements[cid] = [float(c) for c in position]

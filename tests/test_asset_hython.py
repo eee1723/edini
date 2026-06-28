@@ -193,6 +193,7 @@ class TestValidateAssetHython(unittest.TestCase):
 # (tabletop + 4 legs) with correct component_id tagging.
 
 TABLE = os.path.join(PYTHONLIBS, "edini", "data", "table.asset.json")
+CHAIR = os.path.join(PYTHONLIBS, "edini", "data", "chair.asset.json")
 
 _BUILD_SCRIPT = r"""
 import sys, os, json, traceback
@@ -206,8 +207,9 @@ try:
 
     from edini import asset_builder, asset_model
 
-    table = {table!r}
-    asset = asset_model.load_asset(table)
+    asset_path = {asset_path!r}
+    asset = asset_model.load_asset(asset_path)
+    asset = asset_model.load_asset(asset_path)
 
     # Build into a throwaway geo sandbox.
     obj = hou.node('/obj')
@@ -249,10 +251,10 @@ print({end!r})
 """
 
 
-def _run_build():
-    """Build the table in hython and return the parsed result dict."""
+def _run_build(asset_path=TABLE):
+    """Build an asset in hython and return the parsed result dict."""
     script = _BUILD_SCRIPT.format(
-        pythonlibs=PYTHONLIBS, table=TABLE, start=_START, end=_END,
+        pythonlibs=PYTHONLIBS, asset_path=asset_path, start=_START, end=_END,
     )
     proc = subprocess.run(
         [HYTHON, "-c", script],
@@ -343,6 +345,44 @@ class TestBuildAssetHython(unittest.TestCase):
         # the rim radius = top_size/2 → diameter 1.0.
         self.assertGreaterEqual(size[0], 0.9)
         self.assertGreaterEqual(size[2], 0.9)
+
+
+@unittest.skipUnless(HYTHON, "hython not found — skip real-Houdini test")
+class TestBuildChairHython(unittest.TestCase):
+    """Real-world asset authoring check: a chair (seat + backrest + 4 legs)
+    exercises M2 against a shape the bundled table does NOT cover — a vertical
+    backrest whose orientation matters. This was written from an agent's
+    perspective (not hand-tuned to pass) to surface real M2 limits."""
+
+    def test_chair_builds_six_components(self):
+        result = _run_build(CHAIR)
+        self.assertNotIn("error", result, result.get("error", ""))
+        self.assertTrue(result["build_success"])
+        self.assertEqual(result["components_built"], 6)
+
+    def test_chair_component_ids(self):
+        result = _run_build(CHAIR)
+        self.assertNotIn("error", result, result.get("error", ""))
+        self.assertEqual(
+            set(result["component_ids"]),
+            {"seat", "leg_fl", "leg_fr", "leg_bl", "leg_br", "backrest"})
+
+    def test_backrest_stands_up(self):
+        """The backrest box (size Y = back_height) makes the chair's total Y
+        extent reach seat_height + back_height. The backrest stands up via its
+        size axis, not via rotation — M2 currently has NO rotation capability,
+        which is the limit this test documents (a tilted backrest is a later
+        fix, tracked separately)."""
+        result = _run_build(CHAIR)
+        self.assertNotIn("error", result, result.get("error", ""))
+        size = result.get("bounds_size", [0, 0, 0])
+        # Y extent must reach ≈ seat_height(0.45) + back_height(0.50) = 0.95.
+        self.assertGreaterEqual(size[1], 0.90)
+
+    def test_no_cook_errors(self):
+        result = _run_build(CHAIR)
+        self.assertNotIn("error", result, result.get("error", ""))
+        self.assertEqual(result["cook_errors"], [])
 
 
 if __name__ == "__main__":

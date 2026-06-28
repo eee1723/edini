@@ -195,6 +195,52 @@ class TestNativeChainComponent(_BuilderTestCase):
         self.assertIn("tabletop", placements)
         self.assertAlmostEqual(placements["tabletop"][1], 0.75, places=4)
 
+    def test_component_orient_applied_to_transform(self):
+        # attach.orient = [rx, ry, rz] (degrees) must reach the xform's rotation
+        # parm. Without this a tilted backrest / angled strut is impossible —
+        # this is the limit the chair real-world test surfaced.
+        asset = _inline_table_asset()
+        asset["components"][0]["attach"]["orient"] = [15.0, 0.0, 0.0]
+        root = self._make_sandbox()
+        result = self.build_asset(asset, root.path())
+        self.assertTrue(result["success"], result)
+        xform = self._child(root, "tabletop_xform")
+        self.assertIsNotNone(xform)
+        # The rotation was applied: the xform carries a non-default rx.
+        r_tuple = xform.parmTuple("r")
+        if r_tuple is not None:
+            rx = r_tuple.eval()[0]
+            self.assertAlmostEqual(rx, 15.0, places=4)
+
+    def test_instance_orient_applied(self):
+        # Multi-instance orient: each instance can tilt independently.
+        asset = {
+            "asset_schema_version": 1, "id": "t",
+            "params": {"s": {"kind": "primary", "default": 1.0}},
+            "skeleton": {
+                "p1": {"expr": ["0", "0", "0"]},
+                "p2": {"expr": ["2", "0", "0"]}},
+            "components": [{
+                "id": "beam", "backend": "native_chain",
+                "nodes": [{"type": "box", "params": {"size": ["s", "s", "s"]}}],
+                "instances": [
+                    {"id": "beam_a", "position": "p1", "orient": [0, 30, 0]},
+                    {"id": "beam_b", "position": "p2", "orient": [0, 0, 45]},
+                ],
+            }],
+        }
+        root = self._make_sandbox()
+        result = self.build_asset(asset, root.path())
+        self.assertTrue(result["success"], result)
+        a = self._child(root, "beam_a_xform")
+        b = self._child(root, "beam_b_xform")
+        self.assertIsNotNone(a)
+        self.assertIsNotNone(b)
+        if a.parmTuple("r") is not None:
+            self.assertAlmostEqual(a.parmTuple("r").eval()[1], 30.0, places=4)
+        if b.parmTuple("r") is not None:
+            self.assertAlmostEqual(b.parmTuple("r").eval()[2], 45.0, places=4)
+
 
 # ===================================================================
 # param expression resolution (detail-1 = A: string param values are
