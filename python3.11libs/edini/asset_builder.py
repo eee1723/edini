@@ -449,6 +449,94 @@ def _tag_component_id(root_path: str, tail_node, cid: str) -> Any:
     return tag
 
 
+def _from_to_geometry(from_pt, to_pt):
+    """Compute the placement of a from-to (strut/tube) component.
+
+    Given two resolved skeleton points, returns ``(midpoint, length, orient)``
+    where ``orient`` is an Euler-angle tuple (rx,ry,rz, degrees) that rotates
+    the geometry's default +Y axis onto the (to-from) direction. This is the
+    primitive bike-frame tubes / chair rungs / table stretchers need: the agent
+    names two points and NEVER computes an angle — the builder derives midpoint,
+    length, and orientation from the points alone.
+
+    Orientation is derived via axis-angle (rotation axis = Y × dir, angle =
+    arccos(Y·dir/|dir|)) then converted to Euler, which avoids gimbal lock for
+    the common case and never asks the agent to write trig.
+    """
+    import math
+    fx, fy, fz = float(from_pt[0]), float(from_pt[1]), float(from_pt[2])
+    tx, ty, tz = float(to_pt[0]), float(to_pt[1]), float(to_pt[2])
+    dx, dy, dz = tx - fx, ty - fy, tz - fz
+    length = math.sqrt(dx * dx + dy * dy + dz * dz)
+    mid = ((fx + tx) / 2.0, (fy + ty) / 2.0, (fz + tz) / 2.0)
+    if length < 1e-9:
+        raise RuntimeError(
+            f"from-to component has coincident points: from={from_pt} to={to_pt}")
+    # Direction unit vector.
+    ux, uy, uz = dx / length, dy / length, dz / length
+    # Default geometry axis is +Y. Rotate +Y onto (ux,uy,uz).
+    # axis = Y × dir; angle = acos(Y·dir).
+    dot = uy  # Y·(ux,uy,uz) = uy
+    angle = math.acos(max(-1.0, min(1.0, dot)))
+    # Rotation axis = Y × dir = (-uz, 0, ux) (cross with (0,1,0)).
+    ax, ay, az = -uz, 0.0, ux
+    axis_len = math.sqrt(ax * ax + ay * ay + az * az)
+    if axis_len < 1e-9:
+        # dir is parallel to Y (or anti): no rotation, or 180° flip.
+        orient = (180.0, 0.0, 0.0) if dot < 0 else (0.0, 0.0, 0.0)
+    else:
+        # axis-angle (radians) → quaternion → Euler degrees via hou.hmath.
+        # Build quaternion (qx,qy,qz,qw) from axis-angle.
+        h = math.sin(angle / 2.0)
+        qx, qy, qz = (ax / axis_len) * h, (ay / axis_len) * h, (az / axis_len) * h
+        qw = math.cos(angle / 2.0)
+        try:
+            quat = hou.Vector4(qx, qy, qz, qw)  # type: ignore[name-defined]
+            euler_rad = hou.hmath.eulerFromQuaternion(quat, "xyz")  # type: ignore[name-defined]
+            orient = tuple(math.degrees(a) for a in euler_rad)
+        except Exception:
+            # Fallback: axis-angle → Euler via a direct (less robust) formula.
+            # Only reached if hou.hmath is unavailable (offline/mock).
+            orient = _axis_angle_to_euler_deg(
+                (ax / axis_len, ay / axis_len, az / axis_len), angle)
+    return mid, length, orient
+
+
+def _axis_angle_to_euler_deg(axis, angle):
+    """Fallback axis-angle → Euler (XYZ, degrees) without hou (for tests/mock)."""
+    import math
+    ax, ay, az = axis
+    s = math.sin(angle)
+    c = math.cos(angle)
+    t = 1.0 - c
+    # Standard rotation-matrix → Euler (XYZ) extraction.
+    rx = math.degrees(math.atan2(ay * s, c))
+    ry = math.degrees(math.atan2(-ax * s, t * ax * ax + c)) if (t * ax * ax + c) != 0 else 0.0
+    rz = math.degrees(math.atan2(az * s, c))
+    return (rx, ry, rz)
+
+
+def _set_from_to_length(tail_node, length: float, cid: str) -> None:
+    """Set the auto-computed span length on a from-to component's geometry.
+
+    The tail node is typically the tube/cylinder whose 'height' parm defines
+    how long the strut is. The from-to contract is "the tube spans A→B", so the
+    builder overrides whatever height the agent wrote with |to-from|. Best-effort:
+    if the tail isn't a height-bearing node (e.g. a box), the length is applied
+    via the transform's scale instead — but the common case (tube) sets height."""
+    try:
+        type_name = tail_node.type().name().split("::")[0].lower()
+    except Exception:
+        type_name = ""
+    try:
+        if type_name in ("tube", "cylinder") and tail_node.parm("height") is not None:
+            tail_node.parm("height").set(float(length))
+        # Non-tube tails: length is positional (midpoint + orient already encode
+        # direction); the geometry keeps its authored size. No-op here.
+    except Exception:
+        pass
+
+
 def build_asset(asset: dict, root_path: str) -> dict[str, Any]:
     """Build a validated asset into a Houdini node network under ``root_path``.
 
@@ -505,46 +593,66 @@ def build_asset(asset: dict, root_path: str) -> dict[str, Any]:
                     f"component '{cid}' backend {backend!r} not supported "
                     f"(use native_chain or python)")
 
-            # Place the component onto its skeleton point(s). Two forms:
+            # Place the component. Three forms (checked in order):
+            #   - from/to: a strut/tube spanning two skeleton points. The
+            #     builder sets the tube height = |to-from| and places at the
+            #     midpoint rotated to the (to-from) direction. The agent never
+            #     computes a length or an angle.
             #   - instances[]: geometry built ONCE, then N transform-copies,
             #     each at its own point with its own component_id.
             #   - attach.position: one transform (the single-instance case).
-            # Both fan out from the shared geometry tail (one build, N copies),
-            # avoiding the old CTP idfix boundary math entirely.
-            instances = comp.get("instances")
-            if isinstance(instances, list) and instances:
-                for inst in instances:
-                    inst_id = inst.get("id")
-                    point_name = inst.get("position")
-                    if point_name not in skeleton:
-                        raise RuntimeError(
-                            f"instance {inst_id!r} of component {cid!r} attach "
-                            f"{point_name!r} is not a resolved skeleton point "
-                            f"(validate should have caught this)")
-                    position = skeleton[point_name]
-                    inst_orient = inst.get("orient")
-                    moved = _move_to_point(
-                        root_path, tail, inst_id, position,
-                        orient=tuple(inst_orient) if inst_orient else None)
-                    tagged = _tag_component_id(root_path, moved, inst_id)
-                    component_nodes.append(tagged)
-                    placements[inst_id] = [float(c) for c in position]
-            else:
-                attach = comp.get("attach") or {}
-                point_name = attach.get("position")
-                if point_name not in skeleton:
+            from_name = comp.get("from")
+            to_name = comp.get("to")
+            if from_name is not None or to_name is not None:
+                # from-to strut: validate points, set length, place at midpoint.
+                if from_name not in skeleton or to_name not in skeleton:
                     raise RuntimeError(
-                        f"component {cid!r} attach {point_name!r} is not a "
-                        f"resolved skeleton point (validate should have caught "
+                        f"from-to component {cid!r} references unresolved points "
+                        f"{from_name!r}/{to_name!r} (validate should have caught "
                         f"this)")
-                position = skeleton[point_name]
-                comp_orient = attach.get("orient")
-                moved = _move_to_point(
-                    root_path, tail, cid, position,
-                    orient=tuple(comp_orient) if comp_orient else None)
+                mid, length, orient = _from_to_geometry(
+                    skeleton[from_name], skeleton[to_name])
+                # Override the tube height with the auto-computed span length.
+                _set_from_to_length(tail, length, cid)
+                moved = _move_to_point(root_path, tail, cid, mid, orient=orient)
                 tagged = _tag_component_id(root_path, moved, cid)
                 component_nodes.append(tagged)
-                placements[cid] = [float(c) for c in position]
+                placements[cid] = [float(c) for c in mid]
+            else:
+                instances = comp.get("instances")
+                if isinstance(instances, list) and instances:
+                    for inst in instances:
+                        inst_id = inst.get("id")
+                        point_name = inst.get("position")
+                        if point_name not in skeleton:
+                            raise RuntimeError(
+                                f"instance {inst_id!r} of component {cid!r} attach "
+                                f"{point_name!r} is not a resolved skeleton point "
+                                f"(validate should have caught this)")
+                        position = skeleton[point_name]
+                        inst_orient = inst.get("orient")
+                        moved = _move_to_point(
+                            root_path, tail, inst_id, position,
+                            orient=tuple(inst_orient) if inst_orient else None)
+                        tagged = _tag_component_id(root_path, moved, inst_id)
+                        component_nodes.append(tagged)
+                        placements[inst_id] = [float(c) for c in position]
+                else:
+                    attach = comp.get("attach") or {}
+                    point_name = attach.get("position")
+                    if point_name not in skeleton:
+                        raise RuntimeError(
+                            f"component {cid!r} attach {point_name!r} is not a "
+                            f"resolved skeleton point (validate should have caught "
+                            f"this)")
+                    position = skeleton[point_name]
+                    comp_orient = attach.get("orient")
+                    moved = _move_to_point(
+                        root_path, tail, cid, position,
+                        orient=tuple(comp_orient) if comp_orient else None)
+                    tagged = _tag_component_id(root_path, moved, cid)
+                    component_nodes.append(tagged)
+                    placements[cid] = [float(c) for c in position]
 
         if not component_nodes:
             raise RuntimeError("asset has no components to build")

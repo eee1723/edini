@@ -1,6 +1,6 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-26 &nbsp;|&nbsp; **声明式资产管道里程碑2 — native_chain + python + 多实例交付 ✅，真机生成桌子（3 定义/6 实例 168 点）** &nbsp;|&nbsp; 进展：多实例 transform 复制（1 定义 + N 实例挂 N 骨架点），替代旧 CTP stamping（anchor 私有坐标违背 M2 + idfix boundary 数学脆）；桌子 4 桌腿从 4 独立组件收敛为 1 定义+4实例，几何零变化
+> 最后更新：2026-06-27 &nbsp;|&nbsp; **声明式资产管道里程碑2 — 完整能力交付 ✅，真机生成自行车（6 组件 224 点：4 管材 + 2 轮子）** &nbsp;|&nbsp; 进展：from-to 两点连接原语（管材/桁架核心，agent 永不算角度）+ orient 旋转 + python + 多实例，实战测试（椅子→自行车）暴露并修复 3 个真实缺陷（无朝向/orient 静默忽略/无两点连接）
 
 ## ⚠️ 架构转向说明（2026-06-23 → 06-26 三次演进）
 
@@ -684,8 +684,8 @@ recipe 教惯用法，资产管道教结构。
 | 里程碑 | 内容 | 状态 | 关键文件 |
 |--------|------|------|----------|
 | **M1 骨架点 + 表达式引擎** | exprs.py + skeleton_resolver.py + asset_model.py + validate_asset 工具。纯数据层，shift-left 验证。 | ✅ **交付 + 真机实测通过**（162 单元/集成测试 + hython 端到端 5 项，修 2 bug + 样例数学修正） | exprs.py / skeleton_resolver.py / asset_model.py / tool_executor.py(validate_asset) / pi-extensions/edini-tools/tools/asset.ts / data/bicycle.asset.json / tests/test_{exprs,skeleton_resolver,asset_model,tool_executor_asset,asset_hython}.py |
-| **M2 组件构建** | `components[]` 真正生成几何，挂到骨架点。native 节点链 + python backend（Python SOP 画曲线/自定义截面）。组件声明 attach 到哪个骨架点、读哪个参数。 | ✅ **native_chain + python backend 交付**（桌子 6 组件 168 点含 Python 曲线，hython 端到端全绿）。vex_skeleton 故意不做（VEX 易错，python 几何 API 替代）；多实例 CTP 后续 | asset_builder.py（_build_native_chain/_build_python_component/_inject_param_values）/ asset_model.py(_validate_components) / tool_executor.py(build_asset) / pi-extensions asset.ts / data/table.asset.json / tests/test_asset_{builder,model,hython,tool_executor_asset}.py |
-| **M3 盒子占位 + 早期验证** | 拆分阶段先输出盒子几何（挂骨架点），做连接点对齐 + 比例合理性验证（不做 AABB）。验证前移到最便宜的时机。 | ⬜ 下一步 | 新工具（build_blockout / validate_blockout） |
+| **M2 组件构建** | `components[]` 真正生成几何，挂到骨架点。native 节点链 + python backend（Python SOP 画曲线）+ 多实例 + orient 旋转 + from-to 两点连接（管材/桁架）。组件声明 attach 到哪个骨架点、读哪个参数。 | ✅ **完整能力交付 + 自行车真机验证**（自行车 6 组件 224 点：4 from-to 管材 + 2 python 轮子）。3 种 placement（attach/instances/from-to）+ 2 backend + orient。实战测试（椅子→自行车）暴露并修复 3 真实缺陷 | asset_builder.py（_build_native_chain/_build_python_component/_inject_param_values/_from_to_geometry/_move_to_point）/ asset_model.py(_validate_components) / tool_executor.py(build_asset) / pi-extensions asset.ts / skills/asset-authoring/SKILL.md / data/{table,chair,bicycle}.asset.json / tests/test_asset_{builder,model,hython,tool_executor_asset}.py |
+| **M3 盒子占位 + 早期验证** | 拆分阶段先输出盒子几何，做连接点对齐 + 比例合理性验证。 | ⏸️ **暂缓**（经分析：历史失败无一是骨架点摆位错；M1 resolve_skeleton 已能预览坐标发现几何错；约束断言=领域规则会扼杀创造力。自行车实战证明 resolve 预览足够） | — |
 | **M4 组装提交 + skill** | 组件合并到 OUT，方向验证读骨架点朝向（不烘焙 axis）。**最后才写 skill 规则**（capability before rules）。 | ⬜ | commit_sandbox 改造 + 新 SKILL.md |
 
 ### ✅ 里程碑1 实测已完成（2026-06-26）

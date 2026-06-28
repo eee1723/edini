@@ -8,18 +8,51 @@
     "chainstay_len":  {"kind": "primary", "default": 0.405, "min": 0.38, "max": 0.45, "label": "Chainstay Length"},
     "seat_angle":     {"kind": "primary", "default": 73.5,  "min": 70.0, "max": 76.0, "label": "Seat Tube Angle"},
     "head_angle":     {"kind": "primary", "default": 73.0,  "min": 70.0, "max": 76.0, "label": "Head Tube Angle"},
-    "crank_length":   {"kind": "primary", "default": 0.1725,"min": 0.150,"max": 0.185,"label": "Crank Length"},
-
+    "tube_r":         {"kind": "primary", "default": 0.018, "min": 0.010, "max": 0.030, "label": "Frame Tube Radius"},
+    "seat_tube_len":  {"kind": "primary", "default": 0.53,  "min": 0.40, "max": 0.65, "label": "Seat Tube Length"},
+    "head_tube_len":  {"kind": "primary", "default": 0.15,  "min": 0.10, "max": 0.22, "label": "Head Tube Length"},
+    "fork_offset":    {"kind": "primary", "default": 0.045, "min": 0.030, "max": 0.060, "label": "Fork Offset/Rake"},
+    "rim_r":          {"kind": "derived", "from": "wheel_radius - 0.025"},
     "bb_height":      {"kind": "derived", "from": "wheel_radius - bb_drop"},
     "rear_x":         {"kind": "derived", "from": "0"},
-    "front_x":        {"kind": "derived", "from": "rear_x + wheelbase"}
+    "front_x":        {"kind": "derived", "from": "rear_x + wheelbase"},
+    "bb_x":           {"kind": "derived", "from": "rear_x - sqrt(chainstay_len**2 - bb_drop**2)"},
+    "head_rad":       {"kind": "derived", "from": "radians(head_angle)"},
+    "seat_rad":       {"kind": "derived", "from": "radians(seat_angle)"},
+    "bb_to_seat_top_x": {"kind": "derived", "from": "sin(seat_rad) * seat_tube_len"},
+    "bb_to_seat_top_y": {"kind": "derived", "from": "cos(seat_rad) * seat_tube_len"},
+    "reach":          {"kind": "derived", "from": "wheelbase + bb_x - front_x + fork_offset"},
+    "head_stack":     {"kind": "derived", "from": "wheel_radius + sqrt(max(0.01, reach**2) * 0.6)"},
+    "head_bot_x":     {"kind": "derived", "from": "front_x"},
+    "head_top_x":     {"kind": "derived", "from": "head_bot_x - sin(head_rad) * head_tube_len"},
+    "head_top_y":     {"kind": "derived", "from": "head_stack"},
+    "head_bot_y":     {"kind": "derived", "from": "head_stack - cos(head_rad) * head_tube_len"}
   },
   "skeleton": {
-    "base":       {"expr": ["0", "0", "0"]},
-    "rear_axle":  {"expr": ["rear_x",         "wheel_radius", "0"]},
-    "front_axle": {"expr": ["front_x",        "wheel_radius", "0"]},
-    "bb_center":  {"expr": ["rear_x - sqrt(chainstay_len**2 - bb_drop**2)", "bb_height", "0"]},
-    "ground":     {"expr": ["0",              "0",           "0"]}
+    "rear_axle":  {"expr": ["rear_x",        "wheel_radius", "0"]},
+    "front_axle": {"expr": ["front_x",       "wheel_radius", "0"]},
+    "bb_center":  {"expr": ["bb_x",          "bb_height",    "0"]},
+    "seat_top":   {"expr": ["bb_x + bb_to_seat_top_x", "bb_height + bb_to_seat_top_y", "0"]},
+    "head_top":   {"expr": ["head_top_x",    "head_top_y",   "0"]},
+    "head_bot":   {"expr": ["head_bot_x",    "head_bot_y",   "0"]}
   },
-  "components": []
+  "components": [
+    {"id": "seat_tube", "backend": "native_chain", "from": "bb_center", "to": "seat_top",
+     "nodes": [{"type": "tube", "params": {"rad": ["tube_r", "tube_r"]}}]},
+    {"id": "head_tube", "backend": "native_chain", "from": "head_bot", "to": "head_top",
+     "nodes": [{"type": "tube", "params": {"rad": ["tube_r", "tube_r"]}}]},
+    {"id": "top_tube", "backend": "native_chain", "from": "seat_top", "to": "head_top",
+     "nodes": [{"type": "tube", "params": {"rad": ["tube_r", "tube_r"]}}]},
+    {"id": "down_tube", "backend": "native_chain", "from": "bb_center", "to": "head_bot",
+     "nodes": [{"type": "tube", "params": {"rad": ["tube_r", "tube_r"]}}]},
+    {
+      "id": "wheel", "backend": "python",
+      "imports": ["math"],
+      "code": "node = hou.pwd()\ngeo = node.geometry()\ngeo.clear()\nn = 64\nrim = geo.createPolygon()\nrim.setIsClosed(True)\nfor i in range(n):\n    a = 6.2832 * i / n\n    pt = geo.createPoint()\n    pt.setPosition((rim_r * math.cos(a), 0.0, rim_r * math.sin(a)))\n    rim.addVertex(pt)",
+      "instances": [
+        {"id": "wheel_front", "position": "front_axle", "orient": [0, 90, 0]},
+        {"id": "wheel_rear",  "position": "rear_axle",  "orient": [0, 90, 0]}
+      ]
+    }
+  ]
 }

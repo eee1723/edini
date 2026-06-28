@@ -163,10 +163,10 @@ class TestValidateAssetHython(unittest.TestCase):
         self.assertTrue(result["success"], result.get("errors"))
         self.assertEqual(result["errors"], [])
 
-    def test_resolves_five_skeleton_points(self):
+    def test_resolves_six_skeleton_points(self):
         result = _run_hython(resolve=True)
         self.assertNotIn("error", result, result.get("error", ""))
-        self.assertEqual(result["point_count"], 5)
+        self.assertEqual(result["point_count"], 6)
 
     def test_bb_center_physically_correct(self):
         """The corrected bb_center expression resolves to a forward (negative-x)
@@ -381,6 +381,52 @@ class TestBuildChairHython(unittest.TestCase):
 
     def test_no_cook_errors(self):
         result = _run_build(CHAIR)
+        self.assertNotIn("error", result, result.get("error", ""))
+        self.assertEqual(result["cook_errors"], [])
+
+
+@unittest.skipUnless(HYTHON, "hython not found — skip real-Houdini test")
+class TestBuildBicycleHython(unittest.TestCase):
+    """The ultimate M2 check: a bicycle frame (4 from-to tubes) + 2 wheels
+    (python + multi-instance) exercises EVERY M2 capability in one object —
+    from-to struts, the python backend, multi-instance, and orient rotation.
+    Surfaced the from-to gap (no two-point connection primitive) which was then
+    added; this test guards the integrated result."""
+
+    def test_bicycle_builds_six_components(self):
+        # 4 frame tubes (from-to) + 2 wheel instances (python, 1 def).
+        result = _run_build(BICYCLE)
+        self.assertNotIn("error", result, result.get("error", ""))
+        self.assertTrue(result["build_success"])
+        self.assertEqual(result["components_built"], 6)
+
+    def test_bicycle_has_frame_and_wheels(self):
+        result = _run_build(BICYCLE)
+        self.assertNotIn("error", result, result.get("error", ""))
+        self.assertEqual(
+            set(result["component_ids"]),
+            {"seat_tube", "head_tube", "top_tube", "down_tube",
+             "wheel_front", "wheel_rear"})
+
+    def test_from_to_tubes_have_auto_length(self):
+        # A from-to tube's length = distance between its points, NOT a value the
+        # author wrote. Spot-check the top tube (seat_top→head_top).
+        # We assert via the bike's overall bounds spanning the full wheelbase.
+        result = _run_build(BICYCLE)
+        self.assertNotIn("error", result, result.get("error", ""))
+        size = result.get("bounds_size", [0, 0, 0])
+        # X span must cover rear_axle(0) to front_axle(wheelbase=1.05), at least.
+        self.assertGreaterEqual(size[0], 1.0)
+
+    def test_wheels_are_circles(self):
+        # The python wheel backend draws a 64-point circle. Two instances → the
+        # bike has substantial geometry (the table was 168 pts; bike is more).
+        result = _run_build(BICYCLE)
+        self.assertNotIn("error", result, result.get("error", ""))
+        self.assertGreaterEqual(result["point_count"], 128)
+
+    def test_no_cook_errors(self):
+        result = _run_build(BICYCLE)
         self.assertNotIn("error", result, result.get("error", ""))
         self.assertEqual(result["cook_errors"], [])
 

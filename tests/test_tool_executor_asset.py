@@ -128,12 +128,13 @@ class TestValidateAssetResolve(_HouMockTestCase):
         # The skeleton points are returned as lists (JSON-serializable).
         self.assertEqual(result["resolved_skeleton"]["p"], [0.0, 1.0, 0.0])
 
-    def test_resolve_on_bicycle_returns_five_points(self):
+    def test_resolve_on_bicycle_returns_six_points(self):
         result = self.validate_asset(asset_path=BICYCLE_PATH, resolve=True)
         self.assertTrue(result["success"])
         skel = result["resolved_skeleton"]
-        self.assertEqual(len(skel), 5)
-        for name in ("base", "rear_axle", "front_axle", "bb_center", "ground"):
+        self.assertEqual(len(skel), 6)
+        for name in ("rear_axle", "front_axle", "bb_center",
+                     "seat_top", "head_top", "head_bot"):
             self.assertIn(name, skel)
             self.assertEqual(len(skel[name]), 3)
 

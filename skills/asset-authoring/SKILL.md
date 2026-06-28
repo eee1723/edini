@@ -111,6 +111,27 @@ tall). For a part that must tilt — a leaning chair back, an angled strut — a
 "attach": {"position": "back_center", "orient": [10, 0, 0]}
 ```
 
+#### from-to struts (a part spanning two points)
+
+Many parts are *connections* between two points — a bike-frame tube (seat tube
+spans BB to seat top), a chair rung, a table stretcher. For these, name two
+skeleton points with `from`/`to` instead of `attach`. The builder auto-computes
+the midpoint (position), the length (|to−from|, overriding any height you
+wrote), and the rotation that aligns a Y-axis tube onto the (to−from) direction.
+**You never compute a length or an angle** — that's the whole point:
+
+```json
+{
+  "id": "top_tube", "backend": "native_chain",
+  "from": "seat_top", "to": "head_top",
+  "nodes": [{"type": "tube", "params": {"rad": ["tube_r", "tube_r"]}}]
+}
+```
+
+Use `from`/`to` for any strut whose defining feature is "it goes from here to
+there". Use `attach` for a part that *sits at* a point (a box, a wheel).
+`from`/`to` is mutually exclusive with `attach`/`instances`.
+
 ## Workflow
 
 1. **Sketch the points first.** Before writing components, decide which skeleton

@@ -500,6 +500,56 @@ class TestValidateComponents(unittest.TestCase):
         self.assertFalse(any(
             e["code"] == "COMPONENT_BAD_ORIENT" for e in result["errors"]))
 
+    # ── from-to checks (strut/tube between two points) — bike-frame need ──
+
+    def _strut_asset(self):
+        return {
+            "asset_schema_version": 1, "id": "s",
+            "params": {"r": {"kind": "primary", "default": 0.02}},
+            "skeleton": {"a": {"expr": ["0", "0", "0"]},
+                         "b": {"expr": ["1", "1", "0"]}},
+            "components": [{
+                "id": "strut", "backend": "native_chain",
+                "from": "a", "to": "b",
+                "nodes": [{"type": "tube", "params": {"rad": ["r", "r"]}}],
+            }],
+        }
+
+    def test_valid_from_to_passes(self):
+        result = validate(self._strut_asset())
+        self.assertTrue(result["success"], result["errors"])
+
+    def test_from_to_bad_point(self):
+        asset = self._strut_asset()
+        asset["components"][0]["to"] = "nonexistent"
+        result = validate(asset)
+        self.assertFalse(result["success"])
+        self.assertTrue(any(
+            e["code"] == "COMPONENT_FROM_TO_BAD_POINT" for e in result["errors"]))
+
+    def test_from_to_missing_one_point(self):
+        asset = self._strut_asset()
+        del asset["components"][0]["to"]  # only 'from'
+        result = validate(asset)
+        self.assertFalse(result["success"])
+        self.assertTrue(any(
+            e["code"] == "COMPONENT_FROM_TO_BAD_POINT" for e in result["errors"]))
+
+    def test_from_to_conflicts_with_attach(self):
+        asset = self._strut_asset()
+        asset["components"][0]["attach"] = {"position": "a"}
+        result = validate(asset)
+        self.assertFalse(result["success"])
+        self.assertTrue(any(
+            e["code"] == "COMPONENT_FROM_TO_CONFLICT" for e in result["errors"]))
+
+    def test_from_to_no_attach_required(self):
+        # A from-to component must NOT trigger COMPONENT_NO_ATTACH.
+        result = validate(self._strut_asset())
+        self.assertTrue(result["success"], result["errors"])
+        self.assertFalse(any(
+            e["code"] == "COMPONENT_NO_ATTACH" for e in result["errors"]))
+
     # ── param-ref checks (the hole the old design never closed) ──
 
     def test_node_param_expr_dangling_ref(self):
@@ -705,17 +755,20 @@ class TestBicycleAsset(unittest.TestCase):
 
     def test_has_expected_param_count(self):
         result = validate(self.asset)
-        # 7 primary + 3 derived = 10 params.
-        self.assertEqual(result["summary"]["param_count"], 10)
+        # 10 primary + 15 derived = 25 params (milestone-2 bike with full frame
+        # geometry derived params for head/seat tube positions).
+        self.assertEqual(result["summary"]["param_count"], 25)
 
-    def test_has_five_skeleton_points(self):
+    def test_has_six_skeleton_points(self):
         result = validate(self.asset)
-        self.assertEqual(result["summary"]["skeleton_point_count"], 5)
+        # rear/front axle, bb_center, seat_top, head_top, head_bot.
+        self.assertEqual(result["summary"]["skeleton_point_count"], 6)
 
-    def test_resolves_five_points(self):
+    def test_resolves_six_points(self):
         resolved = asset_model.resolve_skeleton(self.asset)
-        self.assertEqual(len(resolved), 5)
-        for name in ("base", "rear_axle", "front_axle", "bb_center", "ground"):
+        self.assertEqual(len(resolved), 6)
+        for name in ("rear_axle", "front_axle", "bb_center",
+                     "seat_top", "head_top", "head_bot"):
             self.assertIn(name, resolved)
             self.assertEqual(len(resolved[name]), 3)
 

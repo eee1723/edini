@@ -484,6 +484,101 @@ class TestMultiInstance(_BuilderTestCase):
         self.assertIsNotNone(rear_xform.inputs()[0])
 
 
+# ===================================================================
+# from-to: a component connecting two skeleton points (a strut/tube)
+# ===================================================================
+
+class TestFromToComponent(_BuilderTestCase):
+    """The from-to primitive: a component spanning from skeleton point A to
+    point B (a bike-frame tube, a chair rung, a table stretcher). The builder
+    auto-computes the midpoint (position), the length (|B-A|), and the rotation
+    that aligns the geometry's default axis (Y) onto the (B-A) direction — via
+    axis-angle, NOT Euler, so the agent never computes angles. This was the
+    gap the bicycle real-world test surfaced."""
+
+    def _diagonal_strut_asset(self):
+        # A single tube from origin up to (1,1,0) — a diagonal in the XY plane.
+        return {
+            "asset_schema_version": 1, "id": "strut_test",
+            "params": {"tr": {"kind": "primary", "default": 0.02}},
+            "skeleton": {
+                "lo": {"expr": ["0", "0", "0"]},
+                "hi": {"expr": ["1", "1", "0"]},
+            },
+            "components": [
+                {
+                    "id": "diagonal", "backend": "native_chain",
+                    "from": "lo", "to": "hi",
+                    "nodes": [{"type": "tube", "params": {
+                        "rad": ["tr", "tr"]}}],  # height auto from |hi-lo|
+                }
+            ],
+        }
+
+    def test_from_to_builds_component(self):
+        root = self._make_sandbox()
+        result = self.build_asset(self._diagonal_strut_asset(), root.path())
+        self.assertTrue(result["success"], result)
+        # The component materialized (tube + xform + tag), merged into OUT.
+        self.assertEqual(result["components_built"], 1)
+
+    def test_from_to_length_auto_computed(self):
+        # The tube height is auto-set to |hi - lo| = sqrt(2) ≈ 1.414, NOT a
+        # value the agent wrote. This is the whole point: the agent never
+        # measures the diagonal.
+        root = self._make_sandbox()
+        result = self.build_asset(self._diagonal_strut_asset(), root.path())
+        self.assertTrue(result["success"])
+        tube = self._child(root, "diagonal_n0")
+        h = tube.parm("height")
+        if h is not None:
+            self.assertAlmostEqual(h.eval(), 2 ** 0.5, places=3)
+
+    def test_from_to_positioned_at_midpoint(self):
+        # The xform t = midpoint of lo,hi = (0.5, 0.5, 0).
+        root = self._make_sandbox()
+        result = self.build_asset(self._diagonal_strut_asset(), root.path())
+        self.assertTrue(result["success"])
+        placements = result.get("placements", {})
+        self.assertIn("diagonal", placements)
+        mid = placements["diagonal"]
+        self.assertAlmostEqual(mid[0], 0.5, places=3)
+        self.assertAlmostEqual(mid[1], 0.5, places=3)
+
+    def test_from_to_rotation_to_align_direction(self):
+        # The tube (default +Y) must rotate to point along (1,1,0), i.e. 45°
+        # about Z. The xform carries a non-zero rz.
+        root = self._make_sandbox()
+        result = self.build_asset(self._diagonal_strut_asset(), root.path())
+        self.assertTrue(result["success"])
+        xform = self._child(root, "diagonal_xform")
+        r = xform.parmTuple("r")
+        if r is not None:
+            rz = r.eval()[2]
+            # |rz| should be 45° (the rotation from +Y toward +X is about Z).
+            self.assertAlmostEqual(abs(rz), 45.0, delta=1.0)
+
+    def test_from_to_bad_point_rejected(self):
+        asset = self._diagonal_strut_asset()
+        asset["components"][0]["to"] = "nonexistent"
+        root = self._make_sandbox()
+        result = self.build_asset(asset, root.path())
+        self.assertFalse(result["success"])
+
+    def test_from_to_overrides_height_param(self):
+        # If the agent ALSO writes an explicit height, the auto-length wins
+        # (from-to's whole contract is "the tube spans A→B, length is implied").
+        asset = self._diagonal_strut_asset()
+        asset["components"][0]["nodes"][0]["params"]["height"] = 99.0
+        root = self._make_sandbox()
+        result = self.build_asset(asset, root.path())
+        self.assertTrue(result["success"], result)
+        tube = self._child(root, "diagonal_n0")
+        h = tube.parm("height")
+        if h is not None:
+            self.assertAlmostEqual(h.eval(), 2 ** 0.5, places=3)
+
+
 class TestParamInjection(_BuilderTestCase):
     """The python-backend value injector: rewrites a bare parameter NAME in
     agent-authored code into its resolved numeric literal, via a SAFE AST walk

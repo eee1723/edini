@@ -373,19 +373,53 @@ def _validate_components(asset: dict) -> list[dict]:
                         f"component {cid!r} code syntax error: {exc.msg} "
                         f"(line {exc.lineno})", loc))
 
-        # ── placement: attach (single instance) OR instances[] (multi) ──
-        # A component hangs off skeleton point(s) BY NAME. Two forms:
+        # ── placement: attach (single) / instances[] (multi) / from-to (strut) ──
+        # A component hangs off skeleton point(s) BY NAME. Three forms:
+        #   - from/to: a strut/tube spanning two points (bike frame tube, chair
+        #     rung). The builder auto-computes midpoint, length, orientation.
         #   - attach.position: one instance at one point (the simple case).
         #   - instances[]: N instances, each at its own point with its own id.
-        #     The geometry is defined ONCE; each instance is a transform copy.
-        # Both forms name skeleton points (never private coordinates) — this is
-        # the milestone-2 contract that replaced the old anchor mechanism.
+        # All forms name skeleton points (never private coordinates) — the
+        # milestone-2 contract that replaced the old anchor mechanism.
         attach = comp.get("attach")
         instances = comp.get("instances")
+        from_name = comp.get("from")
+        to_name = comp.get("to")
         has_attach = isinstance(attach, dict)
         has_instances = isinstance(instances, list)
+        has_from_to = from_name is not None or to_name is not None
 
-        if has_attach and has_instances:
+        if has_from_to:
+            # from-to strut: validate both points are declared skeleton points.
+            if from_name is None or not isinstance(from_name, str):
+                errors.append(_err(
+                    "COMPONENT_FROM_TO_BAD_POINT",
+                    f"component {cid!r} (from-to) needs a string 'from' "
+                    f"skeleton-point name", loc))
+            elif from_name not in point_names:
+                errors.append(_err(
+                    "COMPONENT_FROM_TO_BAD_POINT",
+                    f"component {cid!r} 'from' {from_name!r} is not a declared "
+                    f"skeleton point (known: {sorted(point_names)})",
+                    {**((loc or {})), "point": from_name}))
+            if to_name is None or not isinstance(to_name, str):
+                errors.append(_err(
+                    "COMPONENT_FROM_TO_BAD_POINT",
+                    f"component {cid!r} (from-to) needs a string 'to' "
+                    f"skeleton-point name", loc))
+            elif to_name not in point_names:
+                errors.append(_err(
+                    "COMPONENT_FROM_TO_BAD_POINT",
+                    f"component {cid!r} 'to' {to_name!r} is not a declared "
+                    f"skeleton point (known: {sorted(point_names)})",
+                    {**((loc or {})), "point": to_name}))
+            # from-to is mutually exclusive with attach/instances.
+            if has_attach or has_instances:
+                errors.append(_err(
+                    "COMPONENT_FROM_TO_CONFLICT",
+                    f"component {cid!r} has from/to AND attach/instances — use "
+                    f"one placement form", loc))
+        elif has_attach and has_instances:
             errors.append(_err(
                 "COMPONENT_INSTANCES_AND_ATTACH_CONFLICT",
                 f"component {cid!r} has both 'attach' and 'instances' — use one "
