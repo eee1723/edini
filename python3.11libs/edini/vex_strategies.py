@@ -200,12 +200,21 @@ for (int i = 0; i < nx; i++) {
 # Per-instance orient (different facing per grid cell) is a later milestone;
 # M2 applies one orient per mount, shared by all its points.
 
-def _orient_fragment(orient_spec: dict) -> str:
+def _orient_fragment(orient_spec: dict, align_axis: str = "+Y") -> str:
     """Build the @orient-setting VEX fragment for a mount's orient spec.
 
     Reads two resolved corners (da/db with their own cX selectors), computes
-    the unit direction, and writes ``p@orient = dihedral({0,1,0}, dir)`` onto
-    every point currently in the geometry. Returns "" if no orient spec.
+    the unit direction, and writes the orient quaternion onto EVERY point via
+    ``setpointattrib`` — NOT a bare ``p@orient =`` — because this fragment runs
+    inside a **detail** wrangle (it must, to ``addpoint`` the mount points), and
+    a bare ``p@orient =`` in a detail wrangle becomes a *detail* attribute,
+    which ``copytopoints::2.0`` silently ignores. Writing through
+    ``setpointattrib`` forces it onto each POINT, where CTP reads it.
+
+    ``align_axis`` (default "+Y") selects which axis of the leaf shape is mapped
+    onto the measured direction: ``p@orient = dihedral(<align_axis>, dir)``.
+    A torus wheel's symmetry axis is +Z, so it passes ``"+Z"``; a +Y-grown
+    shape keeps the default. Returns "" if no orient spec.
     """
     if not isinstance(orient_spec, dict):
         return ""
@@ -213,21 +222,43 @@ def _orient_fragment(orient_spec: dict) -> str:
     from_b = orient_spec.get("from_b")
     if not (isinstance(from_a, dict) and isinstance(from_b, dict)):
         return ""
-    # Resolve both orient points' corners to selectors.
     sa = _corner_selectors(from_a.get("axes", "-X-Y-Z"))
     sb = _corner_selectors(from_b.get("axes", "+X-Y-Z"))
+    ax, ay, az = align_axis_to_vec(align_axis)
+    axis_label = align_axis  # e.g. "+Y"
     return r"""
-// --- orient: map leaf's +Y onto the direction between two measured corners ---
+// --- orient: map leaf's {axis_label} onto the direction between two measured corners ---
+// Written via setpointattrib so the attribute is POINT-class (CTP-readable),
+// not detail-class (a bare orient export here would be silently ignored).
 vector __mn = getbbox_min(0);
 vector __mx = getbbox_max(0);
 vector __da = set(lerp(__mn.x, __mx.x, {dax}), lerp(__mn.y, __mx.y, {day}), lerp(__mn.z, __mx.z, {daz}));
 vector __db = set(lerp(__mn.x, __mx.x, {dbx}), lerp(__mn.y, __mx.y, {dby}), lerp(__mn.z, __mx.z, {dbz}));
 vector __dir = normalize(__db - __da);
-p@orient = dihedral({{0,1,0}}, __dir);
+vector4 __q = dihedral({{{ax},{ay},{az}}}, __dir);
+for (int __i = 0; __i < npoints(geoself()); __i++) {{
+    setpointattrib(geoself(), "orient", __i, __q, "set");
+}}
 """.format(
         dax=sa["cx"], day=sa["cy"], daz=sa["cz"],
         dbx=sb["cx"], dby=sb["cy"], dbz=sb["cz"],
+        ax=ax, ay=ay, az=az,
+        axis_label=axis_label,
     ).strip()
+
+
+def align_axis_to_vec(align_axis: str) -> tuple[float, float, float]:
+    """Resolve an align-axis sign-string to a unit vector.
+
+    "+Y" → (0,1,0), "-Z" → (0,0,-1), etc. The leaf's this axis is rotated onto
+    the measured direction by ``dihedral``. Default "+Y" preserves the original
+    semantics (a +Y-grown shape faces the measured direction). Components are
+    ints (0/±1) so the injected VEX reads as the idiomatic ``{0,1,0}`` literal.
+    """
+    sign, axis = _parse_face(align_axis)
+    base = {"X": (1, 0, 0), "Y": (0, 1, 0), "Z": (0, 0, 1)}[axis]
+    s = int(sign)
+    return (s * base[0], s * base[1], s * base[2])
 
 
 # ── Public: turn a mount position spec into (snippet, spare_parms) ──

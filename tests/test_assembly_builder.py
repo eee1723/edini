@@ -300,6 +300,35 @@ class TestVexStrategyResolution(unittest.TestCase):
         self.assertIn("dihedral", frag)        # the +Y→dir quaternion
         self.assertIn("{0,1,0}", frag)         # the leaf's built axis
 
+    def test_orient_fragment_writes_point_class_orient(self):
+        """The orient must be written as a POINT attribute via setpointattrib,
+        NOT a bare p@orient= in the detail wrangle body. copytopoints::2.0
+        only reads point-class orient; a detail-class orient (what a bare
+        p@orient= in a detail wrangle produces) is silently ignored."""
+        from edini.vex_strategies import _orient_fragment
+        frag = _orient_fragment({
+            "from": "root",
+            "from_a": {"measure": "bbox_corner", "axes": "-X-Y+Z"},
+            "from_b": {"measure": "bbox_corner", "axes": "+X-Y+Z"}})
+        # The point-class contract: orient is written via setpointattrib.
+        self.assertIn('setpointattrib(geoself(), "orient"', frag)
+        # The bug we're fixing: a bare p@orient = assignment in the body.
+        self.assertNotIn("p@orient = ", frag)
+
+    def test_orient_fragment_pscale_like_attrs_use_setpointattrib(self):
+        """The same point-class rule applies to any per-instance attribute the
+        orient fragment sets. Today only orient, but the contract is: NO bare
+        p@/f@ assignments in the detail-wrangle orient fragment."""
+        from edini.vex_strategies import _orient_fragment
+        frag = _orient_fragment({
+            "from": "root",
+            "from_a": {"measure": "bbox_corner", "axes": "-X-Y+Z"},
+            "from_b": {"measure": "bbox_corner", "axes": "+X-Y+Z"}})
+        import re
+        bare_exports = re.findall(r'\b[fp]@\w+\s*=', frag)
+        self.assertEqual(bare_exports, [],
+                         f"orient fragment has bare attribute exports: {bare_exports}")
+
     def test_validation_catches_cyclic_param_via_dangling(self):
         """A leaf scale referencing an undeclared param is rejected."""
         a = _car_assembly()
