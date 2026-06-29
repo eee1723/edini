@@ -1324,6 +1324,20 @@ def _make_tube_ptg():
     return g
 
 
+def _make_torus_ptg():
+    """Torus SOP parm template group (H21). The torus has INDEPENDENT scalar
+    radii radx/rady (NOT a rad parmTuple — unlike tube's rad1/rad2), plus
+    rows/cols. This mirrors the real H21.0.440 torus so a leaf shape with
+    e.g. params.radx can be built under the mock (grouping tests differentiate
+    leaves by shape params). See assembly_builder._VALID_SHAPES doc note."""
+    g = MockParmTemplateGroup()
+    g.append(MockFloatParmTemplate("radx", "Radius X", 1, default_value=(1.0,)))
+    g.append(MockFloatParmTemplate("rady", "Radius Y", 1, default_value=(0.3,)))
+    g.append(MockIntParmTemplate("rows", "Rows", 1, default_value=(10,)))
+    g.append(MockIntParmTemplate("cols", "Cols", 1, default_value=(20,)))
+    return g
+
+
 def _make_copytopoints_ptg():
     """Copy to Points 2.0 parm template group (H21.0.440 structure).
 
@@ -1503,7 +1517,8 @@ class MockHou:
             "xform": MockNodeType(
                 "xform", "Transform", "Sop", 1, 1,
                 parm_template_group=_make_transform_ptg()),
-            "torus": MockNodeType("torus", "Torus", "Sop", 1, 0),
+            "torus": MockNodeType("torus", "Torus", "Sop", 1, 0,
+                                parm_template_group=_make_torus_ptg()),
         })
         obj_cat = MockCategory("Object", {
             "geo": MockNodeType("geo", "Geometry", "Object", 1, 0),

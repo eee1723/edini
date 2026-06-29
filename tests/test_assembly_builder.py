@@ -219,7 +219,7 @@ class TestBuildAssemblyStructure(unittest.TestCase):
 
     def test_build_creates_live_network_structure(self):
         """M2 live structure: root + one attribwrangle per mount + a pscale
-        wrangle per scaled leaf + one copytopoints per leaf + merge + OUT.
+        wrangle per scaled leaf-mount + one copytopoints per leaf GROUP + OUT.
         The mock verifies node EXISTENCE + wiring; VEX correctness is hython."""
         root_path, res = self._build(_car_assembly())
         self.assertTrue(res["success"], res.get("error"))
@@ -231,11 +231,16 @@ class TestBuildAssemblyStructure(unittest.TestCase):
         # 4 mount wrangles (one per wheel corner).
         for c in ("fr", "fl", "br", "bl"):
             self.assertIn(f"mount_wheel_{c}", names)
-        # mounts_cloud merge + 4 CTP leaves + the final merge + OUT.
-        self.assertIn("mounts_cloud", names)
-        for c in ("fr", "fl", "br", "bl"):
-            self.assertIn(f"wheel_{c}_ctp", names)
-        self.assertIn("merge_all", names)
+        # Grouped CTP: 4 identical wheels share ONE wheel_fr_ctp (the group's
+        # representative leaf id) stamping the merged cloud of their mounts
+        # (wheel_fr_cloud). The mounts themselves are NOT merged; only their
+        # CLOUD is.
+        self.assertIn("wheel_fr_cloud", names)
+        self.assertIn("wheel_fr_ctp", names)
+        self.assertNotIn("wheel_fl_ctp", names)
+        # With all 4 wheels collapsed into ONE group, there is only a single
+        # CTP output — so no final merge_all is needed (CTP → OUT directly).
+        self.assertNotIn("merge_all", names)
         self.assertIn("OUT", names)
 
     def test_mount_wrangle_carries_bbox_corner_vex(self):
@@ -493,6 +498,70 @@ class TestOriginNormalization(unittest.TestCase):
         # Face center is computed from bbox min on the chosen axis.
         self.assertIn("getbbox_min", snip)
         self.assertIn("getbbox_max", snip)
+
+
+class TestGroupedCTP(unittest.TestCase):
+    """N structurally-identical leaves (same shape+scale+origin) must share
+    ONE shape node + ONE CTP, stamping onto the merged cloud of their mounts —
+    not N independent shape+CTP chains."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls._saved_ref = MockNode._hou_ref
+        cls._saved_mod = sys.modules.get("hou")
+        cls._hou = create_mock_hou()
+        sys.modules["hou"] = cls._hou
+        MockNode._hou_ref = cls._hou
+        for _m in list(sys.modules):
+            if _m.startswith("edini"):
+                del sys.modules[_m]
+        from edini import assembly_builder  # noqa: E402
+        cls.build_assembly = staticmethod(assembly_builder.build_assembly)
+
+    @classmethod
+    def tearDownClass(cls):
+        MockNode._hou_ref = cls._saved_ref
+        sys.modules["hou"] = cls._saved_mod
+        for _m in list(sys.modules):
+            if _m.startswith("edini"):
+                del sys.modules[_m]
+        super().tearDownClass()
+
+    def _build(self, assembly):
+        import sys
+        hou = sys.modules["hou"]
+        root = hou.node("/obj").createNode("geo", "test_group")
+        from edini.assembly_builder import build_assembly
+        res = build_assembly(assembly, root.path())
+        return root.path(), res
+
+    def test_four_identical_wheels_produce_one_ctp(self):
+        """The car's 4 torus wheels are structurally identical → 1 CTP node
+        (not 4). The single CTP stamps onto the merged cloud of all 4 mounts."""
+        root_path, res = self._build(_car_assembly())
+        self.assertTrue(res["success"], res.get("error"))
+        hou = sys.modules["hou"]
+        names = {c.name() for c in hou.node(root_path).children()}
+        ctp_nodes = [n for n in names if n.endswith("_ctp")]
+        self.assertEqual(len(ctp_nodes), 1,
+                         f"expected 1 grouped CTP, got {ctp_nodes}")
+        # The 4 mounts still exist (grouping merges their CLOUD, not the mounts).
+        for c in ("fr", "fl", "br", "bl"):
+            self.assertIn(f"mount_wheel_{c}", names)
+
+    def test_different_shapes_stay_separate(self):
+        """Two leaves with different shape params do NOT group — each keeps its
+        own CTP (grouping must be exact)."""
+        asm = _car_assembly()
+        asm["leaves"][0]["shape"]["params"]["radx"] = 2.0  # different radius
+        root_path, res = self._build(asm)
+        self.assertTrue(res["success"], res.get("error"))
+        hou = sys.modules["hou"]
+        names = {c.name() for c in hou.node(root_path).children()}
+        ctp_nodes = [n for n in names if n.endswith("_ctp")]
+        self.assertGreaterEqual(len(ctp_nodes), 2,
+                                f"different shapes must not group: {ctp_nodes}")
 
 
 class TestKeyboardGrid(unittest.TestCase):

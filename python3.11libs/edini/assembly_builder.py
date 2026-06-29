@@ -330,6 +330,66 @@ def _resolve_align_axis(value: Any) -> str:
     return value
 
 
+def _hashable(v: Any) -> Any:
+    """Deep-freeze a value for use as a dict key: lists → tuples (recursively),
+    dicts → sorted tuple of (k, frozen-v) pairs, scalars/strings pass through.
+    Two values with the same structure produce equal frozen keys regardless of
+    key insertion order (dicts are sorted) or list-vs-tuple form."""
+    if isinstance(v, dict):
+        return tuple(sorted(((str(k), _hashable(val))
+                             for k, val in v.items()), key=lambda kv: kv[0]))
+    if isinstance(v, (list, tuple)):
+        return tuple(_hashable(el) for el in v)
+    return v
+
+
+def _leaf_group_key(lf: dict, mount: dict) -> tuple:
+    """A stable key identifying leaves that produce byte-identical stamped
+    output (modulo mount position) and so can share one shape + one CTP.
+
+    Two leaves group iff: same shape type+params, same scale, same origin spec.
+    Mount position/orient do NOT enter the key (they vary per mount — that's
+    the whole point of grouping). Resolved align_axis is NOT part of the key
+    because orient lives on the MOUNT, not the leaf — all leaves sharing a
+    mount already share its orient.
+
+    Param/origin values may be lists (e.g. box ``size`` or origin ``offset``);
+    they are deep-frozen via :func:`_hashable` so the key is hashable and
+    order-insensitive for dict-valued components."""
+    shape = lf.get("shape", {})
+    shape_key = (shape.get("type"),
+                 _hashable(shape.get("params") or {}))
+    scale = lf.get("scale")
+    origin = lf.get("origin")
+    origin_key = _hashable(origin) if isinstance(origin, dict) else None
+    return (shape_key, _hashable(scale), origin_key)
+
+
+def _group_leaves(leaves: list[dict], mounts_by_id: dict[str, dict]) -> list[dict]:
+    """Group leaves by _leaf_group_key, preserving declaration order.
+
+    Returns a list of groups, each:
+      {key, leaves: [lf, ...], mount_ids: [mid, ...]}
+    Leaves in a group share one shape+CTP and stamp onto the merged cloud of
+    all the group's mounts. A singleton group is the current (pre-grouping)
+    behavior.
+    """
+    groups: list[dict] = []
+    by_key: dict[tuple, int] = {}
+    for lf in leaves:
+        mid = lf["mount"]
+        mount = mounts_by_id.get(mid, {})
+        k = _leaf_group_key(lf, mount)
+        if k in by_key:
+            g = groups[by_key[k]]
+            g["leaves"].append(lf)
+            g["mount_ids"].append(mid)
+        else:
+            by_key[k] = len(groups)
+            groups.append({"key": k, "leaves": [lf], "mount_ids": [mid]})
+    return groups
+
+
 def _eval_shape_params(shape_params: dict | None, params: dict[str, float]) -> dict:
     """Resolve a shape's param values: numbers pass through, strings are
     evaluated against the param library.
@@ -706,15 +766,17 @@ def build_assembly(
       4. for each Mount: an attribwrangle downstream of the root, running the
          matching VEX strategy (vex_strategies.build_mount_vex), with its
          selector parms installed. Each emits the mount's point(s).
-      5. merge all mount wrangles into one point cloud.
-      6. for each Leaf: build its shape node, then a copytopoints that stamps
-         the shape onto the cloud's points. (A leaf whose scale != 1 stamps a
-         uniform @pscale onto its mount's points first.)
+      5. group leaves by structural identity (shape+scale+origin); merge each
+         group's mounts into a sub-cloud.
+      6. for each Leaf GROUP: build the shared shape node (once), then one
+         copytopoints that stamps the shape onto the group's sub-cloud. (A leaf
+         whose scale != 1 stamps a uniform @pscale onto its mount's points
+         first.) N identical leaves collapse to ONE shape + ONE CTP.
       7. merge all copytopoints → display-flagged OUT.
 
     ``root_geometry_provider`` is retained as a test seam for the mock (the
     mock can't execute VEX or synthesize geometry, so mock tests assert the
-    NETWORK STRUCTURE — root + N wrangles + merge + N CTPs + OUT — while the
+    NETWORK STRUCTURE — root + N wrangles + per-group CTPs + OUT — while the
     VEX correctness is verified by hython against the Python oracle).
     """
     result = validate_assembly(assembly)
@@ -777,70 +839,78 @@ def build_assembly(
                 raise AssemblyError(f"mount {mid!r} set snippet failed: {e}") from None
             mount_nodes[mid] = wr
 
-        # 5. Merge all mount wrangles into one point cloud. (Single-mount
-        # assemblies skip the merge and feed the wrangle straight in.)
-        mount_outputs = list(mount_nodes.values())
-        if len(mount_outputs) > 1:
-            cloud = _create_node(root_path, "merge", "mounts_cloud")
-            for idx, n in enumerate(mount_outputs):
-                cloud.setInput(idx, n)
-        else:
-            cloud = mount_outputs[0] if mount_outputs else root_sop
-
-        # 6. One copytopoints per leaf: stamp the leaf shape onto the cloud's
-        # points. A leaf's scale (if any) is applied by a wrangle that sets
-        # @pscale on the cloud before the CTP — kept simple here: the scale
-        # becomes a uniform pscale via a small wrangle per leaf's mount.
+        # 5+6. Group structurally-identical leaves so they share ONE shape +
+        # ONE CTP (4 identical wheels → 1 shape + 1 CTP stamping the merged
+        # cloud of all their mounts). The grouping key is exact: shape+scale+
+        # origin must match. Singleton groups behave exactly as the old per-
+        # leaf build. The old global mounts_cloud is superseded by per-group
+        # sub-clouds below.
         leaf_outputs: list = []
         leaves = assembly.get("leaves") or []
         if not leaves:
             # No leaves: the OUT is just the root (still a valid, if minimal, model).
             leaf_outputs = [root_sop]
-        for lf in leaves:
-            lid = lf["id"]
-            mount_id = lf["mount"]
-            mount_wr = mount_nodes.get(mount_id)
-            if mount_wr is None:
-                raise AssemblyError(f"leaf {lid!r} mount {mount_id!r} not declared")
-            shape_in = _build_shape(root_path, lf["shape"], params, f"{lid}_geoshape")
-            shape_node = shape_in
-            # Origin normalization (optional): move the leaf's chosen anchor to
-            # the origin (+ offset) so it lands clear of the root. Inserted
-            # between shape and the scale/CTP chain.
-            origin_spec = lf.get("origin")
-            if isinstance(origin_spec, dict):
-                norm = _build_origin_normalize(
-                    root_path, origin_spec, params, f"{lid}_normalize")
-                norm.setInput(0, shape_in)
-                shape_node = norm   # CTP input 0 now points at the normalize output
-            # Scale: if the leaf declares a scale (a number or param expr), apply
-            # it by stamping @pscale onto the mount's points via a wrangle, so the
-            # scaled copies are still live (the scale re-cooks with the param).
-            scale = lf.get("scale")
-            cloud_for_leaf = cloud
-            if scale is not None:
-                scale_val = evaluate(scale, params) if isinstance(scale, str) else float(scale)
-                sw = _create_node(root_path, "attribwrangle", f"{lid}_pscale")
-                sw.setInput(0, mount_wr)
+        else:
+            mounts_by_id = {mt["id"]: mt for mt in (assembly.get("mounts") or [])}
+            groups = _group_leaves(leaves, mounts_by_id)
+            for group in groups:
+                lf0 = group["leaves"][0]      # representative for shape/scale/origin
+                lid0 = lf0["id"]
+                group_mounts = group["mount_ids"]
+
+                shape_in = _build_shape(root_path, lf0["shape"], params, f"{lid0}_geoshape")
+                shape_node = shape_in
+                # Origin normalization (optional, applied to the group's shared shape).
+                origin_spec = lf0.get("origin")
+                if isinstance(origin_spec, dict):
+                    norm = _build_origin_normalize(
+                        root_path, origin_spec, params, f"{lid0}_normalize")
+                    norm.setInput(0, shape_in)
+                    shape_node = norm
+
+                # Scale: stamp @pscale onto the group's mount points via a wrangle.
+                scale = lf0.get("scale")
+                scale_nodes: list = []
+                for mid in group_mounts:
+                    mount_wr = mount_nodes.get(mid)
+                    if mount_wr is None:
+                        raise AssemblyError(
+                            f"leaf group {lid0!r} mount {mid!r} not declared")
+                    if scale is not None:
+                        scale_val = (evaluate(scale, params)
+                                     if isinstance(scale, str) else float(scale))
+                        sw = _create_node(root_path, "attribwrangle",
+                                          f"{lid0}_{mid}_pscale")
+                        sw.setInput(0, mount_wr)
+                        try:
+                            sw.parm("class").set("point")
+                        except Exception:
+                            pass
+                        try:
+                            sw.parm("snippet").set(f"f@pscale = {float(scale_val)};")
+                        except Exception:
+                            pass
+                        scale_nodes.append(sw)
+                    else:
+                        scale_nodes.append(mount_wr)
+
+                # Merge the group's mount outputs into one sub-cloud.
+                if len(scale_nodes) > 1:
+                    sub_cloud = _create_node(root_path, "merge", f"{lid0}_cloud")
+                    for idx, n in enumerate(scale_nodes):
+                        sub_cloud.setInput(idx, n)
+                else:
+                    sub_cloud = scale_nodes[0]
+
+                ctp = _create_node(root_path, "copytopoints", f"{lid0}_ctp")
+                ctp.setInput(0, shape_node)
+                ctp.setInput(1, sub_cloud)
                 try:
-                    sw.parm("class").set("point")
+                    from edini.node_utils import _init_copytopoints_attribs
+                    _init_copytopoints_attribs(ctp)
                 except Exception:
                     pass
-                try:
-                    sw.parm("snippet").set(f"f@pscale = {float(scale_val)};")
-                except Exception:
-                    pass
-                cloud_for_leaf = sw
-            ctp = _create_node(root_path, "copytopoints", f"{lid}_ctp")
-            ctp.setInput(0, shape_node)         # input 0 = the shape to stamp
-            ctp.setInput(1, cloud_for_leaf)     # input 1 = the target points
-            # Press resettargetattribs so @orient/@pscale transfer to copies.
-            try:
-                from edini.node_utils import _init_copytopoints_attribs
-                _init_copytopoints_attribs(ctp)
-            except Exception:
-                pass
-            leaf_outputs.append(ctp)
+                leaf_outputs.append(ctp)
 
         # 7. Merge all copytopoints → OUT.
         if len(leaf_outputs) > 1:
