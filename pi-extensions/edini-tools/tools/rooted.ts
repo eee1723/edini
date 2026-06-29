@@ -54,7 +54,8 @@ export const buildAssembly = {
     "Pass an inline 'assembly' dict. Returns OUT path + sandbox_root + mount/leaf ids. Assembly shape: " +
     "{id, params:{name: number|{default}}, root:{shape:{type:'box'|'tube'|'torus'|'sphere', params:{parm: value|expr}}}, " +
     "mounts:[{id, position:{measure:'bbox_corner'|'bbox_face_center'|'bbox_center'|'point_on_edge'|'grid_on_face'|'array', from:'root', ...kind_fields}, orient?:{from:'root', from_a:{...}, from_b:{...}}}], " +
-    "leaves:[{id, mount:<mount_id>, shape:{type, params}, scale?:\"param_expr\"}]}.",
+    "leaves:[{id, mount:<mount_id>, shape:{type, params}, scale?:\"param_expr\"}]}. " +
+    "Orientation takes align_axis ('+Y' default, the leaf axis mapped onto the measured direction — a torus wheel's symmetry axis is +Y so it stands on its axle). A leaf may declare origin:{anchor:'bbox_center'|'bbox_face:±XYZ'|[x,y,z], offset:[x,y,z]} to normalize its pose before copy (clear the root). Identical leaves auto-group onto one shape + one CTP.",
   promptSnippet: "Build a rooted model: leaves placed by MEASURING the root's geometry (no hardcoded coords)",
   promptGuidelines: [
     "CORE PRINCIPLE: never write a coordinate. A leaf's position is a MEASUREMENT of the already-cooked root " +

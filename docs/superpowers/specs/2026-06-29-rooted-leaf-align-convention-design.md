@@ -77,7 +77,10 @@ All new fields have defaults, so existing assemblies build unchanged.
 
 Semantics: `p@orient = dihedral(<align_axis_vec>, normalize(B - A))`.
 Legal values: `±X`, `±Y`, `±Z` (six).
-- torus wheel → `"+Z"` (torus default symmetry axis is +Z).
+- torus wheel → `"+Y"` (a Houdini torus disc lies in the **XZ** plane with its
+  symmetry axis along **Y** — verified under hython 21.0.440; the original
+  spec draft assumed +Z and was WRONG, corrected after hython facing tests
+  showed the disc staying flat).
 - box keycap, anything grown along +Y → default `"+Y"`.
 
 ### 3.2 `leaf.align_axis` override + `leaf.origin` (problems 2 & 3)
