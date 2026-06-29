@@ -1,6 +1,6 @@
-"""Build the three verified assemblies (car / keyboard / stairs) in real
-Houdini, save a .hip you can open, and print a geometry report to verify the
-results match your expectations.
+"""Build the four verified assemblies (car / bicycle / keyboard / stairs) in
+real Houdini, save a .hip you can open, and print a geometry report to verify
+the results match your expectations.
 
 Run with hython:
     D:/houdini/bin/hython.exe scripts/show_assemblies.py
@@ -24,7 +24,7 @@ from edini.assembly_builder import build_assembly
 # Each example builds under its own /obj container so all three coexist in one
 # .hip. The containers are offset in X so they don't overlap when you open it.
 EXAMPLES = [
-    ("car_showcase", -6.0, {
+    ("car_showcase", -9.0, {
         "id": "car",
         "params": {"length": 4.0, "width": 2.0, "thickness": 0.5,
                    "wheel_radius": 0.4, "wheel_tube_r": 0.08},
@@ -33,7 +33,7 @@ EXAMPLES = [
         "mounts": [
             {"id": "wheel_" + c, "position": {"measure": "bbox_corner",
                 "from": "root", "axes": axes},
-             "orient": {"from": "root",
+             "orient": {"from": "root", "align_axis": "+Y",
                 "from_a": {"measure": "bbox_corner", "axes": "-X-Y+Z"},
                 "from_b": {"measure": "bbox_corner", "axes": "+X-Y+Z"}}}
             for c, axes in [("fr", "+X-Y+Z"), ("fl", "+X-Y-Z"),
@@ -46,7 +46,34 @@ EXAMPLES = [
             for c in ("fr", "fl", "br", "bl")
         ],
     }),
-    ("keyboard_showcase", 0.0, {
+    ("bicycle_showcase", -3.0, {
+        # Exercises ALL FOUR leaf-align fixes: align_axis +Y (torus disc stands
+        # on its axle), origin normalization (wheel pushed clear of platform),
+        # grouped CTP (4 identical wheels → 1 shape + 1 CTP), orient point-class.
+        "id": "bicycle",
+        "params": {"length": 4.0, "width": 2.0, "thickness": 0.5,
+                   "wheel_radius": 0.4, "wheel_tube_r": 0.08,
+                   "wheel_clearance": 0.1},
+        "root": {"shape": {"type": "box", "params": {
+            "size": ["length", "thickness", "width"]}}},
+        "mounts": [
+            {"id": "wheel_" + c, "position": {"measure": "bbox_corner",
+                "from": "root", "axes": axes},
+             "orient": {"from": "root", "align_axis": "+Y",
+                "from_a": {"measure": "bbox_corner", "axes": "-X-Y+Z"},
+                "from_b": {"measure": "bbox_corner", "axes": "+X-Y+Z"}}}
+            for c, axes in [("fr", "+X-Y+Z"), ("fl", "+X-Y-Z"),
+                            ("br", "-X-Y+Z"), ("bl", "-X-Y-Z")]
+        ],
+        "leaves": [
+            {"id": "wheel_" + c, "mount": "wheel_" + c, "scale": "wheel_radius",
+             "origin": {"anchor": "bbox_center", "offset": [0, 0, "wheel_clearance"]},
+             "shape": {"type": "torus", "params": {
+                 "radx": 1.0, "rady": "wheel_tube_r", "rows": 24, "cols": 12}}}
+            for c in ("fr", "fl", "br", "bl")
+        ],
+    }),
+    ("keyboard_showcase", 3.0, {
         "id": "keyboard",
         "params": {"tray_width": 4.0, "tray_depth": 1.5, "tray_thick": 0.1,
                    "key_size": 0.2, "key_height": 0.08},
@@ -62,7 +89,7 @@ EXAMPLES = [
                  "size": ["key_size", "key_height", "key_size"]}}},
         ],
     }),
-    ("stairs_showcase", 6.0, {
+    ("stairs_showcase", 9.0, {
         "id": "stairs",
         "params": {"base_w": 3.0, "base_h": 0.2, "base_d": 1.0,
                    "tread_w": 0.6, "tread_h": 0.05, "tread_d": 0.25,
@@ -117,7 +144,7 @@ def main():
     obj = hou.node("/obj")
 
     print("=" * 72)
-    print("Building 3 assemblies in real Houdini " + hou.applicationVersionString())
+    print("Building 4 assemblies in real Houdini " + hou.applicationVersionString())
     print("=" * 72)
 
     for name, x_offset, assembly in EXAMPLES:
@@ -151,6 +178,7 @@ def main():
         # mount points moved automatically — the whole point of M2.
         live_param, new_val, label = {
             "car_showcase": ("length", 8.0, "length 4→8"),
+            "bicycle_showcase": ("length", 8.0, "length 4→8"),
             "keyboard_showcase": ("tray_width", 8.0, "tray_width 4→8"),
             "stairs_showcase": ("base_w", 5.0, "base_w 3→5"),
         }[name]
