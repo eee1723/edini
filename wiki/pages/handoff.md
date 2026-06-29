@@ -2,10 +2,96 @@
 
 > **用途**：让新 Agent 或开发者在 Edini 仓库里快速上手。
 
-**最后更新**：2026-06-27（声明式资产管道 M2 完整能力交付 + from-to 两点连接原语 + 自行车真机验证）
-**当前阶段**：声明式资产管道里程碑2 全部交付 —— 2 backend（native_chain + python 值注入）+ 3 placement（attach / instances / from-to）+ orient 旋转。真机生成桌子（6 组件）、椅子（含倾斜靠背）、**自行车**（4 from-to 管材 + 2 python 轮子，224 点）。
-**下一步**：M4 组装提交（让 build_asset 结果能 commit_sandbox 固化）+ 真实 Pi agent 端到端（asset-authoring skill 实战检验）
-**工作分支**：`fix/sandbox-diagnostics-and-parm-tooling`（M1/M2 全部工作在此分支，已 push）
+**最后更新**：2026-06-29（rooted-modeling skill M2 live 关联交付 —— VEX 策略 + Copy-to-Points，改 root 参数实时更新，502 测试含真机 hython）
+**当前阶段**：**rooted-modeling**（根件驱动 + live VEX+CTP）M0/M1/M2 全部交付。旧的声明式资产管道已整体搁置到 `_disabled_backup/asset-pipeline-2026-06/`。
+**下一步**：用户实测发现若干问题（见下方「rooted-modeling 待修问题」），下次会话接着改。本机有完整 Houdini：`D:\houdini\bin\hython.exe`（Houdini 21.0.440）。
+**工作分支**：`master`
+
+---
+
+## 🔴 最重要：rooted-modeling skill（2026-06-29，必读）
+
+### 这是当前主线
+
+程序化建模的**第四次演进**，取代了被搁置的声明式资产管道。**核心思想**（用户原话）：「**先做根件（车架/底座/房子外壳），再用根件的真实几何去算出所有其他组件的位置，不能硬编码**」。
+
+**为什么取代声明式管道**：旧管道的 build 层是「测一次、烤成字面值」——build 时测对 root 几何算出坐标写进 xform，但写完就死了，用户改 root 参数叶子不动。这违背 live 参数化的核心承诺。
+
+**M2 的突破（live 关联）**：每个 mount 变成一个 `attribwrangle`，VEX 每次 cook **实时读 root 的 bbox**（`getbbox_min/max`），叶子用 `copytopoints` 盖印。改参数 → bbox 变 → wrangle 重 cook → 点移位 → CTP 重盖印，**全程零烤值**。
+
+### 4 角色
+
+| 角色 | 是什么 | 怎么得到 |
+|------|--------|----------|
+| **Root** | 根基组件（车平台/键盘盘/房子外壳） | 先建，native SOP，size 读参数表达式 |
+| **Mount** | 位置+朝向，叶子坐的地方 | **测量** root 的 cooked 几何（bbox 角点/面中心/网格/阵列）。永不硬编码坐标 |
+| **Shape** | 自包含叶子资产（轮子/键帽/门） | 形态独立于 root |
+| **Leaf** | 摆到 Mount 上的 Shape | 形态独立，**摆放派生** |
+
+### 关键技术决策（用户拍板）
+
+1. **VEX + Copy to Points** 实现 live（不是 Python SOP）。
+2. **不让 LLM 写 VEX**：每种测量原语 = 一段**预制 VEX 策略**（`vex_strategies.py`），Python 解析符号串（`"+X-Y+Z"`→`{cx:1,cy:0,cz:1}`）注入数字。agent 只选策略+参数。
+3. **measure.py 保留作预言机**：Python 算期望点，VEX 算实际点，逐点对比验证 VEX 正确性。
+4. orient 用 **`@orient` 四元数**（`dihedral({0,1,0}, dir)`），不是 @N+@up。
+
+### 里程碑
+
+| MS | 内容 | 状态 |
+|----|------|------|
+| M0 | measure.py 测量层 + 小车 4 轮（xform 版） + SKILL | ✅ 交付 |
+| M1 | grid_on_face（键盘网格）+ array（阶梯阵列）fan-out | ✅ 交付 |
+| M2 | **live 关联**：vex_strategies + 重写 build 为 attribwrangle+CTP + root 参数暴露 spare parm | ✅ 交付（真机 hython live recook 铁证） |
+
+### 真机铁证（Houdini 21.0.440）
+
+```
+车：length 4→8，recook（不重建）→ 前轮 (+2,-0.25,+1) → (+4,-0.25,+1) [MOVED live]
+键盘：tray_width 4→8，recook → 15 键帽网格整体重缩放 [MOVED live]
+阶梯：3 踏步对角攀升 (run=0.5, rise=0.3)
+```
+
+### 关键文件
+
+```
+python3.11libs/edini/
+  measure.py           # 测量层 + Python 预言机（bbox 角点/面中心/边点/grid/array/方向/朝向）
+  vex_strategies.py    # 预制 VEX 策略库（每测量原语一段 detail-wrangle 模板 + 符号串解析器）
+  assembly_builder.py  # build_assembly（live 网络：root + mount wrangles + CTP + OUT）+ validate + root 参数 spare parm 暴露
+  exprs.py             # 安全表达式引擎（复用，未被搁置）
+pi-extensions/edini-tools/tools/rooted.ts  # build_assembly TS schema（live 描述 + promptGuidelines）
+skills/rooted-modeling/SKILL.md            # skill 文档（4 角色 + live 章节 + shape 参数表）
+tests/
+  test_measure.py            # 53 测试（测量层 + Python 预言机）
+  test_assembly_builder.py   # 25 mock 测试（校验 + VEX 选择器解析 + 网络结构）
+  test_assembly_hython.py    # 5 真机测试（含 2 个 live recook 铁证：车+键盘）
+scripts/
+  verify_vex_strategies.py  # 7 个 VEX 策略 vs Python 预言机逐点对比（hython）
+  show_assemblies.py         # 构建 car/keyboard/stairs → edini_showcase.hip + live demo
+edini_showcase.hip           # 三个 live 模型，可 GUI 打开改参数看效果
+```
+
+### 怎么跑
+
+```bash
+# 真机验证 VEX 策略
+D:/houdini/bin/hython.exe scripts/verify_vex_strategies.py
+
+# 构建 + live demo + 存 .hip
+D:/houdini/bin/hython.exe scripts/show_assemblies.py
+
+# 全量测试（mock + hython，本机全跑）
+python -m pytest tests/ -q
+```
+
+### ⚠️ rooted-modeling 待修问题（用户 2026-06-29 实测发现）
+
+用户在 Houdini GUI 打开 `edini_showcase.hip` 实测后发现了若干问题。**具体细节待用户补充**，下次会话的起点。已知的范围限制（非 bug，是设计）：
+
+- **只有 root-shape 参数是 live**（length/width 等喂 root box 的）。mount 内部参数（grid rows/cols/margin、array count/step/origin）目前 build 时烤进 VEX，改这些要重建。阶梯的 `base_w` 改了踏步不动就是这个原因。
+- mock 测不到 VEX 执行（mock 不 cook），VEX 正确性靠 hython + Python 预言机保证。
+
+**用户补充的具体问题**：_（下次会话由用户/agent 填写）_
 
 ---
 
@@ -32,19 +118,22 @@ python3.11libs/edini/
   asset_model.py      # 纯数据层：schema + validate（含 component 校验：orient/from-to/instances）
   asset_builder.py    # 几何构造层：build_asset 主入口 + _build_native_chain/_build_python_component/
                       #   _from_to_geometry/_move_to_point/_inject_param_values（值注入 AST）
-  tool_executor.py    # validate_asset + build_asset handler（TOOL_HANDLERS 注册）
+                      #   + M4 setUserData 印记（edini_asset_source）
+  harness.py          # commit_sandbox（M4：识别印记绕过 G3a/G3b，保留 G3c/结构 + receipt method）
+  tool_executor.py    # validate_asset + build_asset + commit_sandbox handler（TOOL_HANDLERS 注册）
   exprs.py            # M1 表达式引擎（safe AST，支持比较/布尔用于约束）
   skeleton_resolver.py # M1 骨架点 DAG（topo + 环检测）
-pi-extensions/edini-tools/tools/asset.ts  # validateAsset + buildAsset TS schema（含 promptGuidelines）
-skills/asset-authoring/SKILL.md           # agent 写资产的约定文档（实战验证沉淀）
+pi-extensions/edini-tools/tools/asset.ts  # validateAsset + buildAsset TS schema（含 promptGuidelines + M4 commit 说明）
+skills/asset-authoring/SKILL.md           # agent 写资产的约定文档（实战验证沉淀 + M4 commit 流程）
 python3.11libs/edini/data/
   table.asset.json    # 多实例桌腿 + python 圆环（3 定义/6 实例）
   chair.asset.json    # 倾斜靠背（orient 实战）
   bicycle.asset.json  # 完整自行车（from-to 管材 + python 轮子）
 tests/
-  test_asset_builder.py      # mock hou：native_chain/python/instances/orient/from-to
-  test_asset_model.py        # 纯数据：validate 全错误码 + 3 资产端到端
-  test_asset_hython.py       # 真机：table/chair/bicycle 端到端
+  test_asset_builder.py       # mock hou：native_chain/python/instances/orient/from-to + M4 印记
+  test_commit_declarative.py  # M4：声明式提交 vs 旧管道门禁（mock hou）
+  test_asset_model.py         # 纯数据：validate 全错误码 + 3 资产端到端
+  test_asset_hython.py        # 真机：table/chair/bicycle 端到端 + M4 TestCommitAssetHython（build→commit）
   test_tool_executor_asset.py # handler 接入
 ```
 
@@ -59,11 +148,14 @@ tests/
 2. orient 被静默忽略 → 加 COMPONENT_BAD_ORIENT 校验
 3. **无两点连接原语** → 加 from-to（管架结构核心，agent 永不算角度）
 
-### 下一步（M2 之后）
+### 下一步（M4 已交付，2026-06-29）
 
-1. **M4 组装提交**：build_asset → commit_sandbox，接 G3 门禁，让资产结果能固化成正式节点。
-2. **真实 Pi agent 端到端**：让 Pi agent 用 asset-authoring skill + build_asset 写一个它没见过的资产，验证它能否理解模型（最后的 capability 检验）。
-3. **M3 暂缓**：经分析无必要（历史失败无一是骨架点摆位错；resolve_skeleton 预览已能发现几何错；约束断言会扼杀创造力）。
+1. **✅ M4 组装提交已交付**：`build_asset` 打 `edini_asset_source` userData 印记 → `commit_sandbox` 识别后绕过旧 G3a bake（edini_world_axis）+ G3b PCA 方向门禁，保留 G3c 健康 + 结构门禁，receipt 标 `method:"declarative"`。**核心冲突**：旧门禁为提示词管道设计，会误判声明式资产（builder 故意不烘焙 axis、不走 PCA）。**策略**（与用户敲定）：标记 + 绕过是 opt-in 的，旧 network_mode 手写网络（无印记）继续走完整门禁栈，不削弱旧防御。全量回归 592 passed 零回归。
+2. **M4 真机 hython 实测（待办）**：本机仅装 Houdini Server（hserver，无 hython.exe），`TestCommitAssetHython` 5 用例已注册但优雅 skip。需在带完整 Houdini 桌面的机器跑 `pytest tests/test_asset_hython.py::TestCommitAssetHython` 验证 build→commit→receipt 端到端。
+3. **真实 Pi agent 端到端**：让 Pi agent 用 asset-authoring skill + build_asset + commit_sandbox 写一个它没见过的资产，验证它能否理解模型 + 完整走通 build→commit。**M4 让这条线现在可达**（之前 build_asset 出来的 sandbox 无法 commit，端到端断了）。最后的 capability 检验。
+4. **M3 暂缓**：经分析无必要（历史失败无一是骨架点摆位错；resolve_skeleton 预览已能发现几何错；约束断言会扼杀创造力）。
+
+**M4 关键文件**：`asset_builder.py`（setUserData 印记）/ `harness.py`（commit_sandbox 识别分支 + receipt method）/ `tests/test_commit_declarative.py`（声明式 vs 旧管道 vs 健康）/ `tests/test_asset_hython.py`（TestCommitAssetHython 真机）。
 
 ---
 

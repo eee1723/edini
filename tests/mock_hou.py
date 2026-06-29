@@ -697,6 +697,11 @@ class MockNode:
         # Node comment (Houdini Notes panel) — the recipe library uses this
         # as its metadata source, so the mock must support read/write.
         self._comment: str = ""
+        # Per-node userData (hou.Node.userData/setUserData) — arbitrary string
+        # metadata that persists with the node. The asset pipeline marks a
+        # declarative-asset sandbox with an `edini_asset_source` user datum so
+        # commit_sandbox can recognize it without inspecting geometry.
+        self._user_data: dict[str, str] = {}
 
     def path(self) -> str:
         return self._path
@@ -764,6 +769,21 @@ class MockNode:
     def setComment(self, text: str) -> None:
         """Mock of hou.Node.setComment."""
         self._comment = text or ""
+
+    def setUserData(self, key: str, value: str) -> None:
+        """Mock of hou.Node.setUserData — store an arbitrary string value under
+        a key. The asset pipeline uses this to mark a declarative-asset sandbox
+        (`edini_asset_source`) so commit_sandbox recognizes it without geometry
+        inspection. A None value clears the key (mirroring real Houdini)."""
+        if value is None:
+            self._user_data.pop(key, None)
+        else:
+            self._user_data[key] = str(value)
+
+    def userData(self, key: str):
+        """Mock of hou.Node.userData — return the stored string value, or None
+        if the key is unset (mirroring real Houdini)."""
+        return self._user_data.get(key)
 
     def children(self) -> list[MockNode]:
         return list(self._children)

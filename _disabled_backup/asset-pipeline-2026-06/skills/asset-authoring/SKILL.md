@@ -144,7 +144,13 @@ there". Use `attach` for a part that *sits at* a point (a box, a wheel).
 4. **build_asset** — turns it into geometry. Returns the OUT path + where each
    part landed.
 5. **inspect_health / geometry_inventory** on the OUT — verify the result.
-6. **commit_sandbox** when the user wants it kept.
+6. **commit_sandbox** when the user wants it kept. A declarative asset commits
+   cleanly: the builder stamps the sandbox, so `commit_sandbox` bypasses the
+   legacy bake (`edini_world_axis`) and PCA-orientation gates — orientation is
+   already deterministic from the skeleton DAG (from-to midpoint/angle, orient
+   Euler). You do NOT bake axes or supply `orientation_checks`; just call
+   `commit_sandbox(sandbox_root, <final_name>)`. The receipt is marked
+   `method: "declarative"`.
 
 ## Common mistakes this skill prevents
 

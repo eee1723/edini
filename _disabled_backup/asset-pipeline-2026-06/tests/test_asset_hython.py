@@ -431,5 +431,139 @@ class TestBuildBicycleHython(unittest.TestCase):
         self.assertEqual(result["cook_errors"], [])
 
 
+# ── Milestone 4: build_asset → commit_sandbox (assembly + commit) ────
+#
+# A third hython script that builds the table into a real sandbox, then commits
+# it via commit_sandbox — the milestone-4 "实测" gate. This proves a declarative
+# asset (stamped by build_asset) commits successfully: the legacy bake (G3a) and
+# PCA-orientation (G3b) gates are bypassed for a stamped asset, while the health
+# gate runs against genuine geometry. The receipt is marked method='declarative'.
+
+_COMMIT_SCRIPT = r"""
+import sys, os, json, traceback
+
+sys.path.insert(0, {pythonlibs!r})
+
+result = {{}}
+try:
+    import hou
+    result['houdini_version'] = hou.applicationVersionString()
+
+    from edini import asset_builder, asset_model, harness
+
+    asset_path = {asset_path!r}
+    asset = asset_model.load_asset(asset_path)
+
+    # 1. Build the asset into a sandbox.
+    obj = hou.node('/obj')
+    root = obj.createNode('geo', 'edini_m4_test')
+    build = asset_builder.build_asset(asset, root.path())
+    result['build_success'] = build.get('success')
+    result['asset_source'] = build.get('asset_source')
+    result['sandbox_root'] = root.path()
+    if not build.get('success'):
+        result['error'] = build.get('error', 'build failed')
+    else:
+        # Confirm the sandbox root carries the declarative-asset stamp.
+        result['has_stamp'] = root.userData('edini_asset_source') is not None
+        # 2. Commit the sandbox — the milestone-4 step.
+        commit = harness.commit_sandbox(
+            root.path(), {final_name!r}, replace_existing=True)
+        result['commit_success'] = commit.get('success')
+        result['committed'] = commit.get('committed')
+        result['final_path'] = commit.get('final_path')
+        if not commit.get('success'):
+            result['commit_error'] = commit.get('error', 'commit failed')
+        else:
+            receipt = commit.get('verification_receipt', {{}})
+            result['receipt_method'] = receipt.get('method')
+            result['receipt_passed'] = receipt.get('passed')
+            result['health_overall_ok'] = receipt.get('health', {{}}).get('overall_ok')
+            # Inspect the committed node's real geometry.
+            final = hou.node(commit['final_path'])
+            out = hou.node(build['out_path'])
+            out.cook(force=True)
+            geo = out.geometry()
+            result['point_count'] = geo.intrinsicValue('pointcount')
+            result['prim_count'] = geo.intrinsicValue('primitivecount')
+        # Clean up.
+        try:
+            if commit.get('success'):
+                hou.node(commit['final_path']).destroy()
+            else:
+                root.destroy()
+        except Exception:
+            pass
+except Exception:
+    result['error'] = traceback.format_exc()
+
+print({start!r})
+print(json.dumps(result, default=str))
+print({end!r})
+"""
+
+
+def _run_commit(asset_path=TABLE, final_name="edini_table_committed"):
+    """Build + commit an asset in hython and return the parsed result dict."""
+    script = _COMMIT_SCRIPT.format(
+        pythonlibs=PYTHONLIBS, asset_path=asset_path,
+        final_name=final_name, start=_START, end=_END,
+    )
+    proc = subprocess.run(
+        [HYTHON, "-c", script],
+        capture_output=True, text=True, timeout=180,
+    )
+    output = proc.stdout + proc.stderr
+    if _START not in output or _END not in output:
+        return {
+            "error": "hython produced no result sentinel",
+            "stdout": proc.stdout[-2000:], "stderr": proc.stderr[-2000:],
+        }
+    block = output.split(_START, 1)[1].split(_END, 1)[0].strip()
+    return json.loads(block)
+
+
+@unittest.skipUnless(HYTHON, "hython not found — skip real-Houdini test")
+class TestCommitAssetHython(unittest.TestCase):
+    """End-to-end milestone-4: a declarative asset builds AND commits in a real
+    Houdini process. The bake/PCA gates are bypassed for the stamped asset; the
+    receipt records method='declarative'."""
+
+    def test_build_then_commit_succeeds(self):
+        result = _run_commit()
+        self.assertNotIn("error", result, result.get("error", ""))
+        self.assertTrue(result["build_success"])
+        self.assertTrue(result["commit_success"], result.get("commit_error", ""))
+        self.assertTrue(result["committed"])
+
+    def test_sandbox_stamped_as_declarative(self):
+        """build_asset stamps the sandbox root so commit_sandbox recognizes it."""
+        result = _run_commit()
+        self.assertNotIn("error", result, result.get("error", ""))
+        self.assertEqual(result["asset_source"], "edini")
+        self.assertTrue(result["has_stamp"])
+
+    def test_receipt_is_declarative_method(self):
+        """The verification receipt records method='declarative' — orientation
+        was determined by the builder (skeleton DAG), not by the bake/PCA gates."""
+        result = _run_commit()
+        self.assertNotIn("error", result, result.get("error", ""))
+        self.assertEqual(result["receipt_method"], "declarative")
+
+    def test_committed_geometry_is_real(self):
+        """The committed asset produces genuine non-trivial geometry."""
+        result = _run_commit()
+        self.assertNotIn("error", result, result.get("error", ""))
+        self.assertGreater(result["point_count"], 0)
+        self.assertGreater(result["prim_count"], 0)
+
+    def test_receipt_passed_flag_true_on_clean_geometry(self):
+        """On real geometry the receipt's passed flag is True — the health gate
+        finds no blocking defects on a clean declarative asset."""
+        result = _run_commit()
+        self.assertNotIn("error", result, result.get("error", ""))
+        self.assertTrue(result["receipt_passed"], result)
+
+
 if __name__ == "__main__":
     unittest.main()

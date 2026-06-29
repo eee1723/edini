@@ -157,6 +157,23 @@ class TestBuildAssetHappy(_BuilderTestCase):
         # The display flag is set so the gate target auto-finds OUT.
         self.assertTrue(out._display_flag)
 
+    def test_sandbox_root_stamped_as_declarative_asset(self):
+        """M4: build_asset stamps the sandbox root with an
+        `edini_asset_source` user datum so commit_sandbox recognizes it as a
+        declarative build and skips the legacy bake/PCA orientation gates."""
+        import json as _json
+        root = self._make_sandbox()
+        result = self.build_asset(_inline_table_asset(), root.path())
+        self.assertTrue(result["success"])
+        self.assertEqual(result.get("asset_source"), "edini")
+        stamp = root.userData("edini_asset_source")
+        self.assertIsNotNone(stamp, "sandbox root must carry edini_asset_source")
+        meta = _json.loads(stamp)
+        self.assertEqual(meta["asset_id"], "table_test")
+        # The component ids recorded are the placement keys (topp, legs).
+        self.assertIn("tabletop", meta["component_ids"])
+        self.assertIn("leg_fl", meta["component_ids"])
+
 
 # ===================================================================
 # per-component native_chain construction

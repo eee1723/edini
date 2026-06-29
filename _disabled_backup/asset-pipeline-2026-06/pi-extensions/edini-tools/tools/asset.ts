@@ -91,6 +91,9 @@ export const buildAsset = {
     "geo container. Pass an inline 'asset' dict OR an 'asset_path'. ALWAYS call validate_asset " +
     "first to catch param/skeleton errors cheaply; this tool then builds the geometry. " +
     "Returns the OUT path + sandbox_root so you can inspect, adjust, or commit_sandbox the result. " +
+    "The sandbox is stamped as a declarative build, so commit_sandbox bypasses the legacy bake + " +
+    "PCA-orientation gates (orientation is deterministic here) and keeps only the health gate — " +
+    "no need to bake edini_world_axis or supply orientation_checks. " +
     "Component shape: {id, backend:'native_chain', attach:{position:'<skeleton_point>'}, " +
     "nodes:[{type, params:{parm: value|expr}}]}. A node param value that is a STRING is an " +
     "expression over the param library (e.g. box size ['top_size','top_thickness','top_size']).",
@@ -99,7 +102,7 @@ export const buildAsset = {
     "Call validate_asset BEFORE build_asset — it catches param typos and skeleton-point reference errors for free, without creating any nodes.",
     "Each component attaches to a DECLARED skeleton point by name (attach.position). Components never carry their own coordinates — the skeleton DAG computes positions, so two components can never disagree about a shared feature's location.",
     "Node param values: a NUMBER is used directly; a STRING is an expression over the param library (e.g. 'wheel_radius', 'top_size/2', 'sqrt(a**2 + b**2)'). This keeps every dimension parametric.",
-    "build_asset returns sandbox_root + out_path. To make the asset permanent, call commit_sandbox(sandbox_root, <final_name>). On failure the sandbox is preserved so you can diagnose the partial build.",
+    "build_asset returns sandbox_root + out_path. To make the asset permanent, call commit_sandbox(sandbox_root, <final_name>). The builder stamps the sandbox so commit_sandbox recognizes it as a declarative build: it skips the legacy bake (edini_world_axis) and PCA-orientation gates — orientation is already deterministic from the skeleton DAG — and keeps only the geometry-health gate. You do NOT need to bake axes or supply orientation_checks for a declarative asset. On failure the sandbox is preserved so you can diagnose the partial build.",
     "Milestone 2 implements the native_chain backend only (native SOPs: box/tube/torus/...). vex_skeleton and python backends arrive in a later milestone.",
   ],
   parameters: Type.Object({

@@ -31,7 +31,6 @@ from edini.harness import (
     add_parm,
     _create_sandbox_root,
 )
-from edini.asset_builder import build_asset as _build_asset_network
 from edini.recipe_library import (
     recipe_list,
     recipe_read,
@@ -42,19 +41,18 @@ from edini.recipe_library import (
     create_recipe_manager,
     set_node_notes,
 )
-from edini.asset_model import validate_asset as _validate_asset_data
-from edini.asset_model import resolve_skeleton as _resolve_skeleton_data
-from edini.asset_model import load_asset as _load_asset_file
+from edini.assembly_builder import build_assembly as _build_assembly_network
 
-# NOTE: The procedural-modeling pipeline (build_procedural_asset,
-# rebuild_component, build_variant_scatter, validate_recipe_tool) has been
-# disabled and moved to _disabled_backup/procedural-modeling/. We are NOT
-# reviving those handlers as-is. Instead, a new declarative-asset pipeline is
-# being built bottom-up: milestone 1 restores the expression engine
-# (exprs.py) and adds a skeleton-point DAG + asset model (asset_model.py,
-# skeleton_resolver.py) + the validate_asset tool below. Component building
-# and assembly will be added in later milestones. Do not re-add the old
-# build_procedural_asset handler — it is superseded by this new pipeline.
+# NOTE: Two procedural pipelines are archived under _disabled_backup/:
+#   1. procedural-modeling/  — prompt-driven build_procedural_asset + G1-G3 gates.
+#   2. asset-pipeline-2026-06/ — declarative asset (params+skeleton DAG,
+#      asset_model.py/asset_builder.py/skeleton_resolver.py, validate_asset/
+#      build_asset tools). Its positions-come-from-an-expression-DAG premise
+#      could not express "measure real root geometry to place leaves", which is
+#      why the new rooted-modeling skill exists.
+# Neither is imported here. The shared infrastructure they relied on —
+# exprs.py (expression engine) and harness.py (sandbox/commit lifecycle) —
+# is kept live for the new skill.
 
 # Knowledge and eval handlers (available only in Houdini runtime)
 try:
@@ -100,66 +98,33 @@ def _edini_get_eval_stats(period: int = 10) -> dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
-def validate_asset(asset: dict | None = None, asset_path: str | None = None,
-                   resolve: bool = False) -> dict[str, Any]:
-    """Validate a procedural asset description (milestone-1 entry point).
+def build_assembly(assembly: dict | None = None, assembly_path: str | None = None,
+                   sandbox_name: str = "assembly") -> dict[str, Any]:
+    """Build a rooted-modeling assembly (Root → Measure → Mount → Shape).
 
-    Accepts either an inline ``asset`` dict or a path to an asset JSON file.
-    Pure-data validation — no Houdini dependency. Checks the param library,
-    the skeleton-point DAG (cycles, dangling refs, expression syntax), and
-    optionally resolves the skeleton to concrete coordinates (when
-    ``resolve=True``) so the agent can preview where every point lands.
-
-    Returns ``{success, errors, warnings, summary, resolved_skeleton?}``.
+    Validates first (shift-left — rejects bad assemblies before any node is
+    made), then creates a sandbox geo container and builds the root shape,
+    cooks it, measures it to resolve every mount, places the leaves, and
+    merges into a display-flagged OUT. Returns the OUT path + sandbox root +
+    the resolved mounts (position/orient per mount id) so the agent can verify
+    the parametric linkage without inspecting geometry. Preserved on failure.
     """
-    if asset is None and not asset_path:
-        return {"success": False, "error": "provide 'asset' (dict) or 'asset_path'"}
-    if asset is None:
-        asset = _load_asset_file(asset_path)
-        if asset is None:
-            return {"success": False, "error": f"could not read asset: {asset_path}"}
-    result = _validate_asset_data(asset)
-    if resolve and result["success"]:
+    import json as _json
+    if assembly is None and not assembly_path:
+        return {"success": False, "error": "provide 'assembly' (dict) or 'assembly_path'"}
+    if assembly is None:
         try:
-            result["resolved_skeleton"] = {
-                k: list(v) for k, v in _resolve_skeleton_data(asset).items()
-            }
-        except Exception as exc:
-            # validate passed but resolve failed — surface as a warning.
-            result["warnings"].append({
-                "code": "RESOLVE_FAILED",
-                "message": f"could not resolve skeleton: {exc}",
-            })
-    return result
-
-
-def build_asset(asset: dict | None = None, asset_path: str | None = None,
-                sandbox_name: str = "asset") -> dict[str, Any]:
-    """Build a validated declarative asset into a Houdini network (milestone 2).
-
-    Validates first (shift-left — rejects bad assets before any node is made),
-    then creates a sandbox geo container and builds the component network into
-    it. The agent receives the OUT path + sandbox root so it can inspect,
-    adjust, or commit_sandbox the result.
-
-    Returns ``{success, out_path, sandbox_root, components_built, placements?}``
-    on success, or ``{success:false, error}`` on validation/build failure. The
-    sandbox is preserved on failure so the agent can diagnose the partial build.
-    """
-    if asset is None and not asset_path:
-        return {"success": False, "error": "provide 'asset' (dict) or 'asset_path'"}
-    if asset is None:
-        asset = _load_asset_file(asset_path)
-        if asset is None:
-            return {"success": False, "error": f"could not read asset: {asset_path}"}
+            with open(assembly_path, "r", encoding="utf-8") as f:
+                assembly = _json.load(f)
+        except Exception as e:
+            return {"success": False, "error": f"could not read assembly: {e}"}
 
     try:
         _job_id, root_path = _create_sandbox_root(sandbox_name)
     except Exception as exc:
         return {"success": False, "error": f"could not create sandbox: {exc}"}
 
-    result = _build_asset_network(asset, root_path)
-    # Always surface the sandbox root so the agent can commit/discard/inspect.
+    result = _build_assembly_network(assembly, root_path)
     result["sandbox_root"] = root_path
     return result
 
@@ -321,23 +286,14 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     ),
     "recipe_set_notes": lambda **kw: set_node_notes(
         kw["node_path"], kw["notes"]),
-    # ── Procedural-asset pipeline (milestone 1: skeleton + validation) ──
-    # Pure-data validation of a declarative asset JSON (params + skeleton
-    # point DAG). No Houdini dependency — shift-left validation. Component
-    # building/assembly arrive in later milestones.
-    "validate_asset": lambda **kw: validate_asset(
-        asset=kw.get("asset"),
-        asset_path=kw.get("asset_path"),
-        resolve=kw.get("resolve", False),
-    ),
-    # Milestone-2: build the asset's components into a Houdini network. Each
-    # component attaches to a skeleton point BY NAME and reads dimensions from
-    # the param library; the builder merges everything into a display-flagged
-    # OUT. Returns the OUT path + sandbox root for follow-up commit/inspect.
-    "build_asset": lambda **kw: build_asset(
-        asset=kw.get("asset"),
-        asset_path=kw.get("asset_path"),
-        sandbox_name=kw.get("sandbox_name", "asset"),
+    # ── Rooted-modeling assembly (Root → Measure → Mount → Shape) ──
+    # Build a procedural model where leaves attach to the ROOT by measuring its
+    # real geometry — no hardcoded coordinates. The root is cooked, measured to
+    # resolve each mount, and leaves are placed onto the measured mounts.
+    "build_assembly": lambda **kw: build_assembly(
+        assembly=kw.get("assembly"),
+        assembly_path=kw.get("assembly_path"),
+        sandbox_name=kw.get("sandbox_name", "assembly"),
     ),
 }
 

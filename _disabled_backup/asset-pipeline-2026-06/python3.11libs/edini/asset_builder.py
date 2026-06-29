@@ -672,8 +672,33 @@ def build_asset(asset: dict, root_path: str) -> dict[str, Any]:
         except Exception:
             pass
 
+        # 5. Mark the sandbox root as a declarative-asset build (milestone 4).
+        #
+        # commit_sandbox's G3a (bake) and G3b (PCA orientation) gates were
+        # built for the OLD prompt-driven pipeline: they require every
+        # component_id prim to carry a baked `edini_world_axis` and that the
+        # agent supply orientation_checks verified via PCA. A declarative asset
+        # is the opposite — orientation is computed deterministically from the
+        # skeleton DAG (from-to midpoint/angle, orient Euler), never baked, and
+        # never PCA-estimated (the PCA hub-90° bug was the reason this pipeline
+        # exists). So the builder stamps the sandbox root with an
+        # `edini_asset_source` user datum; commit_sandbox recognizes it and
+        # skips those two legacy gates, keeping only the health/structure gates
+        # that still add value. The agent never has to bake axes or write
+        # orientation_checks for a declarative asset.
+        import json as _json
+        _stamp = _json.dumps({
+            "asset_id": asset.get("id", ""),
+            "component_ids": sorted(placements.keys()),
+        })
+        try:
+            root.setUserData("edini_asset_source", _stamp)
+        except Exception:
+            pass  # best-effort: a missing stamp just falls back to full gates.
+
         return {
             "success": True,
+            "asset_source": "edini",
             "out_path": out.path(),
             "components_built": len(component_nodes),
             "placements": placements,

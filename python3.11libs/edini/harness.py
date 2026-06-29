@@ -438,6 +438,24 @@ def commit_sandbox(
                     "traceback": traceback.format_exc(),
                 }
 
+    # ── Milestone 4: declarative-asset recognition ──
+    # build_asset stamps the sandbox root with an `edini_asset_source` user
+    # datum. A declarative asset's orientation is computed deterministically
+    # from the skeleton DAG (from-to midpoint/angle, orient Euler) — it is
+    # NEVER baked as edini_world_axis, and NEVER PCA-estimated (the hub-90° PCA
+    # bug was the reason this pipeline exists). So the two legacy gates that
+    # encode those assumptions (G3a bake, G3b PCA orientation) are SKIPPED for
+    # a stamped declarative asset. The health gate (G3c) and the modular-
+    # structure gate are KEPT — they catch real defects (orphan points, stray
+    # open curves) and declarative assets are genuinely multi-component. An
+    # unstamped sandbox (raw network_mode hand-written network) still runs the
+    # full gate stack — the bypass is opt-in via the build_asset stamp only.
+    is_edini_asset = False
+    try:
+        is_edini_asset = bool(node.userData("edini_asset_source"))
+    except Exception:
+        is_edini_asset = False
+
     # ── G3a: bake gate (spec §4 G3a, decision 1+4) ──
     # The FIRST defense-in-depth layer. When the asset carries @component_id-
     # tagged prims (a real procedural asset), every such prim must also carry
@@ -446,55 +464,56 @@ def commit_sandbox(
     # has no axis attribute → refused here, before any structure/orientation/
     # health work. Decision 12: the asset stays in the sandbox (no rename, no
     # discard) so the agent can fix and re-commit without rebuilding.
-    #
-    # Scope: only applies when component_id prims exist. Empty/scaffolding
-    # geometry (no component_id) is not a procedural asset — there is nothing
-    # to orientation-verify, so the gate passes (parity with the orientation
-    # gate, which also no-ops without component_id).
-    g3_target = None
-    try:
-        g3_target = _select_gate_target(node)
-    except Exception:
+    # SKIPPED for declarative assets (see the milestone-4 note above).
+    if not is_edini_asset:
+        # Scope: only applies when component_id prims exist. Empty/scaffolding
+        # geometry (no component_id) is not a procedural asset — there is nothing
+        # to orientation-verify, so the gate passes (parity with the orientation
+        # gate, which also no-ops without component_id).
         g3_target = None
-    g3_has_component_prims = False
-    if g3_target is not None:
         try:
-            _g = g3_target.geometry()
-            g3_has_component_prims = (
-                _g is not None
-                and _g.findPrimAttrib("component_id") is not None
-                and _g.intrinsicValue("primitivecount") > 0
-            )
+            g3_target = _select_gate_target(node)
         except Exception:
-            g3_has_component_prims = False
-    if g3_has_component_prims:
-        g3_baked = True
-        g3_missing: list[str] = []
-        try:
-            g3_baked, g3_missing, _detail = _verify_world_axes_baked(g3_target)
-        except Exception as _e:
-            g3_baked = False
-            g3_missing = [f"<check error: {_e}>"]
-        if not g3_baked:
-            return {
-                "success": False,
-                "sandbox_root_path": sandbox_root_path,
-                "final_path": final_path,
-                "committed": False,
-                "refused": True,
-                "error": (
-                    "G3_NOT_BAKED: every prim with a @component_id must carry "
-                    "a NON-ZERO 3-float @edini_world_axis (a unit construction "
-                    "axis). It is read as floatListAttribValue, so a STRING "
-                    "value like \"y\" will NOT work. Bake it with an "
-                    "attribwrangle (class=primitive), e.g.:\n"
-                    "    v@edini_world_axis = {0,1,0};   // pipe along Y\n"
-                    "    // or per-component: "
-                    "if(s@component_id==\"pipe_body\")v@edini_world_axis={0,1,0};\n"
-                    "You do NOT need build_procedural_asset — a valid baked "
-                    f"axis vector passes this gate. Missing/zero on: {g3_missing}"
-                ),
-            }
+            g3_target = None
+        g3_has_component_prims = False
+        if g3_target is not None:
+            try:
+                _g = g3_target.geometry()
+                g3_has_component_prims = (
+                    _g is not None
+                    and _g.findPrimAttrib("component_id") is not None
+                    and _g.intrinsicValue("primitivecount") > 0
+                )
+            except Exception:
+                g3_has_component_prims = False
+        if g3_has_component_prims:
+            g3_baked = True
+            g3_missing: list[str] = []
+            try:
+                g3_baked, g3_missing, _detail = _verify_world_axes_baked(g3_target)
+            except Exception as _e:
+                g3_baked = False
+                g3_missing = [f"<check error: {_e}>"]
+            if not g3_baked:
+                return {
+                    "success": False,
+                    "sandbox_root_path": sandbox_root_path,
+                    "final_path": final_path,
+                    "committed": False,
+                    "refused": True,
+                    "error": (
+                        "G3_NOT_BAKED: every prim with a @component_id must carry "
+                        "a NON-ZERO 3-float @edini_world_axis (a unit construction "
+                        "axis). It is read as floatListAttribValue, so a STRING "
+                        "value like \"y\" will NOT work. Bake it with an "
+                        "attribwrangle (class=primitive), e.g.:\n"
+                        "    v@edini_world_axis = {0,1,0};   // pipe along Y\n"
+                        "    // or per-component: "
+                        "if(s@component_id==\"pipe_body\")v@edini_world_axis={0,1,0};\n"
+                        "You do NOT need build_procedural_asset — a valid baked "
+                        f"axis vector passes this gate. Missing/zero on: {g3_missing}"
+                    ),
+                }
 
     # ── Modular structure gate ──
     # Refuse to commit monolithic assets (single Python SOP emitting all
@@ -524,8 +543,13 @@ def commit_sandbox(
     # ── G3b: Orientation gate ──
     # If the agent supplied orientation_checks OR the asset has a component_id
     # attribute, run verify_orientation and refuse to commit on failure.
+    # SKIPPED for declarative assets (is_edini_asset): their orientation is
+    # computed deterministically from the skeleton DAG, never PCA-estimated.
+    # The PCA path was retired for procedural assets precisely because it is
+    # unreliable on real geometry (the hub-90° bug); re-introducing it as a
+    # commit gate on declarative assets would repeat that failure.
     orientation_result = None
-    if not skip_orientation:
+    if not skip_orientation and not is_edini_asset:
         orientation_result = _run_orientation_gate(
             sandbox_root_path, orientation_checks
         )
@@ -623,6 +647,7 @@ def commit_sandbox(
         health=health_result,
         components_detected=components_detected,
         construction_axes_baked=axes_baked,
+        method="declarative" if is_edini_asset else "gated",
     )
 
     result = {
@@ -819,6 +844,7 @@ def _build_verification_receipt(
     components_detected: list[str] | None = None,
     construction_axes_baked: bool = True,
     defaulted_axes: dict | None = None,
+    method: str = "gated",
 ) -> dict[str, Any]:
     """Build a tamper-evident verification receipt (spec §5.2).
 
@@ -827,6 +853,12 @@ def _build_verification_receipt(
     returned by the tool, so the agent cannot rewrite its numbers. The agent
     can only choose to omit a failure, but the receipt stays complete in the
     tool result the user can see.
+
+    ``method`` records how the asset was verified:
+      - "gated"      — the legacy bake+PCA gate stack (old procedural pipeline).
+      - "declarative" — a build_asset declarative asset. Orientation is
+        deterministic (skeleton DAG); the bake/PCA gates were skipped, so
+        `construction_axes_baked` reflects geometry state, NOT a requirement.
     """
     hard_errors, soft_warnings = _health_hard_soft_summary(health or {})
     ori = orientation or {}
@@ -834,6 +866,7 @@ def _build_verification_receipt(
     ori_failed = ori.get("failed", 0)
     receipt = {
         "passed": (ori_failed == 0 and hard_errors == 0),
+        "method": method,
         "orientation": {
             "passed": ori.get("passed", 0),
             "failed": ori_failed,

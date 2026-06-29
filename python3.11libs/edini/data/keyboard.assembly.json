@@ -1,0 +1,37 @@
+{
+  "id": "keyboard",
+  "params": {
+    "tray_width": 4.0,
+    "tray_depth": 1.5,
+    "tray_thick": 0.1,
+    "key_size": 0.3,
+    "key_height": 0.1
+  },
+  "root": {
+    "shape": {"type": "box", "params": {"size": ["tray_width", "tray_thick", "tray_depth"]}}
+  },
+  "mounts": [
+    {
+      "id": "spacebar",
+      "position": {"measure": "bbox_face_center", "from": "root", "face": "+Y"}
+    },
+    {
+      "id": "mod_left",
+      "position": {"measure": "point_on_edge", "from": "root",
+                   "axes_a": "-X+Y-Z", "axes_b": "+X+Y-Z", "t": 0.25}
+    },
+    {
+      "id": "mod_right",
+      "position": {"measure": "point_on_edge", "from": "root",
+                   "axes_a": "-X+Y-Z", "axes_b": "+X+Y-Z", "t": 0.75}
+    }
+  ],
+  "leaves": [
+    {"id": "spacebar_key", "mount": "spacebar",
+     "shape": {"type": "box", "params": {"size": ["key_size*2", "key_height", "key_size"]}}},
+    {"id": "mod_left_key", "mount": "mod_left",
+     "shape": {"type": "box", "params": {"size": ["key_size", "key_height", "key_size"]}}},
+    {"id": "mod_right_key", "mount": "mod_right",
+     "shape": {"type": "box", "params": {"size": ["key_size", "key_height", "key_size"]}}}
+  ]
+}
