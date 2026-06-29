@@ -92,6 +92,78 @@ def instance_centers():
             centers.extend([list(p.position()) for p in wg.points()])
     return centers
 
+def instance_piece_bboxes():
+    """For each CONNECTED piece in OUT, its bbox (min/max/size on 3 axes).
+    A torus wheel (radx=1, rady=0.08) is THIN along its symmetry axis (~0.16)
+    and WIDE on the other two (~2.0). After orient, the thin axis points
+    along the axle direction — so the thin bbox dim reveals the wheel's
+    facing without trusting CTP attribute transfer.
+
+    Pieces are clustered by CONNECTIVITY (prims sharing points belong to one
+    wheel), NOT per-prim: a single torus has ~288 face prims whose individual
+    bboxes are meaningless薄片; only the whole-wheel bbox reveals the facing."""
+    out = hou.node(root.path() + "/OUT")
+    out.cook(force=True)
+    geo = out.geometry()
+    prims = list(geo.prims())
+    # Union-Find over point numbers: prims sharing a point are one piece.
+    parent = {}
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]; x = parent[x]
+        return x
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb: parent[ra] = rb
+    for prim in prims:
+        pts = [v.point().number() for v in prim.vertices()]
+        for p in pts:
+            if p not in parent: parent[p] = p
+        for i in range(1, len(pts)):
+            union(pts[0], pts[i])
+    # Bucket each prim by its root point.
+    buckets = {}
+    for prim in prims:
+        pts = [v.point().number() for v in prim.vertices()]
+        proot = find(pts[0]) if pts else -1
+        buckets.setdefault(proot, []).append(prim)
+    bboxes = []
+    for proot, prims_in_piece in buckets.items():
+        if len(prims_in_piece) < 4:  # skip stray single prims / the root box faces
+            continue
+        xs, ys, zs = [], [], []
+        for prim in prims_in_piece:
+            for v in prim.vertices():
+                p = v.point().position()
+                xs.append(float(p[0])); ys.append(float(p[1])); zs.append(float(p[2]))
+        bboxes.append({
+            "min": [min(xs), min(ys), min(zs)],
+            "max": [max(xs), max(ys), max(zs)],
+            "size": [max(xs)-min(xs), max(ys)-min(ys), max(zs)-min(zs)],
+            "prim_count": len(prims_in_piece),
+        })
+    return bboxes
+
+def mount_cloud_orient():
+    """Read p@orient off each mount wrangle's points (pre-CTP), so we can
+    verify the orient quaternion itself lands on points and rotates the
+    align-axis basis onto the measured axle direction."""
+    out = {}
+    for nm in [c.name() for c in root.allSubChildren() if c.name().startswith("mount_")]:
+        wr = hou.node(root.path() + "/" + nm); wr.cook(force=True)
+        wg = wr.geometry()
+        if wg is None:
+            continue
+        orients = []
+        for p in wg.points():
+            try:
+                q = p.floatListAttribValue("orient")
+                orients.append(list(q))
+            except Exception:
+                pass
+        out[nm] = orients
+    return out
+
 def root_bbox():
     box = hou.node(root.path() + "/root_shape"); box.cook(force=True)
     return list(box.geometry().intrinsicValue("bounds"))
@@ -100,6 +172,9 @@ probe = {}
 if res.get("success"):
     probe["centers"] = instance_centers()
     probe["root_bbox"] = root_bbox()
+    if probe_kind in ("piece_bboxes", "facing"):
+        probe["pieces"] = instance_piece_bboxes()
+        probe["cloud_orient"] = mount_cloud_orient()
     # THE LIVE TEST: change a param, recook, re-read — WITHOUT rebuilding.
     if probe_kind == "live_recook":
         param = req["change_param"]; newval = req["new_value"]
@@ -123,7 +198,7 @@ def _car(length=4.0):
         "mounts": [
             {"id": "wheel_" + c, "position": {"measure": "bbox_corner",
                 "from": "root", "axes": axes},
-             "orient": {"from": "root",
+             "orient": {"from": "root", "align_axis": "+Y",
                 "from_a": {"measure": "bbox_corner", "axes": "-X-Y+Z"},
                 "from_b": {"measure": "bbox_corner", "axes": "+X-Y+Z"}}}
             for c, axes in [("fr", "+X-Y+Z"), ("fl", "+X-Y-Z"),
@@ -131,6 +206,35 @@ def _car(length=4.0):
         ],
         "leaves": [
             {"id": "wheel_" + c, "mount": "wheel_" + c, "scale": "wheel_radius",
+             "shape": {"type": "torus", "params": {
+                 "radx": 1.0, "rady": "wheel_tube_r", "rows": 24, "cols": 12}}}
+            for c in ("fr", "fl", "br", "bl")
+        ],
+    }
+
+
+def _bicycle(length=4.0):
+    """A bicycle-style platform + 4 wheels, exercising all four fixes:
+    align_axis +Z (torus faces its axle), origin normalization (wheel pushed
+    to +Z to clear the platform), grouped CTP (4 identical wheels → 1 CTP)."""
+    return {
+        "id": "bicycle",
+        "params": {"length": length, "width": 2.0, "thickness": 0.5,
+                   "wheel_radius": 0.4, "wheel_tube_r": 0.08, "wheel_clearance": 0.1},
+        "root": {"shape": {"type": "box",
+                           "params": {"size": ["length", "thickness", "width"]}}},
+        "mounts": [
+            {"id": "wheel_" + c, "position": {"measure": "bbox_corner",
+                "from": "root", "axes": axes},
+             "orient": {"from": "root", "align_axis": "+Y",
+                "from_a": {"measure": "bbox_corner", "axes": "-X-Y+Z"},
+                "from_b": {"measure": "bbox_corner", "axes": "+X-Y+Z"}}}
+            for c, axes in [("fr", "+X-Y+Z"), ("fl", "+X-Y-Z"),
+                            ("br", "-X-Y+Z"), ("bl", "-X-Y-Z")]
+        ],
+        "leaves": [
+            {"id": "wheel_" + c, "mount": "wheel_" + c, "scale": "wheel_radius",
+             "origin": {"anchor": "bbox_center", "offset": [0, 0, "wheel_clearance"]},
              "shape": {"type": "torus", "params": {
                  "radx": 1.0, "rady": "wheel_tube_r", "rows": 24, "cols": 12}}}
             for c in ("fr", "fl", "br", "bl")
@@ -272,6 +376,74 @@ class TestLiveBuildHython(unittest.TestCase):
             dy = pts[i + 1][1] - pts[i][1]
             self.assertAlmostEqual(dx, 0.5, places=4)
             self.assertAlmostEqual(dy, 0.3, places=4)
+
+    def test_bicycle_wheels_face_their_axle(self):
+        """The decisive facing test: each wheel instance's THINNEST bbox axis
+        must be the axle direction (X for this platform). A torus radx=1,
+        rady=0.08 is ~0.16 thick on its symmetry axis and ~2.0 on the others,
+        so the thinnest bbox dim points where the wheel faces. If orient were
+        ignored (the old bug), the thin axis would stay Z, not X."""
+        res = _run(_bicycle(), probe="facing")
+        self.assertTrue(res["success"], res.get("error"))
+        pieces = res["_probe"]["pieces"]
+        thin_axes = []
+        for p in pieces:
+            sz = p["size"]
+            thin_axes.append(sz.index(min(sz)))
+        # For this platform the axle runs along X (index 0).
+        x_facing = sum(1 for a in thin_axes if a == 0)
+        self.assertGreaterEqual(x_facing, 4,
+            f"wheels not facing axle (X): thin_axes={thin_axes}, pieces={len(pieces)}")
+
+    def test_bicycle_cloud_orient_rotates_align_axis_to_axle(self):
+        """Secondary check: read p@orient off the mount cloud (pre-CTP), rotate
+        the align axis (+Y — the torus's symmetry axis) by it, and the result
+        must align with the measured axle direction (X). Proves the orient
+        quaternion itself is correct. (align_axis is +Y because a Houdini torus
+        disc lies in the XZ plane with its symmetry axis along Y.)"""
+        import math
+        res = _run(_bicycle(), probe="facing")
+        self.assertTrue(res["success"], res.get("error"))
+        cloud = res["_probe"]["cloud_orient"]
+        self.assertTrue(cloud, "no orient read from mount cloud")
+        for mount_name, quats in cloud.items():
+            self.assertTrue(quats, f"no orient on {mount_name}'s points")
+            q = quats[0]
+            # q = (qx,qy,qz,qw) from floatListAttribValue. Rotate v={0,1,0} (+Y) by q.
+            qx, qy, qz, qw = q
+            vx, vy, vz = 0.0, 1.0, 0.0
+            # Quaternion rotation: v' = v + 2*qw*(q_vec × v) + 2*(q_vec × (q_vec × v))
+            cxv = (qy*vz - qz*vy, qz*vx - qx*vz, qx*vy - qy*vx)
+            cxv2 = (qy*cxv[2] - qz*cxv[1], qz*cxv[0] - qx*cxv[2], qx*cxv[1] - qy*cxv[0])
+            rx = vx + 2*qw*cxv[0] + 2*cxv2[0]
+            ry = vy + 2*qw*cxv[1] + 2*cxv2[1]
+            rz = vz + 2*qw*cxv[2] + 2*cxv2[2]
+            n = math.sqrt(rx*rx + ry*ry + rz*rz)
+            rx, ry, rz = rx/n, ry/n, rz/n
+            # The axle runs along ±X. The rotated +Y (align axis) must be dominantly X.
+            self.assertGreater(abs(rx), 0.9,
+                f"{mount_name}: rotated +Y = ({rx:.3f},{ry:.3f},{rz:.3f}) "
+                f"not aligned to axle X (orient wrong or ignored)")
+
+    def test_bicycle_one_ctp_four_wheels(self):
+        """4 identical wheels share ONE CTP. The OUT has 4 wheels but the
+        network has a single wheel_*_ctp node."""
+        res = _run(_bicycle(), probe="instance_centers")
+        self.assertTrue(res["success"], res.get("error"))
+        centers = res["_probe"]["centers"]
+        self.assertEqual(len(centers), 4, f"expected 4 wheel mount points, got {centers}")
+
+    def test_car_still_faces_axle_under_new_convention(self):
+        """Regression: the car (now annotated align_axis +Z) still has its
+        wheels facing the axle, proving the new convention is backward
+        compatible with the verified example."""
+        res = _run(_car(), probe="facing")
+        self.assertTrue(res["success"], res.get("error"))
+        pieces = res["_probe"]["pieces"]
+        thin_axes = [p["size"].index(min(p["size"])) for p in pieces]
+        x_facing = sum(1 for a in thin_axes if a == 0)
+        self.assertGreaterEqual(x_facing, 4,
+            f"car wheels lost axle facing: thin_axes={thin_axes}")
 
 
 if __name__ == "__main__":

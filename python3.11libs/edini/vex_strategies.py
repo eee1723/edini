@@ -91,9 +91,15 @@ def _face_selector(face: str) -> dict[str, int]:
 _VEX_CLEAR = r"""
 // Drop the input geometry's points — the wrangle output is ONLY the emitted
 // mount points (otherwise the source box's corners pass through). Remove from
-// the high end down so indices stay valid as we delete.
+// the high end down so indices stay valid as we delete. Also declare the
+// __newpts[] array that EVERY addpoint in this wrangle appends its returned
+// point number to — the orient fragment (appended below) writes onto THESE
+// points, NOT on a npoints() range: in a detail wrangle npoints() does NOT
+// reflect points addpoint'd during the same cook, so a range loop would miss
+// them and leave their orient at the default identity quaternion.
 int __n = npoints(geoself());
 for (int __i = __n - 1; __i >= 0; __i--) { removepoint(geoself(), __i); }
+int __newpts[];
 """.strip()
 
 # bbox_corner: one point at a chosen corner. cx/cy/cz ∈ {0,1} pick min/max.
@@ -103,7 +109,7 @@ vector mx = getbbox_max(0);
 vector p = set(lerp(mn.x, mx.x, chi("cx")),
                lerp(mn.y, mx.y, chi("cy")),
                lerp(mn.z, mx.z, chi("cz")));
-int pt = addpoint(0, p);
+append(__newpts, addpoint(0, p));
 """.strip()
 
 # bbox_face_center: one point at the center of a face. face_axis∈{0,1,2},
@@ -117,12 +123,12 @@ int fa = chi("face_axis");
 float fs = ch("face_sign");
 vector p = ctr;
 p[fa] = (fs > 0) ? mx[fa] : mn[fa];
-int pt = addpoint(0, p);
+append(__newpts, addpoint(0, p));
 """.strip()
 
 # bbox_center: one point at the bbox midpoint.
 _VEX_BBOX_CENTER = _VEX_CLEAR + r"""
-int pt = addpoint(0, getbbox_center(0));
+append(__newpts, addpoint(0, getbbox_center(0)));
 """.strip()
 
 # point_on_edge: lerp between two corners (each by its own cx/cy/cz) at t∈[0,1].
@@ -132,7 +138,7 @@ vector mn = getbbox_min(0);
 vector mx = getbbox_max(0);
 vector a = set(lerp(mn.x, mx.x, chi("cax")), lerp(mn.y, mx.y, chi("cay")), lerp(mn.z, mx.z, chi("caz")));
 vector b = set(lerp(mn.x, mx.x, chi("cbx")), lerp(mn.y, mx.y, chi("cby")), lerp(mn.z, mx.z, chi("cbz")));
-int pt = addpoint(0, lerp(a, b, ch("t")));
+append(__newpts, addpoint(0, lerp(a, b, ch("t"))));
 """.strip()
 
 # grid_on_face: an rows×cols lattice of cell centers on a face. margin-inset,
@@ -162,7 +168,7 @@ for (int r = 0; r < rows; r++) {
         p[fa] = face_val;
         p[a0] = mn[a0] + m + cell0 * (r + 0.5);
         p[a1] = mn[a1] + m + cell1 * (c + 0.5);
-        addpoint(0, p);
+        append(__newpts, addpoint(0, p));
     }
 }
 """.strip()
@@ -181,7 +187,7 @@ for (int i = 0; i < nx; i++) {
         for (int k = 0; k < nz; k++) {
             float c = (nz == 1) ? 0.0 : (k - (nz - 1) / 2.0);
             vector p = origin + a * s0 + b * s1 + c * s2;
-            addpoint(0, p);
+            append(__newpts, addpoint(0, p));
         }
     }
 }
@@ -230,14 +236,17 @@ def _orient_fragment(orient_spec: dict, align_axis: str = "+Y") -> str:
 // --- orient: map leaf's {axis_label} onto the direction between two measured corners ---
 // Written via setpointattrib so the attribute is POINT-class (CTP-readable),
 // not detail-class (a bare orient export here would be silently ignored).
+// Iterates __newpts (the array every addpoint in this wrangle appended to),
+// NOT npoints(): in a detail wrangle npoints() does not reflect points created
+// by addpoint during the same cook, so a range loop would miss them.
 vector __mn = getbbox_min(0);
 vector __mx = getbbox_max(0);
 vector __da = set(lerp(__mn.x, __mx.x, {dax}), lerp(__mn.y, __mx.y, {day}), lerp(__mn.z, __mx.z, {daz}));
 vector __db = set(lerp(__mn.x, __mx.x, {dbx}), lerp(__mn.y, __mx.y, {dby}), lerp(__mn.z, __mx.z, {dbz}));
 vector __dir = normalize(__db - __da);
 vector4 __q = dihedral({{{ax},{ay},{az}}}, __dir);
-for (int __i = 0; __i < npoints(geoself()); __i++) {{
-    setpointattrib(geoself(), "orient", __i, __q, "set");
+foreach (int __ptnum; __newpts) {{
+    setpointattrib(geoself(), "orient", __ptnum, __q, "set");
 }}
 """.format(
         dax=sa["cx"], day=sa["cy"], daz=sa["cz"],
