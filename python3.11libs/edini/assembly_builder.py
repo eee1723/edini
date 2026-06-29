@@ -181,6 +181,12 @@ def validate_assembly(assembly: dict) -> dict[str, Any]:
                 if osource not in known_sources:
                     errors.append({"code": "MOUNT_BAD_SOURCE", "message":
                         f"mount {mid!r} orient.from {osource!r} unknown"})
+                oalign = orient.get("align_axis")
+                if oalign is not None and oalign not in (
+                        "+X", "-X", "+Y", "-Y", "+Z", "-Z"):
+                    errors.append({"code": "MOUNT_BAD_ALIGN_AXIS", "message":
+                        f"mount {mid!r} orient.align_axis must be one of "
+                        f"+X/-X/+Y/-Y/+Z/-Z, got {oalign!r}"})
 
     # Leaves reference a declared mount + a shape.
     leaves = assembly.get("leaves", []) or []
@@ -278,6 +284,21 @@ def _resolve_params(assembly: dict) -> dict[str, float]:
         else:
             raise AssemblyError(f"param {name!r} is not numeric")
     return out
+
+
+def _resolve_align_axis(value: Any) -> str:
+    """Validate + return an align_axis sign-string (default '+Y').
+
+    Legal values: '+X','-X','+Y','-Y','+Z','-Z'. This is the leaf axis that the
+    orient quaternion maps onto the measured direction. Torus wheels pass '+Z'
+    (their symmetry axis); +Y-grown shapes keep the default.
+    """
+    if value is None:
+        return "+Y"
+    if not isinstance(value, str) or value not in ("+X", "-X", "+Y", "-Y", "+Z", "-Z"):
+        raise AssemblyError(
+            f"align_axis must be one of +X/-X/+Y/-Y/+Z/-Z, got {value!r}")
+    return value
 
 
 def _eval_shape_params(shape_params: dict | None, params: dict[str, float]) -> dict:
@@ -626,7 +647,11 @@ def build_assembly(
             # when the mount declares an orient spec.
             orient_spec = mt.get("orient")
             if isinstance(orient_spec, dict):
-                frag = _orient_fragment(orient_spec)
+                # align_axis lives on the orient spec (default +Y). Resolved
+                # per-leaf override is applied when the leaf picks its mount;
+                # here the mount's own value seeds the shared orient fragment.
+                align_axis = _resolve_align_axis(orient_spec.get("align_axis"))
+                frag = _orient_fragment(orient_spec, align_axis=align_axis)
                 if frag:
                     snippet = snippet + "\n" + frag
             wr = _create_node(root_path, "attribwrangle", f"mount_{mid}")

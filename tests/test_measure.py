@@ -370,6 +370,30 @@ class TestDirectionAndOrient:
         assert _verify_align_y(orient, direction), (
             f"orient {orient} does not map +Y to {direction}")
 
+    @pytest.mark.parametrize("align_axis", ["+X", "-X", "+Y", "-Y", "+Z", "-Z"])
+    @pytest.mark.parametrize("direction", [
+        (1, 0, 0), (0, 0, 1), (0, 1, 0), (0, -1, 0),
+        (-1, 0, 0), (0, 0, -1), (1, 1, 0), (1, 0, 1), (0.6, 0.8, 0.0),
+    ])
+    def test_orient_to_align_maps_axis_to_direction(self, align_axis, direction):
+        """Generic orient: applying the returned Euler to align_axis yields the
+        target direction. Covers all six align axes (the +Y case is the
+        original behavior; +Z is the torus-wheel case)."""
+        from edini.measure import orient_to_align, _verify_align
+        orient = orient_to_align(direction, align_axis)
+        assert _verify_align(align_axis, orient, direction), (
+            f"orient {orient} does not map {align_axis} to {direction}")
+
+    def test_orient_to_align_default_axis_is_y(self):
+        """orient_to_align with no align_axis behaves like orient_to_align_y —
+        backward compatibility for the +Y-grown shapes."""
+        from edini.measure import orient_to_align, _verify_align
+        d = (0.7, 0.0, 0.7)
+        # orient_to_align(d) with default align_axis="+Y" must map +Y to d,
+        # matching the contract of orient_to_align_y (geometric, not tuple-equal).
+        assert _verify_align("+Y", orient_to_align(d), d), (
+            f"orient_to_align {orient_to_align(d)} does not map +Y to {d}")
+
 
 # ── Integration: the "wheel at a corner, axle along the long edge" claim ──
 

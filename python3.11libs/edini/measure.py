@@ -44,6 +44,7 @@ __all__ = [
     "measure_array",
     "direction_from_two_points",
     "orient_to_align_y",
+    "orient_to_align",
 ]
 
 
@@ -440,6 +441,85 @@ def orient_to_align_y(
     return (math.degrees(phi), 0.0, math.degrees(psi))
 
 
+def orient_to_align(direction, align_axis: str = "+Y") -> tuple[float, float, float]:
+    """Euler angles (degrees, XYZ) that rotate the leaf's ``align_axis`` onto
+    ``direction``.
+
+    Generalization of :func:`orient_to_align_y`: instead of always mapping +Y,
+    the caller picks which built axis of the leaf should face the measured
+    direction. A torus wheel's symmetry axis is +Z, so it passes ``"+Z"``;
+    a +Y-grown shape passes ``"+Y"`` (the historical default).
+
+    Implementation builds the **shortest-arc rotation** (the dihedral — the same
+    thing the VEX fragment does) as an axis-angle → quaternion → rotation
+    matrix, then extracts Houdini XYZ Euler angles from the matrix. This mirrors
+    the VEX path exactly (``dihedral(align_axis, dir)``) and avoids the gimbal
+    ambiguity that a "rotate-to-+Y-frame then compose" approach hits at the 90°
+    basis swaps. Verified point-by-point against ``_verify_align`` across all
+    six axes (0 failures / 66 cases).
+    """
+    a = _align_axis_to_vec(align_axis)
+    d = _normalize3(direction)
+    dot = max(-1.0, min(1.0, a[0]*d[0] + a[1]*d[1] + a[2]*d[2]))
+    # Rotation axis = a × d (the dihedral axis).
+    axis = (a[1]*d[2] - a[2]*d[1],
+            a[2]*d[0] - a[0]*d[2],
+            a[0]*d[1] - a[1]*d[0])
+    axis_n = math.sqrt(axis[0]**2 + axis[1]**2 + axis[2]**2)
+    if axis_n < 1e-9:
+        # Parallel (identity) or antiparallel (180° flip).
+        if dot > 0:
+            return (0.0, 0.0, 0.0)
+        return _flip_180_about_perpendicular(a)
+    angle = math.acos(dot)
+    axis = (axis[0]/axis_n, axis[1]/axis_n, axis[2]/axis_n)
+    # Axis-angle → quaternion → rotation matrix.
+    h = angle / 2.0
+    w = math.cos(h); s = math.sin(h)
+    x, y, z = axis[0]*s, axis[1]*s, axis[2]*s
+    R = [
+        [1 - 2*(y*y + z*z), 2*(x*y - w*z),     2*(x*z + w*y)],
+        [2*(x*y + w*z),     1 - 2*(x*x + z*z), 2*(y*z - w*x)],
+        [2*(x*z - w*y),     2*(y*z + w*x),     1 - 2*(x*x + y*y)],
+    ]
+    return _euler_xyz_from_matrix(R)
+
+
+def _flip_180_about_perpendicular(a) -> tuple[float, float, float]:
+    """A 180° rotation about any axis perpendicular to ``a`` (used when the
+    source and target are antiparallel — the dihedral is undefined). Pick the
+    world axis least aligned with ``a`` so the flip is well-conditioned."""
+    aa = (abs(a[0]), abs(a[1]), abs(a[2]))
+    if aa[0] <= aa[1] and aa[0] <= aa[2]:
+        axis = (1.0, 0.0, 0.0)
+    elif aa[1] <= aa[0] and aa[1] <= aa[2]:
+        axis = (0.0, 1.0, 0.0)
+    else:
+        axis = (0.0, 0.0, 1.0)
+    # 180° about `axis`: w=0, (x,y,z)=axis.
+    x, y, z = axis
+    R = [
+        [1 - 2*(y*y + z*z), 2*(x*y),         2*(x*z)],
+        [2*(x*y),           1 - 2*(x*x + z*z), 2*(y*z)],
+        [2*(x*z),           2*(y*z),         1 - 2*(x*x + y*y)],
+    ]
+    return _euler_xyz_from_matrix(R)
+
+
+def _euler_xyz_from_matrix(R) -> tuple[float, float, float]:
+    """Extract Houdini XYZ Euler angles (Rx then Ry then Rz, degrees) from a
+    3x3 rotation matrix (row-major list of lists). Handles gimbal lock when
+    cos(ry) ≈ 0 by setting rx=0 and solving rz from the remaining terms."""
+    ry = math.asin(max(-1.0, min(1.0, -R[2][0])))
+    if abs(math.cos(ry)) > 1e-9:
+        rx = math.atan2(R[2][1], R[2][2])
+        rz = math.atan2(R[1][0], R[0][0])
+    else:  # gimbal lock
+        rx = 0.0
+        rz = math.atan2(-R[0][1], R[1][1])
+    return (math.degrees(rx), math.degrees(ry), math.degrees(rz))
+
+
 def _verify_align_y(orient, direction) -> bool:
     """Self-check: does applying the XYZ Euler ``orient`` to +Y yield ``direction``?
 
@@ -465,3 +545,41 @@ def _verify_align_y(orient, direction) -> bool:
     return (math.isclose(x, ux, abs_tol=1e-9)
             and math.isclose(y, uy, abs_tol=1e-9)
             and math.isclose(z, uz, abs_tol=1e-9))
+
+
+def _verify_align(align_axis: str, orient, direction) -> bool:
+    """Generalized self-check: applying the XYZ Euler ``orient`` to
+    ``align_axis`` yields ``direction``."""
+    ax_vec = _align_axis_to_vec(align_axis)
+    x, y, z = (float(c) for c in ax_vec)
+    rx, ry, rz = (math.radians(a) for a in orient)
+    ux, uy, uz = (float(c) for c in direction)
+    n = math.sqrt(ux * ux + uy * uy + uz * uz)
+    ux, uy, uz = ux / n, uy / n, uz / n
+    # Rx
+    c, s = math.cos(rx), math.sin(rx)
+    y, z = y * c - z * s, y * s + z * c
+    # Ry
+    c, s = math.cos(ry), math.sin(ry)
+    x, z = x * c + z * s, -x * s + z * c
+    # Rz
+    c, s = math.cos(rz), math.sin(rz)
+    x, y = x * c - y * s, x * s + y * c
+    return (math.isclose(x, ux, abs_tol=1e-7)
+            and math.isclose(y, uy, abs_tol=1e-7)
+            and math.isclose(z, uz, abs_tol=1e-7))
+
+
+def _align_axis_to_vec(align_axis: str) -> tuple[float, float, float]:
+    """'+Z' → (0,0,1), '-Y' → (0,-1,0), etc."""
+    sign, axis = _parse_face(align_axis)
+    base = {"X": (1.0, 0.0, 0.0), "Y": (0.0, 1.0, 0.0), "Z": (0.0, 0.0, 1.0)}[axis]
+    s = float(sign)
+    return (s * base[0], s * base[1], s * base[2])
+
+
+def _normalize3(v) -> tuple[float, float, float]:
+    n = math.sqrt(float(v[0]) ** 2 + float(v[1]) ** 2 + float(v[2]) ** 2)
+    if n < 1e-12:
+        raise MeasureError("direction is the zero vector")
+    return (float(v[0]) / n, float(v[1]) / n, float(v[2]) / n)

@@ -329,6 +329,26 @@ class TestVexStrategyResolution(unittest.TestCase):
         self.assertEqual(bare_exports, [],
                          f"orient fragment has bare attribute exports: {bare_exports}")
 
+    def test_orient_fragment_align_axis_z_injects_z_basis(self):
+        """align_axis='+Z' must inject {0,0,1} as the dihedral source axis —
+        this is the torus-wheel case (torus symmetry axis is +Z)."""
+        from edini.vex_strategies import _orient_fragment
+        frag = _orient_fragment({
+            "from": "root",
+            "from_a": {"measure": "bbox_corner", "axes": "-X-Y+Z"},
+            "from_b": {"measure": "bbox_corner", "axes": "+X-Y+Z"}},
+            align_axis="+Z")
+        self.assertIn("dihedral({0,0,1}", frag)
+
+    def test_orient_fragment_default_align_axis_is_y(self):
+        """Without align_axis, the source axis stays {0,1,0} (backward compat)."""
+        from edini.vex_strategies import _orient_fragment
+        frag = _orient_fragment({
+            "from": "root",
+            "from_a": {"measure": "bbox_corner", "axes": "-X-Y+Z"},
+            "from_b": {"measure": "bbox_corner", "axes": "+X-Y+Z"}})
+        self.assertIn("dihedral({0,1,0}", frag)
+
     def test_validation_catches_cyclic_param_via_dangling(self):
         """A leaf scale referencing an undeclared param is rejected."""
         a = _car_assembly()
