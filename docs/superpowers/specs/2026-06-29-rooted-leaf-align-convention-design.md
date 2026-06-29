@@ -17,8 +17,10 @@ platform + 4 wheels) and found four problems, all rooted in the same gap: the
 2. **Copy input 0 (the shape) orientation is arbitrary.** Houdini `copytopoints`
    aligns the source's `+Z` to `N` (legacy), or uses `orient` directly. The
    builder hardcodes `dihedral({0,1,0}, dir)` — "source +Y → measured direction"
-   — but a torus wheel's symmetry axis is **+Z** (disc lies in XY), so even with
-   orient working, the wheel would be tilted.
+   — with no way to pick a different source axis, so a leaf whose symmetry axis
+   isn't +Y (e.g. a torus, whose disc lies in XZ with symmetry axis **+Y** —
+   this was mis-stated as +Z in the original draft and corrected after hython
+   testing; see §3.1) couldn't be correctly aimed without per-shape VEX edits.
 3. **No way to normalize the leaf's origin pose before copy.** A wheel whose
    geometry center ≠ axle center, or that must sit clear of the root, has no
    mechanism to be displaced to a standard pose (+Z / +Y / -Y) before stamping.
@@ -69,7 +71,7 @@ All new fields have defaults, so existing assemblies build unchanged.
 ```jsonc
 "orient": {
   "from": "root",
-  "align_axis": "+Z",                 // NEW. default "+Y". leaf's THIS axis → measured dir
+  "align_axis": "+Y",                 // NEW. default "+Y". leaf's THIS axis → measured dir
   "from_a": { "measure": "bbox_corner", "axes": "-X-Y+Z" },
   "from_b": { "measure": "bbox_corner", "axes": "+X-Y+Z"  }
 }
@@ -83,14 +85,18 @@ Legal values: `±X`, `±Y`, `±Z` (six).
   showed the disc staying flat).
 - box keycap, anything grown along +Y → default `"+Y"`.
 
-### 3.2 `leaf.align_axis` override + `leaf.origin` (problems 2 & 3)
+`align_axis` lives on the mount's orient; all leaves sharing that mount share
+it. (An earlier draft proposed a per-leaf `leaf.align_axis` override, but it
+was NOT implemented — YAGNI; if you need a different axis, use a separate
+mount. Do not set `leaf.align_axis`.)
+
+### 3.2 `leaf.origin` (problem 3)
 
 ```jsonc
 "leaves": [{
   "id": "wheel",
   "mount": "wheel",
   "scale": "wheel_radius",
-  "align_axis": "+Z",            // OPTIONAL: overrides mount.orient.align_axis for this leaf
   "origin": {                    // OPTIONAL: normalize leaf pose before copy
     "anchor": "bbox_center",     //   "bbox_center" | "bbox_face:+Z" | ... | [x,y,z]
     "offset": [0, 0, 0.1]        //   additional translate after normalization (param exprs ok)
@@ -99,7 +105,7 @@ Legal values: `±X`, `±Y`, `±Z` (six).
 }]
 ```
 
-**`align_axis` resolution priority:** `leaf.align_axis` > `mount.orient.align_axis` > default `"+Y"`.
+**`align_axis` resolution:** only `mount.orient.align_axis` (default `"+Y"`). No per-leaf override.
 
 **`origin.anchor` values:**
 | value | which point moves to the origin |
@@ -167,12 +173,10 @@ bbox-only `matchsize` cannot express reliably.
 ### 4.4 grouped CTP (problem 4) — `build_assembly` leaf loop restructure
 
 Group leaves by `(shape structurally identical, scale value identical,
-resolved align_axis identical, origin identical)`. "Shape structurally
-identical" = same `shape.type` AND identical `shape.params` (two different
-wheel radii ⇒ different groups). "Resolved align_axis" = the
-`leaf.align_axis ?? mount.orient.align_axis ?? "+Y"` value after override
-resolution (so two leaves whose leaf/mount fields differ but resolve to the
-same axis still group). Per group:
+origin identical)`. "Shape structurally identical" = same `shape.type` AND
+identical `shape.params` (two different wheel radii ⇒ different groups).
+align_axis is NOT part of the key — orient (incl. align_axis) lives on the
+mount, so all leaves sharing a mount already share its orient. Per group:
 1. Build **one** shape node.
 2. Build **one** `<group>_normalize` node if `origin` present.
 3. Merge the group's mounts into one sub-cloud.
@@ -190,7 +194,6 @@ be byte-identical (modulo mount position).
 ## 5. Validation additions (assembly_builder.validate_assembly)
 
 - `orient.align_axis` ∈ `{±X, ±Y, ±Z}` else `MOUNT_BAD_ALIGN_AXIS`.
-- `leaf.align_axis` (if present) same check.
 - `leaf.origin.anchor` is `"bbox_center"` | `"bbox_face:<±XYZ>"` | 3-list
   else `LEAF_BAD_ORIGIN`.
 - `leaf.origin.offset` (if present) is a 3-list of numbers / param exprs,
@@ -202,8 +205,8 @@ be byte-identical (modulo mount position).
 - **orient point-class:** generated snippet contains
   `setpointattrib(geoself(), "orient", ...)` and does **not** contain a bare
   `p@orient =` in the detail body.
-- **align_axis injection:** `_orient_fragment(spec, "+Z")` emits a dihedral
-  whose source axis is `{0,0,1}`.
+- **align_axis injection:** `_orient_fragment(spec, "+Y")` emits a dihedral
+  whose source axis is `{0,1,0}` (the torus-symmetry-axis case).
 - **grouped CTP:** 4 structurally-identical wheel leaves ⇒ build produces 1
   shape node + 1 CTP node (asserted by node count / type), not 4+4.
 - **origin node:** a leaf with `origin` has a `<leaf>_normalize` wrangle
@@ -225,7 +228,8 @@ be byte-identical (modulo mount position).
   facing).
 - **one CTP, four wheels:** bicycle cloud has 4 points, 1 CTP, OUT has 4 wheel
   geometries.
-- **car regression:** car's 4 wheels (now annotated `align_axis: "+Z"`) still
+- **car regression:** car's 4 wheels (now annotated `align_axis: "+Y"` — the
+  corrected torus symmetry axis) still
   face correctly under the new convention.
 
 ### 6.3 oracle layer (`tests/test_measure.py`)
@@ -235,7 +239,7 @@ be byte-identical (modulo mount position).
 ## 7. Skill doc + tool schema updates
 
 - `skills/rooted-modeling/SKILL.md`: document `align_axis`, `origin`, grouped
-  CTP; update the car example annotation (`align_axis: "+Z"`); add a bicycle
+  CTP; update the car example annotation (`align_axis: "+Y"`); add a bicycle
   verified example section; note the orient point-class fix.
 - `pi-extensions/edini-tools/tools/rooted.ts` (`build_assembly` description /
   promptGuidelines): mention `align_axis` and `origin` fields so the agent
@@ -247,7 +251,7 @@ be byte-identical (modulo mount position).
 
 | risk | mitigation |
 |------|-----------|
-| align_axis changes break car regression | car annotated `align_axis:"+Z"`; hython regression gate |
+| align_axis changes break car regression | car annotated `align_axis:"+Y"`; hython regression gate |
 | grouped CTP merges leaves that should differ | strict grouping key (shape+scale+align_axis+origin all equal) |
 | origin normalization hides a misplaced leaf | normalize only translates to a *standard pose*, never to a coordinate; mount still derives position by measurement |
 | orient setpointattrib perf on huge clouds | mount clouds are tiny (≤ grid/array size); non-issue |

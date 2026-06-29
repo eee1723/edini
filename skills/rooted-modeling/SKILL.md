@@ -85,8 +85,8 @@ mount's measured direction):
    "from_a": {...}, "from_b": {...}}
 ```
 
-The leaf may override the mount's align axis per-instance with
-`leaf.align_axis` (priority: leaf > mount > `"+Y"`).
+`align_axis` lives on the mount's orient (all leaves sharing that mount share
+it). There is no per-leaf override.
 
 ### Fan-out: one leaf definition → many placed instances
 
