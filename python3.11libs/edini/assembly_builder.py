@@ -210,6 +210,35 @@ def validate_assembly(assembly: dict) -> dict[str, Any]:
         # scale (optional): expression over params.
         if "scale" in lf and isinstance(lf["scale"], str):
             _check_expr_refs(lf["scale"], param_names, f"leaves[{li}].scale", errors)
+        # origin (optional): normalize leaf pose before copy.
+        origin = lf.get("origin")
+        if origin is not None:
+            if not isinstance(origin, dict):
+                errors.append({"code": "LEAF_BAD_ORIGIN", "message":
+                    f"leaves[{li}] origin must be an object"})
+            else:
+                anchor = origin.get("anchor", "bbox_center")
+                valid_anchor = (
+                    (isinstance(anchor, str)
+                     and (anchor == "bbox_center"
+                          or (anchor.startswith("bbox_face:")
+                              and anchor[len("bbox_face:"):] in
+                              ("+X", "-X", "+Y", "-Y", "+Z", "-Z"))))
+                    or (isinstance(anchor, (list, tuple)) and len(anchor) == 3))
+                if not valid_anchor:
+                    errors.append({"code": "LEAF_BAD_ORIGIN", "message":
+                        f"leaves[{li}] origin.anchor must be 'bbox_center', "
+                        f"'bbox_face:<±XYZ>', or a 3-list, got {anchor!r}"})
+                off = origin.get("offset")
+                if off is not None:
+                    if not (isinstance(off, (list, tuple)) and len(off) == 3):
+                        errors.append({"code": "LEAF_BAD_ORIGIN", "message":
+                            f"leaves[{li}] origin.offset must be a 3-list"})
+                    else:
+                        for c in off:
+                            if isinstance(c, str):
+                                _check_expr_refs(c, param_names,
+                                                 f"leaves[{li}].origin.offset", errors)
 
     return {
         "success": len(errors) == 0,
@@ -571,6 +600,85 @@ def _build_shape(parent_path: str, shape: dict, params: dict[str, float],
     return node
 
 
+def _build_origin_normalize(root_path: str, origin_spec: dict,
+                            params: dict[str, float], name: str):
+    """Build the ``<leaf>_normalize`` wrangle that moves a leaf's chosen anchor
+    point to the origin (+ optional offset) before copytopoints, so the leaf
+    lands clear of the root.
+
+    anchor forms:
+      - ``"bbox_center"``       → subtract geometry bbox center
+      - ``"bbox_face:<±XYZ>"``  → subtract that face's center
+      - ``[x, y, z]``           → subtract the explicit point
+
+    offset (optional ``[x,y,z]``, may be param exprs) is added after, wired as a
+    ``chv("offset")`` spare so it stays editable.
+
+    Returns the wrangle node. The wrangle runs over POINT (it only moves ``@P``).
+    """
+    anchor = origin_spec.get("anchor", "bbox_center")
+    offset = origin_spec.get("offset", [0.0, 0.0, 0.0])
+    wr = _create_node(root_path, "attribwrangle", name)
+    try:
+        wr.parm("class").set("point")
+    except Exception:
+        pass
+
+    if isinstance(anchor, str) and anchor == "bbox_center":
+        body = r'vector __c = getbbox_center(0); @P -= __c;'
+    elif isinstance(anchor, str) and anchor.startswith("bbox_face:"):
+        face = anchor[len("bbox_face:"):]
+        from edini.vex_strategies import _face_selector
+        sa = _face_selector(face)  # {face_axis, face_sign}
+        fa, fs = sa["face_axis"], sa["face_sign"]
+        body = (
+            f'vector __mn = getbbox_min(0); vector __mx = getbbox_max(0); '
+            f'vector __c = getbbox_center(0); '
+            f'__c[{fa}] = ({fs} > 0) ? __mx[{fa}] : __mn[{fa}]; '
+            f'@P -= __c;')
+    elif isinstance(anchor, (list, tuple)) and len(anchor) == 3:
+        ax, ay, az = (_maybe_eval(c, params) for c in anchor)
+        body = f'@P -= set({float(ax)}, {float(ay)}, {float(az)});'
+    else:
+        raise AssemblyError(f"origin.anchor unrecognized: {anchor!r}")
+
+    body += ' @P += chv("offset");'
+
+    # Install offset as a vector spare (three float spares: offsetx/y/z), set
+    # to the resolved offset values.
+    try:
+        ptg = wr.parmTemplateGroup()
+    except Exception:
+        ptg = None
+    ox = _maybe_eval(offset[0], params) if len(offset) > 0 else 0.0
+    oy = _maybe_eval(offset[1], params) if len(offset) > 1 else 0.0
+    oz = _maybe_eval(offset[2], params) if len(offset) > 2 else 0.0
+    if ptg is not None:
+        for sname, sval in (("offsetx", float(ox)), ("offsety", float(oy)),
+                            ("offsetz", float(oz))):
+            if ptg.find(sname) is None:
+                try:
+                    ptg.append(hou.FloatParmTemplate(sname, sname, 1, (sval,)))
+                except Exception:
+                    continue
+        try:
+            wr.setParmTemplateGroup(ptg)
+        except Exception:
+            pass
+    for sname, sval in (("offsetx", float(ox)), ("offsety", float(oy)),
+                        ("offsetz", float(oz))):
+        try:
+            wr.parm(sname).set(sval)
+        except Exception:
+            pass
+
+    try:
+        wr.parm("snippet").set(body)
+    except Exception as e:
+        raise AssemblyError(f"{name} set snippet failed: {e}") from None
+    return wr
+
+
 # ── The build entry point ───────────────────────────────────────────
 
 
@@ -694,7 +802,17 @@ def build_assembly(
             mount_wr = mount_nodes.get(mount_id)
             if mount_wr is None:
                 raise AssemblyError(f"leaf {lid!r} mount {mount_id!r} not declared")
-            shape_node = _build_shape(root_path, lf["shape"], params, f"{lid}_shape")
+            shape_in = _build_shape(root_path, lf["shape"], params, f"{lid}_geoshape")
+            shape_node = shape_in
+            # Origin normalization (optional): move the leaf's chosen anchor to
+            # the origin (+ offset) so it lands clear of the root. Inserted
+            # between shape and the scale/CTP chain.
+            origin_spec = lf.get("origin")
+            if isinstance(origin_spec, dict):
+                norm = _build_origin_normalize(
+                    root_path, origin_spec, params, f"{lid}_normalize")
+                norm.setInput(0, shape_in)
+                shape_node = norm   # CTP input 0 now points at the normalize output
             # Scale: if the leaf declares a scale (a number or param expr), apply
             # it by stamping @pscale onto the mount's points via a wrangle, so the
             # scaled copies are still live (the scale re-cooks with the param).

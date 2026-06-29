@@ -412,6 +412,89 @@ def _staircase_assembly(treads=5):
     }
 
 
+class TestOriginNormalization(unittest.TestCase):
+    """A leaf with an `origin` spec gets a normalize wrangle between its shape
+    and CTP that moves the chosen anchor point to the origin (+ optional
+    offset), so the leaf lands clear of the root."""
+
+    # NOTE on isolation: assembly_builder binds its module-level `hou` global at
+    # import time. The top-of-file import (line 28) pulled it in with hou=None,
+    # so we must flush the edini modules and re-import AFTER installing the
+    # mock — the same flush-and-reimport contract TestBuildAssemblyStructure /
+    # TestM1Builds use. The mock install happens once per class.
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls._saved_ref = MockNode._hou_ref
+        cls._saved_mod = sys.modules.get("hou")
+        cls._hou = create_mock_hou()
+        sys.modules["hou"] = cls._hou
+        MockNode._hou_ref = cls._hou
+        for _m in list(sys.modules):
+            if _m.startswith("edini"):
+                del sys.modules[_m]
+        from edini import assembly_builder  # noqa: E402
+        cls.build_assembly = staticmethod(assembly_builder.build_assembly)
+
+    @classmethod
+    def tearDownClass(cls):
+        MockNode._hou_ref = cls._saved_ref
+        sys.modules["hou"] = cls._saved_mod
+        for _m in list(sys.modules):
+            if _m.startswith("edini"):
+                del sys.modules[_m]
+        super().tearDownClass()
+
+    def _build(self, assembly):
+        hou = sys.modules["hou"]
+        root = hou.node("/obj").createNode("geo", "test_origin")
+        res = self.build_assembly(assembly, root.path(),
+                                  root_geometry_provider=_box_provider)
+        return root.path(), res
+
+    def test_leaf_without_origin_has_no_normalize_node(self):
+        """Backward compat: a leaf without `origin` builds exactly as before —
+        no extra normalize wrangle in the network."""
+        asm = _car_assembly()  # car leaves have no `origin`
+        root_path, res = self._build(asm)
+        self.assertTrue(res["success"], res.get("error"))
+        hou = sys.modules["hou"]
+        names = {c.name() for c in hou.node(root_path).children()}
+        self.assertFalse(any(n.endswith("_normalize") for n in names),
+                         f"unexpected normalize node(s): {[n for n in names if n.endswith('_normalize')]}")
+
+    def test_leaf_with_origin_inserts_normalize_wrangle(self):
+        """A leaf declaring origin=bbox_center gets a <leaf>_normalize wrangle
+        between its shape and its CTP, whose snippet subtracts the bbox center
+        and adds the offset."""
+        asm = _car_assembly()
+        # Annotate the first wheel with an origin spec.
+        asm["leaves"][0]["origin"] = {"anchor": "bbox_center", "offset": [0, 0, 0.2]}
+        root_path, res = self._build(asm)
+        self.assertTrue(res["success"], res.get("error"))
+        hou = sys.modules["hou"]
+        names = {c.name() for c in hou.node(root_path).children()}
+        self.assertIn("wheel_fr_normalize", names)
+        snip = hou.node(f"{root_path}/wheel_fr_normalize").parm("snippet").eval()
+        self.assertIn("getbbox_center", snip)
+        self.assertIn("@P -=", snip)
+        # offset wired as chv("offset")
+        self.assertIn("chv(\"offset\")", snip)
+
+    def test_leaf_origin_face_anchor_uses_face_center(self):
+        """anchor='bbox_face:-Y' subtracts the -Y face center so the leaf's
+        base sits on the mount and the body hangs in +Y."""
+        asm = _car_assembly()
+        asm["leaves"][0]["origin"] = {"anchor": "bbox_face:-Y"}
+        root_path, res = self._build(asm)
+        self.assertTrue(res["success"], res.get("error"))
+        hou = sys.modules["hou"]
+        snip = hou.node(f"{root_path}/wheel_fr_normalize").parm("snippet").eval()
+        # Face center is computed from bbox min on the chosen axis.
+        self.assertIn("getbbox_min", snip)
+        self.assertIn("getbbox_max", snip)
+
+
 class TestKeyboardGrid(unittest.TestCase):
     """The keyboard's geometry correctness (15 keys on the tray face, rescaling
     with tray width) is verified in hython against the Python oracle. Here we
@@ -506,7 +589,7 @@ class TestM1Builds(unittest.TestCase):
         names = {c.name() for c in hou.node(root.path()).children()}
         # Live structure: root + 1 grid mount wrangle + key shape + key CTP + OUT.
         self.assertIn("mount_keys", names)
-        self.assertIn("key_shape", names)
+        self.assertIn("key_geoshape", names)
         self.assertIn("key_ctp", names)
         self.assertIn("OUT", names)
         # NO per-position xform nodes — the fan-out is via CTP, not N xforms.
