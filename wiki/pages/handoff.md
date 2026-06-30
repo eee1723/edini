@@ -2,9 +2,9 @@
 
 > **用途**：让新 Agent 或开发者在 Edini 仓库里快速上手。
 
-**最后更新**：2026-06-29（rooted-modeling skill M2 live 关联交付 —— VEX 策略 + Copy-to-Points，改 root 参数实时更新，502 测试含真机 hython）
-**当前阶段**：**rooted-modeling**（根件驱动 + live VEX+CTP）M0/M1/M2 全部交付。旧的声明式资产管道已整体搁置到 `_disabled_backup/asset-pipeline-2026-06/`。
-**下一步**：用户实测发现若干问题（见下方「rooted-modeling 待修问题」），下次会话接着改。本机有完整 Houdini：`D:\houdini\bin\hython.exe`（Houdini 21.0.440）。
+**最后更新**：2026-06-29（rooted-modeling skill M2.5 — leaf align convention：orient point-class 修复 + align_axis + origin normalize + 分组 CTP，151 测试含 9 真机 hython facing 铁证）
+**当前阶段**：**rooted-modeling**（根件驱动 + live VEX+CTP）M0/M1/M2/M2.5 全部交付。旧的声明式资产管道已整体搁置到 `_disabled_backup/asset-pipeline-2026-06/`。
+**下一步**：用户上次实测发现的 4 个 leaf 层问题已**全部修复**（M2.5，见下方）。本机有完整 Houdini：`D:\houdini\bin\hython.exe`（Houdini 21.0.440）。建议下次用户在 Houdini GUI 重新打开 `edini_showcase.hip`（已重新生成，含 car + bicycle + keyboard + stairs）验证轮子朝向正确。
 **工作分支**：`master`
 
 ---
@@ -84,14 +84,20 @@ D:/houdini/bin/hython.exe scripts/show_assemblies.py
 python -m pytest tests/ -q
 ```
 
-### ⚠️ rooted-modeling 待修问题（用户 2026-06-29 实测发现）
+### ✅ rooted-modeling leaf 层问题（用户 2026-06-29 实测发现 → M2.5 已全部修复）
 
-用户在 Houdini GUI 打开 `edini_showcase.hip` 实测后发现了若干问题。**具体细节待用户补充**，下次会话的起点。已知的范围限制（非 bug，是设计）：
+用户在 Houdini GUI 打开 `edini_showcase.hip` 实测后报告 4 个 leaf 层问题，**M2.5 全部修复并真机验证**：
 
-- **只有 root-shape 参数是 live**（length/width 等喂 root box 的）。mount 内部参数（grid rows/cols/margin、array count/step/origin）目前 build 时烤进 VEX，改这些要重建。阶梯的 `base_w` 改了踏步不动就是这个原因。
-- mock 测不到 VEX 执行（mock 不 cook），VEX 正确性靠 hython + Python 预言机保证。
+1. **orient 不生效**（`mount_wheel_fr` 的 `f@orient=xxx` 没起作用）→ 根因：detail wrangle 里 `p@orient=` 写成 detail 属性 CTP 不读。修复：`setpointattrib` 写到每个 point。**systematic-debugging 进一步发现**：detail wrangle 的 `npoints()` 不反映同次 cook 内 addpoint 创建的点，导致循环永不执行 → 改用 `__newpts[]` 数组（每个 addpoint append 进去）。
+2. **copy 第一输入端朝向**（第一输入端应强制朝 z 轴，z 轴朝向第二输入端 N 方向）→ 根因：leaf 对齐轴硬编码 +Y。修复：新增 `orient.align_axis` 字段（±X/±Y/±Z 六轴可配）。**关键事实纠正**：torus 对称轴是 +Y（圆盘在 XZ 平面）不是 +Z，spec 原假设错了，hython 实测纠正。
+3. **leaf 原点规范化**（用 matchsize 或 vex 把模型位移到标准轴避免和 root 穿插）→ 修复：新增 `leaf.origin`（anchor: bbox_center / bbox_face:±XYZ / [x,y,z] + offset），copy 前插入 point wrangle 规范化。
+4. **单个 copy 出 N 实例**（4 同形状轮子 + 4 mount merge 后用 1 个 copy）→ 修复：`_leaf_group_key` + `_group_leaves`，同 shape+scale+origin 的 leaf 共享 1 shape + 1 CTP。
 
-**用户补充的具体问题**：_（下次会话由用户/agent 填写）_
+**真机铁证**（hython 21.0.440，9 个 facing 测试全过）：bicycle 4 轮每个 bbox `[0.063, 0.805, 0.805]` thin 轴 = X（车轴方向）；mount cloud orient 四元数旋转 +Y 得 X；1 CTP 4 轮；car 回归仍正确；live recook 工作。
+
+**设计/计划文档**：`docs/superpowers/specs/2026-06-29-rooted-leaf-align-convention-design.md` + `docs/superpowers/plans/2026-06-29-rooted-leaf-align-convention.md`。
+
+**仍存在的设计限制（非 bug）**：只有 root-shape 参数是 live；mount 内部参数（grid rows/cols/margin、array count/step/origin）build 时烤进 VEX，改这些要重建。
 
 ---
 

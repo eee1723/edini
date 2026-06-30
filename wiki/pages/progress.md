@@ -1,6 +1,6 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-29 &nbsp;|&nbsp; **🔴 主线转向：rooted-modeling skill（根件驱动 + live VEX+CTP，502 测试全绿含真机 hython）** &nbsp;|&nbsp; 旧的声明式资产管道（asset_model/asset_builder/skeleton DAG）**整体搁置**到 `_disabled_backup/asset-pipeline-2026-06/`（capability 在但「测一次烤成字面值」不 live，用户改 root 参数叶子不动）。新 skill 用 **attribwrangle 读 root bbox + copytopoints 盖印**，改参数实时更新，**车/键盘/阶梯三例在真 Houdini 21.0.440 验证 live recook**。下方旧的资产管道卡片保留作历史记录。
+> 最后更新：2026-06-29 &nbsp;|&nbsp; **🔴 主线：rooted-modeling skill M2.5 — leaf align convention 全绿（151 测试含 9 真机 hython facing 铁证）** &nbsp;|&nbsp; 用户上次实测发现的 4 个 leaf 层问题已**全部修复并真机验证**：① orient 写成 detail 属性 CTP 不读 → `setpointattrib` 到 `__newpts[]`；② leaf 对齐轴硬编码 +Y → `orient.align_axis` 可配（六轴）；③ copy 前 leaf 原点位姿不规范 → `leaf.origin` 规范化 wrangle；④ 4 同形状 leaf 出 4 份几何 → 分组共享 1 shape + 1 CTP。**调试关键发现：torus 对称轴是 +Y 不是 +Z**（spec 原假设错了，hython 实测纠正）。下方旧的资产管道卡片保留作历史记录。
 
 ## ⚠️ 重大架构转向（2026-06-29）：rooted-modeling 取代声明式资产管道
 
@@ -17,6 +17,7 @@
 | **M0** | measure.py 测量层（bbox 角点/面中心/边点/方向/朝向）+ assembly_builder（xform 版）+ 小车 4 轮 + SKILL | ✅ 交付（459→489 测试） |
 | **M1** | grid_on_face（键盘网格）+ array（阶梯阵列）fan-out | ✅ 交付（489→499 测试） |
 | **M2** | **live 关联**：vex_strategies.py 预制 VEX + 重写 build 层为 attribwrangle+CTP + root 参数暴露为 spare parm | ✅ 交付（502 测试，**含真机 hython live recook 铁证**） |
+| **M2.5** | **leaf align convention**：orient point-class 修复 + `align_axis` 可配 + `leaf.origin` 规范化 + 分组 CTP | ✅ 交付（151 测试，**含 9 真机 hython wheel-facing 铁证**） |
 
 **真机铁证**（Houdini 21.0.440，本机 `D:\houdini\bin\hython.exe`）：
 ```
@@ -27,8 +28,8 @@
 
 **新 skill 文件**：`python3.11libs/edini/{measure,vex_strategies,assembly_builder}.py` + `skills/rooted-modeling/SKILL.md` + `pi-extensions/edini-tools/tools/rooted.ts` + `tests/test_{measure,assembly_builder,assembly_hython}.py` + `scripts/{verify_vex_strategies,show_assemblies}.py`。
 
-**⚠️ 已发现待修问题**（用户 2026-06-29 实测发现，下次的起点）：
-- 详见 `wiki/pages/handoff.md` 的「rooted-modeling 待修问题」章节。用户在 Houdini GUI 打开 `edini_showcase.hip` 后发现若干问题（待用户补充具体细节），暂存此处供下次会话接着改。
+**✅ 已发现并修复的 leaf 层问题**（用户 2026-06-29 实测发现 → M2.5 全部修复）：
+- 用户在 Houdini GUI 打开 `edini_showcase.hip` 后发现 4 个 leaf 层问题（orient 不生效 / 朝向硬编码 / 无原点规范化 / 重复几何）。**M2.5（本次交付）已全部修复**：systematic-debugging 走完整流程，hython facing 测试作决定性验证，并纠正了 spec 的事实错误（torus 轴是 +Y 非 +Z）。详见下方 M2.5 时间线卡片。`edini_showcase.hip` 已重新生成（含 car + bicycle + keyboard + stairs 四例）。
 
 ---
 
@@ -201,6 +202,20 @@ recipe 教惯用法，资产管道教结构。
 </div>
 
 <div class="timeline">
+
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-29</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第三十六阶段：rooted-modeling M2.5 — leaf align convention（orient point-class 修复 + align_axis + origin normalize + 分组 CTP）</span>
+      <span class="status-tag status-done">完成 · 真机 hython facing 铁证</span>
+    </div>
+    <div class="timeline-summary">用户实测 M2 的 `edini_showcase.hip` 后发现 4 个 leaf 层问题，本次全部修复。<strong>第一性原理拆解</strong>：4 问题共享同一根因——leaf 层缺显式「对齐约定」（align convention）。<strong>brainstorming → spec → plan → subagent-driven 执行（8 task）</strong>，每 task 两阶段 review（spec 合规 + 代码质量）。<strong>四修复</strong>：① <strong>orient point-class</strong>（`vex_strategies._orient_fragment`）—— detail wrangle 里 `p@orient=` 变成 detail 属性 CTP 不读，改 `setpointattrib` 写到每个 point；② <strong>align_axis 约定</strong>（`measure.orient_to_align(direction, align_axis="+Y")` 泛化）—— leaf 的对齐轴可配（±X/±Y/±Z 六轴），dihedral→四元数→矩阵→Euler 直构（已验证 0/66 失败）；③ <strong>leaf.origin 规范化</strong>（`_build_origin_normalize`）—— copy 前插入 wrangle，把 anchor 点（bbox_center / bbox_face:±XYZ / [x,y,z]）移到原点 + offset；④ <strong>分组 CTP</strong>（`_leaf_group_key` + `_group_leaves`）—— 同 shape+scale+origin 的 leaf 共享 1 shape + 1 CTP，4 轮子从 4+4 降到 1+1。<strong>调试关键发现（systematic-debugging）</strong>：hython facing 测试暴露 mock 抓不到的两个根因——(a) <strong>VEX 语义陷阱</strong>：detail wrangle 里 `npoints()` 不反映同次 cook 内 `addpoint` 创建的点，导致 orient 循环 `for i&lt;npoints()` 永不执行（orient 留单位四元数），改用 `__newpts[]` 数组解决；(b) <strong>事实错误</strong>：torus 对称轴是 <strong>+Y</strong>（圆盘在 XZ 平面）不是 spec 假设的 +Z，align_axis 改回 +Y 后轮子才立起来（bbox `[0.063, 0.805, 0.805]` thin=X 车轴方向）。<strong>真机铁证</strong>（hython 21.0.440）：bicycle 4 轮每个 bbox thin 轴 = X（车轴方向）、mount cloud orient 四元数旋转 +Y 得 X 方向、1 CTP 4 轮、car 回归仍朝向正确、live recook（length 4→8 轮子滑动）。<strong>测试</strong>：151 passed（142 mock + 9 hython），final code review APPROVED。<strong>新展示</strong>：`edini_showcase.hip` 含 car + bicycle + keyboard + stairs 四例。7 个 feature commit + 1 review 修复 commit。</div>
+    <div class="timeline-tags">
+      <span>leaf-align-convention</span><span>orient-point-class</span><span>setpointattrib</span><span>__newpts数组</span><span>align_axis</span><span>dihedral→矩阵→Euler</span><span>origin规范化</span><span>分组CTP</span><span>systematic-debugging</span><span>torus轴+Y纠正</span><span>hython-facing铁证</span><span>151测试</span>
+    </div>
+  </div>
+</div>
 
 <div class="timeline-item timeline-done">
   <div class="timeline-date">2026-06-26</div>
