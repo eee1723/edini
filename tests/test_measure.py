@@ -12,6 +12,7 @@ from __future__ import annotations
 import math
 import sys
 import os
+import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "python3.11libs"))
 
@@ -32,6 +33,7 @@ from edini.measure import (  # noqa: E402
     measure_grid_on_face,
     measure_array,
     measure_cells,
+    measure_pickets,
     direction_from_two_points,
     orient_to_align_y,
 )
@@ -454,6 +456,39 @@ class TestMeasureCells:
         # And the key stays square (6×6).
         assert pad[0][1][0] == pytest.approx(6.0)
         assert pad[0][1][2] == pytest.approx(6.0)
+
+
+# ── pickets (1D row of position/size/orient instances) ────────────
+
+
+class TestMeasurePickets(unittest.TestCase):
+    def test_count_uniform_pickets(self):
+        """count=8 on a box → 8 points evenly spaced, each carrying a
+        (position, scale, orient) triple; orient is identity (no rot)."""
+        geo = _box_geo(0, 4, 0, 0.5, 0, 1)   # 4 wide, 1 deep
+        res = measure_pickets(geo, face="+Y", edge_axis="X", count=8)
+        self.assertEqual(len(res), 8)
+        pos0, scale0, orient0 = res[0]
+        # orient is identity quaternion (0,0,0,1).
+        self.assertAlmostEqual(orient0[0], 0.0)
+        self.assertAlmostEqual(orient0[1], 0.0)
+        self.assertAlmostEqual(orient0[2], 0.0)
+        self.assertAlmostEqual(orient0[3], 1.0)
+        # X positions span the edge after margin.
+        xs = [p[0] for p, s, o in res]
+        self.assertGreater(max(xs) - min(xs), 0)
+
+    def test_explicit_cells_uneven_pickets(self):
+        """An explicit cells table (uneven widths) overrides count."""
+        geo = _box_geo(0, 4, 0, 0.5, 0, 1)
+        res = measure_pickets(geo, face="+Y", edge_axis="X",
+            cells=[{"gx": 0, "w": 2}, {"gx": 2.5, "w": 1}])
+        self.assertEqual(len(res), 2)
+
+    def test_count_must_be_positive(self):
+        geo = _box_geo(0, 4, 0, 0.5, 0, 1)
+        with self.assertRaises(MeasureError):
+            measure_pickets(geo, face="+Y", edge_axis="X", count=0)
 
 
 # ── direction & orientation ────────────────────────────────────────

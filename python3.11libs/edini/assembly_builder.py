@@ -427,6 +427,21 @@ def _expand_repeat_cells(cells: list[dict]) -> list[dict]:
     return out
 
 
+def _expand_pickets_count(position_spec: dict) -> dict:
+    """Expand a pickets `count` into an explicit equal-width cells table.
+    count=N → N cells of width 1 at gx=0,1,...,N-1. The VEX loop is unchanged;
+    only fed a generated table."""
+    if "count" not in position_spec:
+        return position_spec
+    count = int(position_spec["count"])
+    if count < 1:
+        raise AssemblyError(f"pickets count must be >= 1, got {count}")
+    cells = [{"gx": float(i), "w": 1.0} for i in range(count)]
+    out = {k: v for k, v in position_spec.items() if k != "count"}
+    out["cells"] = cells
+    return out
+
+
 def _leaf_group_key(lf: dict, mount: dict) -> tuple:
     """A stable key identifying leaves that produce byte-identical stamped
     output (modulo mount position) and so can share one shape + one CTP.

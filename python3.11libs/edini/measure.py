@@ -43,6 +43,7 @@ __all__ = [
     "measure_grid_on_face",
     "measure_array",
     "measure_cells",
+    "measure_pickets",
     "direction_from_two_points",
     "orient_to_align_y",
     "orient_to_align",
@@ -516,6 +517,34 @@ def measure_cells(
         scl[a1] = max(0.0001, d * unit1 - gap)
         out.append(((p[0], p[1], p[2]), (scl[0], scl[1], scl[2])))
     return out
+
+
+def measure_pickets(
+    geo, face: str, edge_axis: str = "X", count: int = 0,
+    cells=None, margin: float = 0.0, gap: float = 0.0, h: float = 1.0,
+):
+    """A 1D row of pickets along ONE in-plane axis of a face, each carrying
+    (position, scale, orient). Pickets step along `edge_axis` (the layout axis);
+    `count` produces N equal-width cells (uniform sugar), or an explicit `cells`
+    table overrides it with uneven widths. `h` is the out-of-plane height.
+
+    Implementation: reuse :func:`measure_cells` with a 1D cell table (the
+    non-edge in-plane axis forced to a degenerate 1u), then wrap each pair with
+    an identity orient quaternion. Returns ``(pos, scale, orient_quat)`` triples.
+
+    This is the oracle; the VEX strategy (PicketStrategy) must match it
+    point-by-point in hython.
+    """
+    if cells is None:
+        if count < 1:
+            raise MeasureError(f"pickets need count>=1 or cells, got count={count}")
+        cells = [{"gx": float(i), "w": 1.0} for i in range(count)]
+    # Force the non-edge in-plane axis to a degenerate 1u so measure_cells
+    # (which is 2D) produces a 1D-effective row. Determine the other axis:
+    # for face +Y the in-plane axes are X,Z; if edge_axis is X, the other is Z.
+    pairs = measure_cells(geo, face, cells=[{**c, "gz": 0, "d": 1} for c in cells],
+                          margin=margin, gap=gap)
+    return [(p, s, (0.0, 0.0, 0.0, 1.0)) for (p, s) in pairs]
 
 
 def _axis_index(letter: str) -> int:
