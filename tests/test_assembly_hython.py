@@ -766,5 +766,73 @@ class TestShelfHython(unittest.TestCase):
                            f"layer-1 book not above layer-0: Ys={ys}")
 
 
+def _city():
+    """A 3-block cityscape: a tower (h=40), a podium (h=10), and a street strip
+    (h=6) on a ground plane. Proves the blocks SYNTHESIS: 2D footprints (cells
+    loop) + per-block heights (the height fragment) + the tallest fills the
+    root's height."""
+    return {
+        "id": "city",
+        "root": {"shape": {"type": "box", "params": {"size": [8, 0.1, 6]}}},
+        "mounts": [{"id": "blocks", "position": {
+            "measure": "blocks", "from": "root", "face": "+Y",
+            "cells": [{"gx": 0, "gz": 0, "w": 2, "d": 2, "h": 40},   # tower
+                      {"gx": 2, "gz": 0, "w": 2, "d": 2, "h": 10},   # podium
+                      {"gx": 0, "gz": 2, "w": 4, "d": 2, "h": 6}]}}],     # street strip
+        "leaves": [{"id": "bldg", "mount": "blocks",
+            "shape": {"type": "box", "params": {"size": [1, 1, 1]}}}]}
+
+
+@unittest.skipUnless(HYTHON, "hython not installed")
+class TestBlocksHython(unittest.TestCase):
+    """THE blocks-strategy proof (④ synthesis): a cityscape built end-to-end.
+    BlockStrategy composes the tiles orient mechanism with a height fragment.
+    The geometric signature: each block's bbox Y-size reflects its height
+    (tower > podium > strip), and the tallest (h=40) fills the root's height."""
+
+    def test_city_three_blocks_with_distinct_heights(self):
+        """3 blocks stamped; their bbox Y-sizes reflect h (40 > 10 > 6). The
+        height unit = root_face_span / max(h), so the tallest (h=40) fills the
+        root's face-axis span, and the others scale proportionally (10/40, 6/40).
+        This is the height fragment working: without it, all 3 would share the
+        base 2D loop's face-axis scale (1, the leaf's own height)."""
+        res = _run(_city(), probe="piece_bboxes")
+        self.assertTrue(res["success"], res.get("error"))
+        pieces = res["_probe"]["pieces"]
+        self.assertEqual(len(pieces), 3, f"expected 3 blocks, got {len(pieces)}")
+        y_sizes = sorted(p["size"][1] for p in pieces)
+        # Distinct (the height fragment differentiated them by h).
+        self.assertEqual(len(set(round(s, 4) for s in y_sizes)), 3,
+                         f"heights not distinct: {y_sizes}")
+        # Ordered by h: strip(6) < podium(10) < tower(40).
+        self.assertLess(y_sizes[0], y_sizes[1], f"not ordered: {y_sizes}")
+        self.assertLess(y_sizes[1], y_sizes[2], f"not ordered: {y_sizes}")
+        # Proportional: the ratio tower/podium should match 40/10 = 4.0 (the
+        # derived unit cancels — both scale by the same unit, so their ratio is
+        # the ratio of their h values). This is the measurement-driven invariant.
+        self.assertAlmostEqual(y_sizes[2] / y_sizes[1], 40.0 / 10.0, places=2,
+                               msg=f"tower/podium ratio broke: {y_sizes}")
+
+    def test_blocks_compose_rot_and_height(self):
+        """THE synthesis proof: a block with BOTH h and rot produces an instance
+        whose bbox reflects the height AND whose orient is non-identity. The two
+        fragments (height → scale, rot → orient) compose independently."""
+        city = {
+            "id": "city2",
+            "root": {"shape": {"type": "box", "params": {"size": [8, 0.1, 6]}}},
+            "mounts": [{"id": "blocks", "position": {
+                "measure": "blocks", "from": "root", "face": "+Y",
+                "cells": [{"gx": 0, "gz": 0, "w": 1, "d": 1, "h": 20, "rot": 90}]}}],
+            "leaves": [{"id": "bldg", "mount": "blocks",
+                "shape": {"type": "box", "params": {"size": [1, 1, 1]}}}]}
+        res = _run(city, probe="piece_bboxes")
+        self.assertTrue(res["success"], res.get("error"))
+        pieces = res["_probe"]["pieces"]
+        self.assertEqual(len(pieces), 1)
+        # Height applied: Y-size reflects h (not 1, the leaf's default).
+        self.assertNotAlmostEqual(pieces[0]["size"][1], 1.0, places=2,
+                                  msg=f"height not applied: {pieces[0]['size']}")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -45,6 +45,7 @@ __all__ = [
     "measure_cells",
     "measure_pickets",
     "measure_tiles",
+    "measure_blocks",
     "measure_shelf",
     "_axis_angle_quat",
     "_rule_rot",
@@ -596,6 +597,34 @@ def measure_tiles(geo, face, cells, margin=0.0, gap=0.0, orient_rule=None):
             rot = _rule_rot(orient_rule, 0, c)
         q = _axis_angle_quat(nvec, rot)
         out.append((p, s, q))
+    return out
+
+
+def measure_blocks(geo, face, cells, margin=0.0, gap=0.0, orient_rule=None):
+    """A 2D city-blocks layout — the SYNTHESIS (④). Each cell carries a 2D
+    footprint {gx,gz,w,d} (in-plane, via the cells loop) + an out-of-plane
+    HEIGHT (h, along the face normal) + optional per-cell ROTATION (rot →
+    quaternion, as tiles). This composes measure_tiles (rot → orient) with a
+    height-derived face-axis scale. Returns (pos, scale, orient_quat) triples.
+
+    The height unit is DERIVED from the root's face-axis span / max(h): the
+    tallest block fills the root's height (mirroring the in-plane unit
+    derivation, so the layout is a function of the root's geometry). Empty grid
+    slots (parks/streets) are simply undeclared cells."""
+    triples = measure_tiles(geo, face, cells=cells, margin=margin, gap=gap,
+                            orient_rule=orient_rule)
+    sign, axis = _parse_face(face)
+    ai = _axis_index(axis)
+    b = measure_bbox(geo)
+    root_face_span = b["max"][ai] - b["min"][ai]
+    max_h_u = max((float(c.get("h", 0.0)) for c in cells), default=0.0)
+    unit_h = root_face_span / max_h_u if max_h_u > 0 else 1.0
+    out = []
+    for (p, s, q), c in zip(triples, cells):
+        h_u = float(c.get("h", 0.0))
+        s2 = list(s)
+        s2[ai] = h_u * unit_h
+        out.append((p, tuple(s2), q))
     return out
 
 

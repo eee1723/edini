@@ -35,6 +35,7 @@ from edini.measure import (  # noqa: E402
     measure_cells,
     measure_pickets,
     measure_tiles,
+    measure_blocks,
     measure_shelf,
     _axis_angle_quat,
     _rule_rot,
@@ -601,6 +602,55 @@ class TestMeasureShelf(unittest.TestCase):
         res = measure_shelf(geo, face="+Y", axis="Y", layers=layers, margin=0.0)
         # layer 0 (height 10) book Y-scale > layer 1 (height 5) book Y-scale
         self.assertGreater(res[0][1][1], res[1][1][1])
+
+
+class TestMeasureBlocks(unittest.TestCase):
+    """measure_blocks — the SYNTHESIS oracle (④). Composes tiles' rot (→ orient)
+    with an out-of-plane height column. The height unit derives from the root's
+    face-axis span / max(h), so the tallest block fills the root's height."""
+
+    def test_block_height_applied_to_face_axis_scale(self):
+        """A block with h=40 → its scale's face-axis (Y) component reflects the
+        derived height (root_face_span / max(h) × h)."""
+        geo = _box_geo(0, 8, 0, 10, 0, 6)   # root: 8 wide, 10 tall, 6 deep
+        res = measure_blocks(geo, "+Y", cells=[{"gx": 0, "gz": 0, "w": 2, "d": 2, "h": 40}])
+        self.assertEqual(len(res), 1)
+        pos, scale, orient = res[0]
+        # No rot → identity orient.
+        self.assertEqual(orient, (0.0, 0.0, 0.0, 1.0))
+        # Height unit = root_face_span(10) / max_h(40) = 0.25; scale Y = 40 × 0.25 = 10.
+        self.assertAlmostEqual(scale[1], 10.0, places=5)
+
+    def test_tallest_block_fills_root_height(self):
+        """max(h) block → its scale Y == the root's face-axis span (fills it)."""
+        geo = _box_geo(0, 8, 0, 10, 0, 6)
+        res = measure_blocks(geo, "+Y", cells=[
+            {"gx": 0, "gz": 0, "w": 2, "d": 2, "h": 40},   # tallest
+            {"gx": 2, "gz": 0, "w": 2, "d": 2, "h": 10}])  # quarter height
+        # Tallest block (h=40): scale Y == root span (10).
+        self.assertAlmostEqual(res[0][1][1], 10.0, places=5)
+        # Shorter block (h=10): scale Y == 10 × 0.25 = 2.5.
+        self.assertAlmostEqual(res[1][1][1], 2.5, places=5)
+
+    def test_block_with_rot(self):
+        """A block with rot=90 → orient = quaternion(90° about +Y)."""
+        geo = _box_geo(0, 8, 0, 10, 0, 6)
+        res = measure_blocks(geo, "+Y",
+            cells=[{"gx": 0, "gz": 0, "w": 2, "d": 2, "h": 10, "rot": 90}])
+        pos, scale, orient = res[0]
+        import math
+        self.assertAlmostEqual(orient[1], math.sin(math.radians(45)), places=5)
+        self.assertAlmostEqual(orient[3], math.cos(math.radians(45)), places=5)
+
+    def test_orient_rule_applied_when_no_explicit_rot(self):
+        """Mount-level orient_rule supplies rot for blocks without explicit rot."""
+        geo = _box_geo(0, 8, 0, 10, 0, 6)
+        res = measure_blocks(geo, "+Y",
+            cells=[{"gx": 1, "gz": 0, "w": 2, "d": 2, "h": 10}],  # no rot
+            orient_rule="checker")   # gx=1,gz=0 → (1+0)%2=1 → 90°
+        pos, scale, orient = res[0]
+        import math
+        self.assertAlmostEqual(orient[1], math.sin(math.radians(45)), places=5)
 
 
 # ── direction & orientation ────────────────────────────────────────

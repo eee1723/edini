@@ -975,6 +975,65 @@ class TestShelfLayout(unittest.TestCase):
         self.assertNotIn("__layer_gy[]", snippet)
 
 
+class TestBlocksLayout(unittest.TestCase):
+    """The `blocks` strategy (④ synthesis): 2D footprint + height + optional
+    rotation. Composes tiles' rot (→ orient) with a height fragment. Validated
+    at the schema level + VEX-structure level here; geometry is hython's job."""
+
+    def test_blocks_validates(self):
+        a = {"id": "city",
+             "root": {"shape": {"type": "box", "params": {"size": [8, 0.1, 6]}}},
+             "mounts": [{"id": "blocks", "position": {
+                 "measure": "blocks", "from": "root", "face": "+Y",
+                 "cells": [{"gx": 2, "gz": 0, "w": 2, "d": 3, "h": 40},
+                           {"gx": 4, "gz": 0, "w": 2, "d": 3, "h": 10, "rot": 0}]}}],
+             "leaves": [{"id": "bldg", "mount": "blocks",
+                 "shape": {"type": "box", "params": {"size": [1, 1, 1]}}}]}
+        r = validate_assembly(a)
+        self.assertTrue(r["success"], r["errors"])
+
+    def test_blocks_bad_measure_rejected(self):
+        a = {"id": "x",
+             "root": {"shape": {"type": "box", "params": {"size": [8, 0.1, 6]}}},
+             "mounts": [{"id": "m", "position": {
+                 "measure": "blocks", "face": "+Y",
+                 "cells": [{"gx": 0, "gz": 0, "w": 0, "d": 1, "h": 10}]}}],  # w<=0
+             "leaves": []}
+        r = validate_assembly(a)
+        self.assertFalse(r["success"])
+        self.assertTrue(any(e["code"] == "MOUNT_BAD_BLOCKS" for e in r["errors"]))
+
+    def test_blocks_vex_has_height_and_orient(self):
+        """When a cell has both h and rot, the VEX emits BOTH the block-height
+        fragment (__block_h/__u_h) AND the orient write. This is the synthesis:
+        the two fragments compose independently."""
+        from edini.vex_strategies import build_mount_vex
+        spec = {"measure": "blocks", "face": "+Y",
+                "cells": [{"gx": 0, "gz": 0, "w": 1, "d": 1, "h": 40, "rot": 90}]}
+        snippet, parms = build_mount_vex(spec)
+        self.assertIn("__block_h[]", snippet)
+        self.assertIn("__u_h", snippet)
+        self.assertIn('setpointattrib(geoself(), "orient"', snippet)
+
+    def test_blocks_vex_height_only_when_h_present(self):
+        """A cell without h does NOT emit the block-height fragment (mirrors how
+        tiles-only cells emit no height)."""
+        from edini.vex_strategies import build_mount_vex
+        spec = {"measure": "blocks", "face": "+Y",
+                "cells": [{"gx": 0, "gz": 0, "w": 1, "d": 1, "rot": 90}]}  # no h
+        snippet, _ = build_mount_vex(spec)
+        self.assertNotIn("__block_h[]", snippet)
+
+    def test_cells_still_no_block_fragment(self):
+        """REGRESSION: the existing cells strategy must NOT emit the block
+        height fragment (the gate is _block_h_vals, set only by BlockStrategy)."""
+        from edini.vex_strategies import build_mount_vex
+        snippet, _ = build_mount_vex({"measure": "cells", "face": "+Y",
+            "cells": [{"gx": 0, "gz": 0, "w": 1, "d": 1}]})
+        self.assertNotIn("__block_h[]", snippet)
+        self.assertNotIn("__s3", snippet)
+
+
 # setUpClass for the keyboard/stairs BUILD tests (they need the mock hou like
 # the structure test does). Re-use the same flush-and-reimport contract.
 class TestM1Builds(unittest.TestCase):

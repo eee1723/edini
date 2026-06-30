@@ -456,6 +456,39 @@ class TabularFillStrategy(VexStrategy):
             shelf_decl = ""
             shelf_block = ""
 
+        # Per-cell out-of-plane HEIGHT (BlockStrategy only): when
+        # self._block_h_vals is set (a per-cell height list — set ONLY by
+        # BlockStrategy._parse_table, never by cells/pickets/tiles/shelf), emit
+        # a __block_h[] array + a fragment that OVERRIDES each point's face-axis
+        # scale with the block's height. The unit is DERIVED from the root's
+        # face-axis span / max(h) (the tallest block fills the root's height),
+        # mirroring how the in-plane units derive from the in-plane spans. This
+        # is the synthesis: BlockStrategy = TileStrategy (rot → orient) + this
+        # height fragment. The two fragments are independent (orient writes
+        # p@orient; height writes the face-axis scale component) so they compose
+        # cleanly. cells/pickets/tiles/shelf leave _block_h_vals unset → None →
+        # NO block fragment → byte-identical VEX preserved (Task-1 gate).
+        block_h_vals = getattr(self, "_block_h_vals", None)
+        has_block_h = (isinstance(block_h_vals, list) and len(block_h_vals) == len(cx)
+                       and any(abs(float(h)) > 1e-12 for h in block_h_vals))
+        if has_block_h:
+            total_h_u = max(float(h) for h in block_h_vals)
+            block_decl = (
+                "float __block_h[] = " + self._arr(block_h_vals)
+                + "float __u_h = (__mx[__fa] - __mn[__fa]) / "
+                + repr(total_h_u) + ";"
+            )
+            block_block = (
+                "    // block height: override the face-axis scale with the\n"
+                "    // block's height (out-of-plane, derived from the root's\n"
+                "    // face-axis span / max height so the tallest fills it).\n"
+                "    vector __s3 = __scl; __s3[__fa] = __block_h[__ci] * __u_h;\n"
+                "    setpointattrib(geoself(), \"scale\", __pt, __s3, \"set\");\n"
+            )
+        else:
+            block_decl = ""
+            block_block = ""
+
         snippet = _VEX_CLEAR + r"""
 vector __mn = getbbox_min(0);
 vector __mx = getbbox_max(0);
@@ -477,7 +510,7 @@ float __span1 = (__mx[__a1] - __mn[__a1]) - 2 * __m;
 float __cx[] = """ + self._arr(cx) + r"""
 float __cz[] = """ + self._arr(cz) + r"""
 float __cw[] = """ + self._arr(w_vals) + r"""
-float __cd[] = """ + self._arr(d_vals) + rot_decl + shelf_decl + r"""
+float __cd[] = """ + self._arr(d_vals) + rot_decl + shelf_decl + block_decl + r"""
 // ONE loop over every cell. Position = grid center × derived unit; scale =
 // physical size (w*u0) with the gap inset so adjacent keys show a visible seam.
 // (Unique loop vars __ci/__ncell avoid clashing with the clear loop's __n/__i.)
@@ -495,7 +528,7 @@ for (int __ci = 0; __ci < __ncell; __ci++) {
     __scl[__a0] = max(0.0001, __cw[__ci] * __u0 - __gap);
     __scl[__a1] = max(0.0001, __cd[__ci] * __u1 - __gap);
     setpointattrib(geoself(), "scale", __pt, __scl, "set");
-""" + shelf_block + rot_block + r"""}
+""" + shelf_block + block_block + rot_block + r"""}
 """.strip()
         return snippet
 
@@ -623,11 +656,52 @@ class ShelfStrategy(TabularFillStrategy):
         return gx, gz, w, d
 
 
+class BlockStrategy(TabularFillStrategy):
+    """The 2D city-blocks schema — the SYNTHESIS layout (④). Cells carry
+    {gx,gz,w,d, h?, rot?}: a 2D footprint (in-plane, via the cells loop) + an
+    out-of-plane HEIGHT (h, along the face normal) + optional per-cell ROTATION
+    (rot → p@orient, exactly as tiles). This composes the mechanisms built for
+    tiles (rot → ``_rot_vals``) and a new height fragment (``_block_h_vals``);
+    the two fragments are independent (orient vs face-axis scale) and stack
+    cleanly. ``build()`` first applies the named orient rule (if any), exactly
+    as TileStrategy does, then inherits the rest.
+
+    The unit for height is DERIVED from the root's face-axis span / max(h) so
+    the tallest block fills the root's height (mirroring the in-plane unit
+    derivation). Empty grid slots (parks/streets) are simply undeclared cells."""
+
+    def build(self, position_spec: dict) -> tuple[str, dict[str, Any]]:
+        # Apply the named orient rule (mirrors TileStrategy.build): inject rot
+        # into cells lacking it, so the VEX just sees a __rot[] array.
+        spec = dict(position_spec)
+        rule = spec.get("orient")
+        if isinstance(rule, str):
+            from edini.measure import _rule_rot
+            cells = [dict(c) for c in spec.get("cells", [])]
+            for ci, c in enumerate(cells):
+                if "rot" not in c:
+                    c["rot"] = _rule_rot(rule, ci, c)
+            spec["cells"] = cells
+        return super().build(spec)
+
+    def _parse_table(self, cells):
+        gx, gz, w, d, rot, h = [], [], [], [], [], []
+        for c in cells:
+            gx.append(float(c["gx"])); gz.append(float(c["gz"]))
+            w.append(float(c["w"])); d.append(float(c["d"]))
+            rot.append(float(c.get("rot", 0.0)))
+            h.append(float(c.get("h", 0.0)))
+        self._rot_vals = rot        # signals orient fragment (Task 5 mechanism)
+        self._block_h_vals = h      # signals the height fragment (new)
+        return gx, gz, w, d
+
+
 # Module-level singleton dispatched to by build_mount_vex.
 _CELLS_STRATEGY = CellsStrategy()
 _PICKET_STRATEGY = PicketStrategy()
 _TILE_STRATEGY = TileStrategy()
 _SHELF_STRATEGY = ShelfStrategy()
+_BLOCK_STRATEGY = BlockStrategy()
 
 
 def build_cells_vex(cells: list[dict]) -> tuple[str, dict[str, Any]]:
@@ -870,6 +944,9 @@ def build_mount_vex(mount_position: dict) -> tuple[str, dict[str, Any]]:
     if kind == "shelf":
         return _SHELF_STRATEGY.build(mount_position)
 
+    if kind == "blocks":
+        return _BLOCK_STRATEGY.build(mount_position)
+
     static = _STATIC_STRATEGIES.get(kind)
     if static is None:
         raise VexStrategyError(f"no VEX strategy for measure {kind!r}")
@@ -878,5 +955,6 @@ def build_mount_vex(mount_position: dict) -> tuple[str, dict[str, Any]]:
 
 __all__ = ["VexStrategy", "StaticTemplateStrategy", "TabularFillStrategy",
            "CellsStrategy", "PicketStrategy", "TileStrategy", "ShelfStrategy",
+           "BlockStrategy",
            "VexStrategyError", "build_mount_vex", "build_cells_vex",
            "_orient_fragment", "_corner_selectors", "_face_selector"]
