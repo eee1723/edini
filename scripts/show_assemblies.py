@@ -3,7 +3,7 @@ real Houdini, save a .hip you can open, and print a geometry report to verify
 the results match your expectations.
 
 Run with hython:
-    D:/houdini/bin/hython.exe scripts/show_assemblies.py
+    "C:\Program Files\Side Effects Software\Houdini 21.0.440\bin\hython.exe" scripts/show_assemblies.py
 or:
     python scripts/show_assemblies.py            # uses EDINI_HYTHON or auto-detect
 

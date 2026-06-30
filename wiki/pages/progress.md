@@ -20,7 +20,7 @@
 | **M2.5** | **leaf align convention**：orient point-class 修复 + `align_axis` 可配 + `leaf.origin` 规范化 + 分组 CTP | ✅ 交付（151 测试，**含 9 真机 hython wheel-facing 铁证**） |
 | **M3** | **cells 测量原语 + 三层类架构 + square/fill**：显式布局表（1u 网格，6.25u 空格/staggered/gap/per-point v@scale）+ VexStrategy 三层类重构 + square 正方约束 + pad/repeat/stretch 三填满模式 + Pi agent 端到端链路修复 | ✅ 交付（599 测试，**含 5 真机 hython 铁证：square 键 X==Z / pad 留白 / repeat 增量 / live 重排 / one-CTP-many-sizes**） |
 
-**真机铁证**（Houdini 21.0.440，本机 `D:\houdini\bin\hython.exe`）：
+**真机铁证**（Houdini 21.0.440，本机 `C:\Program Files\Side Effects Software\Houdini 21.0.440\bin\hython.exe`）：
 ```
 车：length 4→8，recook（不重建）→ 前轮 (+2,-0.25,+1) → (+4,-0.25,+1) [MOVED live]
 键盘：tray_width 16→24，recook → 65 键正方形布局自动重排填满 [MOVED live, square]
