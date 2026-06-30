@@ -887,6 +887,51 @@ class TestPicketsLayout(unittest.TestCase):
         self.assertIn('setpointattrib(geoself(), "scale"', snippet)
 
 
+class TestTilesLayout(unittest.TestCase):
+    """The `tiles` strategy — a 2D tile mosaic. Cells carry {gx,gz,w,d, rot?}.
+    rot (degrees) rotates each tile about the face normal → per-cell p@orient
+    (CTP reads it). A mount-level `orient` rule (herringbone/checker/running)
+    supplies rot for cells without explicit rot."""
+
+    def test_tiles_validates(self):
+        a = {"id": "floor",
+             "root": {"shape": {"type": "box", "params": {"size": [4, 0.1, 4]}}},
+             "mounts": [{"id": "tiles", "position": {
+                 "measure": "tiles", "from": "root", "face": "+Y",
+                 "cells": [{"gx":0,"gz":0,"w":1,"d":1,"rot":90},
+                           {"gx":1,"gz":0,"w":1,"d":1}]}}],
+             "leaves": [{"id": "tile", "mount": "tiles",
+                 "shape": {"type": "box", "params": {"size": [0.9, 0.05, 0.9]}}}]}
+        r = validate_assembly(a)
+        self.assertTrue(r["success"], r["errors"])
+
+    def test_tiles_vex_writes_per_cell_orient_when_rot_present(self):
+        """When a cell has rot, the VEX emits __rot[] + setpointattrib orient."""
+        from edini.vex_strategies import build_mount_vex
+        spec = {"measure": "tiles", "face": "+Y",
+                "cells": [{"gx":0,"gz":0,"w":1,"d":1,"rot":90}]}
+        snippet, parms = build_mount_vex(spec)
+        self.assertIn("__rot[]", snippet)
+        self.assertIn('setpointattrib(geoself(), "orient"', snippet)
+
+    def test_tiles_vex_no_orient_when_no_rot(self):
+        """When NO cell has rot, the VEX does NOT emit orient (mirrors cells)."""
+        from edini.vex_strategies import build_mount_vex
+        spec = {"measure": "tiles", "face": "+Y",
+                "cells": [{"gx":0,"gz":0,"w":1,"d":1}]}  # no rot anywhere
+        snippet, parms = build_mount_vex(spec)
+        self.assertNotIn('setpointattrib(geoself(), "orient"', snippet)
+
+    def test_cells_still_no_orient(self):
+        """REGRESSION: the existing cells strategy must NOT emit orient VEX
+        (the per-cell orient addition is gated on _rot_vals)."""
+        from edini.vex_strategies import build_mount_vex
+        spec = {"measure": "cells", "face": "+Y",
+                "cells": [{"gx":0,"gz":0,"w":1,"d":1}]}
+        snippet, parms = build_mount_vex(spec)
+        self.assertNotIn('setpointattrib(geoself(), "orient"', snippet)
+
+
 # setUpClass for the keyboard/stairs BUILD tests (they need the mock hou like
 # the structure test does). Re-use the same flush-and-reimport contract.
 class TestM1Builds(unittest.TestCase):

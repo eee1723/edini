@@ -395,6 +395,27 @@ class TabularFillStrategy(VexStrategy):
 
         cx = [gx + w / 2.0 for gx, w in zip(gx_vals, w_vals)]
         cz = [gz + d / 2.0 for gz, d in zip(gz_vals, d_vals)]
+
+        # Per-cell orient (tiles strategy): only emitted when the strategy
+        # carries a non-trivial `rot` per cell. CellsStrategy/PicketStrategy
+        # never set _rot_vals, so this produces NOTHING for them — keeping the
+        # 2D `cells` VEX byte-identical (the Task-1 regression gate). The gate
+        # requires a non-empty list matching the cell count AND at least one
+        # non-zero rotation (all-zero rot is a no-op orient, so we omit it and
+        # the VEX stays identical to the cells strategy for that case too).
+        rot_vals = getattr(self, "_rot_vals", None)
+        has_rot = (isinstance(rot_vals, list) and len(rot_vals) == len(cx)
+                   and any(abs(float(r)) > 1e-12 for r in rot_vals))
+        rot_decl = ("float __rot[] = " + self._arr(rot_vals)
+                    if has_rot else "")
+        rot_block = (
+            "    // per-cell orient: rotate `rot` degrees about the face normal\n"
+            "    // → quaternion (POINT class via setpointattrib, so CTP reads it).\n"
+            "    vector __nvec = {0, 0, 0}; __nvec[__fa] = __fs;\n"
+            "    vector4 __qrot = quaternion(radians(__rot[__ci]), __nvec);\n"
+            "    setpointattrib(geoself(), \"orient\", __pt, __qrot, \"set\");\n"
+            if has_rot else "")
+
         snippet = _VEX_CLEAR + r"""
 vector __mn = getbbox_min(0);
 vector __mx = getbbox_max(0);
@@ -416,7 +437,7 @@ float __span1 = (__mx[__a1] - __mn[__a1]) - 2 * __m;
 float __cx[] = """ + self._arr(cx) + r"""
 float __cz[] = """ + self._arr(cz) + r"""
 float __cw[] = """ + self._arr(w_vals) + r"""
-float __cd[] = """ + self._arr(d_vals) + r"""
+float __cd[] = """ + self._arr(d_vals) + rot_decl + r"""
 // ONE loop over every cell. Position = grid center × derived unit; scale =
 // physical size (w*u0) with the gap inset so adjacent keys show a visible seam.
 // (Unique loop vars __ci/__ncell avoid clashing with the clear loop's __n/__i.)
@@ -434,7 +455,7 @@ for (int __ci = 0; __ci < __ncell; __ci++) {
     __scl[__a0] = max(0.0001, __cw[__ci] * __u0 - __gap);
     __scl[__a1] = max(0.0001, __cd[__ci] * __u1 - __gap);
     setpointattrib(geoself(), "scale", __pt, __scl, "set");
-}
+""" + rot_block + r"""}
 """.strip()
         return snippet
 
@@ -484,9 +505,44 @@ class PicketStrategy(TabularFillStrategy):
         return gx_vals, [0.0]*len(gx_vals), w_vals, [1.0]*len(gx_vals)
 
 
+class TileStrategy(TabularFillStrategy):
+    """The 2D tile-mosaic schema. Cells carry {gx,gz,w,d, rot?}. rot (degrees)
+    rotates each tile about the face normal → per-cell p@orient (CTP reads it).
+    A mount-level `orient` rule (herringbone/checker/running) supplies rot for
+    cells without explicit rot. The rule is applied HERE (Python layer) before
+    _parse_table, so the VEX just sees a __rot[] array."""
+
+    def build(self, position_spec: dict) -> tuple[str, dict[str, Any]]:
+        # Apply the named orient rule: inject rot into cells that lack it.
+        spec = dict(position_spec)
+        rule = spec.get("orient")
+        if isinstance(rule, str):
+            from edini.measure import _rule_rot
+            cells = [dict(c) for c in spec.get("cells", [])]
+            for ci, c in enumerate(cells):
+                if "rot" not in c:
+                    c["rot"] = _rule_rot(rule, ci, c)
+            spec["cells"] = cells
+        return super().build(spec)
+
+    def _parse_table(self, cells):
+        gx, gz, w, d, rot = [], [], [], [], []
+        for ci, c in enumerate(cells):
+            try:
+                gx.append(float(c["gx"])); gz.append(float(c["gz"]))
+                w.append(float(c["w"])); d.append(float(c["d"]))
+            except (KeyError, TypeError, ValueError) as e:
+                raise VexStrategyError(
+                    f"cell {ci} must have numeric gx/gz/w/d, got {c!r}") from None
+            rot.append(float(c.get("rot", 0.0)))
+        self._rot_vals = rot   # signals _build_vex to emit per-cell orient
+        return gx, gz, w, d
+
+
 # Module-level singleton dispatched to by build_mount_vex.
 _CELLS_STRATEGY = CellsStrategy()
 _PICKET_STRATEGY = PicketStrategy()
+_TILE_STRATEGY = TileStrategy()
 
 
 def build_cells_vex(cells: list[dict]) -> tuple[str, dict[str, Any]]:
@@ -713,6 +769,13 @@ def build_mount_vex(mount_position: dict) -> tuple[str, dict[str, Any]]:
     if kind == "pickets":
         return _PICKET_STRATEGY.build(mount_position)
 
+    # tiles: the 2D tile-mosaic strategy. Dispatches to TileStrategy, which
+    # applies the named orient rule (herringbone/checker/running) at the Python
+    # layer, then reuses the TabularFill loop + emits a per-cell __rot[] array
+    # → setpointattrib "orient" (POINT-class, CTP-readable) inside the loop.
+    if kind == "tiles":
+        return _TILE_STRATEGY.build(mount_position)
+
     static = _STATIC_STRATEGIES.get(kind)
     if static is None:
         raise VexStrategyError(f"no VEX strategy for measure {kind!r}")
@@ -720,6 +783,6 @@ def build_mount_vex(mount_position: dict) -> tuple[str, dict[str, Any]]:
 
 
 __all__ = ["VexStrategy", "StaticTemplateStrategy", "TabularFillStrategy",
-           "CellsStrategy", "PicketStrategy",
+           "CellsStrategy", "PicketStrategy", "TileStrategy",
            "VexStrategyError", "build_mount_vex", "build_cells_vex",
            "_orient_fragment", "_corner_selectors", "_face_selector"]

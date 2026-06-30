@@ -650,5 +650,72 @@ class TestPicketsHython(unittest.TestCase):
                                    msg=f"uneven picket spacing: {gaps}")
 
 
+def _tile_floor():
+    return {
+        "id": "floor",
+        "root": {"shape": {"type": "box", "params": {"size": [4, 0.1, 4]}}},
+        "mounts": [{"id": "tiles", "position": {
+            "measure": "tiles", "from": "root", "face": "+Y",
+            "cells": [{"gx":0,"gz":0,"w":1,"d":1,"rot":90},
+                      {"gx":1,"gz":0,"w":1,"d":1,"rot":0}]}}],
+        "leaves": [{"id": "tile", "mount": "tiles",
+            "shape": {"type": "box", "params": {"size": [0.9, 0.05, 0.9]}}}]}
+
+
+@unittest.skipUnless(HYTHON, "hython not installed")
+class TestTilesHython(unittest.TestCase):
+    """THE tiles-strategy proof: a 2D tile mosaic built end-to-end with explicit
+    per-cell rot. The TileStrategy reuses the TabularFill loop and emits a
+    per-cell __rot[] array → setpointattrib "orient" (POINT-class) inside the
+    loop. The rot=90 tile's p@orient must be the 90°-about-Y quaternion
+    (0, sin45, 0, cos45); the rot=0 tile must be identity."""
+
+    def test_tile_per_cell_orient_applied(self):
+        """THE per-cell orient proof: the tile with rot=90 has a p@orient that
+        is the quaternion for 90° about the +Y face normal (0, sin45, 0, cos45),
+        and the rot=0 tile is identity. Read via the mount cloud (pre-CTP).
+        Compared by |dot product| because q ≡ -q (|q1·q2|≈1 means equal)."""
+        import math
+        res = _run(_tile_floor(), probe="facing")
+        self.assertTrue(res["success"], res.get("error"))
+        cloud = res["_probe"]["cloud_orient"]
+        self.assertTrue(cloud, "no orient read from mount cloud")
+        # The single mount_tiles wrangle emits both tiles' points.
+        all_quats = []
+        for mount_name, quats in cloud.items():
+            self.assertTrue(quats, f"no orient on {mount_name}'s points")
+            all_quats.extend(quats)
+        self.assertEqual(len(all_quats), 2,
+                         f"expected 2 tile orient quaternions, got {len(all_quats)}")
+        # The expected quaternions: 90° about +Y → (0, sin45, 0, cos45);
+        # 0° → identity (0,0,0,1).
+        sin45 = math.sin(math.radians(45.0))
+        cos45 = math.cos(math.radians(45.0))
+        expected = [
+            (0.0, sin45, 0.0, cos45),   # rot=90
+            (0.0, 0.0, 0.0, 1.0),       # rot=0 (identity)
+        ]
+
+        def quat_abs_dot(a, b):
+            """|dot| of two quats — ≈1 means equal (q ≡ -q)."""
+            return abs(sum(x * y for x, y in zip(a, b)))
+
+        # Each expected quat must match SOME emitted quat (order-independent).
+        for exp in expected:
+            best = max(quat_abs_dot(exp, q) for q in all_quats)
+            self.assertGreater(best, 0.999,
+                f"no tile orient matched expected {exp}; best dot={best:.4f}, "
+                f"got {all_quats}")
+
+    def test_tile_two_points_built(self):
+        """Smoke: the tiles mount emits exactly 2 points (one per cell), proving
+        the per-cell orient VEX (with the __rot[] array) cooks cleanly."""
+        res = _run(_tile_floor(), probe="instance_centers")
+        self.assertTrue(res["success"], res.get("error"))
+        centers = res["_probe"]["centers"]
+        self.assertEqual(len(centers), 2,
+                         f"expected 2 tile mount points, got {len(centers)}: {centers}")
+
+
 if __name__ == "__main__":
     unittest.main()

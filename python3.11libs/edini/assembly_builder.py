@@ -135,7 +135,7 @@ def validate_assembly(assembly: dict) -> dict[str, Any]:
             kind = pos.get("measure")
             if kind not in ("bbox_corner", "bbox_face_center", "bbox_center",
                             "point_on_edge", "grid_on_face", "array",
-                            "cells", "pickets"):
+                            "cells", "pickets", "tiles"):
                 errors.append({"code": "MOUNT_BAD_MEASURE", "message":
                     f"mount {mid!r} position.measure {kind!r} unsupported"})
             # Required axis/edge fields per measure kind.
@@ -273,6 +273,55 @@ def validate_assembly(assembly: dict) -> dict[str, Any]:
                         errors.append({"code": "MOUNT_BAD_PICKETS", "message":
                             f"mount {mid!r} pickets.axes must be a single-element "
                             f"list of one axis letter (X/Y/Z), got {paxes!r}"})
+            elif kind == "tiles":
+                # The 2D tile-mosaic schema: mirrors `cells` ({gx,gz,w,d}, face,
+                # derived unit) but each cell may ALSO carry an optional `rot`
+                # (degrees about the face normal → per-cell p@orient), and the
+                # mount may declare an `orient` rule (herringbone|checker|
+                # running) that supplies rot for cells without an explicit one.
+                if not _is_face_str(pos.get("face")):
+                    errors.append({"code": "MOUNT_BAD_FACE", "message":
+                        f"mount {mid!r} position.face must be a 2-char string like '+Y'"})
+                cells = pos.get("cells")
+                if not isinstance(cells, list) or not cells:
+                    errors.append({"code": "MOUNT_BAD_TILES", "message":
+                        f"mount {mid!r} tiles.cells must be a non-empty list"})
+                else:
+                    for ci, c in enumerate(cells):
+                        if not isinstance(c, dict):
+                            errors.append({"code": "MOUNT_BAD_TILES", "message":
+                                f"mount {mid!r} tiles[{ci}] must be an object"})
+                            continue
+                        miss = [k for k in ("gx", "gz", "w", "d") if k not in c]
+                        if miss:
+                            errors.append({"code": "MOUNT_BAD_TILES", "message":
+                                f"mount {mid!r} tiles[{ci}] missing keys {miss}"})
+                            continue
+                        bad = [k for k in ("gx", "gz", "w", "d")
+                               if not isinstance(c[k], (int, float))
+                               or (k in ("w", "d") and float(c[k]) <= 0)]
+                        if bad:
+                            errors.append({"code": "MOUNT_BAD_TILES", "message":
+                                f"mount {mid!r} tiles[{ci}] bad values for {bad} "
+                                f"(gx/gz numeric; w/d > 0)"})
+                            continue
+                        # Optional per-cell rot: numeric if present.
+                        if "rot" in c and (not isinstance(c["rot"], (int, float))
+                                           or isinstance(c["rot"], bool)):
+                            errors.append({"code": "MOUNT_BAD_TILES", "message":
+                                f"mount {mid!r} tiles[{ci}].rot must be numeric, "
+                                f"got {c['rot']!r}"})
+                # Mount-level orient rule: if present must be a named rule. (Note:
+                # this is the `orient` field on the position spec, distinct from
+                # the mount-level `orient` orient-object handled below — for
+                # tiles it is a rule NAME string, not a measured direction.)
+                trule = pos.get("orient")
+                if trule is not None and (not isinstance(trule, str)
+                                          or trule not in
+                                          ("herringbone", "checker", "running")):
+                    errors.append({"code": "MOUNT_BAD_TILES", "message":
+                        f"mount {mid!r} tiles.orient must be "
+                        f"herringbone|checker|running, got {trule!r}"})
 
         # Orient: optional. If present, derive from a measured direction.
         orient = mt.get("orient")
