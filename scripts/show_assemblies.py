@@ -142,6 +142,49 @@ EXAMPLES = [
                 "params": {"size": ["tread_w", "tread_h", "tread_d"]}}},
         ],
     }),
+    ("fence_showcase", 15.0, {
+        # A picket FENCE via `pickets`: a 1D row of 8 posts along the platform's
+        # long edge (X). The PicketStrategy reuses the TabularFill 2D loop with
+        # the 2nd axis degenerate — a uniform row that FILLS the edge and
+        # rescales when fence_len changes (measurement-driven placement).
+        "id": "fence",
+        "params": {"fence_len": 4.0, "rail_h": 0.5, "rail_d": 0.1},
+        "root": {"shape": {"type": "box", "params": {
+            "size": ["fence_len", "rail_h", "rail_d"]}}},   # a platform/rail
+        "mounts": [
+            {"id": "pickets", "position": {"measure": "pickets", "from": "root",
+                "basis": {"face": "+Y"}, "axes": ["X"], "count": 8}},
+        ],
+        "leaves": [
+            {"id": "post", "mount": "pickets", "shape": {"type": "box",
+                "params": {"size": [0.1, 1.0, 0.1]}}},
+        ],
+    }),
+    ("shelf_showcase", 21.0, {
+        # A 3D BOOKSHELF via `shelf`: 3 layers of books stacking along the face
+        # normal (Y). The ShelfStrategy flattens layers into a cells table,
+        # reuses the TabularFill 2D loop in-plane, then its shelf fragment
+        # overrides each book's Y with the layer-derived center — the 3D stack
+        # the 2D loop cannot express. Layers span the SAME width (every shelf
+        # spans the full root width — the canonical bookshelf).
+        "id": "shelf",
+        "params": {"bookcase_w": 4.0, "bookcase_h": 5.0, "bookcase_d": 1.0},
+        "root": {"shape": {"type": "box", "params": {
+            "size": ["bookcase_w", "bookcase_h", "bookcase_d"]}}},
+        "mounts": [
+            {"id": "shelves", "position": {"measure": "shelf", "from": "root",
+                "basis": {"face": "+Y"}, "axis": "Y",
+                "layers": [
+                    {"height": 1,   "cells": [{"gx": 0, "w": 1}, {"gx": 1, "w": 1}]},
+                    {"height": 1.5, "cells": [{"gx": 0, "w": 2}]},
+                    {"height": 1,   "cells": [{"gx": 0, "w": 1}, {"gx": 1, "w": 1}]},
+                ]}},
+        ],
+        "leaves": [
+            {"id": "book", "mount": "shelves", "shape": {"type": "box",
+                "params": {"size": [0.8, 1.0, 0.3]}}},
+        ],
+    }),
 ]
 
 
@@ -179,7 +222,8 @@ def main():
     obj = hou.node("/obj")
 
     print("=" * 72)
-    print("Building 4 assemblies in real Houdini " + hou.applicationVersionString())
+    print(f"Building {len(EXAMPLES)} assemblies in real Houdini "
+          + hou.applicationVersionString())
     print("=" * 72)
 
     for name, x_offset, assembly in EXAMPLES:
@@ -216,6 +260,8 @@ def main():
             "bicycle_showcase": ("length", 8.0, "length 4→8"),
             "keyboard_showcase": ("tray_width", 24.0, "tray_width 16→24 (keys relay to fill)"),
             "stairs_showcase": ("base_w", 5.0, "base_w 3→5"),
+            "fence_showcase": ("fence_len", 8.0, "fence_len 4→8 (posts relay to fill)"),
+            "shelf_showcase": ("bookcase_h", 7.0, "bookcase_h 5→7 (layers stretch)"),
         }[name]
         before = _first_mount_pts(root, res)
         try:

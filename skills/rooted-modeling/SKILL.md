@@ -63,6 +63,10 @@ measures (return many — used to fan one leaf out to N instances):
 | `grid_on_face` | **an rows×cols lattice** across a face | `face: "+Y", rows: 5, cols: 3, margin: 0.05` → 15 identical cells. A uniform grid (tiles, rivets). |
 | `array` | **a 1D/2D/3D lattice** stepping from an origin | `count: [5,1,1], step: [[0.5,0.3,0],...]` → 5 points climbing diagonally. Stair treads. |
 | `cells` | **an explicit 1u-unit layout** where each cell has its OWN size | `unit: "key_size", cells: [{gx,gz,w,d}, ...]` → each cell carries its own size. A keyboard with a 6.25u spacebar + 1u keys + staggered rows. |
+| `pickets` | **a 1D row** along an edge | `basis: {face: "+Y"}, axes: ["X"], count: 8` → 8 posts along the +Y face's X edge. A fence/railing. |
+| `tiles` | **a 2D mosaic** with per-cell rotation | `face: "+Y", cells: [{gx,gz,w,d,rot?}], orient: "herringbone"` → each tile rotates. A tile floor / mosaic. |
+| `shelf` | **a 3D layered** layout | `basis: {face: "+Y"}, axis: "Y", layers: [{height, cells}]` → layers stack along Y. A bookshelf. |
+| `blocks` | **a 2D footprint + height** (synthesis) | `face: "+Y", cells: [{gx,gz,w,d,h?,rot?}]` → 2D footprint + out-of-plane height + optional rotation. A city block. |
 
 ### `cells` — when the parts are NOT uniform (a real keyboard)
 
@@ -141,6 +145,107 @@ instance layout that fills a region"*: bookshelves (books of different widths),
 city blocks (buildings of different footprints), tile mosaics, fence pickets. A
 new such layout subclasses `TabularFillStrategy` and only overrides the cell
 schema — the fill/square/unit machinery is inherited.
+
+The cells strategy is the archetype for four sibling layouts, each a
+`TabularFillStrategy` subclass that reuses the same fill/square/unit machinery
+and only overrides the cell schema. They cover the four common fill patterns:
+
+### `pickets` — a 1D row (a fence / railing / balusters)
+
+When the parts form a **single row** along ONE edge (a line of fence posts, a
+handrail's balusters), use `pickets`. It is `cells` restricted to one in-plane
+axis: each cell declares `{gx, w}` (no depth — the second axis is degenerate).
+Give `count: N` for N equal-width posts, or an explicit `cells` table for
+uneven widths.
+
+```jsonc
+"position": {
+  "measure": "pickets", "from": "root",
+  "basis": {"face": "+Y"}, "axes": ["X"], "count": 8
+}
+```
+- `axes: ["X"]` names the **layout axis** the posts step along (the edge's
+  direction). `basis.face` is the face the posts sit on. `basis.edge`
+  optionally restricts to one edge of that face.
+- `count: 8` → 8 equal-width posts; the unit is DERIVED from the face's span,
+  so the row FILLS the edge and rescales when the root resizes. For uneven
+  posts, drop `count` and declare `cells: [{gx, w}, ...]`.
+
+### `tiles` — a 2D mosaic with per-cell rotation
+
+When each cell is a 2D tile that **rotates independently** (a herringbone
+floor, a checkerboard, a brick running-bond), use `tiles`. Each cell carries
+an optional `rot` (degrees, about the face normal → per-cell `p@orient`), OR
+you give a mount-level `orient` rule (`herringbone`/`checker`/`running`) that
+fills in `rot` for any cell missing it. This resolves the per-instance-orient
+case the single-orient mount cannot express.
+
+```jsonc
+"position": {
+  "measure": "tiles", "from": "root", "face": "+Y",
+  "orient": "herringbone",          // mount-level rule for cells without rot
+  "cells": [
+    {"gx": 0, "gz": 0, "w": 1, "d": 1},               // rot filled by the rule
+    {"gx": 1, "gz": 0, "w": 1, "d": 1, "rot": 45}     // explicit per-cell
+  ]
+}
+```
+- `rot` is a per-cell degree rotation about the **face normal**; it becomes a
+  per-point `p@orient` (POINT-class via `setpointattrib`, so CTP reads it and
+  each tile spins independently). `orient: "rule"` is sugar — it just supplies
+  `rot` for cells that lack one, so you never compute angles by hand.
+
+### `shelf` — a 3D layered layout (a bookshelf)
+
+When the layout **stacks in layers** along the face normal (a bookshelf, a
+rack of shelves), use `shelf`. Declare `layers: [{height, cells}]` — each
+layer has a `height` (in 1u units) and a within-layer `cells` table (a row of
+books). Layers stack along the face's normal axis; the layer unit is DERIVED
+from the root's span so the stack FILLS the root and rescales live.
+
+```jsonc
+"position": {
+  "measure": "shelf", "from": "root",
+  "basis": {"face": "+Y"}, "axis": "Y",        // axis = the face's normal axis
+  "layers": [
+    {"height": 1, "cells": [{"gx": 0, "w": 1}, {"gx": 1, "w": 1}]},
+    {"height": 1, "cells": [{"gx": 0, "w": 2}]}
+  ]
+}
+```
+- `axis` MUST equal the face's normal axis (`Y` for `+Y`). `height` is in 1u;
+  the world height is derived so the layers fill the root's normal span.
+- **Separation of concerns:** `shelf` places BOOKS — the root builds the
+  boards. The layer concept is subclass-side; the inherited base loop places
+  each cell in-plane (X/Z), and a per-point face-axis override lifts each onto
+  its layer (sets the Y position to the layer center + Y scale to the layer
+  height). So the bookshelf's books are one CTP; the boards are the root.
+
+### `blocks` — a 2D footprint + height (the synthesis)
+
+When each cell is a 2D footprint that ALSO has an out-of-plane HEIGHT (a city
+block: a footprint of varying area, a building of varying height), use
+`blocks`. It is the synthesis of `tiles` (per-cell `rot` → `p@orient`) and a
+new height column: each cell carries optional `h` (height in 1u) and optional
+`rot`. The height unit is DERIVED from the root's face-axis span / `max(h)` so
+the tallest block fills the root's height. Empty grid slots (parks / streets)
+are simply undeclared cells.
+
+```jsonc
+"position": {
+  "measure": "blocks", "from": "root", "face": "+Y",
+  "cells": [
+    {"gx": 0, "gz": 0, "w": 1, "d": 1, "h": 40},   // tall tower
+    {"gx": 1, "gz": 0, "w": 1, "d": 1, "h": 15},   // short building
+    {"gx": 0, "gz": 1, "w": 1, "d": 1}             // no h → flat lot (park)
+  ]
+}
+```
+- `h` is in 1u; the world height is `h * (root_face_span / max_h)` so the
+  tallest block fills the root's height. A cell without `h` is a flat lot.
+  `rot` (degrees about the face normal) spins each block — the same mechanism
+  `tiles` uses. The orient fragment and the height fragment are independent,
+  so they stack cleanly.
 
 A mount's `orient` (optional) is **also derived**: give two measured points
 and the builder computes the direction the leaf's built +Y axis should align
@@ -470,14 +575,21 @@ axis mapped onto the measured direction — a torus wheel's is +Y), per-leaf
 `origin` normalization (clear the root before copy), automatic grouping of
 identical leaves onto one shape + one CTP, and the orient point-class fix
 (orient written as a point attribute CTP actually reads).
+**Tabular-fill layouts (M3):** `cells` (each part its own size), plus four
+sibling layouts — `pickets` (a 1D fence row), `tiles` (a 2D mosaic with
+per-cell rotation), `shelf` (a 3D layered bookshelf), and `blocks` (a 2D
+footprint + height). All subclass `TabularFillStrategy`, reuse the
+fill/square/unit machinery, and fill the root exactly (measurement-driven).
+**Per-instance orient within a grid/array is DONE** (`tiles`/`blocks` write a
+per-cell `p@orient` via `setpointattrib`, so each instance spins
+independently — a herringbone floor, a checkerboard).
 
-**Later milestones:** live mount internals (grid rows/cols, array step are
-currently baked at build); named anchors the root exposes explicitly (so a
-root can mark "hub_point" instead of you inferring the corner); per-instance
-orient within a grid/array (all keys currently share one orient); and
-**multi-level derivation** where a placed leaf becomes the root for the next
-level (bike frame → fork → handlebar). The measurement-first contract won't
-change — only the menu of measurements grows.
+**Later milestones:** live mount internals (grid rows/cols, array step, and
+the tabular-fill layout tables are currently baked at build); named anchors
+the root exposes explicitly (so a root can mark "hub_point" instead of you
+inferring the corner); and **multi-level derivation** where a placed leaf
+becomes the root for the next level (bike frame → fork → handlebar). The
+measurement-first contract won't change — only the menu of measurements grows.
 
 ## Reference
 

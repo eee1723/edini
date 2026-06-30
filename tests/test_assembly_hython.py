@@ -22,7 +22,6 @@ import sys
 import unittest
 
 _HOUDINI_CANDIDATES = [
-    r"D:\houdini",
     r"C:\Program Files\Side Effects Software",
     "/Applications/Houdini",
     "/opt/hfs",

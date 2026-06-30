@@ -239,6 +239,98 @@ def main():
             print(f"   vex   : {c_vex_sorted}")
             print(f"   oracle: {c_or_sorted}")
 
+    # ── the four sibling tabular-fill strategies: pickets / tiles / shelf / ──
+    # blocks. Each subclasses TabularFillStrategy, so it shares the SAME VEX
+    # structure (ch("face_axis"/"face_sign"/"margin"/"gap") + unit DERIVED in-VEX
+    # from the box span) and cooks through _run_cells_wrangle. The oracles return
+    # (pos, scale, orient) TRIPLES; this script verifies the POINT CLOUD matches
+    # (positions only — we extract [t[0] for t in triples]). Orient/scale
+    # correctness (per-cell rotation, layer height, block height) is the hython
+    # suite's job. pickets needs its `count`→cells expansion (builder layer).
+    from edini.assembly_builder import _expand_pickets_count
+
+    # pickets: count=N → N equal-width posts along an edge (a 1D row).
+    pickets_margin = 0.1
+    pickets_spec = _expand_pickets_count(
+        {"measure": "pickets", "face": "+Y", "axes": ["X"], "count": 6,
+         "margin": pickets_margin})
+    p_snippet, _ = build_mount_vex(pickets_spec)
+    p_vex = _run_cells_wrangle(box, p_snippet, pickets_margin, face="+Y")
+    p_oracle = M.measure_pickets(box.geometry(), "+Y", edge_axis="X", count=6,
+                                 margin=pickets_margin)
+    p_ok = _points_close(sorted(vp[0] for vp in p_vex),
+                         sorted(t[0] for t in p_oracle))
+    all_ok = all_ok and p_ok
+    print(f"[{'OK ' if p_ok else 'FAIL'}] pickets count=6: "
+          f"vex={len(p_vex)}pts oracle={len(p_oracle)}pts")
+
+    # tiles: 2D mosaic with per-cell rot + a mount-level orient rule. The rule
+    # fills rot for cells lacking one; positions are unaffected by rot (rot only
+    # sets p@orient), so the point cloud is the cells layout's centers.
+    tiles_cells = [{"gx": 0, "gz": 0, "w": 1, "d": 1, "rot": 90},
+                   {"gx": 1, "gz": 0, "w": 1, "d": 1},               # rule-filled
+                   {"gx": 0, "gz": 1, "w": 2, "d": 1, "rot": 45},
+                   {"gx": 0, "gz": 2, "w": 1, "d": 1}]               # rule-filled
+    tiles_margin = 0.1
+    tiles_spec = {"measure": "tiles", "face": "+Y", "orient": "herringbone",
+                  "margin": tiles_margin, "cells": tiles_cells}
+    t_snippet, _ = build_mount_vex(tiles_spec)
+    t_vex = _run_cells_wrangle(box, t_snippet, tiles_margin, face="+Y")
+    t_oracle = M.measure_tiles(box.geometry(), "+Y", tiles_cells,
+                               margin=tiles_margin, orient_rule="herringbone")
+    t_ok = _points_close(sorted(vp[0] for vp in t_vex),
+                         sorted(tr[0] for tr in t_oracle))
+    all_ok = all_ok and t_ok
+    print(f"[{'OK ' if t_ok else 'FAIL'}] tiles herringbone: "
+          f"vex={len(t_vex)}pts oracle={len(t_oracle)}pts")
+
+    # shelf: 3D layered bookshelf — layers stack along the face normal (Y). The
+    # shelf fragment overrides each point's face-axis P with the layer center, so
+    # the point cloud has 3D variety (books at different heights). NOTE: a shelf's
+    # layers must all span the SAME total in-plane width (every shelf spans the
+    # full root width — the canonical bookshelf), because the VEX flattens all
+    # layers into ONE cells table (single in-plane unit). Layers of differing
+    # widths are NOT supported by this measurement (a deliberate design limit;
+    # use a different layout if shelves differ in span).
+    shelf_layers = [
+        {"height": 1,   "cells": [{"gx": 0, "w": 1}, {"gx": 1, "w": 1}]},
+        {"height": 1.5, "cells": [{"gx": 0, "w": 2}]},
+        {"height": 1,   "cells": [{"gx": 0, "w": 1}, {"gx": 1, "w": 1}]},
+    ]
+    shelf_margin = 0.1
+    shelf_spec = {"measure": "shelf", "basis": {"face": "+Y"}, "axis": "Y",
+                  "margin": shelf_margin, "layers": shelf_layers}
+    sh_snippet, _ = build_mount_vex(shelf_spec)
+    sh_vex = _run_cells_wrangle(box, sh_snippet, shelf_margin, face="+Y")
+    sh_oracle = M.measure_shelf(box.geometry(), "+Y", "Y", shelf_layers,
+                                margin=shelf_margin)
+    sh_ok = _points_close(sorted(vp[0] for vp in sh_vex),
+                          sorted(tr[0] for tr in sh_oracle))
+    all_ok = all_ok and sh_ok
+    print(f"[{'OK ' if sh_ok else 'FAIL'}] shelf 3 layers: "
+          f"vex={len(sh_vex)}pts oracle={len(sh_oracle)}pts")
+
+    # blocks: 2D footprint + out-of-plane height (the synthesis). The block
+    # fragment overrides each point's face-axis scale with the height (derived
+    # from root span / max(h)); rot sets p@orient. Positions are the footprint
+    # centers, so the point cloud is a 2D grid (height/rot don't move P).
+    blocks_cells = [{"gx": 0, "gz": 0, "w": 1, "d": 1, "h": 40},
+                    {"gx": 1, "gz": 0, "w": 1, "d": 1, "h": 15},
+                    {"gx": 0, "gz": 1, "w": 1, "d": 1},          # no h → flat lot
+                    {"gx": 1, "gz": 1, "w": 1, "d": 1, "h": 25, "rot": 30}]
+    blocks_margin = 0.1
+    blocks_spec = {"measure": "blocks", "face": "+Y", "margin": blocks_margin,
+                   "cells": blocks_cells}
+    b_snippet, _ = build_mount_vex(blocks_spec)
+    b_vex = _run_cells_wrangle(box, b_snippet, blocks_margin, face="+Y")
+    b_oracle = M.measure_blocks(box.geometry(), "+Y", blocks_cells,
+                                margin=blocks_margin)
+    b_ok = _points_close(sorted(vp[0] for vp in b_vex),
+                         sorted(tr[0] for tr in b_oracle))
+    all_ok = all_ok and b_ok
+    print(f"[{'OK ' if b_ok else 'FAIL'}] blocks 2D+height: "
+          f"vex={len(b_vex)}pts oracle={len(b_oracle)}pts")
+
     print()
     print("ALL STRATEGIES MATCH ORACLE" if all_ok else "SOME STRATEGIES MISMATCH")
     return all_ok

@@ -1,6 +1,8 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-30 &nbsp;|&nbsp; **🔴 主线：rooted-modeling skill M3 — cells 策略三层类架构 + 正方形约束 + 三填满模式（599 测试全绿）** &nbsp;|&nbsp; 本轮三大交付：① **cells 测量原语**（显式布局表，1u 网格，支持 6.25u 空格 + staggered 错位 + gap 间隔 + per-point v@scale，1 CTP 多尺寸键）；② **三层类架构重构**（VexStrategy → StaticTemplateStrategy/TabularFillStrategy → CellsStrategy，消掉 if-elif 链，泛化性载体）；③ **square/fill 模式**（square 强制 unit=min 保正方，pad 居中留白 / repeat 自动增量 / stretch 默认拉伸）。外加 Pi agent 端到端链路修复（build_assembly 返回契约 + system prompt 引导 + pi_data_bridge ESM 重写）。下方旧的资产管道卡片保留作历史记录。
+> 最后更新：2026-06-30 &nbsp;|&nbsp; **🔴 主线：rooted-modeling skill M3.5 — TabularFill 四布局扩展（pickets/tiles/shelf/blocks，595 测试 + 7 真机 hython 铁证全绿）** &nbsp;|&nbsp; 本轮在 M3 的 `TabularFillStrategy` 泛化载体上新增 4 个布局策略，按"从简单到复杂打磨抽象"的顺序：① **pickets**（1D 栅栏，驱动 `axes[]` 维度可变抽象 + count 语法糖）；② **tiles**（2D 瓷砖，**解决 SKILL.md 点名的 per-cell orient milestone** —— per-cell `rot` 四元数 + 命名规则 herringbone/checker/running）；③ **shelf**（3D 书架，layer 预处理下沉到子类，base 类零改动）；④ **blocks**（城市街区，**合成考试** —— 近零新 VEX，纯组合 tiles 的 rot + 高度列）。方案 C 分层泛化兑现：每个布局驱动真实泛化下沉到基类，2D cells 全程 byte-identical。agent 零 VEX，纯声明式 JSON。
+>
+> 上一轮：M3 — cells 策略三层类架构 + 正方形约束 + 三填满模式（599 测试全绿）。本轮三大交付：① **cells 测量原语**（显式布局表，1u 网格，支持 6.25u 空格 + staggered 错位 + gap 间隔 + per-point v@scale，1 CTP 多尺寸键）；② **三层类架构重构**（VexStrategy → StaticTemplateStrategy/TabularFillStrategy → CellsStrategy，消掉 if-elif 链，泛化性载体）；③ **square/fill 模式**（square 强制 unit=min 保正方，pad 居中留白 / repeat 自动增量 / stretch 默认拉伸）。外加 Pi agent 端到端链路修复（build_assembly 返回契约 + system prompt 引导 + pi_data_bridge ESM 重写）。下方旧的资产管道卡片保留作历史记录。
 
 ## ⚠️ 重大架构转向（2026-06-29）：rooted-modeling 取代声明式资产管道
 
