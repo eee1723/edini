@@ -551,6 +551,40 @@ def _expand_pickets_count(position_spec: dict) -> dict:
     return out
 
 
+def _expand_shelf_layers(position_spec: dict) -> dict:
+    """Flatten a shelf `layers` table into a cells list carrying per-cell layer
+    info (for the VEX strategy). Each cell gets its layer's gy (cumulative u) and
+    h (layer height) injected, so the inherited TabularFill loop can place it in
+    3D. The layer axis comes from basis.face's normal.
+
+    This is a builder-layer mirror of :func:`edini.measure.measure_shelf`: the
+    oracle flattens layers into (pos, scale, orient) triples in Python; this
+    does the same flattening into a single flat cells table the ShelfStrategy
+    VEX (Task 7) consumes. For now it just needs to exist and be importable.
+    """
+    layers = position_spec.get("layers")
+    if not isinstance(layers, list):
+        return position_spec
+    basis = position_spec.get("basis", {})
+    face = basis.get("face") if isinstance(basis, dict) else position_spec.get("face")
+    # Determine the layer axis letter from the face (the face's normal axis).
+    # Defer precise validation to validate_assembly; here just flatten.
+    out_spec = {k: v for k, v in position_spec.items() if k != "layers"}
+    flat_cells = []
+    cum = 0.0
+    for layer in layers:
+        h = float(layer.get("height", 0))
+        for c in layer.get("cells", []):
+            cell = dict(c)
+            cell["__layer_gy"] = cum      # layer's base in u (consumed by strategy)
+            cell["__layer_h"] = h          # layer height in u
+            flat_cells.append(cell)
+        cum += h
+    out_spec["cells"] = flat_cells
+    out_spec["__shelf_layer_axis"] = face  # signal to the strategy
+    return out_spec
+
+
 def _leaf_group_key(lf: dict, mount: dict) -> tuple:
     """A stable key identifying leaves that produce byte-identical stamped
     output (modulo mount position) and so can share one shape + one CTP.

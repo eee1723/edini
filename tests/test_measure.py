@@ -35,6 +35,7 @@ from edini.measure import (  # noqa: E402
     measure_cells,
     measure_pickets,
     measure_tiles,
+    measure_shelf,
     _axis_angle_quat,
     _rule_rot,
     direction_from_two_points,
@@ -564,6 +565,42 @@ class TestMeasureTiles(unittest.TestCase):
         pos, scale, orient = res[0]
         # checker with gx=0,gz=0 → 0° → identity.
         self.assertEqual(orient, (0.0, 0.0, 0.0, 1.0))
+
+
+# ── shelf (3D layered layout oracle) ──────────────────────────────
+
+
+class TestMeasureShelf(unittest.TestCase):
+    def test_layers_flatten_to_book_positions_scale_orient(self):
+        """2 layers (heights 10, 8) with 2 + 1 books → 3 triples. Each book's
+        orient is identity (shelf books don't rotate)."""
+        geo = _box_geo(0, 6, 0, 5, 0, 2)   # root: 6 wide, 5 tall, 2 deep
+        layers = [{"height": 10, "cells": [{"gx": 0, "w": 2}, {"gx": 2, "w": 1}]},
+                  {"height": 8,  "cells": [{"gx": 0, "w": 3}]}]
+        res = measure_shelf(geo, face="+Y", axis="Y", layers=layers, margin=0.0)
+        self.assertEqual(len(res), 3)  # 2 + 1 books
+        # All orients are identity.
+        for pos, scale, orient in res:
+            self.assertEqual(orient, (0.0, 0.0, 0.0, 1.0))
+
+    def test_layer_y_positions_stack(self):
+        """Books in layer 0 sit lower (Y) than books in layer 1."""
+        geo = _box_geo(0, 6, 0, 5, 0, 2)
+        layers = [{"height": 10, "cells": [{"gx": 0, "w": 1}]},
+                  {"height": 8,  "cells": [{"gx": 0, "w": 1}]}]
+        res = measure_shelf(geo, face="+Y", axis="Y", layers=layers, margin=0.0)
+        y0 = res[0][0][1]   # layer 0 book Y
+        y1 = res[1][0][1]   # layer 1 book Y
+        self.assertGreater(y1, y0)   # layer 1 is higher
+
+    def test_book_y_scale_matches_layer_height(self):
+        """A book's Y-scale reflects its layer's height (taller layer → taller book scale)."""
+        geo = _box_geo(0, 6, 0, 5, 0, 2)
+        layers = [{"height": 10, "cells": [{"gx": 0, "w": 1}]},
+                  {"height": 5,  "cells": [{"gx": 0, "w": 1}]}]
+        res = measure_shelf(geo, face="+Y", axis="Y", layers=layers, margin=0.0)
+        # layer 0 (height 10) book Y-scale > layer 1 (height 5) book Y-scale
+        self.assertGreater(res[0][1][1], res[1][1][1])
 
 
 # ── direction & orientation ────────────────────────────────────────

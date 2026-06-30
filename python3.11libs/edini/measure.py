@@ -45,6 +45,7 @@ __all__ = [
     "measure_cells",
     "measure_pickets",
     "measure_tiles",
+    "measure_shelf",
     "_axis_angle_quat",
     "_rule_rot",
     "direction_from_two_points",
@@ -595,6 +596,86 @@ def measure_tiles(geo, face, cells, margin=0.0, gap=0.0, orient_rule=None):
             rot = _rule_rot(orient_rule, 0, c)
         q = _axis_angle_quat(nvec, rot)
         out.append((p, s, q))
+    return out
+
+
+def measure_shelf(geo, face, axis, layers, margin=0.0, gap=0.0):
+    """A 3D layered layout (bookshelf). Layers stack along `axis` (usually Y);
+    each layer has a `height` (1u units) and a `cells` table (within-layer 2D,
+    reusing measure_cells). Returns (pos, scale, orient_quat) triples; orient is
+    identity (shelf books don't rotate).
+
+    The layer axis is the face's NORMAL direction (out of the face plane): books
+    sit ON the face (within-layer X/Z from measure_cells) and stack UP along the
+    normal. So the within-layer measure_cells gives X/Z + w/d; we add the layer
+    Y-base to each position and set the Y-scale to the layer's height.
+
+    The layer unit is DERIVED from the root's span along the layer axis, so the
+    stack of layers fills the root exactly along the normal — resize the root
+    and every layer rescales. Mirrors how the VEX will work (Task 7): the shelf
+    strategy is 2D-cells-per-layer with a Y offset + Y scale per layer.
+
+    Args:
+        geo: cooked root geometry (read for its bbox — the stack fills it).
+        face: which face the books lie on (its normal is the layer axis).
+        axis: the layer stacking axis letter; MUST equal the face's normal axis.
+        layers: list of ``{"height": <1u>, "cells": [...]}`` dicts. Each cell is
+            a within-layer ``{"gx","gz","w","d"}`` table fed to measure_cells.
+        margin: inset passed to the within-layer measure_cells.
+        gap: per-cell visible seam passed to measure_cells.
+
+    Returns:
+        A flat list of ``(position, scale, orient)`` triples, one per book
+        across all layers (layer order preserved, within-layer order preserved).
+        ``position``'s normal-axis component is the book's vertical center
+        (layer base + half the layer height); ``scale``'s normal-axis component
+        is the layer's world height; ``orient`` is identity.
+
+    Raises:
+        MeasureError: if `layers` is empty/non-list, the layer axis ≠ the face's
+            normal, or the layers' total height is not positive.
+    """
+    if not isinstance(layers, list) or not layers:
+        raise MeasureError("shelf needs a non-empty layers list")
+    sign, face_axis_letter = _parse_face(face)
+    # The layer axis must be the face's normal axis (the face_axis_letter).
+    if axis != face_axis_letter:
+        raise MeasureError(
+            f"shelf axis {axis!r} must be the face's normal axis {face_axis_letter!r}")
+    b = measure_bbox(geo)
+    ai = _axis_index(axis)
+    root_span = b["max"][ai] - b["min"][ai]
+    total_height_u = sum(float(l.get("height", 0)) for l in layers)
+    if total_height_u <= 0:
+        raise MeasureError("shelf layers must have positive total height")
+    unit_axis = root_span / total_height_u
+    # The face's base along the normal axis (where layer 0 starts).
+    face_base = b["max"][ai] if sign > 0 else b["min"][ai]
+    out = []
+    cum_u = 0.0   # cumulative height in u along the layer axis
+    for layer in layers:
+        h_u = float(layer["height"])
+        cells = layer.get("cells", [])
+        if not cells:
+            cum_u += h_u
+            continue
+        # Within-layer books via measure_cells (2D on the face). Shelf cells are
+        # typically 1D (a row of books along one axis), so default the missing
+        # in-plane axis to a degenerate 1u — the same trick measure_pickets uses.
+        norm_cells = [{**c, "gz": float(c.get("gz", 0)), "d": float(c.get("d", 1))}
+                      for c in cells]
+        pairs = measure_cells(geo, face, cells=norm_cells, margin=margin, gap=gap)
+        layer_y_base = face_base + sign * cum_u * unit_axis
+        book_h_world = h_u * unit_axis
+        book_y_center = layer_y_base + sign * book_h_world / 2.0
+        for (p, s) in pairs:
+            # Replace the face-axis component of position with the layer-derived Y.
+            p2 = list(p)
+            p2[ai] = book_y_center
+            s2 = list(s)
+            s2[ai] = book_h_world
+            out.append((tuple(p2), tuple(s2), (0.0, 0.0, 0.0, 1.0)))
+        cum_u += h_u
     return out
 
 
