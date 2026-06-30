@@ -848,6 +848,45 @@ class TestCellsLayout(unittest.TestCase):
         self.assertEqual(parms["_gap"], 0.0)
 
 
+class TestPicketsLayout(unittest.TestCase):
+    """The `pickets` strategy — a 1D row of equal-width (or explicit-width)
+    pickets along ONE in-plane axis of a face (the fence / baluster strategy).
+    Geometry correctness (point-by-point match to measure_pickets) is the
+    hython test's job; here we pin validation + the VEX strategy resolution."""
+
+    def test_pickets_count_validates(self):
+        a = {"id": "fence",
+             "root": {"shape": {"type": "box", "params": {"size": [4, 0.5, 1]}}},
+             "mounts": [{"id": "pickets", "position": {
+                 "measure": "pickets", "from": "root",
+                 "basis": {"face": "+Y"}, "axes": ["X"], "count": 8}}],
+             "leaves": [{"id": "post", "mount": "pickets",
+                 "shape": {"type": "box", "params": {"size": [0.1, 1.0, 0.1]}}}]}
+        r = validate_assembly(a)
+        self.assertTrue(r["success"], r["errors"])
+
+    def test_pickets_bad_count_rejected(self):
+        a = {"id": "fence",
+             "root": {"shape": {"type": "box", "params": {"size": [4, 0.5, 1]}}},
+             "mounts": [{"id": "pickets", "position": {
+                 "measure": "pickets", "count": 0}}],
+             "leaves": []}
+        r = validate_assembly(a)
+        self.assertFalse(r["success"])
+        self.assertTrue(any("count" in str(e.get("message", "")) for e in r["errors"]))
+
+    def test_pickets_vex_one_axis_row(self):
+        """PicketStrategy produces a 1D-effective row via the degenerate-2nd-axis
+        trick: the inherited _build_vex runs with gz=0/d=1, so all points share
+        the same z. The VEX still has ONE addpoint + setpointattrib scale."""
+        from edini.vex_strategies import build_mount_vex
+        spec = {"measure": "pickets", "face": "+Y", "axes": ["X"],
+                "cells": [{"gx": 0, "w": 1}, {"gx": 1, "w": 1}]}
+        snippet, parms = build_mount_vex(spec)
+        self.assertEqual(snippet.count("addpoint(geoself()"), 1)
+        self.assertIn('setpointattrib(geoself(), "scale"', snippet)
+
+
 # setUpClass for the keyboard/stairs BUILD tests (they need the mock hou like
 # the structure test does). Re-use the same flush-and-reimport contract.
 class TestM1Builds(unittest.TestCase):

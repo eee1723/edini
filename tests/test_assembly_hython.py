@@ -591,5 +591,64 @@ class TestLiveBuildHython(unittest.TestCase):
             f"car wheels lost axle facing: thin_axes={thin_axes}")
 
 
+def _fence():
+    return {
+        "id": "fence",
+        "root": {"shape": {"type": "box", "params": {"size": [4, 0.5, 1]}}},
+        "mounts": [{"id": "pickets", "position": {
+            "measure": "pickets", "from": "root",
+            "basis": {"face": "+Y"}, "axes": ["X"], "count": 8}}],
+        "leaves": [{"id": "post", "mount": "pickets",
+            "shape": {"type": "box", "params": {"size": [0.1, 1.0, 0.1]}}}]}
+
+
+@unittest.skipUnless(HYTHON, "hython not installed")
+class TestPicketsHython(unittest.TestCase):
+    """THE pickets-strategy proof: a 1D row of pickets built end-to-end. The
+    PicketStrategy reuses the 2D TabularFill loop with the 2nd axis degenerate
+    (gz=0/d=1) — exactly as measure_pickets does — so the inherited _build_vex
+    produces a 1D-effective row (all points share the same Z). count=8 is
+    expanded to 8 equal-width cells by the builder, and the live VEX emits 8
+    mount points that CTP stamps 8 posts onto."""
+
+    def test_fence_eight_posts_built(self):
+        """count=8 → 8 mount points → 8 posts stamped. The mount cloud carries
+        exactly 8 points (one per picket), proving the 1D-effective VEX (the
+        degenerate-2nd-axis trick) cooks cleanly in real hython and emits the
+        expected point count. The per-point count is the mount wrangle's POINTS
+        — the direct source of truth, not the post-copy geometry."""
+        res = _run(_fence(), probe="instance_centers")
+        self.assertTrue(res["success"], res.get("error"))
+        centers = res["_probe"]["centers"]
+        self.assertEqual(len(centers), 8,
+                         f"expected 8 picket mount points, got {len(centers)}: {centers}")
+
+    def test_fence_pickets_form_one_axis_row(self):
+        """The 8 pickets form a 1D row along X: they span the root's X (the layout
+        axis) but all share the SAME Z (the degenerate 2nd axis). The unit is
+        derived live from the root's span, so the row FILLS the root on X. This
+        is the geometric signature of the degenerate-2nd-axis trick working —
+        measure_pickets produces the same row, point-by-point."""
+        res = _run(_fence(), probe="instance_centers")
+        self.assertTrue(res["success"], res.get("error"))
+        centers = res["_probe"]["centers"]
+        self.assertEqual(len(centers), 8)
+        zs = [c[2] for c in centers]
+        # THE 1D CLAIM: every picket shares the same Z (the degenerate axis).
+        self.assertEqual(len(set(round(z, 6) for z in zs)), 1,
+                         f"pickets not a 1D row: Z values differ {zs}")
+        # The row FILLS the root's X span ([4, 0.5, 1] → X∈[-2, 2]). The derived
+        # unit is 4/8 = 0.5, pickets centered at cx=0.5..7.5 → X from -1.75 to
+        # +1.75, all within the root.
+        xs = sorted(c[0] for c in centers)
+        self.assertGreaterEqual(xs[0], -2.0)
+        self.assertLessEqual(xs[-1], 2.0)
+        # Pickets are evenly spaced: consecutive X differ by the derived unit 0.5.
+        gaps = [xs[i + 1] - xs[i] for i in range(len(xs) - 1)]
+        for g in gaps:
+            self.assertAlmostEqual(g, 0.5, places=4,
+                                   msg=f"uneven picket spacing: {gaps}")
+
+
 if __name__ == "__main__":
     unittest.main()

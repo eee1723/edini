@@ -465,8 +465,28 @@ class CellsStrategy(TabularFillStrategy):
         return gx_vals, gz_vals, w_vals, d_vals
 
 
+class PicketStrategy(TabularFillStrategy):
+    """The 1D picket/fence schema. Each cell declares {gx, w}. Reuses the
+    TabularFill 2D loop with the 2nd axis degenerate (gz=0, d=1) — exactly as
+    measure_pickets does — so the inherited _build_vex produces a 1D-effective
+    row (all points share the same z). The `count`→cells expansion happens in
+    the builder layer (_expand_pickets_count) BEFORE this sees the spec."""
+
+    def _parse_table(self, cells):
+        gx_vals, w_vals = [], []
+        for ci, c in enumerate(cells):
+            try:
+                gx_vals.append(float(c["gx"])); w_vals.append(float(c["w"]))
+            except (KeyError, TypeError, ValueError):
+                raise VexStrategyError(
+                    f"picket cell {ci} needs numeric gx/w, got {c!r}") from None
+        # 2nd axis degenerate (gz=0, d=1) → 1D-effective row via the inherited 2D loop.
+        return gx_vals, [0.0]*len(gx_vals), w_vals, [1.0]*len(gx_vals)
+
+
 # Module-level singleton dispatched to by build_mount_vex.
 _CELLS_STRATEGY = CellsStrategy()
+_PICKET_STRATEGY = PicketStrategy()
 
 
 def build_cells_vex(cells: list[dict]) -> tuple[str, dict[str, Any]]:
@@ -687,6 +707,12 @@ def build_mount_vex(mount_position: dict) -> tuple[str, dict[str, Any]]:
     if kind == "cells":
         return _CELLS_STRATEGY.build(mount_position)
 
+    # pickets: the 1D fence/baluster strategy. Dispatches to PicketStrategy,
+    # which reuses the 2D TabularFill loop with the 2nd axis degenerate (the
+    # count→cells expansion happens in the builder layer before this runs).
+    if kind == "pickets":
+        return _PICKET_STRATEGY.build(mount_position)
+
     static = _STATIC_STRATEGIES.get(kind)
     if static is None:
         raise VexStrategyError(f"no VEX strategy for measure {kind!r}")
@@ -694,6 +720,6 @@ def build_mount_vex(mount_position: dict) -> tuple[str, dict[str, Any]]:
 
 
 __all__ = ["VexStrategy", "StaticTemplateStrategy", "TabularFillStrategy",
-           "CellsStrategy",
+           "CellsStrategy", "PicketStrategy",
            "VexStrategyError", "build_mount_vex", "build_cells_vex",
            "_orient_fragment", "_corner_selectors", "_face_selector"]

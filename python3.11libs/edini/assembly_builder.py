@@ -134,7 +134,8 @@ def validate_assembly(assembly: dict) -> dict[str, Any]:
                     f"(M0: only 'root')"})
             kind = pos.get("measure")
             if kind not in ("bbox_corner", "bbox_face_center", "bbox_center",
-                            "point_on_edge", "grid_on_face", "array", "cells"):
+                            "point_on_edge", "grid_on_face", "array",
+                            "cells", "pickets"):
                 errors.append({"code": "MOUNT_BAD_MEASURE", "message":
                     f"mount {mid!r} position.measure {kind!r} unsupported"})
             # Required axis/edge fields per measure kind.
@@ -213,6 +214,65 @@ def validate_assembly(assembly: dict) -> dict[str, Any]:
                     errors.append({"code": "MOUNT_BAD_CELLS", "message":
                         f"mount {mid!r} cells.fill must be stretch|pad|repeat, "
                         f"got {fill!r}"})
+            elif kind == "pickets":
+                # The 1D picket/fence schema: a row of pickets along ONE
+                # in-plane axis. Requires a face (basis.face or bare face),
+                # and EITHER a count (int >= 1, expanded to equal-width cells
+                # at build) OR a non-empty explicit cells list of {gx, w}.
+                # axes is optional; if present it must be a single-element list
+                # (the layout axis) — PicketStrategy reuses the 2D TabularFill
+                # loop with the 2nd axis degenerate, mirroring measure_pickets.
+                pface = None
+                basis = pos.get("basis")
+                if isinstance(basis, dict):
+                    pface = basis.get("face")
+                if pface is None:
+                    pface = pos.get("face")
+                if not _is_face_str(pface):
+                    errors.append({"code": "MOUNT_BAD_FACE", "message":
+                        f"mount {mid!r} position needs a face "
+                        f"(basis.face or a bare face field), like '+Y'"})
+                count = pos.get("count")
+                pcells = pos.get("cells")
+                has_count = isinstance(count, int) and not isinstance(count, bool)
+                has_cells = isinstance(pcells, list) and len(pcells) > 0
+                if has_count:
+                    if count < 1:
+                        errors.append({"code": "MOUNT_BAD_PICKETS", "message":
+                            f"mount {mid!r} pickets.count must be an integer >= 1, "
+                            f"got {count!r}"})
+                elif not has_cells:
+                    errors.append({"code": "MOUNT_BAD_PICKETS", "message":
+                        f"mount {mid!r} pickets needs a count (int >= 1) or a "
+                        f"non-empty cells list of {{gx, w}}"})
+                if has_cells:
+                    for ci, c in enumerate(pcells):
+                        if not isinstance(c, dict):
+                            errors.append({"code": "MOUNT_BAD_PICKETS", "message":
+                                f"mount {mid!r} pickets.cells[{ci}] must be an object"})
+                            continue
+                        miss = [k for k in ("gx", "w") if k not in c]
+                        if miss:
+                            errors.append({"code": "MOUNT_BAD_PICKETS", "message":
+                                f"mount {mid!r} pickets.cells[{ci}] missing keys {miss}"})
+                            continue
+                        bad = [k for k in ("gx", "w")
+                               if not isinstance(c[k], (int, float))
+                               or (k == "w" and float(c[k]) <= 0)]
+                        if bad:
+                            errors.append({"code": "MOUNT_BAD_PICKETS", "message":
+                                f"mount {mid!r} pickets.cells[{ci}] bad values for {bad} "
+                                f"(gx numeric; w > 0)"})
+                # axes (optional): if present, must be a single-element list of
+                # one axis letter (the 1D layout axis).
+                paxes = pos.get("axes")
+                if paxes is not None:
+                    if not (isinstance(paxes, list) and len(paxes) == 1
+                            and isinstance(paxes[0], str)
+                            and paxes[0] in ("X", "Y", "Z")):
+                        errors.append({"code": "MOUNT_BAD_PICKETS", "message":
+                            f"mount {mid!r} pickets.axes must be a single-element "
+                            f"list of one axis letter (X/Y/Z), got {paxes!r}"})
 
         # Orient: optional. If present, derive from a measured direction.
         orient = mt.get("orient")
@@ -928,6 +988,12 @@ def build_assembly(
             if pos_spec.get("measure") == "cells" and pos_spec.get("fill") == "repeat":
                 pos_spec = {**pos_spec,
                             "cells": _expand_repeat_cells(pos_spec.get("cells", []))}
+            # pickets count→cells expansion: count=N becomes N equal-width 1u
+            # cells (gx=0,1,...,N-1). The VEX loop is unchanged — only fed a
+            # generated table. PicketStrategy then reuses the 2D TabularFill loop
+            # with the 2nd axis degenerate, producing a 1D-effective row.
+            if pos_spec.get("measure") == "pickets" and "count" in pos_spec:
+                pos_spec = _expand_pickets_count(pos_spec)
             try:
                 snippet, mparms = build_mount_vex(pos_spec)
             except VexStrategyError as e:
