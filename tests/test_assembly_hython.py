@@ -717,5 +717,54 @@ class TestTilesHython(unittest.TestCase):
                          f"expected 2 tile mount points, got {len(centers)}: {centers}")
 
 
+def _bookcase():
+    return {
+        "id": "bookcase",
+        "root": {"shape": {"type": "box", "params": {"size": [6, 5, 2]}}},
+        "mounts": [{"id": "shelves", "position": {
+            "measure": "shelf", "from": "root", "basis": {"face": "+Y"}, "axis": "Y",
+            "layers": [{"height": 10, "cells": [{"gx":0,"w":2}, {"gx":2,"w":1}]},
+                       {"height": 8,  "cells": [{"gx":0,"w":3}]}]}}],
+        "leaves": [{"id": "book", "mount": "shelves",
+            "shape": {"type": "box", "params": {"size": [0.8, 1.0, 0.3]}}}]}
+    # 3 books across 2 layers: layer 0 has 2 books, layer 1 has 1. Layers stack
+    # along Y (the face's normal), each book's Y is derived from its layer.
+
+
+@unittest.skipUnless(HYTHON, "hython not installed")
+class TestShelfHython(unittest.TestCase):
+    """THE shelf-strategy proof: a 3D bookshelf built end-to-end. ShelfStrategy
+    flattens layers into a cells table, reuses the 2D TabularFill loop in-plane
+    (X/Z), then its shelf fragment (gated on self._shelf_layers) overrides each
+    point's face-axis Y with the layer-derived center. This is the 3D case the
+    base 2D loop cannot express directly (it forces Y=face_val for every point):
+    the per-point face-axis override is what lifts books onto their layers.
+    Mirrors measure.measure_shelf: unit_axis = face_span / total_layer_u; layer N
+    base = face_base + sign * cum_u_before_N * unit_axis; book center = base +
+    sign * (h*unit)/2."""
+
+    def test_bookcase_three_books_two_layers(self):
+        """3 books (2 in layer 0, 1 in layer 1) are stamped. The single layer-1
+        book's Y is HIGHER than both layer-0 books' Y (layers stack UP along the
+        face normal +Y). This is the geometric signature of the shelf fragment's
+        face-axis override working — the base 2D loop would put all 3 on the same
+        Y (= face_val)."""
+        res = _run(_bookcase(), probe="instance_centers")
+        self.assertTrue(res["success"], res.get("error"))
+        centers = res["_probe"]["centers"]
+        # 3 books across 2 layers (layer 0: 2 books, layer 1: 1 book).
+        self.assertEqual(len(centers), 3,
+                         f"expected 3 book mount points, got {len(centers)}: {centers}")
+        # The two layer-0 books share the lower Y; the one layer-1 book sits
+        # higher (layers stack along +Y). Cluster the Ys.
+        ys = sorted(c[1] for c in centers)
+        # The two lowest Ys are layer 0; the highest is layer 1. Layer 1 must be
+        # strictly above the layer-0 books — the shelf fragment moved it.
+        self.assertGreater(ys[-1], ys[0],
+                           f"layer-1 book not above layer-0: Ys={ys}")
+        self.assertGreater(ys[-1], ys[1],
+                           f"layer-1 book not above layer-0: Ys={ys}")
+
+
 if __name__ == "__main__":
     unittest.main()

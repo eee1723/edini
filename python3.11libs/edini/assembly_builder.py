@@ -135,7 +135,7 @@ def validate_assembly(assembly: dict) -> dict[str, Any]:
             kind = pos.get("measure")
             if kind not in ("bbox_corner", "bbox_face_center", "bbox_center",
                             "point_on_edge", "grid_on_face", "array",
-                            "cells", "pickets", "tiles"):
+                            "cells", "pickets", "tiles", "shelf"):
                 errors.append({"code": "MOUNT_BAD_MEASURE", "message":
                     f"mount {mid!r} position.measure {kind!r} unsupported"})
             # Required axis/edge fields per measure kind.
@@ -322,6 +322,73 @@ def validate_assembly(assembly: dict) -> dict[str, Any]:
                     errors.append({"code": "MOUNT_BAD_TILES", "message":
                         f"mount {mid!r} tiles.orient must be "
                         f"herringbone|checker|running, got {trule!r}"})
+            elif kind == "shelf":
+                # The 3D bookshelf schema. Layers stack along the face's NORMAL
+                # axis; each layer has a height (1u) + a within-layer cells list
+                # of {gx, w} (a row of books along one in-plane axis — the 2nd
+                # axis defaults to a degenerate 1u, like pickets). Requires a
+                # face (basis.face or bare face), an `axis` that MUST equal the
+                # face's normal axis letter (layers stack OUT of the face), and a
+                # non-empty `layers` list of {height > 0, cells: [{gx, w}]}.
+                sface = None
+                basis = pos.get("basis")
+                if isinstance(basis, dict):
+                    sface = basis.get("face")
+                if sface is None:
+                    sface = pos.get("face")
+                if not _is_face_str(sface):
+                    errors.append({"code": "MOUNT_BAD_FACE", "message":
+                        f"mount {mid!r} position needs a face "
+                        f"(basis.face or a bare face field), like '+Y'"})
+                # axis must equal the face's normal axis letter.
+                saxis = pos.get("axis")
+                if not (isinstance(saxis, str) and saxis in ("X", "Y", "Z")):
+                    errors.append({"code": "MOUNT_BAD_SHELF", "message":
+                        f"mount {mid!r} shelf.axis must be one axis letter "
+                        f"(X/Y/Z), got {saxis!r}"})
+                elif _is_face_str(sface) and saxis != sface[1]:
+                    errors.append({"code": "MOUNT_BAD_SHELF", "message":
+                        f"mount {mid!r} shelf.axis {saxis!r} must equal the "
+                        f"face's normal axis (face {sface!r} → {sface[1]!r})"})
+                layers = pos.get("layers")
+                if not isinstance(layers, list) or not layers:
+                    errors.append({"code": "MOUNT_BAD_SHELF", "message":
+                        f"mount {mid!r} shelf.layers must be a non-empty list "
+                        f"of {{height, cells}}"})
+                else:
+                    for li, layer in enumerate(layers):
+                        if not isinstance(layer, dict):
+                            errors.append({"code": "MOUNT_BAD_SHELF", "message":
+                                f"mount {mid!r} shelf.layers[{li}] must be an object"})
+                            continue
+                        hgt = layer.get("height")
+                        if not isinstance(hgt, (int, float)) or float(hgt) <= 0:
+                            errors.append({"code": "MOUNT_BAD_SHELF", "message":
+                                f"mount {mid!r} shelf.layers[{li}].height must "
+                                f"be a number > 0, got {hgt!r}"})
+                        lcells = layer.get("cells")
+                        if not isinstance(lcells, list) or not lcells:
+                            errors.append({"code": "MOUNT_BAD_SHELF", "message":
+                                f"mount {mid!r} shelf.layers[{li}].cells must "
+                                f"be a non-empty list of {{gx, w}}"})
+                        else:
+                            for ci, c in enumerate(lcells):
+                                if not isinstance(c, dict):
+                                    errors.append({"code": "MOUNT_BAD_SHELF", "message":
+                                        f"mount {mid!r} shelf.layers[{li}].cells[{ci}] must be an object"})
+                                    continue
+                                miss = [k for k in ("gx", "w") if k not in c]
+                                if miss:
+                                    errors.append({"code": "MOUNT_BAD_SHELF", "message":
+                                        f"mount {mid!r} shelf.layers[{li}].cells[{ci}] missing keys {miss}"})
+                                    continue
+                                bad = [k for k in ("gx", "w")
+                                       if not isinstance(c[k], (int, float))
+                                       or (k == "w" and float(c[k]) <= 0)]
+                                if bad:
+                                    errors.append({"code": "MOUNT_BAD_SHELF", "message":
+                                        f"mount {mid!r} shelf.layers[{li}].cells[{ci}] bad values for {bad} "
+                                        f"(gx numeric; w > 0)"})
 
         # Orient: optional. If present, derive from a measured direction.
         orient = mt.get("orient")
@@ -1077,6 +1144,14 @@ def build_assembly(
             # with the 2nd axis degenerate, producing a 1D-effective row.
             if pos_spec.get("measure") == "pickets" and "count" in pos_spec:
                 pos_spec = _expand_pickets_count(pos_spec)
+            # shelf layers→cells flattening: the layers table (each layer has a
+            # height + a within-layer cells list) is flattened into a single cells
+            # table, each cell carrying its layer's cumulative-u base (__layer_gy)
+            # and height (__layer_h). ShelfStrategy reuses the 2D TabularFill loop
+            # in-plane, then its shelf fragment (gated on _shelf_layers) overrides
+            # each point's face-axis P/scale with the layer-derived values.
+            if pos_spec.get("measure") == "shelf" and "layers" in pos_spec:
+                pos_spec = _expand_shelf_layers(pos_spec)
             try:
                 snippet, mparms = build_mount_vex(pos_spec)
             except VexStrategyError as e:

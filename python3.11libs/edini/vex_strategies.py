@@ -416,6 +416,46 @@ class TabularFillStrategy(VexStrategy):
             "    setpointattrib(geoself(), \"orient\", __pt, __qrot, \"set\");\n"
             if has_rot else "")
 
+        # Per-cell shelf 3D (ShelfStrategy only): when self._shelf_layers is set
+        # (a per-cell [(gy, h), ...] list — set ONLY by ShelfStrategy._parse_table,
+        # never by cells/pickets/tiles), emit the layer arrays + a fragment that
+        # OVERRIDES each point's face-axis P with the layer-derived center and
+        # the face-axis scale with the layer height. This is how a 3D bookshelf
+        # reuses the 2D TabularFill loop: layers are flattened into cells, the
+        # loop places each in-plane (X/Z), and this fragment lifts each onto its
+        # layer along the face normal (Y). Mirrors measure.measure_shelf:
+        #   unit_axis = face_span / total_layer_u;
+        #   layer N base = face_base + sign * cum_u_before_N * unit_axis;
+        #   book center = base + sign * (h*unit)/2.
+        # cells/pickets/tiles leave _shelf_layers unset → getattr returns None →
+        # NO shelf fragment → byte-identical VEX preserved (Task-1 gate).
+        shelf_layers = getattr(self, "_shelf_layers", None)
+        has_shelf = (isinstance(shelf_layers, list) and len(shelf_layers) == len(cx))
+        if has_shelf:
+            layer_gy = [gy for gy, _h in shelf_layers]
+            layer_h = [h for _gy, h in shelf_layers]
+            total_layer_u = max(gy + h for gy, h in shelf_layers)
+            shelf_decl = (
+                "float __layer_gy[] = " + self._arr(layer_gy)
+                + "float __layer_h[] = " + self._arr(layer_h)
+                + "float __u_axis = (__mx[__fa] - __mn[__fa]) / "
+                + repr(total_layer_u) + ";"
+            )
+            shelf_block = (
+                "    // shelf 3D: override the face-axis P with the layer-derived\n"
+                "    // center, and the face-axis scale with the layer height. The\n"
+                "    // in-plane axes (X/Z) keep the 2D cells placement/scale.\n"
+                "    float __ly_base = __faceval + __fs * __layer_gy[__ci] * __u_axis;\n"
+                "    float __lh = __layer_h[__ci] * __u_axis;\n"
+                "    vector __p2 = __p; __p2[__fa] = __ly_base + __fs * __lh / 2.0;\n"
+                "    setpointattrib(geoself(), \"P\", __pt, __p2, \"set\");\n"
+                "    vector __s2 = __scl; __s2[__fa] = __lh;\n"
+                "    setpointattrib(geoself(), \"scale\", __pt, __s2, \"set\");\n"
+            )
+        else:
+            shelf_decl = ""
+            shelf_block = ""
+
         snippet = _VEX_CLEAR + r"""
 vector __mn = getbbox_min(0);
 vector __mx = getbbox_max(0);
@@ -437,7 +477,7 @@ float __span1 = (__mx[__a1] - __mn[__a1]) - 2 * __m;
 float __cx[] = """ + self._arr(cx) + r"""
 float __cz[] = """ + self._arr(cz) + r"""
 float __cw[] = """ + self._arr(w_vals) + r"""
-float __cd[] = """ + self._arr(d_vals) + rot_decl + r"""
+float __cd[] = """ + self._arr(d_vals) + rot_decl + shelf_decl + r"""
 // ONE loop over every cell. Position = grid center × derived unit; scale =
 // physical size (w*u0) with the gap inset so adjacent keys show a visible seam.
 // (Unique loop vars __ci/__ncell avoid clashing with the clear loop's __n/__i.)
@@ -455,7 +495,7 @@ for (int __ci = 0; __ci < __ncell; __ci++) {
     __scl[__a0] = max(0.0001, __cw[__ci] * __u0 - __gap);
     __scl[__a1] = max(0.0001, __cd[__ci] * __u1 - __gap);
     setpointattrib(geoself(), "scale", __pt, __scl, "set");
-""" + rot_block + r"""}
+""" + shelf_block + rot_block + r"""}
 """.strip()
         return snippet
 
@@ -539,10 +579,55 @@ class TileStrategy(TabularFillStrategy):
         return gx, gz, w, d
 
 
+class ShelfStrategy(TabularFillStrategy):
+    """The 3D bookshelf schema. Layers stack along the face's NORMAL axis; each
+    layer has a height (1u) + within-layer cells (a row of books, defaulting the
+    2nd in-plane axis to a degenerate 1u — the same trick measure_pickets uses).
+
+    build() flattens layers first (via _expand_shelf_layers), then the inherited
+    TabularFill loop places each flattened cell in-plane (X/Z). _parse_table
+    extracts the per-cell layer info (__layer_gy/__layer_h, injected by the
+    expander) and stores it as self._shelf_layers, which SIGNALS _build_vex to
+    append the shelf 3D fragment — that overrides each point's face-axis P with
+    the layer-derived center and the face-axis scale with the layer height. So
+    the 3D stack is a 2D loop + a per-point face-axis override (mirror of
+    measure.measure_shelf). cells/pickets/tiles leave _shelf_layers unset, so
+    the base _build_vex emits NO shelf fragment for them (byte-identical)."""
+
+    def build(self, position_spec: dict) -> tuple[str, dict[str, Any]]:
+        # Flatten layers into a single cells table (carrying per-cell __layer_gy
+        # / __layer_h) BEFORE the inherited build parses the table. The builder
+        # layer (build_assembly) also does this; build() repeats it so the
+        # strategy is self-sufficient when called directly (e.g. from tests).
+        from edini.assembly_builder import _expand_shelf_layers
+        spec = (_expand_shelf_layers(position_spec)
+                if "layers" in position_spec else position_spec)
+        return super().build(spec)
+
+    def _parse_table(self, cells):
+        gx, gz, w, d, gy, h = [], [], [], [], [], []
+        for ci, c in enumerate(cells):
+            try:
+                gx.append(float(c["gx"])); w.append(float(c["w"]))
+            except (KeyError, TypeError, ValueError) as e:
+                raise VexStrategyError(
+                    f"shelf cell {ci} needs numeric gx/w, got {c!r}") from None
+            # The within-layer 2nd in-plane axis defaults to a degenerate 1u
+            # (a row of books along ONE in-plane axis), like measure_pickets.
+            gz.append(float(c.get("gz", 0))); d.append(float(c.get("d", 1)))
+            # Per-cell layer info injected by _expand_shelf_layers:
+            # __layer_gy = the layer's cumulative-u base; __layer_h = its height.
+            gy.append(float(c.get("__layer_gy", 0)))
+            h.append(float(c.get("__layer_h", 1)))
+        self._shelf_layers = list(zip(gy, h))   # signals _build_vex shelf fragment
+        return gx, gz, w, d
+
+
 # Module-level singleton dispatched to by build_mount_vex.
 _CELLS_STRATEGY = CellsStrategy()
 _PICKET_STRATEGY = PicketStrategy()
 _TILE_STRATEGY = TileStrategy()
+_SHELF_STRATEGY = ShelfStrategy()
 
 
 def build_cells_vex(cells: list[dict]) -> tuple[str, dict[str, Any]]:
@@ -776,6 +861,15 @@ def build_mount_vex(mount_position: dict) -> tuple[str, dict[str, Any]]:
     if kind == "tiles":
         return _TILE_STRATEGY.build(mount_position)
 
+    # shelf: the 3D bookshelf strategy. Dispatches to ShelfStrategy, which
+    # flattens layers into a cells table (carrying per-cell __layer_gy/__layer_h),
+    # reuses the TabularFill loop in-plane, and appends a shelf fragment that
+    # overrides each point's face-axis P/scale with the layer-derived values.
+    # The layer flattening (Task 6's _expand_shelf_layers) also happens in the
+    # builder layer; ShelfStrategy.build repeats it so it's self-sufficient.
+    if kind == "shelf":
+        return _SHELF_STRATEGY.build(mount_position)
+
     static = _STATIC_STRATEGIES.get(kind)
     if static is None:
         raise VexStrategyError(f"no VEX strategy for measure {kind!r}")
@@ -783,6 +877,6 @@ def build_mount_vex(mount_position: dict) -> tuple[str, dict[str, Any]]:
 
 
 __all__ = ["VexStrategy", "StaticTemplateStrategy", "TabularFillStrategy",
-           "CellsStrategy", "PicketStrategy", "TileStrategy",
+           "CellsStrategy", "PicketStrategy", "TileStrategy", "ShelfStrategy",
            "VexStrategyError", "build_mount_vex", "build_cells_vex",
            "_orient_fragment", "_corner_selectors", "_face_selector"]

@@ -932,6 +932,49 @@ class TestTilesLayout(unittest.TestCase):
         self.assertNotIn('setpointattrib(geoself(), "orient"', snippet)
 
 
+class TestShelfLayout(unittest.TestCase):
+    """The `shelf` strategy — a 3D layered layout (bookshelf). Layers stack along
+    the face's NORMAL axis; each layer has a height (1u) + within-layer cells.
+    ShelfStrategy flattens layers first (via _expand_shelf_layers), then the
+    inherited TabularFill loop runs per cell, and _build_vex appends a shelf
+    fragment (gated on self._shelf_layers) that overrides each point's face-axis
+    position + scale with the layer-derived values. Geometry correctness
+    (layer-1 higher than layer-0) is the hython test's job; here we pin
+    validation + the VEX strategy resolution + the cells-no-fragment regression."""
+
+    def test_shelf_validates(self):
+        a = {"id": "bookcase",
+             "root": {"shape": {"type": "box", "params": {"size": [6, 5, 2]}}},
+             "mounts": [{"id": "shelves", "position": {
+                 "measure": "shelf", "from": "root", "basis": {"face": "+Y"},
+                 "axis": "Y",
+                 "layers": [
+                   {"height": 10, "cells": [{"gx":0,"w":2}, {"gx":2,"w":1}]},
+                   {"height": 8,  "cells": [{"gx":0,"w":3}]}]}}],
+             "leaves": [{"id": "book", "mount": "shelves",
+                 "shape": {"type": "box", "params": {"size": [0.8, 1.0, 0.3]}}}]}
+        r = validate_assembly(a)
+        self.assertTrue(r["success"], r["errors"])
+
+    def test_shelf_vex_has_layer_arrays(self):
+        """ShelfStrategy emits __layer_gy[] + __layer_h[] + a shelf fragment
+        that overrides the face-axis position/scale. cells/pickets don't."""
+        from edini.vex_strategies import build_mount_vex
+        spec = {"measure": "shelf", "face": "+Y", "axis": "Y",
+                "layers": [{"height": 10, "cells": [{"gx":0,"w":1}]},
+                           {"height": 8,  "cells": [{"gx":0,"w":1}]}]}
+        snippet, parms = build_mount_vex(spec)
+        self.assertIn("__layer_gy[]", snippet)
+        self.assertIn("__layer_h[]", snippet)
+
+    def test_cells_still_no_shelf_fragment(self):
+        """REGRESSION: cells VEX must NOT contain the shelf fragment."""
+        from edini.vex_strategies import build_mount_vex
+        snippet, _ = build_mount_vex({"measure": "cells", "face": "+Y",
+            "cells": [{"gx":0,"gz":0,"w":1,"d":1}]})
+        self.assertNotIn("__layer_gy[]", snippet)
+
+
 # setUpClass for the keyboard/stairs BUILD tests (they need the mock hou like
 # the structure test does). Re-use the same flush-and-reimport contract.
 class TestM1Builds(unittest.TestCase):
