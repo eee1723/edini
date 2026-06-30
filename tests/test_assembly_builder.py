@@ -822,6 +822,31 @@ class TestCellsLayout(unittest.TestCase):
         self.assertTrue(issubclass(TabularFillStrategy, VexStrategy))
         self.assertEqual(len(_STATIC_STRATEGIES), 6)   # the 6 static kinds
 
+    def test_cells_2d_byte_identical_after_axes_refactor(self):
+        """After generalizing _build_vex to axes[], the 2D cells path must keep
+        producing the SAME VEX variable names + structure (the regression gate
+        for the base-class refactor). Existing tests pin __u0/__span0 etc.; this
+        test adds a structural snapshot so a careless axes[] generalization that
+        renames the 2D variables is caught immediately."""
+        from edini.vex_strategies import build_mount_vex
+        a = _cells_keyboard_assembly()
+        snippet, parms = build_mount_vex(a["mounts"][0]["position"])
+        # The measurement-driven core variable names (pinned by other tests too,
+        # but asserted here as a block for the refactor's safety net).
+        self.assertIn("__u0 = __span0 /", snippet)
+        self.assertIn("__u1 = __span1 /", snippet)
+        # The compact-loop invariants (data/code decoupling).
+        self.assertEqual(snippet.count("addpoint(geoself()"), 1)
+        self.assertIn('setpointattrib(geoself(), "scale"', snippet)
+        # The layout table arrays (one per field).
+        self.assertIn("__cx[] = {", snippet)
+        self.assertIn("__cz[] = {", snippet)
+        self.assertIn("__cw[] = {", snippet)
+        self.assertIn("__cd[] = {", snippet)
+        # margin + gap remain live spares (not baked).
+        self.assertEqual(parms["_margin"], 0.5)
+        self.assertEqual(parms["_gap"], 0.0)
+
 
 # setUpClass for the keyboard/stairs BUILD tests (they need the mock hou like
 # the structure test does). Re-use the same flush-and-reimport contract.
