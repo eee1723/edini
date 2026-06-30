@@ -393,7 +393,7 @@ def get_pi_command() -> list[str]:
 # Pi-AI Data Bridge (auto-synced provider/model data)
 # ═══════════════════════════════════════════════════════════════════════
 
-_BRIDGE_SCRIPT = Path(__file__).resolve().parent / "pi_data_bridge.js"
+_BRIDGE_SCRIPT = Path(__file__).resolve().parent / "pi_data_bridge.mjs"
 _providers_cache: list[dict] | None = None
 _models_cache: dict[str, list[dict]] = {}
 _vision_models_cache: list[dict] | None = None

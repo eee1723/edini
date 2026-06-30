@@ -74,19 +74,54 @@ EXAMPLES = [
         ],
     }),
     ("keyboard_showcase", 3.0, {
+        # A REAL 60% keyboard via `cells`: keys of different sizes (a 6.25u
+        # spacebar + 1u/1.25u/1.5u/2u keys) with staggered rows — the strategy
+        # grid_on_face cannot express (uniform cells only). Each cell carries
+        # its own size via per-point v@scale; one CTP stamps them all. The unit
+        # is DERIVED from the tray's span, so the layout FILLS the tray and
+        # rescales when tray_width changes (measurement-driven placement).
         "id": "keyboard",
-        "params": {"tray_width": 4.0, "tray_depth": 1.5, "tray_thick": 0.1,
-                   "key_size": 0.2, "key_height": 0.08},
+        "params": {"tray_width": 16.0, "tray_depth": 6.0, "tray_thick": 0.4,
+                   "key_height": 0.4},
         "root": {"shape": {"type": "box", "params": {
             "size": ["tray_width", "tray_thick", "tray_depth"]}}},
         "mounts": [
-            {"id": "keys", "position": {"measure": "grid_on_face",
-                "from": "root", "face": "+Y", "rows": 3, "cols": 5, "margin": 0.05}},
+            {"id": "keys", "position": {"measure": "cells",
+                "from": "root", "face": "+Y", "margin": 0.5, "gap": 0.04,
+                "square": True,        # keys stay square (unit=min), like a real keyboard
+                "cells": [
+                    # Row 0 (number row): 15 1u keys across.
+                    *[{"gx": c, "gz": 0, "w": 1, "d": 1} for c in range(15)],
+                    # Row 1 (QWERTY): Tab 1.5u + 13 1u keys + \ 1.5u (staggered).
+                    {"gx": 0, "gz": 1, "w": 1.5, "d": 1},
+                    *[{"gx": 1.5 + c, "gz": 1, "w": 1, "d": 1} for c in range(13)],
+                    {"gx": 14.5, "gz": 1, "w": 1.5, "d": 1},
+                    # Row 2 (ASDF): Caps 1.75u + 12 1u keys + Enter 2.25u.
+                    {"gx": 0, "gz": 2, "w": 1.75, "d": 1},
+                    *[{"gx": 1.75 + c, "gz": 2, "w": 1, "d": 1} for c in range(12)],
+                    {"gx": 13.75, "gz": 2, "w": 2.25, "d": 1},
+                    # Row 3 (ZXCV): Shift 2.25u + 11 1u keys + Shift 2.75u.
+                    {"gx": 0, "gz": 3, "w": 2.25, "d": 1},
+                    *[{"gx": 2.25 + c, "gz": 3, "w": 1, "d": 1} for c in range(11)],
+                    {"gx": 13.25, "gz": 3, "w": 2.75, "d": 1},
+                    # Row 4 (bottom): Ctrl/Alt/Win/Space/Alt/Win/Menu/Ctrl.
+                    {"gx": 0, "gz": 4, "w": 1.25, "d": 1},
+                    {"gx": 1.25, "gz": 4, "w": 1.25, "d": 1},
+                    {"gx": 2.5, "gz": 4, "w": 1.25, "d": 1},
+                    {"gx": 3.75, "gz": 4, "w": 6.25, "d": 1},   # spacebar
+                    {"gx": 10.0, "gz": 4, "w": 1.25, "d": 1},
+                    {"gx": 11.25, "gz": 4, "w": 1.25, "d": 1},
+                    {"gx": 12.5, "gz": 4, "w": 1.25, "d": 1},
+                    {"gx": 13.75, "gz": 4, "w": 1.25, "d": 1},
+                ]}},
         ],
+        # The leaf is a 1u BASIS box; the per-cell v@scale (physical w*unit_x,
+        # d*unit_z, where unit is derived from the tray) grows it to each cell's
+        # footprint. Height is the leaf's own property (key_height).
         "leaves": [
             {"id": "key", "mount": "keys",
              "shape": {"type": "box", "params": {
-                 "size": ["key_size", "key_height", "key_size"]}}},
+                 "size": [1, "key_height", 1]}}},
         ],
     }),
     ("stairs_showcase", 9.0, {
@@ -179,7 +214,7 @@ def main():
         live_param, new_val, label = {
             "car_showcase": ("length", 8.0, "length 4→8"),
             "bicycle_showcase": ("length", 8.0, "length 4→8"),
-            "keyboard_showcase": ("tray_width", 8.0, "tray_width 4→8"),
+            "keyboard_showcase": ("tray_width", 24.0, "tray_width 16→24 (keys relay to fill)"),
             "stairs_showcase": ("base_w", 5.0, "base_w 3→5"),
         }[name]
         before = _first_mount_pts(root, res)

@@ -50,6 +50,20 @@ class VexStrategyError(ValueError):
     """Raised when a mount spec cannot be turned into a VEX strategy."""
 
 
+class VexStrategy:
+    """Base contract for a measurement strategy.
+
+    Subclasses implement :meth:`build` to turn a mount ``position`` spec into a
+    ``(snippet, parms)`` pair. The snippet is a detail-wrangle body that MUST
+    begin with :data:`_VEX_CLEAR` (so the orient fragment can be appended) and
+    MUST emit every point via ``append(__newpts, addpoint(...))``. ``parms`` is
+    a dict of spare-parm name → value the builder installs on the wrangle node.
+    """
+
+    def build(self, position_spec: dict) -> tuple[str, dict[str, Any]]:
+        raise NotImplementedError
+
+
 # ── Sign-string → numeric selector resolution ──────────────────────
 
 
@@ -194,6 +208,229 @@ for (int i = 0; i < nx; i++) {
 """.strip()
 
 
+# cells: an explicit unit-grid layout where each cell has its OWN size, and
+# every size + position is DERIVED live from the root's actual geometry.
+#
+# Unlike grid_on_face (N identical cells), this is the keyboard-keys strategy
+# done right: the agent declares a table of {gx,gz,w,d} cells in 1u units, and
+# the strategy emits one point per cell — each carrying a non-uniform v@scale
+# (w on the first in-plane axis, d on the second). Copy-to-Points 2.0 reads
+# v@scale per instance, so ONE CTP stamps many differently-sized keys (a 1u
+# key + a 6.25u spacebar from a single 1u leaf shape).
+#
+# MEASUREMENT-DRIVEN COUPLING (the key property): the physical size of 1u is
+# NOT a free parameter. It is DERIVED live in VEX from the root's actual span:
+#     unit_x = (root_span_x - 2*margin) / layout_total_u_x
+# where layout_total_u_x = max(gx+w) is the layout's span in grid units (the
+# fixed keyboard spec, baked at build). So scaling the root → unit re-derives →
+# every key rescales AND relays-out to FILL the root exactly, never overflowing.
+# This is what makes the cells layout a true function of the root's geometry,
+# not a free parameter the user must keep in sync.
+#
+# The layout TABLE (which keys, which sizes) is baked at build (mirrors array
+# step). margin is a live spare (the grid-origin inset + fill margin). face +
+# in-plane axes are resolved by Python (face_axis/face_sign spares) and the
+# per-cell code is LOOP-UNROLLED by the builder below (VEX has no JSON parser;
+# Python walks the cells table and emits one block per cell, with gx/gz/w/d
+# inlined as literals — exactly how the orient fragment inlines its selectors).
+class TabularFillStrategy(VexStrategy):
+    """Table-driven (position, size) layouts that FILL a region of the root.
+
+    The layout is an explicit table of cells (the schema is defined by the
+    subclass — :class:`CellsStrategy` uses ``{gx,gz,w,d}``). This base class
+    encodes the table as VEX **array literals** (the data) and runs a single
+    compact **loop** over them (the code), so the generated VEX is ~30 lines
+    regardless of cell count. It derives the per-axis physical unit from the
+    root's actual span (measurement-driven: the layout FILLS the root and
+    rescales when the root resizes), writes a per-point ``v@scale`` so one CTP
+    stamps many differently-sized instances, and applies the shape constraint
+    + fill mode.
+
+    Shape constraint (``square``): when true, the per-axis unit is unified to
+    ``min(unit_a0, unit_a1)`` so a 1u cell is physically SQUARE (no axis
+    stretching). This matches a real keyboard's 1u = 19mm in both X and Z.
+
+    Fill mode (``fill``): how to handle non-divisible leftover space.
+      - ``stretch`` (default): unit = span/total_u per axis (independent; may
+        deform when square=False, or underfill one axis when square=True).
+      - ``pad``: unit = min(both axes); leftover space stays empty on the
+        larger axis (the grid origin centers the layout). Keys stay square.
+      - ``repeat``: like pad for the unit, but the builder PRE-EXPANDS the cell
+        table (Python layer) with extra 1u cells to fill the leftover — so the
+        VEX loop is unchanged, only fed a longer table.
+
+    Subclasses provide :meth:`_parse_table` (spec → validated (centers, sizes)
+    arrays) and :meth:`_table_totals` (the layout's grid-unit span per axis).
+    """
+
+    def build(self, position_spec: dict) -> tuple[str, dict[str, Any]]:
+        cells = position_spec.get("cells")
+        if not isinstance(cells, list) or not cells:
+            raise VexStrategyError("cells strategy needs a non-empty 'cells' list")
+        square = bool(position_spec.get("square", False))
+        fill = str(position_spec.get("fill", "stretch"))
+        if fill not in ("stretch", "pad", "repeat"):
+            raise VexStrategyError(
+                f"cells.fill must be stretch|pad|repeat, got {fill!r}")
+
+        gx_vals, gz_vals, w_vals, d_vals = self._parse_table(cells)
+        total_u_x, total_u_z = self._table_totals(gx_vals, gz_vals, w_vals, d_vals)
+
+        # Resolve face → face_axis/face_sign (same selector as grid_on_face).
+        fparms = _face_selector(position_spec["face"])
+        parms: dict[str, Any] = {"face_axis": fparms["face_axis"],
+                                 "face_sign": fparms["face_sign"]}
+        # margin + gap are live spares (grid inset + visible seam). square/fill
+        # are baked into the VEX template choice below (not live spares): they
+        # change the structure of the unit-derivation, not a runtime value.
+        parms["_margin"] = position_spec.get("margin", 0.0)
+        parms["_gap"] = position_spec.get("gap", 0.0)
+
+        snippet = self._build_vex(gx_vals, gz_vals, w_vals, d_vals,
+                                  total_u_x, total_u_z, square, fill)
+        return snippet, parms
+
+    # ── Subclass hooks ───────────────────────────────────────────────
+    def _parse_table(self, cells: list[dict]
+                     ) -> tuple[list[float], list[float], list[float], list[float]]:
+        """Validate the cell table → (gx[], gz[], w[], d[]) value lists."""
+        raise NotImplementedError
+
+    def _table_totals(self, gx, gz, w, d) -> tuple[float, float]:
+        """The layout's grid-unit span per in-plane axis (max gx+w, max gz+d)."""
+        return (max(gx_ + w_ for gx_, w_ in zip(gx, w)),
+                max(gz_ + d_ for gz_, d_ in zip(gz, d)))
+
+    # ── VEX generation ───────────────────────────────────────────────
+    @staticmethod
+    def _arr(vals) -> str:
+        """Format a Python list as a VEX array-LITERAL body: {a, b, c};"""
+        return "{" + ", ".join(repr(v) for v in vals) + "};"
+
+    def _build_vex(self, gx_vals, gz_vals, w_vals, d_vals,
+                   total_u_x, total_u_z, square, fill) -> str:
+        """Generate the compact-loop VEX for the given table + constraints.
+
+        The unit-derivation block depends on (square, fill): stretch uses the
+        per-axis units independently; square/pad unify them to min. The loop
+        body is shared (data/code decoupled). Mirrors measure.measure_cells.
+        """
+        # The unit-derivation block. stretch (no square): independent per-axis
+        # units (may deform when the root's aspect ≠ the layout's aspect).
+        # square / pad / repeat: unify unit to min(unit0, unit1) so 1u cells stay
+        # SQUARE and never overflow either axis; the leftover space on the larger
+        # axis is split to CENTER the layout (pad-style). repeat additionally
+        # pre-expands the table (builder layer) so the leftover gets filled.
+        if square or fill in ("pad", "repeat"):
+            unit_block = (
+                "float __u0raw = __span0 / " + repr(total_u_x) + ";\n"
+                "float __u1raw = __span1 / " + repr(total_u_z) + ";\n"
+                "// square/pad/repeat: unify unit to min → 1u cells stay square,\n"
+                "// never overflow. Leftover on the larger axis centers the layout.\n"
+                "float __u0 = min(__u0raw, __u1raw);\n"
+                "float __u1 = __u0;\n"
+                "float __extra0 = (__span0 - " + repr(total_u_x) + " * __u0) * 0.5;\n"
+                "float __extra1 = (__span1 - " + repr(total_u_z) + " * __u0) * 0.5;\n"
+                "float __g0 = __mn[__a0] + __m + __extra0;\n"
+                "float __g1 = __mn[__a1] + __m + __extra1;\n"
+            )
+        else:
+            unit_block = (
+                "float __u0 = __span0 / " + repr(total_u_x) + ";\n"
+                "float __u1 = __span1 / " + repr(total_u_z) + ";\n"
+                "float __g0 = __mn[__a0] + __m;\n"
+                "float __g1 = __mn[__a1] + __m;\n"
+            )
+
+        cx = [gx + w / 2.0 for gx, w in zip(gx_vals, w_vals)]
+        cz = [gz + d / 2.0 for gz, d in zip(gz_vals, d_vals)]
+        snippet = _VEX_CLEAR + r"""
+vector __mn = getbbox_min(0);
+vector __mx = getbbox_max(0);
+int   __fa = chi("face_axis");
+float __fs = ch("face_sign");
+float __m  = ch("margin");
+float __gap = ch("gap");               // visible gap between adjacent keys (world units)
+// in-plane axes: the two axes other than __fa, in index order (a0 < a1).
+int __a0 = -1, __a1 = -1, __seen = 0;
+for (int __i = 0; __i < 3; __i++) { if (__i != __fa) { if (__seen == 0) __a0 = __i; else __a1 = __i; __seen++; } }
+float __faceval = (__fs > 0) ? __mx[__fa] : __mn[__fa];
+// THE MEASUREMENT-DRIVEN CORE: per-axis unit DERIVED from root span, so the
+// layout FILLS the root and rescales live.
+float __span0 = (__mx[__a0] - __mn[__a0]) - 2 * __m;
+float __span1 = (__mx[__a1] - __mn[__a1]) - 2 * __m;
+""" + unit_block + r"""
+// The layout table — one line per field. Position is the cell CENTER in grid
+// units (gx + w/2), precomputed in Python so the loop stays branch-free.
+float __cx[] = """ + self._arr(cx) + r"""
+float __cz[] = """ + self._arr(cz) + r"""
+float __cw[] = """ + self._arr(w_vals) + r"""
+float __cd[] = """ + self._arr(d_vals) + r"""
+// ONE loop over every cell. Position = grid center × derived unit; scale =
+// physical size (w*u0) with the gap inset so adjacent keys show a visible seam.
+// (Unique loop vars __ci/__ncell avoid clashing with the clear loop's __n/__i.)
+int __ncell = len(__cx);
+for (int __ci = 0; __ci < __ncell; __ci++) {
+    vector __p = {0, 0, 0};
+    __p[__fa] = __faceval;
+    __p[__a0] = __g0 + __cx[__ci] * __u0;
+    __p[__a1] = __g1 + __cz[__ci] * __u1;
+    int __pt = addpoint(geoself(), __p);
+    append(__newpts, __pt);
+    // physical size = grid units × derived unit, minus the visible gap on each
+    // side (so a 1u key is u0-gap wide; the layout still fills the root).
+    vector __scl = {1, 1, 1};
+    __scl[__a0] = max(0.0001, __cw[__ci] * __u0 - __gap);
+    __scl[__a1] = max(0.0001, __cd[__ci] * __u1 - __gap);
+    setpointattrib(geoself(), "scale", __pt, __scl, "set");
+}
+""".strip()
+        return snippet
+
+
+class CellsStrategy(TabularFillStrategy):
+    """The gx/gz/w/d keyboard-layout schema.
+
+    Each cell declares its lower-left grid coords (gx, gz) and size (w, d) in
+    1u units. This is the keyboard-keys strategy: a real keyboard's keys differ
+    in width (spacebar 6.25u, normal 1u) and rows are staggered. The leaf shape
+    is a 1u BASIS box; the per-point v@scale grows it to each cell's footprint.
+    """
+
+    def _parse_table(self, cells: list[dict]
+                     ) -> tuple[list[float], list[float], list[float], list[float]]:
+        """Validate the {gx,gz,w,d} cell table → value lists."""
+        gx_vals: list[float] = []
+        gz_vals: list[float] = []
+        w_vals: list[float] = []
+        d_vals: list[float] = []
+        for ci, c in enumerate(cells):
+            try:
+                gx_vals.append(float(c["gx"])); gz_vals.append(float(c["gz"]))
+                w_vals.append(float(c["w"])); d_vals.append(float(c["d"]))
+            except (KeyError, TypeError, ValueError) as e:
+                raise VexStrategyError(
+                    f"cell {ci} must have numeric gx/gz/w/d, got {c!r}") from None
+        return gx_vals, gz_vals, w_vals, d_vals
+
+
+# Module-level singleton dispatched to by build_mount_vex.
+_CELLS_STRATEGY = CellsStrategy()
+
+
+def build_cells_vex(cells: list[dict]) -> tuple[str, dict[str, Any]]:
+    """Build the cells strategy's VEX. Returns ``(snippet, {})``.
+
+    Backward-compatible wrapper: delegates to :class:`CellsStrategy`. Kept so
+    existing callers (and tests) that pass a bare cells list still work; new
+    code should use ``build_mount_vex`` with a full position spec (which
+    dispatches through the strategy registry and resolves face/margin/gap).
+    """
+    snippet, _parms = _CELLS_STRATEGY.build(
+        {"measure": "cells", "face": "+Y", "cells": cells})
+    return snippet, {}
+
+
 # ── Orient injection ───────────────────────────────────────────────
 #
 # When a mount declares an orient spec (two measured points → a direction), the
@@ -270,15 +507,121 @@ def align_axis_to_vec(align_axis: str) -> tuple[float, float, float]:
     return (s * base[0], s * base[1], s * base[2])
 
 
+# ── Strategy class hierarchy ───────────────────────────────────────
+#
+# Three layers, each a strict superset of the one above:
+#
+#   VexStrategy            — the contract every measurement kind satisfies:
+#                            build(spec) -> (snippet, parms). The snippet MUST
+#                            begin with _VEX_CLEAR (so __newpts exists for an
+#                            appended orient fragment) and emit points via
+#                            append(__newpts, addpoint()).
+#   ├─ StaticTemplateStrategy — the 6 fixed-template kinds (bbox_corner,
+#   │                           grid_on_face, array, ...). Parameterized by a
+#   │                           template constant + a selector-resolver fn, so
+#   │                           one class replaces the build_mount_vex lookup
+#   │                           table + if/elif chain.
+#   └─ TabularFillStrategy — table-driven (position,size) layouts that FILL a
+#       │                     region. Encodes the layout table as VEX array
+#       │                     literals + a single compact loop (data/code
+#       │                     decoupled — ~30 lines regardless of cell count),
+#       │                     derives the per-axis unit from the root's span,
+#       │                     writes per-point v@scale, and applies the shape
+#       │                     constraint (square) + fill mode (pad/repeat/stretch).
+#       └─ CellsStrategy — the gx/gz/w/d keyboard-layout schema. Future
+#                          bookshelf/city-block layouts inherit the same
+#                          TabularFill base and just override the schema.
+
+
+class StaticTemplateStrategy(VexStrategy):
+    """A measurement kind backed by a fixed VEX template + a selector resolver.
+
+    Encapsulates the 6 static kinds (bbox_corner, bbox_face_center, bbox_center,
+    point_on_edge, grid_on_face, array). Each differs only in (a) which template
+    constant it uses and (b) how it resolves the spec's sign-strings/counts into
+    the ``ch()``/``chi()`` spare values the template reads. Parameterizing those
+    two collapses the old build_mount_vex lookup-table + per-kind if/elif chain
+    into a registry of instances.
+    """
+
+    def __init__(self, template: str, resolver):
+        self._template = template
+        self._resolver = resolver  # (spec) -> dict[str, Any] of spare parms
+
+    def build(self, position_spec: dict) -> tuple[str, dict[str, Any]]:
+        parms = self._resolver(position_spec)
+        return self._template, parms
+
+
+# Per-kind selector resolvers. Each turns the human spec (sign-strings, counts)
+# into the numeric spare-parm values its template reads via ch()/chi().
+def _resolve_bbox_corner(spec: dict) -> dict[str, Any]:
+    return _corner_selectors(spec["axes"])
+
+
+def _resolve_bbox_face_center(spec: dict) -> dict[str, Any]:
+    return _face_selector(spec["face"])
+
+
+def _resolve_bbox_center(spec: dict) -> dict[str, Any]:
+    return {}   # no parameters — reads getbbox_center directly
+
+
+def _resolve_point_on_edge(spec: dict) -> dict[str, Any]:
+    # _corner_selectors returns {cx,cy,cz}; prefix with ca/cb but drop the
+    # leading c so VEX sees cax/cay/caz, cbx/cby/cbz (matching the template).
+    sa = _corner_selectors(spec["axes_a"])
+    sb = _corner_selectors(spec["axes_b"])
+    parms = {f"ca{a[1:]}": v for a, v in sa.items()}   # cx→ax → cax
+    parms.update({f"cb{a[1:]}": v for a, v in sb.items()})  # cx→bx → cbx
+    parms["t"] = float(spec.get("t", 0.5))
+    return parms
+
+
+def _resolve_grid_on_face(spec: dict) -> dict[str, Any]:
+    parms = _face_selector(spec["face"])
+    parms["rows"] = int(spec.get("rows", 1))
+    parms["cols"] = int(spec.get("cols", 1))
+    parms["margin"] = float(spec.get("margin", 0.0))
+    return parms
+
+
+def _resolve_array(spec: dict) -> dict[str, Any]:
+    # count + step arrive as numbers/exprs in the spec; the builder resolves
+    # expressions to concrete values before installing them. Pass them through;
+    # the caller (_install_wrangle_parms) resolves the _-prefixed vector specs.
+    count = spec.get("count", [1, 1, 1])
+    step = spec.get("step", [[0, 0, 0]] * 3)
+    parms: dict[str, Any] = {
+        "countx": int(count[0]), "county": int(count[1]), "countz": int(count[2]),
+        "_origin": spec.get("origin"),
+        "_step0": step[0], "_step1": step[1], "_step2": step[2],
+    }
+    return parms
+
+
+# The static-strategy registry. build_mount_vex dispatches through this.
+_STATIC_STRATEGIES: dict[str, StaticTemplateStrategy] = {
+    "bbox_corner":      StaticTemplateStrategy(_VEX_BBOX_CORNER, _resolve_bbox_corner),
+    "bbox_face_center": StaticTemplateStrategy(_VEX_BBOX_FACE_CENTER, _resolve_bbox_face_center),
+    "bbox_center":      StaticTemplateStrategy(_VEX_BBOX_CENTER, _resolve_bbox_center),
+    "point_on_edge":    StaticTemplateStrategy(_VEX_POINT_ON_EDGE, _resolve_point_on_edge),
+    "grid_on_face":     StaticTemplateStrategy(_VEX_GRID_ON_FACE, _resolve_grid_on_face),
+    "array":            StaticTemplateStrategy(_VEX_ARRAY, _resolve_array),
+}
+
+
 # ── Public: turn a mount position spec into (snippet, spare_parms) ──
 
 
 def build_mount_vex(mount_position: dict) -> tuple[str, dict[str, Any]]:
     """Resolve a mount's ``position`` spec into a VEX snippet + spare parms.
 
-    Returns ``(snippet, parms)`` where ``snippet`` is the full detail-wrangle
-    body (position strategy + optional orient fragment) and ``parms`` is a
-    dict of spare-parm name → value to install on the wrangle node.
+    Dispatches to the matching :class:`VexStrategy` (static template or the
+    cells tabular-fill strategy). Returns ``(snippet, parms)`` where ``snippet``
+    is the full detail-wrangle body (position strategy + optional orient
+    fragment appended separately by the builder) and ``parms`` is a dict of
+    spare-parm name → value to install on the wrangle node.
 
     The snippet reads the root bbox LIVE (getbbox_min/max on input 0), so the
     same node re-cooks correctly when a root param changes — the defining
@@ -287,52 +630,19 @@ def build_mount_vex(mount_position: dict) -> tuple[str, dict[str, Any]]:
     if not isinstance(mount_position, dict):
         raise VexStrategyError("mount position must be an object")
     kind = mount_position.get("measure")
-    snippets: dict[str, str] = {
-        "bbox_corner": _VEX_BBOX_CORNER,
-        "bbox_face_center": _VEX_BBOX_FACE_CENTER,
-        "bbox_center": _VEX_BBOX_CENTER,
-        "point_on_edge": _VEX_POINT_ON_EDGE,
-        "grid_on_face": _VEX_GRID_ON_FACE,
-        "array": _VEX_ARRAY,
-    }
-    if kind not in snippets:
+
+    # cells: dispatch to the CellsStrategy (a TabularFillStrategy). It builds
+    # its snippet dynamically (the layout table is encoded into the VEX).
+    if kind == "cells":
+        return _CELLS_STRATEGY.build(mount_position)
+
+    static = _STATIC_STRATEGIES.get(kind)
+    if static is None:
         raise VexStrategyError(f"no VEX strategy for measure {kind!r}")
-
-    parms: dict[str, Any] = {}
-    body = snippets[kind]
-
-    # Per-kind selector resolution (sign-string → numeric ch() values).
-    if kind == "bbox_corner":
-        parms.update(_corner_selectors(mount_position["axes"]))
-    elif kind == "bbox_face_center":
-        parms.update(_face_selector(mount_position["face"]))
-    elif kind == "point_on_edge":
-        # _corner_selectors returns {cx,cy,cz}; prefix with ca/cb but drop the
-        # leading c so VEX sees cax/cay/caz, cbx/cby/cbz (matching the template).
-        sa = _corner_selectors(mount_position["axes_a"])
-        sb = _corner_selectors(mount_position["axes_b"])
-        parms.update({f"ca{a[1:]}": v for a, v in sa.items()})  # cx→ax → cax
-        parms.update({f"cb{a[1:]}": v for a, v in sb.items()})  # cx→bx → cbx
-        parms["t"] = float(mount_position.get("t", 0.5))
-    elif kind == "grid_on_face":
-        parms.update(_face_selector(mount_position["face"]))
-        parms["rows"] = int(mount_position.get("rows", 1))
-        parms["cols"] = int(mount_position.get("cols", 1))
-        parms["margin"] = float(mount_position.get("margin", 0.0))
-    elif kind == "array":
-        # count + step arrive as numbers/exprs in the spec; the builder resolves
-        # expressions to concrete values before installing them. Here we pass
-        # them through; the caller (_install_array_parms) resolves exprs.
-        count = mount_position.get("count", [1, 1, 1])
-        step = mount_position.get("step", [[0, 0, 0]] * 3)
-        parms["countx"] = int(count[0]); parms["county"] = int(count[1]); parms["countz"] = int(count[2])
-        # origin + step are vectors — installed via parmTuple by the builder.
-        parms["_origin"] = mount_position.get("origin")
-        parms["_step0"] = step[0]; parms["_step1"] = step[1]; parms["_step2"] = step[2]
-
-    snippet = body
-    return snippet, parms
+    return static.build(mount_position)
 
 
-__all__ = ["VexStrategyError", "build_mount_vex", "_orient_fragment",
-           "_corner_selectors", "_face_selector"]
+__all__ = ["VexStrategy", "StaticTemplateStrategy", "TabularFillStrategy",
+           "CellsStrategy",
+           "VexStrategyError", "build_mount_vex", "build_cells_vex",
+           "_orient_fragment", "_corner_selectors", "_face_selector"]

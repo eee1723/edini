@@ -1,6 +1,6 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-29 &nbsp;|&nbsp; **🔴 主线：rooted-modeling skill M2.5 — leaf align convention 全绿（151 测试含 9 真机 hython facing 铁证）** &nbsp;|&nbsp; 用户上次实测发现的 4 个 leaf 层问题已**全部修复并真机验证**：① orient 写成 detail 属性 CTP 不读 → `setpointattrib` 到 `__newpts[]`；② leaf 对齐轴硬编码 +Y → `orient.align_axis` 可配（六轴）；③ copy 前 leaf 原点位姿不规范 → `leaf.origin` 规范化 wrangle；④ 4 同形状 leaf 出 4 份几何 → 分组共享 1 shape + 1 CTP。**调试关键发现：torus 对称轴是 +Y 不是 +Z**（spec 原假设错了，hython 实测纠正）。下方旧的资产管道卡片保留作历史记录。
+> 最后更新：2026-06-30 &nbsp;|&nbsp; **🔴 主线：rooted-modeling skill M3 — cells 策略三层类架构 + 正方形约束 + 三填满模式（599 测试全绿）** &nbsp;|&nbsp; 本轮三大交付：① **cells 测量原语**（显式布局表，1u 网格，支持 6.25u 空格 + staggered 错位 + gap 间隔 + per-point v@scale，1 CTP 多尺寸键）；② **三层类架构重构**（VexStrategy → StaticTemplateStrategy/TabularFillStrategy → CellsStrategy，消掉 if-elif 链，泛化性载体）；③ **square/fill 模式**（square 强制 unit=min 保正方，pad 居中留白 / repeat 自动增量 / stretch 默认拉伸）。外加 Pi agent 端到端链路修复（build_assembly 返回契约 + system prompt 引导 + pi_data_bridge ESM 重写）。下方旧的资产管道卡片保留作历史记录。
 
 ## ⚠️ 重大架构转向（2026-06-29）：rooted-modeling 取代声明式资产管道
 
@@ -18,12 +18,15 @@
 | **M1** | grid_on_face（键盘网格）+ array（阶梯阵列）fan-out | ✅ 交付（489→499 测试） |
 | **M2** | **live 关联**：vex_strategies.py 预制 VEX + 重写 build 层为 attribwrangle+CTP + root 参数暴露为 spare parm | ✅ 交付（502 测试，**含真机 hython live recook 铁证**） |
 | **M2.5** | **leaf align convention**：orient point-class 修复 + `align_axis` 可配 + `leaf.origin` 规范化 + 分组 CTP | ✅ 交付（151 测试，**含 9 真机 hython wheel-facing 铁证**） |
+| **M3** | **cells 测量原语 + 三层类架构 + square/fill**：显式布局表（1u 网格，6.25u 空格/staggered/gap/per-point v@scale）+ VexStrategy 三层类重构 + square 正方约束 + pad/repeat/stretch 三填满模式 + Pi agent 端到端链路修复 | ✅ 交付（599 测试，**含 5 真机 hython 铁证：square 键 X==Z / pad 留白 / repeat 增量 / live 重排 / one-CTP-many-sizes**） |
 
 **真机铁证**（Houdini 21.0.440，本机 `D:\houdini\bin\hython.exe`）：
 ```
 车：length 4→8，recook（不重建）→ 前轮 (+2,-0.25,+1) → (+4,-0.25,+1) [MOVED live]
-键盘：tray_width 4→8，recook → 15 键帽网格整体重缩放 [MOVED live]
+键盘：tray_width 16→24，recook → 65 键正方形布局自动重排填满 [MOVED live, square]
 阶梯：3 踏步对角攀升 (run=0.5, rise=0.3)
+cells: 8 策略 vs 预言机全过（stretch/square/pad 三模式 ratio=6.250 守恒）
+square 键 bbox X==Z（正方），pad 居中留白不溢出，repeat 自动增量键数 >6
 ```
 
 **新 skill 文件**：`python3.11libs/edini/{measure,vex_strategies,assembly_builder}.py` + `skills/rooted-modeling/SKILL.md` + `pi-extensions/edini-tools/tools/rooted.ts` + `tests/test_{measure,assembly_builder,assembly_hython}.py` + `scripts/{verify_vex_strategies,show_assemblies}.py`。
@@ -202,6 +205,20 @@ recipe 教惯用法，资产管道教结构。
 </div>
 
 <div class="timeline">
+
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-06-30</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第三十七阶段：rooted-modeling M3 — cells 测量原语 + 三层类架构 + square/fill 模式 + Pi agent 端到端链路</span>
+      <span class="status-tag status-done">完成 · 真机 hython 5 项铁证</span>
+    </div>
+    <div class="timeline-summary">用户实测 M2.5 键盘后发现「按键是均匀点阵不是真键盘」→ 引发本轮系统性重构。<strong>第一性原理拆解</strong>：真键盘的布局是「每个位置带自己的尺寸」——位置和尺寸是<strong>绑定</strong>的，而 grid_on_face 只能「N 个相同东西均匀铺满」。这是工具能力上限，不是 agent 执行问题。<strong>五大交付</strong>：① <strong>cells 测量原语</strong>（measure_cells + build_cells_vex）—— 显式 1u 单位网格布局表 <code>{gx,gz,w,d}</code>，每个 cell 声明位置+大小，系统生成 <code>{position, v@scale}</code> 对，CTP 2.0 原生支持逐实例非均匀缩放（读 v@scale），<strong>1 个 CTP 盖印 N 个不同尺寸的键</strong>（1u 键 + 6.25u 空格键从一个 1u leaf 出）。支持 staggered 行错位 + gap 间隔 + 缺口。② <strong>unit 实时从 root 派生</strong>（修复 keys 溢出 root 的 bug）—— <code>unit = (root_span - 2*margin) / 布局总u宽</code>，缩 root → unit 实时重算 → keys 自动重排精确填满 root，永不溢出。③ <strong>三层类架构重构</strong>（VexStrategy 契约 → StaticTemplateStrategy 6 静态 kind / TabularFillStrategy 表+循环+unit 派生 → CellsStrategy gx/gz/w/d schema），消掉 build_mount_vex 的 if-elif 链，<strong>泛化性载体</strong>（书架/街区/瓷砖可继承 TabularFillStrategy）。数据/代码解耦：表编码成 VEX 数组字面量 + 单循环，VEX ~30 行不管多少 cell。④ <strong>square 形状约束 + pad/repeat/stretch 三填满模式</strong>（square 强制 unit=min 保正方；pad 居中留白；repeat build 时预处理展开 cells 表自动增量；stretch 默认拉伸）。⑤ <strong>Pi agent 端到端链路修复</strong>（build_assembly 返回契约补 sandbox_root_path/live_params + system prompt 引导用 build_assembly + pi_data_bridge ESM 重写修复 provider 列表消失）。<strong>调试关键发现</strong>：VEX 数组字面量+循环在 H21 可用（验证过）；detail wrangle 的 <code>__n</code> 变量与 clear 循环冲突（改用 <code>__ci/__ncell</code>）；CTP transform 开关默认开读 v@scale 无需配置。<strong>真机铁证</strong>（hython 21.0.440，8 策略 vs 预言机全过含 stretch/square/pad 三模式 ratio=6.250 守恒；square 键 bbox X==Z 正方；pad 居中留白不溢出；repeat 键数 >6 自动增量；65 键 showcase square=true 缩 tray_width 自动重排）。<strong>测试</strong>：599 passed（含 11 新测试），全量零回归。<strong>新展示</strong>：`edini_showcase.hip` 含 car + bicycle + 65 键正方形键盘 + stairs。</div>
+    <div class="timeline-tags">
+      <span>cells原语</span><span>显式布局表</span><span>1u网格</span><span>per-point-v@scale</span><span>1-CTP多尺寸</span><span>unit实时派生</span><span>三层类架构</span><span>VexStrategy</span><span>TabularFillStrategy</span><span>square约束</span><span>pad/repeat/stretch</span><span>数据代码解耦</span><span>Pi-agent端到端</span><span>pi_data_bridge-ESM</span><span>599测试</span>
+    </div>
+  </div>
+</div>
 
 <div class="timeline-item timeline-done">
   <div class="timeline-date">2026-06-29</div>

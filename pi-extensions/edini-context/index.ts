@@ -127,7 +127,16 @@ Before reporting completion, decide whether to capture:
 
 ## Build Path Selection (reference before authoring)
 
-BEFORE hand-authoring nodes, check the recipe library for a matching pattern.
+**Procedural model (a thing with a main body + attached parts)? Use build_assembly FIRST.**
+If the user wants a vehicle, keyboard, building, machine — anything with ONE
+main component (the ROOT) that other parts hang off — use the rooted-modeling
+skill + build_assembly. Leaves are placed by MEASURING the root's real geometry
+(no hardcoded coords), and the build is LIVE: every param is an editable spare
+parm, change it and the model updates without rebuilding. This is far more
+reliable than hand-authoring nodes for such models. Read the rooted-modeling
+skill before authoring an assembly.
+
+BEFORE hand-authoring OTHER nodes, check the recipe library for a matching pattern.
 A recipe is a REFERENCE SAMPLE, not a rigid template: read its python_script
 field to learn the correct node syntax + the conventions the author set, then
 build YOUR OWN network adapted to the task. This cuts authoring errors (wrong
@@ -135,6 +144,7 @@ node versions, missing connections) without bounding what you can create.
 
 | Task | Preferred approach |
 |---|---|
+| **Procedural model: root + attached parts (car, keyboard, building, machine)** | **build_assembly** (read the rooted-modeling skill first) → build LIVE |
 | Geometry that matches a recipe's intent (tube, copy, extrude...) | **recipe_list** → **recipe_read** → study the python_script → author your own network (adapt freely) |
 | Want a quick faithful copy of an existing recipe verbatim | **recipe_rebuild** (the optional deterministic-copy path) |
 | Single-piece generator / parametric surface | houdini_run_python_sandbox (single-SOP) |
@@ -158,6 +168,13 @@ node versions, missing connections) without bounding what you can create.
 7. If defects found: fix the specific part, re-verify. Up to 3 rounds, then ask user.
 8. On accept: houdini_commit_sandbox to commit (runs health/orientation hard gates
    and returns a verification_receipt). Reference the receipt's fields in your report.
+
+**For build_assembly models specifically:** the build returns out_path
+(feed to steps 1/3/4), sandbox_root_path (feed to commit), and live_params
+(the editable spare parm names). After building, VERIFY the live guarantee:
+set one of the live_params on the container to a new value, re-cook, and confirm
+the leaves moved to the re-measured positions. If a leaf didn't move, its mount
+was mis-specified (not a measurement). Only commit once the live tweak works.
 
 --- BEGIN PROCEDURAL_VERIFY_PROMPT ---
 ${PROCEDURAL_VERIFY_PROMPT}

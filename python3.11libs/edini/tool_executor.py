@@ -105,9 +105,15 @@ def build_assembly(assembly: dict | None = None, assembly_path: str | None = Non
     Validates first (shift-left — rejects bad assemblies before any node is
     made), then creates a sandbox geo container and builds the root shape,
     cooks it, measures it to resolve every mount, places the leaves, and
-    merges into a display-flagged OUT. Returns the OUT path + sandbox root +
-    the resolved mounts (position/orient per mount id) so the agent can verify
-    the parametric linkage without inspecting geometry. Preserved on failure.
+    merges into a display-flagged OUT.
+
+    Returns: ``out_path`` (OUT node — feed to inspect_health/verify_orientation/
+    capture_review), ``sandbox_root``/``sandbox_root_path`` (container — feed to
+    commit_sandbox as sandbox_root_path), ``live_params`` (the editable spare
+    parm names — tweak these in the UI to re-measure the root live), plus the
+    ``mount_ids``/``leaf_ids`` present. ``live=True`` marks this as the
+    live (VEX+CTP) build. The sandbox is preserved on failure so the agent can
+    inspect/discard it.
     """
     import json as _json
     if assembly is None and not assembly_path:

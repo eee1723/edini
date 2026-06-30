@@ -134,7 +134,7 @@ def validate_assembly(assembly: dict) -> dict[str, Any]:
                     f"(M0: only 'root')"})
             kind = pos.get("measure")
             if kind not in ("bbox_corner", "bbox_face_center", "bbox_center",
-                            "point_on_edge", "grid_on_face", "array"):
+                            "point_on_edge", "grid_on_face", "array", "cells"):
                 errors.append({"code": "MOUNT_BAD_MEASURE", "message":
                     f"mount {mid!r} position.measure {kind!r} unsupported"})
             # Required axis/edge fields per measure kind.
@@ -169,6 +169,50 @@ def validate_assembly(assembly: dict) -> dict[str, Any]:
                         and all(isinstance(s, list) and len(s) == 3 for s in stp)):
                     errors.append({"code": "MOUNT_BAD_ARRAY", "message":
                         f"mount {mid!r} array.step must be 3 three-vectors"})
+            elif kind == "cells":
+                # An explicit 1u-unit layout table (the keyboard-keys strategy).
+                # face: which face the grid lies on; cells: [{gx,gz,w,d}, ...]
+                # layout in 1u grid units. The per-axis physical unit (1u in
+                # world space) is DERIVED live from the root's span so the layout
+                # FILLS the root and rescales automatically — it is NOT a field.
+                # A legacy `unit` field is accepted but ignored.
+                if not _is_face_str(pos.get("face")):
+                    errors.append({"code": "MOUNT_BAD_FACE", "message":
+                        f"mount {mid!r} position.face must be a 2-char string like '+Y'"})
+                cells = pos.get("cells")
+                if not isinstance(cells, list) or not cells:
+                    errors.append({"code": "MOUNT_BAD_CELLS", "message":
+                        f"mount {mid!r} cells.cells must be a non-empty list"})
+                else:
+                    for ci, c in enumerate(cells):
+                        if not isinstance(c, dict):
+                            errors.append({"code": "MOUNT_BAD_CELLS", "message":
+                                f"mount {mid!r} cells[{ci}] must be an object"})
+                            continue
+                        miss = [k for k in ("gx", "gz", "w", "d") if k not in c]
+                        if miss:
+                            errors.append({"code": "MOUNT_BAD_CELLS", "message":
+                                f"mount {mid!r} cells[{ci}] missing keys {miss}"})
+                            continue
+                        bad = [k for k in ("gx", "gz", "w", "d")
+                               if not isinstance(c[k], (int, float))
+                               or (k in ("w", "d") and float(c[k]) <= 0)]
+                        if bad:
+                            errors.append({"code": "MOUNT_BAD_CELLS", "message":
+                                f"mount {mid!r} cells[{ci}] bad values for {bad} "
+                                f"(gx/gz numeric; w/d > 0)"})
+                # square (optional bool): force 1u cells to be square (unit = min).
+                # fill (optional, default stretch): how to handle non-divisible
+                # leftover space — stretch (fill, may deform) / pad (square, leave
+                # empty) / repeat (square, auto-add 1u cells to fill).
+                if "square" in pos and not isinstance(pos["square"], bool):
+                    errors.append({"code": "MOUNT_BAD_CELLS", "message":
+                        f"mount {mid!r} cells.square must be a boolean"})
+                fill = pos.get("fill", "stretch")
+                if fill not in ("stretch", "pad", "repeat"):
+                    errors.append({"code": "MOUNT_BAD_CELLS", "message":
+                        f"mount {mid!r} cells.fill must be stretch|pad|repeat, "
+                        f"got {fill!r}"})
 
         # Orient: optional. If present, derive from a measured direction.
         orient = mt.get("orient")
@@ -343,6 +387,46 @@ def _hashable(v: Any) -> Any:
     return v
 
 
+def _expand_repeat_cells(cells: list[dict]) -> list[dict]:
+    """Extend a cells table with 1u filler cells (the ``fill=repeat`` mode).
+
+    ``repeat`` keeps cells SQUARE (unit = min, like pad) but FILLS the leftover
+    space on the larger axis by auto-adding 1u cells. This happens at BUILD time
+    (Python), so the VEX loop is unchanged — it just receives a longer table.
+
+    Concretely: the layout's grid-unit span is ``max(gx+w)`` / ``max(gz+d)``.
+    With unit=min, the smaller axis fills exactly; the larger axis has leftover
+    grid units. We extend the layout's declared span so both axes match the
+    LARGER one, filling the now-empty grid slots with 1u cells (skipping any
+    slot already occupied by a declared cell). Result: square keys, no gaps.
+
+    A declared cell "occupies" the integer grid slots its footprint covers; a
+    filler cell is only added to a slot no declared cell touches.
+    """
+    if not cells:
+        return cells
+    total_u_x = max(float(c["gx"]) + float(c["w"]) for c in cells)
+    total_u_z = max(float(c["gz"]) + float(c["d"]) for c in cells)
+    target = max(total_u_x, total_u_z)   # fill both axes to the larger span
+
+    # Build an occupancy grid (integer slots) of declared cells.
+    occupied: set[tuple[int, int]] = set()
+    for c in cells:
+        gx, gz = int(float(c["gx"])), int(float(c["gz"]))
+        w, d = int(float(c["w"])), int(float(c["d"]))
+        for ix in range(gx, gx + w):
+            for iz in range(gz, gz + d):
+                occupied.add((ix, iz))
+
+    # Add a 1u filler cell in every empty integer slot up to `target` on each axis.
+    out = list(cells)
+    for ix in range(int(target)):
+        for iz in range(int(target)):
+            if (ix, iz) not in occupied:
+                out.append({"gx": float(ix), "gz": float(iz), "w": 1, "d": 1})
+    return out
+
+
 def _leaf_group_key(lf: dict, mount: dict) -> tuple:
     """A stable key identifying leaves that produce byte-identical stamped
     output (modulo mount position) and so can share one shape + one CTP.
@@ -515,7 +599,19 @@ def _install_wrangle_parms(wrangle, snippet: str, parms: dict,
         for i in range(3):
             vec_values[f"step{i}"] = tuple(
                 _maybe_eval(c, params) for c in parms[f"_step{i}"])
+    # cells strategy: _margin is a param-expr signal → resolve to a concrete
+    # number and install as a live `margin` spare (the grid-origin inset + the
+    # fill margin that the in-VEX unit derivation uses). The per-axis unit is
+    # DERIVED in-VEX from the bbox (no _unit signal anymore) — that's the
+    # measurement-driven coupling: scale the root → unit re-derives → every key
+    # rescales to fill the root.
+    extra_scalar: dict[str, float] = {}
     out_snippet = snippet
+    if "_margin" in parms:
+        extra_scalar["margin"] = float(_maybe_eval(parms["_margin"], params))
+    # cells gap: the visible seam between adjacent keys (live spare).
+    if "_gap" in parms:
+        extra_scalar["gap"] = float(_maybe_eval(parms["_gap"], params))
     import re as _re
     for vname, vval in vec_values.items():
         literal = "{" + ",".join(repr(float(c)) for c in vval) + "}"
@@ -528,6 +624,8 @@ def _install_wrangle_parms(wrangle, snippet: str, parms: dict,
         ptg = None
     scalar_parms = {k: v for k, v in parms.items()
                     if not k.startswith("_") and k not in vec_values}
+    # Merge the cells-strategy resolved scalars (unit/margin).
+    scalar_parms.update(extra_scalar)
     if ptg is not None:
         for pname, pval in scalar_parms.items():
             if ptg.find(pname) is not None:
@@ -809,6 +907,12 @@ def build_assembly(
         for mt in (assembly.get("mounts") or []):
             mid = mt["id"]
             pos_spec = mt.get("position", {})
+            # repeat pre-expansion: when fill=repeat, the layout table is
+            # extended with 1u cells to fill the leftover space (the VEX loop is
+            # unchanged — only fed a longer table). This keeps the VEX simple.
+            if pos_spec.get("measure") == "cells" and pos_spec.get("fill") == "repeat":
+                pos_spec = {**pos_spec,
+                            "cells": _expand_repeat_cells(pos_spec.get("cells", []))}
             try:
                 snippet, mparms = build_mount_vex(pos_spec)
             except VexStrategyError as e:
@@ -931,11 +1035,23 @@ def build_assembly(
         except Exception:
             pass
 
+        # The spare parms installed on the container (see _install_param_spares)
+        # are the LIVE params: changing them in the Houdini UI makes the root
+        # re-cook → bbox re-reads → mount points move → copies re-stamp. Expose
+        # their names so an agent/user knows what to tweak without scanning the
+        # container's parm table.
+        live_parm_names = sorted(params.keys())
+
         return {
             "success": True,
             "out_path": out.path(),
             "sandbox_root": root_path,
+            "sandbox_root_path": root_path,  # commit_sandbox's expected key
             "live": True,  # signal: this is the live (VEX+CTP) build, not baked
+            # Params exposed as editable spare parms on the container. Changing
+            # any of these in the UI re-measures the root and updates the whole
+            # model WITHOUT rebuilding (the M2 live guarantee).
+            "live_params": live_parm_names,
             "mount_ids": list(mount_nodes.keys()),
             "leaf_ids": [lf["id"] for lf in leaves],
         }

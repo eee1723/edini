@@ -243,6 +243,28 @@ class TestBuildAssemblyStructure(unittest.TestCase):
         self.assertNotIn("merge_all", names)
         self.assertIn("OUT", names)
 
+    def test_build_returns_commit_and_live_param_contract(self):
+        """The build result must carry everything an agent needs to go end-to-end
+        without scanning the container: ``sandbox_root_path`` (commit_sandbox's
+        exact key — no rename needed), ``sandbox_root`` (same path, legacy key),
+        ``out_path`` (feed to inspect_health/inventory/capture), and
+        ``live_params`` (the editable spare parm names — so the agent knows what
+        to tweak to re-verify the live guarantee). This is the contract the
+        end-to-end Pi-agent path depends on; see the rooted-modeling skill."""
+        root_path, res = self._build(_car_assembly())
+        self.assertTrue(res["success"], res.get("error"))
+        # commit_sandbox reads kw["sandbox_root_path"] — it must be present.
+        self.assertEqual(res["sandbox_root_path"], root_path)
+        # Legacy key kept for back-compat; same path.
+        self.assertEqual(res["sandbox_root"], root_path)
+        # out_path for the verify step.
+        self.assertTrue(res["out_path"].endswith("/OUT"))
+        # live_params = the assembly's params (length/width/...), exposed so the
+        # agent can tweak one and re-verify the model moves live.
+        self.assertEqual(set(res["live_params"]),
+                         {"length", "width", "thickness",
+                          "wheel_radius", "wheel_tube_r"})
+
     def test_mount_wrangle_carries_bbox_corner_vex(self):
         """Each mount wrangle's snippet contains the bbox_corner strategy's
         getbbox_min/max + lerp logic (not a baked coordinate)."""
@@ -387,6 +409,49 @@ def _keyboard_assembly(tray_width=4.0, tray_depth=1.5, rows=3, cols=5):
             {"id": "key", "mount": "keys",
              "shape": {"type": "box", "params": {
                  "size": ["key_size", "key_height", "key_size"]}}},
+        ],
+    }
+
+
+def _cells_keyboard_assembly():
+    """A REAL keyboard layout via the `cells` strategy: keys of DIFFERENT sizes
+    (a 6.25u spacebar + 1u keys) on a 1u-unit grid, with a QWERTY-style stagger.
+    The physical unit is DERIVED from the root's span so the layout FILLS the
+    root and rescales when the root resizes. The leaf is a 1u BASIS shape
+    (size [1, height, 1]); each cell's per-point v@scale (physical w*unit_x,
+    d*unit_z) grows it to the cell's footprint. One leaf → one CTP → many sizes.
+    This is what the uniform grid_on_face strategy CANNOT express."""
+    return {
+        "id": "cells_keyboard",
+        "params": {
+            "tray_w": 16.0, "tray_d": 6.0, "tray_h": 0.4,
+            "key_height": 0.4,
+        },
+        "root": {"shape": {"type": "box", "params": {
+            "size": ["tray_w", "tray_h", "tray_d"]}}},
+        "mounts": [
+            {"id": "keys", "position": {
+                "measure": "cells", "from": "root", "face": "+Y",
+                "margin": 0.5,
+                "cells": [
+                    # row 0 (back row): a few 1u keys
+                    {"gx": 0, "gz": 0, "w": 1, "d": 1},
+                    {"gx": 1, "gz": 0, "w": 1, "d": 1},
+                    {"gx": 2, "gz": 0, "w": 1, "d": 1},
+                    # row 1: staggered by 0.5u (QWERTY offset)
+                    {"gx": 0.5, "gz": 1, "w": 1, "d": 1},
+                    {"gx": 1.5, "gz": 1, "w": 1, "d": 1},
+                    # bottom row: a 6.25u spacebar
+                    {"gx": 0, "gz": 4, "w": 6.25, "d": 1},
+                ]}},
+        ],
+        # The leaf is a 1u BASIS box. Its X/Z footprint is 1 unit; the per-cell
+        # v@scale (w*unit_x, d*unit_z) grows it to the cell's physical footprint.
+        # Height (key_height) is the leaf's own property, untouched by scale.
+        "leaves": [
+            {"id": "key", "mount": "keys",
+             "shape": {"type": "box", "params": {
+                 "size": [1, "key_height", 1]}}},   # 1u basis; v@scale grows it
         ],
     }
 
@@ -618,6 +683,146 @@ class TestStaircaseArray(unittest.TestCase):
         self.assertTrue(any(e["code"] == "MOUNT_BAD_ARRAY" for e in r["errors"]))
 
 
+class TestCellsLayout(unittest.TestCase):
+    """The `cells` strategy — an explicit unit-grid layout where each cell has
+    its OWN size (the keyboard-keys strategy done right: a 6.25u spacebar +
+    1u keys + staggered rows, all from one 1u leaf via per-point v@scale).
+    Geometry correctness (per-key bbox sizes) is the hython test's job; here we
+    pin validation + VEX strategy resolution + build structure."""
+
+    def test_cells_assembly_validates(self):
+        r = validate_assembly(_cells_keyboard_assembly())
+        self.assertTrue(r["success"], r["errors"])
+
+    def test_cells_vex_resolves_face_and_derives_unit_from_bbox(self):
+        """The cells VEX must write per-point v@scale via setpointattrib (so CTP
+        stamps differently-sized keys from one leaf), resolve the +Y face, AND
+        DERIVE the per-axis unit from the bbox (no `unit` spare — it's a live
+        function of the root's span, so the layout FILLS the root)."""
+        from edini.vex_strategies import build_mount_vex
+        a = _cells_keyboard_assembly()
+        snippet, parms = build_mount_vex(a["mounts"][0]["position"])
+        # Face resolved: +Y → face_axis=1 (Y), face_sign=1 (positive).
+        self.assertEqual(parms["face_axis"], 1)
+        self.assertEqual(parms["face_sign"], 1)
+        # margin + gap are the cells live spares. NO _unit signal — unit is
+        # derived in-VEX from the bbox.
+        self.assertNotIn("_unit", parms)
+        self.assertEqual(parms["_margin"], 0.5)
+        self.assertEqual(parms["_gap"], 0.0)   # default gap (keys touch)
+        # THE measurement-driven core: unit derived from bbox span / layout span.
+        self.assertIn("__u0 = __span0 /", snippet)
+        self.assertIn("__u1 = __span1 /", snippet)
+        # The per-cell scale write: setpointattrib "scale" on each point.
+        self.assertIn('setpointattrib(geoself(), "scale"', snippet)
+        # THE COMPACT-LOOP design: the layout table is encoded as VEX array
+        # literals (data) + a SINGLE loop processes every cell (code). So there
+        # is exactly ONE addpoint call in the VEX regardless of cell count
+        # (was N calls with the old loop-unrolling). This decouples data from
+        # code — the same loop body handles any tabular (position, size) layout.
+        self.assertEqual(snippet.count("addpoint(geoself()"), 1)
+        # The spacebar's 6.25 width appears as an array element (in __cw).
+        self.assertIn("6.25", snippet)
+        # The array literals are present (one per field: cx/cz/cw/cd).
+        self.assertIn("__cx[] = {", snippet)
+        self.assertIn("__cw[] = {", snippet)
+
+    def test_cells_unit_field_is_optional_now(self):
+        """The legacy `unit` field is accepted (backward compat) but no longer
+        required — the unit is derived from the bbox. An assembly without it
+        still validates."""
+        a = _cells_keyboard_assembly()
+        self.assertNotIn("unit", a["mounts"][0]["position"])  # fixture has none
+        r = validate_assembly(a)
+        self.assertTrue(r["success"], r["errors"])
+
+    def test_bad_cells_empty_table_rejected(self):
+        a = _cells_keyboard_assembly()
+        a["mounts"][0]["position"]["cells"] = []
+        r = validate_assembly(a)
+        self.assertFalse(r["success"])
+        self.assertTrue(any(e["code"] == "MOUNT_BAD_CELLS" for e in r["errors"]))
+
+    def test_bad_cell_zero_width_rejected(self):
+        a = _cells_keyboard_assembly()
+        a["mounts"][0]["position"]["cells"][0]["w"] = 0
+        r = validate_assembly(a)
+        self.assertFalse(r["success"])
+        self.assertTrue(any(e["code"] == "MOUNT_BAD_CELLS" for e in r["errors"]))
+
+    def test_square_and_fill_validate(self):
+        """square (bool) + fill (stretch|pad|repeat) are accepted by validation."""
+        a = _cells_keyboard_assembly()
+        a["mounts"][0]["position"]["square"] = True
+        a["mounts"][0]["position"]["fill"] = "pad"
+        r = validate_assembly(a)
+        self.assertTrue(r["success"], r["errors"])
+
+    def test_bad_fill_rejected(self):
+        a = _cells_keyboard_assembly()
+        a["mounts"][0]["position"]["fill"] = "bogus"
+        r = validate_assembly(a)
+        self.assertFalse(r["success"])
+        self.assertTrue(any(e["code"] == "MOUNT_BAD_CELLS" for e in r["errors"]))
+
+    def test_bad_square_type_rejected(self):
+        a = _cells_keyboard_assembly()
+        a["mounts"][0]["position"]["square"] = "yes"   # not a bool
+        r = validate_assembly(a)
+        self.assertFalse(r["success"])
+        self.assertTrue(any(e["code"] == "MOUNT_BAD_CELLS" for e in r["errors"]))
+
+    def test_square_vex_uses_min_unit(self):
+        """square=True → the VEX unifies unit to min(unit0, unit1) so 1u cells
+        stay square. stretch (default) → independent per-axis (may deform)."""
+        from edini.vex_strategies import build_mount_vex
+        spec = {"measure": "cells", "face": "+Y", "margin": 0.0,
+                "cells": [{"gx": 0, "gz": 0, "w": 1, "d": 1}]}
+        stretch_snip, _ = build_mount_vex(spec)
+        square_snip, _ = build_mount_vex({**spec, "square": True})
+        # stretch: independent units (no min).
+        self.assertIn("__u0 = __span0 /", stretch_snip)
+        self.assertNotIn("min(__u0raw", stretch_snip)
+        # square: unified to min.
+        self.assertIn("min(__u0raw", square_snip)
+
+    def test_repeat_expands_cell_table(self):
+        """fill=repeat → the builder pre-expands the cell table with 1u fillers
+        so the layout fills the larger axis. A layout spanning 2u×2u but with an
+        empty grid slot gets a 1u filler added to fill it."""
+        from edini.assembly_builder import _expand_repeat_cells
+        # cell A (gx:0,gz:0,w:2,d:1) covers slots (0,0)+(1,0);
+        # cell B (gx:0,gz:1,w:1,d:1) covers (0,1). The 2×2 region's empty slot
+        # is (1,1) → exactly one 1u filler is added.
+        cells = [{"gx": 0, "gz": 0, "w": 2, "d": 1},
+                 {"gx": 0, "gz": 1, "w": 1, "d": 1}]
+        expanded = _expand_repeat_cells(cells)
+        self.assertEqual(len(expanded), 3)   # 2 declared + 1 filler
+        # The filler fills the only empty slot (1,1).
+        fillers = [c for c in expanded
+                   if c not in cells or {"gx": c["gx"], "gz": c["gz"],
+                                         "w": c["w"], "d": c["d"]} not in cells]
+        filler_slots = sorted((c["gx"], c["gz"]) for c in expanded
+                              if (c["gx"], c["gz"]) not in
+                              [(cc["gx"], cc["gz"]) for cc in cells])
+        self.assertEqual(filler_slots, [(1.0, 1.0)])
+
+    def test_strategy_class_hierarchy_exists(self):
+        """The three-layer architecture: VexStrategy → StaticTemplateStrategy /
+        TabularFillStrategy → CellsStrategy. All 7 measure kinds dispatch
+        through the strategy registry (no raw if/elif chain in build_mount_vex)."""
+        from edini.vex_strategies import (VexStrategy, StaticTemplateStrategy,
+                                          TabularFillStrategy, CellsStrategy)
+        # Static kinds are StaticTemplateStrategy instances.
+        from edini.vex_strategies import _STATIC_STRATEGIES
+        self.assertTrue(all(isinstance(s, StaticTemplateStrategy)
+                            for s in _STATIC_STRATEGIES.values()))
+        # CellsStrategy is a TabularFillStrategy (and thus a VexStrategy).
+        self.assertTrue(issubclass(CellsStrategy, TabularFillStrategy))
+        self.assertTrue(issubclass(TabularFillStrategy, VexStrategy))
+        self.assertEqual(len(_STATIC_STRATEGIES), 6)   # the 6 static kinds
+
+
 # setUpClass for the keyboard/stairs BUILD tests (they need the mock hou like
 # the structure test does). Re-use the same flush-and-reimport contract.
 class TestM1Builds(unittest.TestCase):
@@ -663,6 +868,33 @@ class TestM1Builds(unittest.TestCase):
         self.assertIn("OUT", names)
         # NO per-position xform nodes — the fan-out is via CTP, not N xforms.
         self.assertNotIn("key_0_xform", names)
+
+    def test_cells_keyboard_builds_single_ctp_many_sizes(self):
+        """The cells keyboard builds a live network: one cells mount wrangle +
+        ONE key shape + ONE CTP (despite 6 differently-sized cells including a
+        6.25u spacebar). The per-cell size comes from v@scale on each emitted
+        point, which CTP reads per instance — so the size variety does NOT split
+        the leaf into multiple groups/CTPs. Geometry-level proof is the hython
+        test's job; here we assert the single-CTP structure."""
+        hou = sys.modules["hou"]
+        a = _cells_keyboard_assembly()
+        root = hou.node("/obj").createNode("geo", "ckb")
+        res = self.build_assembly(a, root.path())
+        self.assertTrue(res["success"], res.get("error"))
+        self.assertTrue(res["live"])
+        names = {c.name() for c in hou.node(root.path()).children()}
+        # One cells mount wrangle + one key shape + one CTP (NOT split by size).
+        self.assertIn("mount_keys", names)
+        self.assertIn("key_geoshape", names)
+        self.assertIn("key_ctp", names)
+        self.assertIn("OUT", names)
+        # The spacebar (6.25u) does NOT get its own CTP — it shares the one CTP
+        # via its per-point v@scale. No second CTP node exists.
+        ctp_nodes = [n for n in names if n.endswith("_ctp")]
+        self.assertEqual(len(ctp_nodes), 1)
+        # The mount wrangle's snippet writes per-point v@scale (the size signal).
+        snip = hou.node(f"{root.path()}/mount_keys").parm("snippet").eval()
+        self.assertIn('setpointattrib(geoself(), "scale"', snip)
 
 
 if __name__ == "__main__":

@@ -31,6 +31,7 @@ from edini.measure import (  # noqa: E402
     measure_point_on_edge,
     measure_grid_on_face,
     measure_array,
+    measure_cells,
     direction_from_two_points,
     orient_to_align_y,
 )
@@ -303,6 +304,156 @@ class TestMeasureArray:
         with pytest.raises(MeasureError):
             measure_array((0, 0, 0), count=[2, 1, 1],
                           step=[(1, 0), (0, 0, 0), (0, 0, 0)])  # 2-vector
+
+
+# ── cells (the keyboard-layout strategy) ──────────────────────────
+
+
+class TestMeasureCells:
+    """The explicit unit-grid layout — the strategy that lets a keyboard have
+    differently-sized keys (a 1u key + a 6.25u spacebar) instead of a uniform
+    grid. The physical unit is DERIVED from the root's span, so the layout
+    FILLS the root and rescales automatically. Each cell returns BOTH its
+    world-space center AND a physical scale vector (v@scale)."""
+
+    def test_each_cell_returns_position_and_physical_scale(self):
+        """A 1u key at the corner + a 6.25u spacebar on a 16x6 tray (margin 0.5).
+        The unit is DERIVED so the layout fills the root; the spacebar's physical
+        width is 6.25× the normal key's width (ratio is conserved)."""
+        geo = _box_geo(0, 16, 0, 0.4, 0, 6)   # 16 x 0.4 x 6 tray
+        cells = [{"gx": 0, "gz": 0, "w": 1, "d": 1},          # corner key
+                 {"gx": 0, "gz": 4, "w": 6.25, "d": 1}]       # spacebar
+        res = measure_cells(geo, "+Y", cells=cells, margin=0.5)
+        assert len(res) == 2
+        (pos_k, scl_k), (pos_s, scl_s) = res
+        # Both on the top face.
+        assert math.isclose(pos_k[1], 0.4, abs_tol=1e-9)
+        # The spacebar's physical width is 6.25× the normal key's.
+        assert scl_s[0] == pytest.approx(6.25 * scl_k[0])
+        assert scl_s[2] == pytest.approx(scl_k[2])   # same depth (both d=1)
+
+    def test_layout_fills_the_root(self):
+        """THE measurement-driven claim: the keys' total X span exactly fills
+        the root's usable span (root_width - 2*margin), regardless of root size.
+        On a 16-wide tray with margin 0.5, a 7.25u-wide layout (1u key + 6.25u
+        spacebar side by side) fills 15.0 world units = 16 - 2*0.5."""
+        geo = _box_geo(0, 16, 0, 0.4, 0, 6)
+        cells = [{"gx": 0, "gz": 0, "w": 1, "d": 1},
+                 {"gx": 1, "gz": 0, "w": 6.25, "d": 1}]   # total u_x = 7.25
+        res = measure_cells(geo, "+Y", cells=cells, margin=0.5)
+        # unit_x = (16 - 1) / 7.25 ≈ 2.069. Spacebar physical width = 6.25 * unit.
+        unit_x = (16.0 - 2 * 0.5) / 7.25
+        assert res[1][1][0] == pytest.approx(6.25 * unit_x)
+
+    def test_resizing_root_rescales_keys(self):
+        """THE live claim: shrink the root and every key rescales to STILL fill
+        it. The keys' physical width scales by the usable-span ratio
+        (root_w - 2*margin), because the unit is derived from the root's span."""
+        cells = [{"gx": 0, "gz": 0, "w": 1, "d": 1},
+                 {"gx": 1, "gz": 0, "w": 6.25, "d": 1}]
+        margin = 0.5
+        big = measure_cells(_box_geo(0, 16, 0, 0.4, 0, 6), "+Y", cells=cells, margin=margin)
+        small = measure_cells(_box_geo(0, 8, 0, 0.4, 0, 6), "+Y", cells=cells, margin=margin)
+        # The spacebar width scales by the usable-span ratio (margin is fixed).
+        ratio = (8.0 - 2 * margin) / (16.0 - 2 * margin)
+        assert small[1][1][0] == pytest.approx(big[1][1][0] * ratio)
+        # And the keys stay WITHIN the smaller root (never overflow).
+        # Spacebar left edge = center - width/2 must be >= the root's xmin (0).
+        sb_center_x = small[1][0][0]
+        sb_half_width = small[1][1][0] / 2.0
+        assert sb_center_x - sb_half_width >= 0.0 - 1e-6   # inside [0, 8]
+
+    def test_staggered_rows_supported(self):
+        """QWERTY stagger: row 1 starts at gx=0.5, row 2 at gx=0.75. The layout
+        table expresses this naturally because gx is per-cell absolute; the
+        derived unit scales the offset consistently."""
+        geo = _box_geo(0, 16, 0, 0.4, 0, 6)
+        cells = [{"gx": 0.0, "gz": 0, "w": 1, "d": 1},
+                 {"gx": 0.5, "gz": 1, "w": 1, "d": 1},
+                 {"gx": 0.75, "gz": 2, "w": 1, "d": 1}]
+        res = measure_cells(geo, "+Y", cells=cells, margin=0.0)
+        xs = [pos[0] for (pos, _s) in res]
+        # The 0.5 / 0.75 grid-unit offsets scale by the derived unit consistently.
+        unit_x = (16.0) / 1.75   # total_u_x = 0.75 + 1 = 1.75
+        assert xs[1] - xs[0] == pytest.approx(0.5 * unit_x)
+        assert xs[2] - xs[0] == pytest.approx(0.75 * unit_x)
+
+    def test_gaps_are_natural(self):
+        """A grid slot with no declared cell is simply absent — a keyboard gap.
+        Declaring 3 cells across a 10-slot-wide row yields exactly 3 points."""
+        geo = _box_geo(0, 10, 0, 0.4, 0, 1)
+        cells = [{"gx": 0, "gz": 0, "w": 1, "d": 1},
+                 {"gx": 3, "gz": 0, "w": 1, "d": 1},   # gap before this
+                 {"gx": 5, "gz": 0, "w": 1, "d": 1}]
+        res = measure_cells(geo, "+Y", cells=cells, margin=0.0)
+        assert len(res) == 3   # the gap (gx=1,2,4...) is just not declared
+
+    def test_margin_eats_into_fill_span(self):
+        """A larger margin shrinks the usable span → the derived unit shrinks →
+        keys get smaller (they fill less of the root). Same layout, margin 0 vs 2."""
+        geo = _box_geo(0, 16, 0, 0.4, 0, 6)
+        cells = [{"gx": 0, "gz": 0, "w": 1, "d": 1}]
+        tight = measure_cells(geo, "+Y", cells=cells, margin=0.0)
+        loose = measure_cells(geo, "+Y", cells=cells, margin=2.0)
+        # With margin, unit_x = (16-4)/1 = 12; without, 16/1 = 16. Key shrinks.
+        assert loose[0][1][0] < tight[0][1][0]
+
+    def test_gap_insets_key_size(self):
+        """The `gap` parameter carves a visible seam between adjacent keys: each
+        key's physical scale loses `gap` on each axis (so two adjacent 1u keys
+        show a `gap`-wide seam between them). Positions are unchanged — only the
+        scale shrinks. gap=0 → keys touch; gap=0.2 → each key is 0.2 narrower."""
+        geo = _box_geo(0, 16, 0, 0.4, 0, 6)   # 16-wide tray
+        cells = [{"gx": 0, "gz": 0, "w": 1, "d": 1}]   # layout total_u_x = 1
+        touching = measure_cells(geo, "+Y", cells=cells, margin=0.0, gap=0.0)
+        gapped = measure_cells(geo, "+Y", cells=cells, margin=0.0, gap=0.2)
+        # unit_x = 16/1 = 16 (fills the tray). Touching key width = 16.
+        assert touching[0][1][0] == pytest.approx(16.0)
+        # Gapped key width = 16 - 0.2 = 15.8 (the seam).
+        assert gapped[0][1][0] == pytest.approx(16.0 - 0.2)
+        # Position is unaffected by gap (only the size shrinks).
+        assert gapped[0][0] == touching[0][0]
+
+    def test_rejects_bad_cell(self):
+        geo = _box_geo(0, 1, 0, 1, 0, 1)
+        with pytest.raises(MeasureError):
+            measure_cells(geo, "+Y",
+                          cells=[{"gx": 0, "gz": 0, "w": 0, "d": 1}])  # w<=0
+
+    def test_rejects_margin_too_large(self):
+        """margin that leaves no usable span → MeasureError."""
+        geo = _box_geo(0, 1, 0, 1, 0, 1)   # 1-unit span
+        with pytest.raises(MeasureError):
+            measure_cells(geo, "+Y", cells=[{"gx": 0, "gz": 0, "w": 1, "d": 1}],
+                          margin=2.0)   # 1 - 2*2 < 0
+
+    def test_square_unifies_unit_to_min(self):
+        """square=True forces unit_x == unit_z == min, so a 1u key is SQUARE
+        even when the root's aspect ≠ the layout's aspect. On a 16×6 tray with
+        a 1u×1u layout, stretch would give unit_x=16, unit_z=6 (rectangular);
+        square gives unit=min(16,6)=6 on BOTH → the key is 6×6 (square)."""
+        geo = _box_geo(0, 16, 0, 0.4, 0, 6)   # 16 wide × 6 deep
+        cells = [{"gx": 0, "gz": 0, "w": 1, "d": 1}]
+        stretch = measure_cells(geo, "+Y", cells=cells, margin=0.0)
+        square = measure_cells(geo, "+Y", cells=cells, margin=0.0, square=True)
+        # stretch: deforms (16 wide × 6 deep). square: 6×6.
+        assert stretch[0][1][0] == pytest.approx(16.0)   # X
+        assert stretch[0][1][2] == pytest.approx(6.0)    # Z (deformed)
+        assert square[0][1][0] == pytest.approx(6.0)     # X
+        assert square[0][1][2] == pytest.approx(6.0)     # Z (square!)
+
+    def test_pad_centers_layout_with_leftover(self):
+        """pad = square unit (min) + center the layout on the larger axis. On a
+        16×6 tray, unit=min(16,6)=6; the X layout (1u wide) occupies 6 of 16,
+        so 10 leftover → centered: origin offset = 10/2 = 5 from the margin."""
+        geo = _box_geo(0, 16, 0, 0.4, 0, 6)
+        cells = [{"gx": 0, "gz": 0, "w": 1, "d": 1}]
+        pad = measure_cells(geo, "+Y", cells=cells, margin=0.0, fill="pad")
+        # center_x = 0 (margin) + 5 (centering offset) + 0.5*6 (cell center) = 8.0
+        assert pad[0][0][0] == pytest.approx(8.0)
+        # And the key stays square (6×6).
+        assert pad[0][1][0] == pytest.approx(6.0)
+        assert pad[0][1][2] == pytest.approx(6.0)
 
 
 # ── direction & orientation ────────────────────────────────────────

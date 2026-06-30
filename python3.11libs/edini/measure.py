@@ -42,6 +42,7 @@ __all__ = [
     "measure_point_on_edge",
     "measure_grid_on_face",
     "measure_array",
+    "measure_cells",
     "direction_from_two_points",
     "orient_to_align_y",
     "orient_to_align",
@@ -373,6 +374,147 @@ def measure_array(
                 dy = steps[0][1] * a + steps[1][1] * b + steps[2][1] * c
                 dz = steps[0][2] * a + steps[1][2] * b + steps[2][2] * c
                 out.append((ox + dx, oy + dy, oz + dz))
+    return out
+
+
+def measure_cells(
+    geo,
+    face: str,
+    cells: Sequence[dict],
+    margin: float = 0.0,
+    gap: float = 0.0,
+    square: bool = False,
+    fill: str = "stretch",
+) -> list[tuple[tuple[float, float, float], tuple[float, float, float]]]:
+    """An explicit unit-grid layout of *(position, scale)* pairs on one bbox face,
+    where the physical unit is **derived from the root's actual geometry**.
+
+    This is the keyboard-keys strategy done right: a real keyboard's keys are
+    NOT a uniform grid (they differ in width — the spacebar is 6.25u, a normal
+    key is 1u — and rows are staggered). So unlike :func:`measure_grid_on_face`
+    which assumes ``rows x cols`` identical cells, this one takes an explicit
+    table of cells, each declaring its absolute grid position ``(gx, gz)`` in
+    **1u units** and its size ``(w, d)`` in 1u units, and returns per cell BOTH
+    its world-space center AND a non-uniform scale vector. The build layer
+    writes that scale as a per-point ``v@scale`` (Copy-to-Points 2.0 reads it),
+    so one CTP stamps many differently-sized keys.
+
+    **The unit is derived, not a parameter.** The physical size of 1u is
+    computed per in-plane axis from the root's actual span:
+
+        unit_a0 = (root_span_a0 - 2*margin) / max(gx + w)
+        unit_a1 = (root_span_a1 - 2*margin) / max(gz + d)
+
+    where ``max(gx + w)`` is the layout's total span in grid units (the fixed
+    keyboard spec). So the layout FILLS the root exactly: resize the root and
+    every key rescales + relays-out automatically, never overflowing. This is
+    the measurement-driven coupling that makes the layout a true function of
+    the root's geometry. The mirror VEX in :func:`vex_strategies.build_cells_vex`
+    computes the same thing live; this oracle is its correctness check.
+
+    For ``face="+Y"`` the grid's +X grows the face's first in-plane axis (X) and
+    +Z grows the second (Z); a cell ``(gx=0, gz=0, w=1, d=1)`` is the corner
+    key, ``(gx=6.25, gz=4, w=6.25, d=1)`` is a bottom-row spacebar. Cells are
+    anchored at their lower-left grid corner, so their center is ``gx + w/2`` /
+    ``gz + d/2``. A grid slot with no declared cell is simply empty (a gap).
+
+    Args:
+        geo: cooked root geometry (read for its bbox — the layout fills it).
+        face: which face the grid lies on (``"+Y"`` = tray top).
+        cells: list of ``{"gx","gz","w","d"}`` dicts (1u units). ``gx``/``gz``
+            are the cell's lower-left grid coords; ``w``/``d`` its width/depth.
+        margin: inset from the face edge on both axes (the fill margin + grid
+            origin offset). The layout's grid-unit span fills the remaining span.
+
+    Returns:
+        A list of ``(position, scale)`` pairs. ``position`` is the cell's
+        world-space center ``(x,y,z)``; ``scale`` is the non-uniform scale a
+        1u-basis leaf must receive so it covers ``w*unit_a0`` x ``d*unit_a1``
+        world units (the leaf is a 1u basis; the scale multiplies it to the
+        cell's physical footprint). Height (the face's own axis) is left at 1.
+
+    Raises:
+        MeasureError: if a cell is malformed, the layout span is zero, or
+            ``margin`` leaves no room on the face.
+    """
+    margin = float(margin)
+    if margin < 0.0:
+        raise MeasureError(f"margin must be >= 0, got {margin}")
+
+    sign, axis = _parse_face(face)
+    b = measure_bbox(geo)
+    # The two in-plane axes (everything but `axis`), in axis-index order.
+    idxs = [i for i in range(3) if "XYZ"[i] != axis]
+    if len(idxs) != 2:
+        raise MeasureError("a face has exactly two in-plane axes")
+    a0, a1 = idxs  # gx grows a0, gz grows a1 (for +Y: a0=X, a1=Z)
+
+    # Validate cells + compute the layout's grid-unit span per axis (the FIXED
+    # spec; the physical unit is derived from this + the bbox below).
+    total_u_x = 0.0
+    total_u_z = 0.0
+    parsed: list[tuple[float, float, float, float]] = []
+    for ci, c in enumerate(cells):
+        try:
+            gx = float(c["gx"]); gz = float(c["gz"])
+            w = float(c["w"]); d = float(c["d"])
+        except (KeyError, TypeError, ValueError) as e:
+            raise MeasureError(
+                f"cell {ci} must have numeric gx/gz/w/d, got {c!r}") from None
+        if w <= 0.0 or d <= 0.0:
+            raise MeasureError(f"cell {ci} w and d must be > 0, got {c!r}")
+        parsed.append((gx, gz, w, d))
+        total_u_x = max(total_u_x, gx + w)
+        total_u_z = max(total_u_z, gz + d)
+    if total_u_x <= 0.0 or total_u_z <= 0.0:
+        raise MeasureError(f"layout span must be > 0, got {total_u_x} x {total_u_z}")
+
+    # DERIVE the physical unit per axis from the root's actual span. This is the
+    # measurement-driven core: the layout FILLS the root, and resizing the root
+    # rescales every key. Mirrors TabularFillStrategy._build_vex exactly.
+    span0 = (b["max"][a0] - b["min"][a0]) - 2.0 * margin
+    span1 = (b["max"][a1] - b["min"][a1]) - 2.0 * margin
+    if span0 <= 0.0 or span1 <= 0.0:
+        raise MeasureError(
+            f"margin {margin} leaves no room on the face "
+            f"(spans {b['max'][a0]-b['min'][a0]}, {b['max'][a1]-b['min'][a1]})")
+
+    # square / pad / repeat: unify unit to min(both axes) → 1u cells stay SQUARE
+    # and never overflow either axis; the leftover on the larger axis centers the
+    # layout (pad-style origin offset). stretch (default): independent per-axis
+    # units (may deform when the root's aspect ≠ the layout's aspect).
+    if square or fill in ("pad", "repeat"):
+        unit0 = min(span0 / total_u_x, span1 / total_u_z)
+        unit1 = unit0
+        extra0 = (span0 - total_u_x * unit0) * 0.5
+        extra1 = (span1 - total_u_z * unit0) * 0.5
+    else:
+        unit0 = span0 / total_u_x
+        unit1 = span1 / total_u_z
+        extra0 = 0.0
+        extra1 = 0.0
+
+    # Grid origin = face's in-plane minimum + margin (+ centering offset if any).
+    g0 = b["min"][a0] + margin + extra0
+    g1 = b["min"][a1] + margin + extra1
+    face_val = b["max"][_axis_index(axis)] if sign > 0 else b["min"][_axis_index(axis)]
+
+    out: list[tuple[tuple[float, float, float], tuple[float, float, float]]] = []
+    for (gx, gz, w, d) in parsed:
+        cx_units = gx + w / 2.0   # center in grid units
+        cz_units = gz + d / 2.0
+        p = [0.0, 0.0, 0.0]
+        p[_axis_index(axis)] = face_val
+        p[a0] = g0 + cx_units * unit0
+        p[a1] = g1 + cz_units * unit1
+        # Physical scale: a 1u-basis leaf × (w*unit0) on a0, (d*unit1) on a1 →
+        # covers the cell's world footprint MINUS the visible gap on each side
+        # (a real keyboard's seams). Height axis stays 1. Matches the VEX's
+        # max(0.0001, w*unit - gap) clamp.
+        scl = [1.0, 1.0, 1.0]
+        scl[a0] = max(0.0001, w * unit0 - gap)
+        scl[a1] = max(0.0001, d * unit1 - gap)
+        out.append(((p[0], p[1], p[2]), (scl[0], scl[1], scl[2])))
     return out
 
 

@@ -261,6 +261,39 @@ def _keyboard(rows=3, cols=5):
     }
 
 
+def _cells_keyboard():
+    """A REAL keyboard layout via the `cells` strategy: a 6.25u spacebar +
+    several 1u keys + a staggered row. The physical unit is DERIVED from the
+    tray's span so the layout FILLS the tray and rescales when tray_w changes.
+    The leaf is a 1u BASIS shape; each cell's per-point v@scale grows it to the
+    cell's footprint. This is the case grid_on_face CANNOT express."""
+    return {
+        "id": "cells_keyboard",
+        "params": {"tray_w": 16.0, "tray_d": 6.0, "tray_h": 0.4,
+                   "key_height": 0.4},
+        "root": {"shape": {"type": "box", "params": {
+            "size": ["tray_w", "tray_h", "tray_d"]}}},
+        "mounts": [
+            {"id": "keys", "position": {
+                "measure": "cells", "from": "root", "face": "+Y",
+                "margin": 0.5,
+                "cells": [
+                    {"gx": 0, "gz": 0, "w": 1, "d": 1},     # back row
+                    {"gx": 1, "gz": 0, "w": 1, "d": 1},
+                    {"gx": 2, "gz": 0, "w": 1, "d": 1},
+                    {"gx": 0.5, "gz": 1, "w": 1, "d": 1},   # staggered row
+                    {"gx": 1.5, "gz": 1, "w": 1, "d": 1},
+                    {"gx": 0, "gz": 4, "w": 6.25, "d": 1},  # spacebar
+                ]}},
+        ],
+        "leaves": [
+            {"id": "key", "mount": "keys",
+             "shape": {"type": "box", "params": {
+                 "size": [1, "key_height", 1]}}},   # 1u basis; v@scale grows it
+        ],
+    }
+
+
 def _run(assembly, probe="instance_centers", change_param=None, new_value=None):
     req = {"assembly": assembly, "probe": probe}
     if change_param is not None:
@@ -340,6 +373,118 @@ class TestLiveBuildHython(unittest.TestCase):
         after_span = after_x[-1] - after_x[0]
         self.assertGreater(after_span / before_span, 1.9,
                            f"grid did not rescale: before_span={before_span}, after_span={after_span}")
+
+    def test_cells_keyboard_one_ctp_many_sizes(self):
+        """THE cells-strategy proof: one CTP stamps 6 DIFFERENTLY-SIZED keys from
+        a single 1u basis leaf. The 6.25u spacebar's bbox X is exactly 6.25× a
+        normal 1u key's X — the RATIO is conserved because the unit is derived
+        from the tray. This is impossible with grid_on_face (uniform cells). The
+        size variety comes from per-point v@scale that CTP reads per instance —
+        verified at the GEOMETRY level (the bbox sizes the user sees)."""
+        res = _run(_cells_keyboard(), probe="piece_bboxes")
+        self.assertTrue(res["success"], res.get("error"))
+        pieces = res["_probe"]["pieces"]
+        # 6 connected key pieces (each key is a box = 6 prims; the root tray is
+        # filtered by the >=4-prim clustering heuristic but we check counts).
+        keys = [p for p in pieces if p["prim_count"] >= 6]
+        self.assertGreaterEqual(len(keys), 6, f"expected >=6 keys, got {len(keys)}: {pieces}")
+        # Sort widest-first. The spacebar (6.25u) must dominate on X.
+        keys.sort(key=lambda p: -p["size"][0])
+        spacebar = keys[0]
+        normal = keys[-1]
+        # THE RATIO claim: spacebar is 6.25× wider than a normal key, regardless
+        # of the derived unit (which depends on the tray size). This ratio is the
+        # invariant the per-point v@scale preserves.
+        self.assertAlmostEqual(spacebar["size"][0] / normal["size"][0], 6.25, delta=0.15,
+                               msg=f"spacebar/normal ratio={spacebar['size'][0]/normal['size'][0]} ≠ 6.25")
+
+    def test_cells_keyboard_LIVE_root_resizes_relays_keys(self):
+        """THE measurement-driven proof: shrink the root (tray_w 16→10) and the
+        keys RELAY-OUT to fill the smaller root — the derived unit shrinks so
+        every key rescales AND the keys stay WITHIN the root (never overflow).
+        This is the coupling the old fixed-unit `cells` lacked."""
+        res = _run(_cells_keyboard(), probe="live_recook",
+                   change_param="tray_w", new_value=10.0)  # shrink tray
+        self.assertTrue(res["success"], res.get("error"))
+        before_root = res["_probe"]["root_bbox"]
+        after_root = res["_probe"]["root_bbox_after"]
+        # The tray actually shrank (16 → 10 on X).
+        self.assertLess(after_root[1] - after_root[0], before_root[1] - before_root[0])
+        before = res["_probe"]["centers"]
+        after = res["_probe"]["centers_after"]
+        self.assertEqual(len(before), 6)
+        self.assertEqual(len(after), 6)
+        # THE KEY CLAIM: keys rescaled to fill the smaller tray. The total X span
+        # of the keys shrank (they're closer together now).
+        before_xs = sorted(c[0] for c in before)
+        after_xs = sorted(c[0] for c in after)
+        before_span = before_xs[-1] - before_xs[0]
+        after_span = after_xs[-1] - after_xs[0]
+        self.assertLess(after_span, before_span,
+                        f"keys did not rescale to smaller tray: {before_span}→{after_span}")
+        # AND the keys stay WITHIN the smaller root — no overflow (the layout
+        # fills it, never exceeds it). Every key's X is within [xmin, xmax].
+        for x in after_xs:
+            self.assertGreaterEqual(x, after_root[0] - 0.01,
+                                    f"key x={x} overflowed tray xmin {after_root[0]}")
+            self.assertLessEqual(x, after_root[1] + 0.01,
+                                 f"key x={x} overflowed tray xmax {after_root[1]}")
+
+    def test_cells_square_keys_are_actually_square(self):
+        """THE square-constraint proof: with square=True, a 1u key's bbox X == Z
+        (physically square), even though the tray is NOT square (16 wide × 6 deep
+        — stretch would deform it to 16×6). This is what makes a real keyboard's
+        keys look right."""
+        a = _cells_keyboard()
+        a["mounts"][0]["position"]["square"] = True
+        res = _run(a, probe="piece_bboxes")
+        self.assertTrue(res["success"], res.get("error"))
+        keys = [p for p in res["_probe"]["pieces"] if p["prim_count"] >= 6]
+        self.assertGreaterEqual(len(keys), 6)
+        # Find a normal 1u key (the smallest X piece that isn't the spacebar).
+        keys.sort(key=lambda p: p["size"][0])
+        normal = keys[0]
+        # THE CLAIM: X size == Z size (square), to within a tolerance for the gap.
+        self.assertAlmostEqual(normal["size"][0], normal["size"][2], delta=0.05,
+                               msg=f"square key not square: X={normal['size'][0]} Z={normal['size'][2]}")
+
+    def test_cells_pad_leaves_visible_leftover(self):
+        """fill=pad: keys stay square (unit=min) AND the layout is centered, so
+        on a non-square tray there's visible leftover on the larger axis. The
+        keys' total X span is LESS than the tray's usable X span (unlike stretch
+        which fills it)."""
+        a = _cells_keyboard()
+        a["mounts"][0]["position"]["square"] = True
+        a["mounts"][0]["position"]["fill"] = "pad"
+        res = _run(a, probe="piece_bboxes")
+        self.assertTrue(res["success"], res.get("error"))
+        keys = [p for p in res["_probe"]["pieces"] if p["prim_count"] >= 6]
+        self.assertGreaterEqual(len(keys), 6)
+        # Keys are square (unit=min(16,6)=6 region → unit ~ (6-...)/...).
+        keys.sort(key=lambda p: p["size"][0])
+        normal = keys[0]
+        self.assertAlmostEqual(normal["size"][0], normal["size"][2], delta=0.05)
+        # Pad leaves leftover: the keys don't reach the tray's X edges (16 wide,
+        # but keys only span ~the 6-unit region). Check via centers: keys cluster
+        # in the middle, not at the X extremes.
+        centers_x = [p["min"][0] + p["size"][0] / 2 for p in keys]
+        # The leftmost key's left edge is well inside the tray (not at xmin=-8).
+        self.assertGreater(min(p["min"][0] for p in keys), -7.5,
+                           "pad keys should not reach the tray's left edge")
+
+    def test_cells_repeat_fills_with_extra_keys(self):
+        """fill=repeat: keys stay square AND extra 1u keys are added to fill the
+        leftover, so MORE keys than declared appear. A 6-cell layout on a
+        non-square tray yields > 6 keys (the fillers)."""
+        a = _cells_keyboard()
+        a["mounts"][0]["position"]["square"] = True
+        a["mounts"][0]["position"]["fill"] = "repeat"
+        res = _run(a, probe="piece_bboxes")
+        self.assertTrue(res["success"], res.get("error"))
+        keys = [p for p in res["_probe"]["pieces"] if p["prim_count"] >= 6]
+        # The fixture declares 6 keys; repeat adds fillers → strictly more.
+        self.assertGreater(len(keys), 6,
+                           f"repeat should add filler keys, got {len(keys)}")
 
     def test_staircase_builds_three_treads(self):
         """The staircase builds with 3 diagonal treads (the array strategy

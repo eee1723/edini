@@ -2,9 +2,9 @@
 
 > **用途**：让新 Agent 或开发者在 Edini 仓库里快速上手。
 
-**最后更新**：2026-06-29（rooted-modeling skill M2.5 — leaf align convention：orient point-class 修复 + align_axis + origin normalize + 分组 CTP，151 测试含 9 真机 hython facing 铁证）
-**当前阶段**：**rooted-modeling**（根件驱动 + live VEX+CTP）M0/M1/M2/M2.5 全部交付。旧的声明式资产管道已整体搁置到 `_disabled_backup/asset-pipeline-2026-06/`。
-**下一步**：用户上次实测发现的 4 个 leaf 层问题已**全部修复**（M2.5，见下方）。本机有完整 Houdini：`D:\houdini\bin\hython.exe`（Houdini 21.0.440）。建议下次用户在 Houdini GUI 重新打开 `edini_showcase.hip`（已重新生成，含 car + bicycle + keyboard + stairs）验证轮子朝向正确。
+**最后更新**：2026-06-30（rooted-modeling skill M3 — cells 测量原语 + 三层类架构 + square/fill 模式 + Pi agent 端到端链路修复，599 测试含 5 真机 hython 铁证）
+**当前阶段**：**rooted-modeling**（根件驱动 + live VEX+CTP）M0/M1/M2/M2.5/M3 全部交付。旧的声明式资产管道已整体搁置到 `_disabled_backup/asset-pipeline-2026-06/`。
+**下一步**：M3 已交付 cells 显式布局表（真实键盘布局：6.25u 空格 + staggered + square 正方 + pad/repeat/stretch）+ VexStrategy 三层类架构（泛化性载体）+ Pi agent 端到端链路修复。本机有完整 Houdini：`D:\houdini\bin\hython.exe`（Houdini 21.0.440）。`edini_showcase.hip` 已重新生成（含 car + bicycle + 65 键正方形键盘 + stairs）。建议下一步：让真实 Pi agent 用 asset-authoring/rooted-modeling skill 自主写一个没见过的资产，验证端到端（capability 检验的最后一步）。
 **工作分支**：`master`
 
 ---

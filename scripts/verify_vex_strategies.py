@@ -94,6 +94,41 @@ def _points_close(a, b, tol=1e-4):
                for (ax, ay, az), (bx, by, bz) in zip(a, b))
 
 
+def _run_cells_wrangle(box, snippet, margin, gap=0.0, face="+Y"):
+    """Cook the cells strategy and return BOTH positions and per-point scales.
+
+    cells is special: its VEX emits per-point v@scale (the key-size signal), and
+    the physical unit is DERIVED in-VEX from the box's span (no unit spare). So
+    we only inline face_axis/face_sign/margin/gap; the unit is computed live from
+    the box's bbox. We read both P and the 'scale' attribute to verify against
+    the oracle's (position, scale) pairs."""
+    from edini.measure import _parse_face
+    sign, axis = _parse_face(face)
+    face_axis = "XYZ".index(axis)
+    face_sign = 1 if sign > 0 else -1
+    import re
+    snip = snippet
+    snip = re.sub(r'chi\("face_axis"\)', str(face_axis), snip)
+    snip = re.sub(r'ch\("face_sign"\)', str(face_sign), snip)
+    snip = re.sub(r'ch\("margin"\)', repr(float(margin)), snip)
+    snip = re.sub(r'ch\("gap"\)', repr(float(gap)), snip)
+    wr = box.parent().createNode("attribwrangle", "cells_wr")
+    wr.setInput(0, box)
+    wr.parm("class").set("detail")
+    wr.parm("snippet").set(snip)
+    wr.cook(force=True)
+    geo = wr.geometry()
+    pts = []
+    for p in geo.points():
+        pos = list(p.position())
+        try:
+            scl = list(p.floatListAttribValue("scale"))
+        except Exception:
+            scl = [1.0, 1.0, 1.0]
+        pts.append((pos, scl))
+    return pts
+
+
 def main():
     obj = hou.node("/obj")
     geo_container = obj.createNode("geo", "vex_verify")
@@ -127,6 +162,18 @@ def main():
                                  [[0.5, 0.3, 0], [0, 0, 0], [0, 0, 0]])),
     ]
 
+    # cells is verified separately: it emits per-point v@scale (not just P), and
+    # the physical unit is DERIVED from the box's span (no unit param). A
+    # keyboard-style layout: 3 normal 1u keys + a 6.25u spacebar + staggered row.
+    cells_spec = {
+        "measure": "cells", "face": "+Y", "margin": 0.1,
+        "cells": [{"gx": 0, "gz": 0, "w": 1, "d": 1},
+                  {"gx": 1, "gz": 0, "w": 1, "d": 1},
+                  {"gx": 0.25, "gz": 1, "w": 1, "d": 1},   # staggered
+                  {"gx": 0, "gz": 3, "w": 6.25, "d": 1}]}  # spacebar
+    cells_layout = cells_spec["cells"]
+    cells_margin = cells_spec["margin"]
+
     # The array strategy carries origin/step as _-prefixed passthrough keys;
     # promote them to real chv() values for the standalone verification cook.
     def _normalize_array_parms(spec_snippet, spec_parms):
@@ -155,6 +202,42 @@ def main():
         if not ok:
             print(f"   vex   : {sorted(vex_pts)[:3]}...")
             print(f"   oracle: {sorted(oracle_pts)[:3]}...")
+
+    # ── cells strategy: verify positions + per-point v@scale, across all 3 ─
+    # fill modes (stretch / square / pad). repeat is build-time expansion so it
+    # shares the square VEX; verified separately in the hython suite.
+    cell_modes = [
+        ("stretch (default)", {}),
+        ("square", {"square": True}),
+        ("pad", {"square": True, "fill": "pad"}),
+    ]
+    for mode_label, mode_overrides in cell_modes:
+        spec = {**cells_spec, **mode_overrides}
+        c_snippet, _ = build_mount_vex(spec)
+        c_vex = _run_cells_wrangle(box, c_snippet, cells_margin,
+                                   face=cells_spec["face"])
+        c_oracle = M.measure_cells(box.geometry(), "+Y", cells_layout,
+                                   margin=cells_margin,
+                                   square=mode_overrides.get("square", False),
+                                   fill=mode_overrides.get("fill", "stretch"))
+        c_vex_sorted = sorted(c_vex, key=lambda ps: (round(ps[0][0], 4), round(ps[0][2], 4)))
+        c_or_sorted = sorted(c_oracle, key=lambda ps: (round(ps[0][0], 4), round(ps[0][2], 4)))
+        c_ok = len(c_vex_sorted) == len(c_or_sorted)
+        if c_ok:
+            for (vp, vs), (op, os) in zip(c_vex_sorted, c_or_sorted):
+                if not _points_close([vp], [op]):
+                    c_ok = False; break
+                if not _points_close([vs], [os]):
+                    c_ok = False; break
+        all_ok = all_ok and c_ok
+        status = "OK " if c_ok else "FAIL"
+        sb = max((vs for _, vs in c_vex), key=lambda s: s[0])
+        nk = min((vs for _, vs in c_vex), key=lambda s: s[0])
+        print(f"[{status}] cells {mode_label}: vex={len(c_vex)}pts "
+              f"oracle={len(c_oracle)}pts ratio={sb[0]/nk[0]:.3f}")
+        if not c_ok:
+            print(f"   vex   : {c_vex_sorted}")
+            print(f"   oracle: {c_or_sorted}")
 
     print()
     print("ALL STRATEGIES MATCH ORACLE" if all_ok else "SOME STRATEGIES MISMATCH")

@@ -60,8 +60,87 @@ measures (return many — used to fan one leaf out to N instances):
 | `bbox_face_center` | center of a face | `face: "+Y"` → top face center. A spacebar at the tray's center. |
 | `bbox_center` | box midpoint | the whole root's center |
 | `point_on_edge` | a point at `t∈[0,1]` along an edge | `axes_a`/`axes_b` + `t: 0.3` → 30% along. A door at 30% of a wall. |
-| `grid_on_face` | **an rows×cols lattice** across a face | `face: "+Y", rows: 5, cols: 3, margin: 0.05` → 15 points, one per key on the tray top. A keyboard key grid. |
+| `grid_on_face` | **an rows×cols lattice** across a face | `face: "+Y", rows: 5, cols: 3, margin: 0.05` → 15 identical cells. A uniform grid (tiles, rivets). |
 | `array` | **a 1D/2D/3D lattice** stepping from an origin | `count: [5,1,1], step: [[0.5,0.3,0],...]` → 5 points climbing diagonally. Stair treads. |
+| `cells` | **an explicit 1u-unit layout** where each cell has its OWN size | `unit: "key_size", cells: [{gx,gz,w,d}, ...]` → each cell carries its own size. A keyboard with a 6.25u spacebar + 1u keys + staggered rows. |
+
+### `cells` — when the parts are NOT uniform (a real keyboard)
+
+`grid_on_face` assumes N **identical** cells. That's wrong for a keyboard: keys
+differ in width (a spacebar is 6.25u, a normal key is 1u) and rows are staggered.
+Use `cells` for any layout where each part has its **own size**. Declare an
+explicit table of cells on a **1u unit grid**:
+
+```jsonc
+"position": {
+  "measure": "cells", "from": "root", "face": "+Y",
+  "margin": 0.5,               // grid inset from the face edge (LIVE spare)
+  "gap": 0.04,                 // visible seam between adjacent keys (LIVE spare, world units)
+  "square": true,              // force 1u keys to be SQUARE (unit = min, no deformation)
+  "fill": "stretch",           // how to handle non-divisible leftover: stretch|pad|repeat
+  "cells": [
+    {"gx": 0,    "gz": 0, "w": 1,    "d": 1},   // a 1u key at the corner
+    {"gx": 0.25, "gz": 1, "w": 1,    "d": 1},   // staggered row (gx offset)
+    {"gx": 0,    "gz": 4, "w": 6.25, "d": 1}    // a 6.25u spacebar
+  ]
+}
+```
+
+- `gx`/`gz` = the cell's **lower-left** grid coords (in 1u units). `w`/`d` = its
+  size in 1u units. The grid's +X grows the face's first in-plane axis (X for
+  `+Y`), +Z grows the second.
+- Each cell gets its OWN size: the build writes a per-point `v@scale` (Copy-to-
+  Points 2.0 reads it per instance), so **one CTP stamps many differently-sized
+  keys** from a single 1u leaf. A `w:6.25` spacebar is 6.25× wider than a `w:1`
+  key, stamped from the same shape.
+- `gap` carves a **visible seam** between adjacent keys: each key's physical
+  size loses `gap` on each in-plane axis (so two side-by-side 1u keys show a
+  `gap`-wide gap between them). 0 = keys touch; ~0.02–0.04 looks like a real
+  keyboard. It's a live spare — change it and seams widen/narrow without rebuild.
+- A grid slot with no declared cell is simply **empty** (a gap). Staggered rows
+  are just different `gx` per cell — no special flag.
+
+**Shape constraint + fill mode** — when the root's aspect ratio ≠ the layout's
+grid-unit aspect, the leftover space must be handled. Two orthogonal controls:
+- `square: true` → unify the unit to `min(unit_x, unit_z)` so a 1u cell is
+  **physically square** in both axes (a real keyboard's 1u = 19mm in X and Z).
+  Without it, each axis derives its unit independently and keys deform when the
+  tray isn't an exact grid multiple.
+- `fill` (default `stretch`) → how to use the square unit's leftover:
+  - **stretch**: fill the root exactly per-axis (may deform if `square` is off;
+    with `square` on, underfills the larger axis).
+  - **pad**: keep keys square, **center the layout** and leave the leftover
+    empty (visible margin on the larger axis). Keys never overflow.
+  - **repeat**: keep keys square, **auto-add 1u filler keys** to fill the
+    leftover (more keys than declared appear). Good for tiling.
+
+**The unit is DERIVED from the root, not a parameter.** The physical size of 1u
+is computed live from the root's actual span divided by the layout's grid-unit
+span (`max(gx+w)`, `max(gz+d)`). So the layout **FILLS the root exactly** and
+rescales automatically when you resize the root — scale `tray_width` and every
+key relays-out to fill the new width, never overflowing. This is true
+measurement-driven placement: the layout is a function of the root's geometry.
+(The layout TABLE — which keys, which sizes — is baked at build; to add/remove
+keys, edit the table and rebuild. `margin` is a live spare.)
+
+The leaf shape is a **1u BASIS** box (`size: [1, key_height, 1]`) — its X/Z
+footprint is 1 unit. The per-cell `v@scale` (= `w*unit_x`, `d*unit_z`, physical)
+grows it to the cell's footprint. Do NOT set `scale` on the leaf (size comes
+from each cell's v@scale, not the leaf).
+
+**Generality — `cells` rides a three-layer class architecture.** The VEX
+strategies are organized as `VexStrategy` (the contract: CLEAR + __newpts +
+emit-points) → `StaticTemplateStrategy` (the 6 fixed kinds) / `TabularFillStrategy`
+(table-driven fill layouts) → `CellsStrategy` (the gx/gz/w/d keyboard schema).
+`TabularFillStrategy` encodes the layout table as VEX **array literals** (data)
++ a single compact **loop** (code), so the VEX is ~30 lines regardless of cell
+count, and it carries the shared machinery: per-axis unit derivation, per-point
+`v@scale`, the `square` shape constraint, and the `pad`/`repeat`/`stretch` fill
+modes. This makes `cells` a general archetype for any *"tabular (position, size)
+instance layout that fills a region"*: bookshelves (books of different widths),
+city blocks (buildings of different footprints), tile mosaics, fence pickets. A
+new such layout subclasses `TabularFillStrategy` and only overrides the cell
+schema — the fill/square/unit machinery is inherited.
 
 A mount's `orient` (optional) is **also derived**: give two measured points
 and the builder computes the direction the leaf's built +Y axis should align
@@ -255,14 +334,20 @@ detail attribute CTP ignored) the disc stayed flat.
 
 ## The verified example: a keyboard (tray + key grid)
 
-Also test-proven (`tests/test_assembly_builder.py::TestKeyboardGrid`). This is
-the case that forced the **fan-out** design: many keys on a face.
+There are **two** keyboard strategies, depending on whether the keys are uniform:
+
+- **Uniform keys** (all the same size): `grid_on_face` — N identical cells.
+  Test-proven (`TestKeyboardGrid`).
+- **Real keys** (a 6.25u spacebar + 1u keys + staggered rows): `cells` — each
+  key has its own size. Test-proven (`TestCellsLayout` + hython
+  `test_cells_keyboard_one_ctp_many_sizes`).
+
+### Uniform keyboard (`grid_on_face`)
 
 - **Root**: a box tray, size `[tray_width, tray_thick, tray_depth]`.
 - **1 mount**: `grid_on_face` on `+Y`, `rows: 5, cols: 3, margin: 0.05` → 15
-  measured points across the tray's top.
-- **1 leaf**: a keycap box — defined **once** — placed at each of the 15
-  measured grid points.
+  identical measured points across the tray's top.
+- **1 leaf**: a keycap box — defined **once** — placed at each of the 15 grid points.
 
 ```json
 "mounts": [
@@ -280,9 +365,41 @@ the case that forced the **fan-out** design: many keys on a face.
 the whole grid rescales off the measured face, no key coordinate was touched.
 The build result reports `mounts.keys.count == 15`.
 
-The keycap's *form* is a plain box that knows nothing of the tray — exactly
-the decoupling the skill is built around: only the *placement* derives from
-the root.
+### Real keyboard (`cells`) — keys of DIFFERENT sizes
+
+This is the strategy for an actual keyboard. One 1u basis leaf fans out to keys
+of many sizes via per-point `v@scale`: a 6.25u spacebar, 1u keys, and staggered
+rows — all from **one CTP**. The unit is derived from the tray so the layout
+FILLS it and rescales when the tray resizes.
+
+```json
+"params": {"tray_w": 16, "tray_d": 6, "tray_h": 0.4, "key_height": 0.4},
+"root": {"shape": {"type": "box", "params": {"size": ["tray_w","tray_h","tray_d"]}}},
+"mounts": [
+  {"id": "keys", "position": {
+     "measure": "cells", "from": "root", "face": "+Y", "margin": 0.5,
+     "cells": [
+       {"gx": 0, "gz": 0, "w": 1, "d": 1}, {"gx": 1, "gz": 0, "w": 1, "d": 1},
+       {"gx": 0.5, "gz": 1, "w": 1, "d": 1},          // staggered row
+       {"gx": 0, "gz": 4, "w": 6.25, "d": 1}          // spacebar
+     ]}}
+],
+"leaves": [
+  {"id": "key", "mount": "keys",
+   "shape": {"type": "box", "params": {"size": [1, "key_height", 1]}}}   // 1u basis
+]
+```
+
+**The proof** (hython, geometry-level): the spacebar is exactly **6.25× wider**
+than a normal key (the ratio is conserved because the unit is derived — it
+scales both the same way). All from one CTP. **And it's measurement-driven**:
+shrink `tray_w` 16→10 and the keys relay-out to fill the smaller tray (the
+derived unit shrinks), never overflowing — the layout is a function of the
+tray's actual geometry, not a free parameter you keep in sync.
+
+The keycap's *form* is a plain 1u basis box that knows nothing of the tray or
+the layout — exactly the decoupling the skill is built around: only the
+*placement and size* derive from the layout table and the tray's geometry.
 
 ## The verified example: a staircase (diagonal array)
 
