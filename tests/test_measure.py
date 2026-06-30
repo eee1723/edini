@@ -34,6 +34,9 @@ from edini.measure import (  # noqa: E402
     measure_array,
     measure_cells,
     measure_pickets,
+    measure_tiles,
+    _axis_angle_quat,
+    _rule_rot,
     direction_from_two_points,
     orient_to_align_y,
 )
@@ -489,6 +492,78 @@ class TestMeasurePickets(unittest.TestCase):
         geo = _box_geo(0, 4, 0, 0.5, 0, 1)
         with self.assertRaises(MeasureError):
             measure_pickets(geo, face="+Y", edge_axis="X", count=0)
+
+
+# ── per-cell orient oracle (measure_tiles + _rule_rot + _axis_angle_quat) ─
+
+
+class TestAxisAngleQuat(unittest.TestCase):
+    def test_identity(self):
+        """0° about any axis → identity quaternion (0,0,0,1)."""
+        q = _axis_angle_quat((0, 1, 0), 0.0)
+        self.assertAlmostEqual(q[0], 0.0); self.assertAlmostEqual(q[1], 0.0)
+        self.assertAlmostEqual(q[2], 0.0); self.assertAlmostEqual(q[3], 1.0)
+
+    def test_90_about_y(self):
+        """90° about +Y → (0, sin45, 0, cos45) = (0, 0.7071, 0, 0.7071)."""
+        q = _axis_angle_quat((0, 1, 0), 90.0)
+        self.assertAlmostEqual(q[0], 0.0, places=5)
+        self.assertAlmostEqual(q[1], math.sin(math.radians(45)), places=5)
+        self.assertAlmostEqual(q[2], 0.0, places=5)
+        self.assertAlmostEqual(q[3], math.cos(math.radians(45)), places=5)
+
+    def test_axis_normalized(self):
+        """A non-unit axis is normalized before use."""
+        q = _axis_angle_quat((0, 2, 0), 90.0)  # length 2, same as (0,1,0)
+        self.assertAlmostEqual(q[1], math.sin(math.radians(45)), places=5)
+
+
+class TestRuleRot(unittest.TestCase):
+    def test_checker_alternates(self):
+        """checker: (row+col)%2==0 → 0°, else 90°."""
+        self.assertEqual(_rule_rot("checker", 0, {"gx": 0, "gz": 0}), 0.0)   # 0+0 even
+        self.assertEqual(_rule_rot("checker", 0, {"gx": 1, "gz": 0}), 90.0)  # 0+1 odd
+        self.assertEqual(_rule_rot("checker", 0, {"gx": 0, "gz": 1}), 90.0)  # 1+0 odd
+
+    def test_herringbone_alternates(self):
+        """herringbone: (row+col)%2==0 → 45°, else 135°."""
+        self.assertEqual(_rule_rot("herringbone", 0, {"gx": 0, "gz": 0}), 45.0)
+        self.assertEqual(_rule_rot("herringbone", 0, {"gx": 1, "gz": 0}), 135.0)
+
+    def test_running_advances(self):
+        """running: (col*30) % 90."""
+        self.assertEqual(_rule_rot("running", 0, {"gx": 0}), 0.0)
+        self.assertEqual(_rule_rot("running", 0, {"gx": 1}), 30.0)
+        self.assertEqual(_rule_rot("running", 0, {"gx": 3}), 90.0 % 90 * 1.0)  # 90%90=0 → but formula is (col*30)%90
+
+    def test_unknown_rule_is_zero(self):
+        self.assertEqual(_rule_rot("bogus", 0, {"gx": 0, "gz": 0}), 0.0)
+
+
+class TestMeasureTiles(unittest.TestCase):
+    def test_cell_with_explicit_rot(self):
+        """A cell with rot=90 about the +Y face normal → orient = (0, sin45, 0, cos45)."""
+        geo = _box_geo(0, 4, 0, 0.4, 0, 4)
+        res = measure_tiles(geo, "+Y", cells=[{"gx": 0, "gz": 0, "w": 1, "d": 1, "rot": 90}])
+        self.assertEqual(len(res), 1)
+        pos, scale, orient = res[0]
+        self.assertAlmostEqual(orient[1], math.sin(math.radians(45)), places=5)
+        self.assertAlmostEqual(orient[3], math.cos(math.radians(45)), places=5)
+
+    def test_cell_without_rot_is_identity(self):
+        geo = _box_geo(0, 4, 0, 0.4, 0, 4)
+        res = measure_tiles(geo, "+Y", cells=[{"gx": 0, "gz": 0, "w": 1, "d": 1}])
+        pos, scale, orient = res[0]
+        self.assertEqual(orient, (0.0, 0.0, 0.0, 1.0))
+
+    def test_orient_rule_applied_when_no_explicit_rot(self):
+        """Mount-level orient_rule supplies rot for cells without explicit rot."""
+        geo = _box_geo(0, 4, 0, 0.4, 0, 4)
+        res = measure_tiles(geo, "+Y", cells=[{"gx": 0, "gz": 0, "w": 1, "d": 1}],
+                            orient_rule="checker")
+        pos, scale, orient = res[0]
+        # checker with gx=0,gz=0 → 0° → identity.
+        self.assertEqual(orient, (0.0, 0.0, 0.0, 1.0))
 
 
 # ── direction & orientation ────────────────────────────────────────

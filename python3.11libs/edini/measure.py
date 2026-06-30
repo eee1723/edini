@@ -44,6 +44,9 @@ __all__ = [
     "measure_array",
     "measure_cells",
     "measure_pickets",
+    "measure_tiles",
+    "_axis_angle_quat",
+    "_rule_rot",
     "direction_from_two_points",
     "orient_to_align_y",
     "orient_to_align",
@@ -545,6 +548,54 @@ def measure_pickets(
     pairs = measure_cells(geo, face, cells=[{**c, "gz": 0, "d": 1} for c in cells],
                           margin=margin, gap=gap)
     return [(p, s, (0.0, 0.0, 0.0, 1.0)) for (p, s) in pairs]
+
+
+def _axis_angle_quat(axis, deg):
+    """axis-angle (degrees) → quaternion (x,y,z,w). Mirrors VEX quaternion().
+    The axis is normalized first. For θ° about unit axis n:
+    q = (n·sin(θ/2), cos(θ/2))."""
+    h = math.radians(deg) / 2.0
+    s = math.sin(h)
+    n = _normalize3(axis)
+    return (n[0]*s, n[1]*s, n[2]*s, math.cos(h))
+
+
+def _rule_rot(rule, ci, cell):
+    """Named orient rules → per-cell rotation degrees. Used by measure_tiles
+    when a cell has no explicit `rot`. The agent picks a rule name instead of
+    computing angles (the "agent never writes expressions" contract)."""
+    if rule == "checker":
+        r, col = int(cell.get("gz", 0)), int(cell.get("gx", 0))
+        return 0.0 if (r + col) % 2 == 0 else 90.0
+    if rule == "herringbone":
+        r, col = int(cell.get("gz", 0)), int(cell.get("gx", 0))
+        return 45.0 if (r + col) % 2 == 0 else 135.0
+    if rule == "running":
+        col = int(cell.get("gx", 0))
+        return (col * 30.0) % 90.0
+    return 0.0
+
+
+def measure_tiles(geo, face, cells, margin=0.0, gap=0.0, orient_rule=None):
+    """A 2D tile mosaic. Each cell may carry `rot` (degrees, about the face
+    normal); if absent, the mount-level `orient_rule` (herringbone/checker/
+    running) computes one. Returns (pos, scale, orient_quat) triples — the
+    oracle that the TileStrategy VEX must match point-by-point in hython.
+
+    Reuses measure_cells for (pos, scale), then attaches an orient quaternion
+    per cell = quaternion(rot° about the face normal)."""
+    pairs = measure_cells(geo, face, cells=cells, margin=margin, gap=gap)
+    sign, axis = _parse_face(face)
+    nvec = [0.0, 0.0, 0.0]
+    nvec[_axis_index(axis)] = float(sign)
+    out = []
+    for (p, s), c in zip(pairs, cells):
+        rot = float(c.get("rot", 0.0))
+        if orient_rule and "rot" not in c:
+            rot = _rule_rot(orient_rule, 0, c)
+        q = _axis_angle_quat(nvec, rot)
+        out.append((p, s, q))
+    return out
 
 
 def _axis_index(letter: str) -> int:
