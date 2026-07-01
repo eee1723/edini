@@ -1,8 +1,8 @@
 # 🚀 开发进度
 
-> 最后更新：2026-06-30 &nbsp;|&nbsp; **🔴 主线：rooted-modeling skill M3.5 — TabularFill 四布局扩展（pickets/tiles/shelf/blocks，595 测试 + 7 真机 hython 铁证全绿）** &nbsp;|&nbsp; 本轮在 M3 的 `TabularFillStrategy` 泛化载体上新增 4 个布局策略，按"从简单到复杂打磨抽象"的顺序：① **pickets**（1D 栅栏，驱动 `axes[]` 维度可变抽象 + count 语法糖）；② **tiles**（2D 瓷砖，**解决 SKILL.md 点名的 per-cell orient milestone** —— per-cell `rot` 四元数 + 命名规则 herringbone/checker/running）；③ **shelf**（3D 书架，layer 预处理下沉到子类，base 类零改动）；④ **blocks**（城市街区，**合成考试** —— 近零新 VEX，纯组合 tiles 的 rot + 高度列）。方案 C 分层泛化兑现：每个布局驱动真实泛化下沉到基类，2D cells 全程 byte-identical。agent 零 VEX，纯声明式 JSON。
+> 最后更新：2026-07-01 &nbsp;|&nbsp; **🔴 主线：rooted-modeling skill M2.6+M2.7 — 真机测试驱动的三大修复（leaf 参数全 live + 视觉自检 + shape 链细节），607 测试 + 26 真机 hython 铁证全绿** &nbsp;|&nbsp; 用户首次用真实 Pi agent 端到端测试小车模型，暴露三个真实问题，全部修复：① **M2.6 leaf 参数 live**——实测发现只有 root 的 length/width/thickness 三个参数能 live 调节，wheel_radius/cabin_length 等所有 leaf 参数改了不动（被 evaluate() 烤成死数字）。修复：leaf shape/scale/offset 统一改成 `ch("../<name>")` 通道引用（leaf 跟 root 同层，路径相同）。真机铁证：wheel_radius 0.4→1.2 轮子长大 >2x；wheel_tube_r 0.08→0.4 变厚 >3x。② **视觉自检修复**——describe_image 报 "Vision model aliyun/qwen-vl-max not found"（硬编码 provider 名 aliyun ≠ models.json 注册名 ali）。修复：默认改 ali + 加 registry 兜底搜索。③ **M2.7 shape 链**——模型"太简易"的直接根因：每个 leaf 是裸 SOP 无倒角/挤出。新增 `shape.chain = [{type, params}, ...]`，支持 polyextrude/polybevel/subdivide 修饰符。真机铁证：box 6 面 → polyextrude 10 面；polybevel 8 点 → 20+ 点；chain 参数 live recook。
 >
-> 上一轮：M3 — cells 策略三层类架构 + 正方形约束 + 三填满模式（599 测试全绿）。本轮三大交付：① **cells 测量原语**（显式布局表，1u 网格，支持 6.25u 空格 + staggered 错位 + gap 间隔 + per-point v@scale，1 CTP 多尺寸键）；② **三层类架构重构**（VexStrategy → StaticTemplateStrategy/TabularFillStrategy → CellsStrategy，消掉 if-elif 链，泛化性载体）；③ **square/fill 模式**（square 强制 unit=min 保正方，pad 居中留白 / repeat 自动增量 / stretch 默认拉伸）。外加 Pi agent 端到端链路修复（build_assembly 返回契约 + system prompt 引导 + pi_data_bridge ESM 重写）。下方旧的资产管道卡片保留作历史记录。
+> 上一轮：M3.5 — TabularFill 四布局扩展（pickets/tiles/shelf/blocks，595 测试 + 7 真机 hython 铁证全绿）。方案 C 分层泛化：一布局一子类，每个布局驱动真实泛化下沉到 TabularFillStrategy 基类，2D cells 全程 byte-identical。agent 零 VEX，纯声明式 JSON。下方旧的资产管道卡片保留作历史记录。
 
 ## ⚠️ 重大架构转向（2026-06-29）：rooted-modeling 取代声明式资产管道
 
@@ -207,6 +207,20 @@ recipe 教惯用法，资产管道教结构。
 </div>
 
 <div class="timeline">
+
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-07-01</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第三十九阶段：真机 agent 测试驱动的三大修复 — M2.6 leaf 参数全 live + 视觉自检 + M2.7 shape 链细节</span>
+      <span class="status-tag status-done">完成 · 真机 hython 5 项新铁证</span>
+    </div>
+    <div class="timeline-summary">用户首次用真实 Pi agent（glm-5.2）端到端测试「程序化简易小汽车」，agent 完整走通 build → inspect → capture → commit 链路，但 GUI 实测暴露三个真实问题。<strong>全链路健康检查</strong>（提示词注入 → 工具注册 → Python handler → 构建层 → 策略 dispatch → SKILL.md）确认链路本身正常，但发现一个<strong>阻塞隐患</strong>：文档 hython 路径写反（声称 C:\Program Files\... 实际在 D:\houdini\bin\，M3.5 Task 0 把方向修反了），已修正。<strong>问题 ①（M2.6 leaf 参数不 live）</strong>——用户发现只有 length/width/thickness（root box 的 size）三个参数有效，wheel_radius/cabin_length/head_size 等 7 个 leaf 参数全无效，但 live_params 却报告全部 10 个 live。<strong>根因</strong>：_build_shape 有两条路径——is_root=True 把参数名转 ch("../name") 通道引用（LIVE），is_root=False（leaf）用 evaluate() 烤成死数字。leaf scale 和 origin offset 同样烤死。<strong>关键洞察</strong>：leaf shape 节点跟 root shape 在 container 下<strong>同层</strong>，所以 ch() 路径完全相同（ch("../name")）。修复：leaf shape/scale/offset 统一走 _param_ref_expr（原 _root_param_ref_expr 重命名，本就通用）。<strong>真机铁证</strong>：wheel_radius 0.4→1.2 轮子直径长大 >2x（scale live）；wheel_tube_r 0.08→0.4 厚度变厚 >3x（shape param live）；全程 recook 不重建。<strong>问题 ②（视觉自检失效）</strong>——两个测试会话的 describe_image 都报 "Vision model aliyun/qwen-vl-max not found in model registry"。<strong>根因</strong>：pi-visionizer 硬编码默认 provider 名 aliyun，但 models.json 注册的是 ali。修复：默认改 ali + index.ts 加 registry 兜底搜索（find 失败时按 modelId 扫 getAvailable()），not-found 错误现在还列出可用模型。<strong>问题 ③（M2.7 模型太简易）</strong>——用户反馈「做的太简易了」。根因：每个 leaf = 一个裸 SOP（box/torus/sphere），无倒角/挤出/细分。<strong>调查 + 设计</strong>（subagent 双轮探索 + plan mode）：最高杠杆改进是给 leaf 引入 shape 节点链。用户确认<strong>轻量选面方案</strong>（group 参数写 Houdini 原生 group spec，不做具名锚点）+ 覆盖 polyextrude/polybevel/subdivide/grid 四个修饰符。<strong>Schema</strong>（向后兼容）：shape 可为 {type, params}（单 SOP，不变）或 {chain: [{type, params}, ...]}（线性 SOP 链，tail 接 CTP）。<strong>核心技术点</strong>：_resolve_chain_param 智能分类——参数引用（如 rim_h，所有 extract_refs 名字都是已知 param）转 ch()；Houdini 原生字符串（如 polyextrude group "0"）原样透传。<strong>真机发现的约束</strong>：polyextrude::2.0 的 group 参数用 prim 号（"0"）或 named group，<strong>不接受 VEX @P.y>0.5 语法</strong>（那是 wrangle 的）——已 SKILL.md 标注。<strong>真机铁证</strong>：box 6 面 → polyextrude 10 面（凸缘）；box 8 点 → polybevel 20+ 点（圆边）；改 polyextrude dist 参数 live recook 挤出高度。<strong>测试</strong>：607 mock（+11 新：8 TestLeafShapeChain + 3 TestLeafParamsLive）+ 26 hython（+5 新：2 leaf-live + 3 chain）全绿，零回归。</div>
+    <div class="timeline-tags">
+      <span>真机agent测试</span><span>M2.6-leaf-live</span><span>ch()通道引用</span><span>同层路径洞察</span><span>visionizer-ali修复</span><span>registry兜底</span><span>M2.7-shape链</span><span>polyextrude</span><span>polybevel</span><span>subdivide</span><span>grid新shape</span><span>_resolve_chain_param</span><span>group-prim号非VEX</span><span>向后兼容</span><span>607mock</span><span>26hython</span>
+    </div>
+  </div>
+</div>
 
 <div class="timeline-item timeline-done">
   <div class="timeline-date">2026-07-01</div>

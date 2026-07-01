@@ -2,9 +2,9 @@
 
 > **用途**：让新 Agent 或开发者在 Edini 仓库里快速上手。
 
-**最后更新**：2026-06-30（rooted-modeling skill M3.5 — TabularFill 四布局扩展 pickets/tiles/shelf/blocks，595 测试 + 7 真机 hython 铁证含 per-cell orient milestone 解决）
-**当前阶段**：**rooted-modeling**（根件驱动 + live VEX+CTP）M0/M1/M2/M2.5/M3/M3.5 全部交付。旧的声明式资产管道已整体搁置到 `_disabled_backup/asset-pipeline-2026-06/`。
-**下一步**：M3.5 在 `TabularFillStrategy` 泛化载体上新增 4 个布局策略（pickets 1D / tiles per-cell orient / shelf 3D layers / blocks 合成）。方案 C 分层泛化兑现：2D cells 全程 byte-identical。本机有完整 Houdini：`D:\houdini\bin\hython.exe`（Houdini 21.0.440，**注意：不是** `C:\Program Files\...`，该路径不存在；真实安装在 D 盘根目录的 houdini 文件夹）。`edini_showcase.hip` 已重新生成（含 car + bicycle + 65 键正方形键盘 + stairs + fence + shelf 六例）。建议下一步：让真实 Pi agent 用 rooted-modeling skill 自主写一个没见过的资产（如台灯/椅子/书桌），验证端到端（capability 检验的最后一步）。
+**最后更新**：2026-07-01（rooted-modeling skill M2.6+M2.7 — 真机 agent 测试驱动的三大修复：leaf 参数全 live + 视觉自检 + shape 链细节，607 测试 + 26 真机 hython 铁证全绿）
+**当前阶段**：**rooted-modeling**（根件驱动 + live VEX+CTP）M0/M1/M2/M2.5/M2.6/M2.7/M3/M3.5 全部交付。旧的声明式资产管道已整体搁置到 `_disabled_backup/asset-pipeline-2026-06/`。
+**下一步**：本轮完成真机 agent 测试暴露的三个问题修复。M2.6 让 leaf 参数（wheel_radius/cabin_length 等）也能 live 调节（之前只有 root 参数 live）；visionizer 视觉模型 provider 名修复（aliyun→ali + registry 兜底）；M2.7 新增 shape 链（polyextrude/polybevel/subdivide/grid）让模型有细节。本机 hython：`D:\houdini\bin\hython.exe`（Houdini 21.0.440，**注意：不是** `C:\Program Files\...`，该路径不存在）。建议下一步：让 agent 用 shape 链做一个有倒角+挤出的细节模型（如带凸缘键帽的键盘、圆角轮缘的赛车），验证 agent 能自主组合 polyextrude+polybevel 产出高质量几何。
 **工作分支**：`master`
 
 ---
@@ -42,6 +42,11 @@
 | M0 | measure.py 测量层 + 小车 4 轮（xform 版） + SKILL | ✅ 交付 |
 | M1 | grid_on_face（键盘网格）+ array（阶梯阵列）fan-out | ✅ 交付 |
 | M2 | **live 关联**：vex_strategies + 重写 build 为 attribwrangle+CTP + root 参数暴露 spare parm | ✅ 交付（真机 hython live recook 铁证） |
+| M2.5 | **leaf align convention**：orient point-class 修复 + align_axis + origin 规范化 + 分组 CTP | ✅ 交付（9 真机 facing 铁证） |
+| M2.6 | **leaf 参数全 live**：leaf shape/scale/offset 统一走 ch("../name")（之前只有 root live） | ✅ 交付（真机 wheel_radius/tube_r live 铁证） |
+| M2.7 | **shape 链细节**：leaf 可声明 SOP 链（polyextrude/polybevel/subdivide/grid） | ✅ 交付（真机 extrude/bevel 铁证） |
+| M3 | **cells 测量原语** + 三层类架构 + square/fill 模式 + Pi agent 端到端链路 | ✅ 交付（599 测试） |
+| M3.5 | **TabularFill 四布局**（pickets/tiles/shelf/blocks）+ per-cell orient | ✅ 交付（595 测试 + 7 hython 铁证） |
 
 ### 真机铁证（Houdini 21.0.440）
 
