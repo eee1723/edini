@@ -38,9 +38,12 @@ export function getEnvConfig(): VisionizerConfig | undefined {
 }
 
 /** Hardcoded default vision model — lowest priority fallback.
- * Must match the provider name registered in ~/.pi/agent/models.json */
+ * The provider name MUST match a key in ~/.pi/agent/models.json["providers"].
+ * The aliyun/dashscope provider is registered as "ali" in the project's
+ * models.json (not "aliyun"); index.ts also has a fallback that searches the
+ * registry by modelId if this exact provider name isn't found. */
 export const DEFAULT_VISION_MODEL: VisionizerConfig = {
-  provider: "aliyun",
+  provider: "ali",
   modelId: "qwen-vl-max",
 };
 
@@ -156,7 +159,7 @@ export function getConfig(ctx: ExtensionContext): VisionizerConfig | undefined {
  *
  * Session config: set via /visionizer-model command (persists in session entries)
  * Env var config: set by Edini UI via VISIONIZER_PROVIDER / VISIONIZER_MODEL_ID
- * Hardcoded default: last resort (aliyun/qwen-vl-max)
+ * Hardcoded default: last resort (ali/qwen-vl-max — matches models.json)
  */
 export function resolveConfig(ctx: ExtensionContext): VisionizerConfig | undefined {
   return getConfig(ctx) ?? getEnvConfig() ?? DEFAULT_VISION_MODEL;

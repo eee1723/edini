@@ -136,12 +136,24 @@ export default function (pi: ExtensionAPI) {
           isError: true,
         };
       }
-      const visionModel = ctx.modelRegistry.find(cfg.provider, cfg.modelId);
+      const visionModel = ctx.modelRegistry.find(cfg.provider, cfg.modelId)
+        // Fallback: the configured provider name may not match the registry key
+        // (e.g. default "ali" vs a user's "aliyun"). Search by modelId across all
+        // providers and use the first that carries it + accepts images.
+        ?? ctx.modelRegistry.getAvailable().find(
+          (m) => m.id === cfg.modelId && m.input.includes("image"));
       if (!visionModel) {
+        const available = ctx.modelRegistry.getAvailable()
+          .filter((m) => m.input.includes("image"))
+          .map((m) => `${m.provider}/${m.id}`);
         return {
           content: [{
             type: "text",
-            text: `Vision model ${cfg.provider}/${cfg.modelId} not found in model registry.`,
+            text: `Vision model ${cfg.provider}/${cfg.modelId} not found in model registry.`
+              + (available.length
+                ? `\nAvailable vision-capable models: ${available.join(", ")}.`
+                  + "\nUse /visionizer-model to pick one, or check ~/.pi/agent/models.json."
+                : "\nNo vision-capable models are configured. Add one to models.json first."),
           }],
           isError: true,
         };
@@ -227,8 +239,11 @@ export default function (pi: ExtensionAPI) {
       if (!cfg) {
         return { messages: replaceImagesWithError(event.messages, "[Image attached but vision model not configured. Please set up a vision model in Edini Settings before I can analyze this image.]") };
       }
-      // Find the vision model in pi's registry
-      const visionModel = ctx.modelRegistry.find(cfg.provider, cfg.modelId);
+      // Find the vision model in pi's registry (with provider-name fallback —
+      // see describeImage handler for rationale).
+      const visionModel = ctx.modelRegistry.find(cfg.provider, cfg.modelId)
+        ?? ctx.modelRegistry.getAvailable().find(
+          (m) => m.id === cfg.modelId && m.input.includes("image"));
       if (!visionModel) {
         return { messages: replaceImagesWithError(event.messages, `[Image attached but vision model ${cfg.provider}/${cfg.modelId} not found in model registry. Check models.json configuration.]`) };
       }
