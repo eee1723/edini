@@ -118,6 +118,15 @@ class TestSaveDeclaration(unittest.TestCase):
         self.assertEqual(len(loaded["plan"]), 1)
         self.assertEqual(loaded["plan"][0]["id"], "base")
 
+    def test_save_raises_when_parm_absent(self):
+        from edini.project.state import save_declaration
+        # A node whose parm() returns None for the state parm.
+        class _NoStateParmNode:
+            def parm(self, name):
+                return None
+        with self.assertRaises(RuntimeError):
+            save_declaration(_NoStateParmNode(), {"version": 1})
+
 
 class TestPlanHelpers(unittest.TestCase):
     def test_add_plan_step_appends(self):

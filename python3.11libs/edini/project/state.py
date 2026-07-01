@@ -51,8 +51,19 @@ def load_declaration(node) -> dict:
 
 
 def save_declaration(node, declaration: dict) -> None:
-    """Write the declaration JSON to the node's hidden parm."""
-    node.parm(STATE_PARM).set(json.dumps(declaration))
+    """Write the declaration JSON to the node's hidden parm.
+
+    Precondition: the STATE_PARM must already be installed on the node
+    (see edini.project.node.build_state_parm_template + create_project_hda,
+    which installs it). Raises RuntimeError if the parm is absent.
+    """
+    parm = node.parm(STATE_PARM)
+    if parm is None:
+        raise RuntimeError(
+            f"Cannot save declaration: node has no '{STATE_PARM}' parm. "
+            f"Install it via build_state_parm_template first."
+        )
+    parm.set(json.dumps(declaration))
 
 
 _STEP_STATUSES = ("pending", "in_progress", "done", "skipped")
