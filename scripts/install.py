@@ -62,7 +62,8 @@ def install() -> None:
                 }
             },
             "houdini": {
-                "python3.11libs": "$EDINI_PATH/python3.11libs"
+                "python3.11libs": "$EDINI_PATH/python3.11libs",
+                "python_panels": "$EDINI_PATH/python3.11libs/edini/project",
             }
         }, f, indent=2)
 
