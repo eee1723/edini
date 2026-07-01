@@ -73,7 +73,7 @@ export const buildAssembly = {
     "The build is LIVE: every root-shape param is an editable spare on the container. After building, open the sandbox " +
       "in Houdini, change a root param (e.g. a car's 'length'), and the whole model updates WITHOUT rebuilding — wheels " +
       "slide to the new measured corners, the key grid re-samples the face. If it doesn't move live, the mount was mis-specified. " +
-      "NOTE: only root-shape params are live; mount internals (grid rows, array step) are baked at build and need a rebuild to change.",
+      "NOTE: ALL params are live — root-shape (length/width), leaf-shape (wheel_radius, cabin_length), leaf scale, and origin offset all re-cook when tweaked. Only mount internals (grid rows/cols/margin, array step) are baked at build and need a rebuild to change.",
     "Use commit_sandbox(sandbox_root, <name>) to make it permanent. The sandbox reuses Houdini's standard lifecycle.",
   ],
   parameters: Type.Object({

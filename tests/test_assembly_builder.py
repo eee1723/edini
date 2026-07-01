@@ -536,7 +536,9 @@ class TestOriginNormalization(unittest.TestCase):
     def test_leaf_with_origin_inserts_normalize_wrangle(self):
         """A leaf declaring origin=bbox_center gets a <leaf>_normalize wrangle
         between its shape and its CTP, whose snippet subtracts the bbox center
-        and adds the offset."""
+        and adds the offset. The offset is inlined as a literal (numbers) or
+        ch() refs (param names) — M2.6: no longer uses a chv("offset") spare,
+        so the offset tracks the container's params live."""
         asm = _car_assembly()
         # Annotate the first wheel with an origin spec.
         asm["leaves"][0]["origin"] = {"anchor": "bbox_center", "offset": [0, 0, 0.2]}
@@ -548,8 +550,23 @@ class TestOriginNormalization(unittest.TestCase):
         snip = hou.node(f"{root_path}/wheel_fr_normalize").parm("snippet").eval()
         self.assertIn("getbbox_center", snip)
         self.assertIn("@P -=", snip)
-        # offset wired as chv("offset")
-        self.assertIn("chv(\"offset\")", snip)
+        # offset inlined as set(x, y, z) — the literal 0.2 appears.
+        self.assertIn("@P += set(0, 0, 0.2)", snip)
+
+    def test_leaf_origin_offset_param_expr_becomes_ch_ref(self):
+        """M2.6: an offset component that is a param-name/expression becomes a
+        ch("../<name>") reference in the VEX, so the offset tracks the param
+        live (not a baked number)."""
+        asm = _car_assembly()
+        asm["leaves"][0]["origin"] = {
+            "anchor": "bbox_center", "offset": [0, 0, "wheel_radius*0.5"]}
+        root_path, res = self._build(asm)
+        self.assertTrue(res["success"], res.get("error"))
+        hou = sys.modules["hou"]
+        snip = hou.node(f"{root_path}/wheel_fr_normalize").parm("snippet").eval()
+        # wheel_radius*0.5 → ch("../wheel_radius")*0.5
+        self.assertIn('ch("../wheel_radius")', snip)
+        self.assertNotIn("0.2", snip)  # not the baked default
 
     def test_leaf_origin_face_anchor_uses_face_center(self):
         """anchor='bbox_face:-Y' subtracts the -Y face center so the leaf's
@@ -627,6 +644,118 @@ class TestGroupedCTP(unittest.TestCase):
         ctp_nodes = [n for n in names if n.endswith("_ctp")]
         self.assertGreaterEqual(len(ctp_nodes), 2,
                                 f"different shapes must not group: {ctp_nodes}")
+
+
+class TestLeafParamsLive(unittest.TestCase):
+    """M2.6 leaf-live fix: leaf shape params, leaf scale, and origin offset are
+    now wired as ch("../<name>") references (not baked numbers), so EVERY param
+    in live_params actually moves when changed. This regression class pins the
+    contract the Pi-agent end-to-end test surfaced (a car where wheel_radius /
+    cabin_length did nothing when tweaked)."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls._saved_ref = MockNode._hou_ref
+        cls._saved_mod = sys.modules.get("hou")
+        cls._hou = create_mock_hou()
+        sys.modules["hou"] = cls._hou
+        MockNode._hou_ref = cls._hou
+        for _m in list(sys.modules):
+            if _m.startswith("edini"):
+                del sys.modules[_m]
+        from edini import assembly_builder  # noqa: E402
+        cls.build_assembly = staticmethod(assembly_builder.build_assembly)
+
+    @classmethod
+    def tearDownClass(cls):
+        MockNode._hou_ref = cls._saved_ref
+        sys.modules["hou"] = cls._saved_mod
+        for _m in list(sys.modules):
+            if _m.startswith("edini"):
+                del sys.modules[_m]
+        super().tearDownClass()
+
+    def _build(self, assembly):
+        hou = sys.modules["hou"]
+        root = hou.node("/obj").createNode("geo", "test_leaflive")
+        res = self.build_assembly(assembly, root.path(),
+                                  root_geometry_provider=_provider_for(assembly))
+        return root.path(), res
+
+    def _car_with_leaf_params(self):
+        """A car whose leaf shape CARRIES param expressions (the real-agent
+        fixture has rady='wheel_tube_r'; the default _car_assembly leaves leaf
+        params empty for the mock). This is the case that broke live."""
+        asm = _car_assembly()
+        for lf in asm["leaves"]:
+            lf["shape"]["params"] = {
+                "radx": 1.0, "rady": "wheel_tube_r", "rows": 24, "cols": 12}
+        return asm
+
+    def test_leaf_shape_param_becomes_ch_ref(self):
+        """A leaf shape param that is a param-name string (e.g. wheel_tube_r)
+        becomes a ch("../wheel_tube_r") expression on the shape node, NOT a
+        baked number."""
+        asm = self._car_with_leaf_params()
+        root_path, res = self._build(asm)
+        self.assertTrue(res["success"], res.get("error"))
+        hou = sys.modules["hou"]
+        # The grouped wheel shape node (wheel_fr is the representative id).
+        shape = hou.node(f"{root_path}/wheel_fr_geoshape")
+        rady_parm = shape.parm("rady")
+        # setExpression was called with ch("../wheel_tube_r") (mock records it).
+        self.assertTrue(rady_parm.hasExpression(),
+                        "leaf shape rady should carry a ch() expression")
+        self.assertIn('ch("../wheel_tube_r")', rady_parm.expression())
+        # And NOT the baked default value (0.08).
+        self.assertNotIn("0.08", rady_parm.expression())
+
+    def test_leaf_scale_becomes_ch_ref(self):
+        """A leaf scale that is a param-name string becomes a ch("../<name>")
+        reference in the pscale wrangle's VEX, not a baked float."""
+        asm = _car_assembly()  # scale: "wheel_radius"
+        root_path, res = self._build(asm)
+        self.assertTrue(res["success"], res.get("error"))
+        hou = sys.modules["hou"]
+        names = {c.name() for c in hou.node(root_path).children()}
+        pscale_nodes = [n for n in names if n.endswith("_pscale")]
+        self.assertTrue(pscale_nodes, "expected a pscale wrangle for scaled leaf")
+        snip = hou.node(f"{root_path}/{pscale_nodes[0]}").parm("snippet").eval()
+        self.assertIn('ch("../wheel_radius")', snip)
+        # Not the baked default (0.4).
+        self.assertNotIn("f@pscale = 0.4", snip)
+
+    def test_all_params_reported_live_are_actually_wired(self):
+        """The contract the Pi-agent test broke: every name in live_params must
+        appear as at least one ch("../<name>") reference SOMEWHERE in the built
+        network (root shape, a leaf shape, a pscale wrangle, or an offset).
+        Build a car with leaf shape + scale params and assert each live_param
+        is referenced via ch() in some node's expression/snippet."""
+        asm = self._car_with_leaf_params()
+        root_path, res = self._build(asm)
+        self.assertTrue(res["success"], res.get("error"))
+        hou = sys.modules["hou"]
+        live_params = res["live_params"]
+        # Collect all ch("../<name>") refs across the network.
+        refs_found = set()
+        for child in hou.node(root_path).allSubChildren():
+            for pname_obj in (child.parms() if hasattr(child, "parms") else []):
+                expr = getattr(pname_obj, "expression", lambda: "")()
+                if expr:
+                    import re
+                    refs_found.update(re.findall(r'ch\("\.\./([^"]+)"\)', expr))
+            # Also scan wrangle snippets for ch() refs.
+            snip_parm = child.parm("snippet") if hasattr(child, "parm") else None
+            if snip_parm is not None:
+                snip = snip_parm.eval()
+                if isinstance(snip, str):
+                    import re
+                    refs_found.update(re.findall(r'ch\("\.\./([^"]+)"\)', snip))
+        for p in live_params:
+            self.assertIn(p, refs_found,
+                          f"live_param {p!r} is reported live but has no "
+                          f"ch('../{p}') reference anywhere in the network")
 
 
 class TestKeyboardGrid(unittest.TestCase):

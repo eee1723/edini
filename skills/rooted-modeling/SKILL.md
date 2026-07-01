@@ -316,16 +316,22 @@ written via `setpointattrib` onto each emitted point (a bare `p@orient=` in the
 detail wrangle would land as a detail attribute CTP ignores). The leaf's
 `align_axis` (default +Y) is the axis mapped onto the measured direction.
 
-**M2 scope (be honest):** only **root-shape** params (length/width/etc. that
-feed the root box's size) are live. A mount's *internal* params (grid rows/
-cols/margin, array count/step/origin) are resolved at build time — they're
-baked into the wrangle's VEX/ch() spares. To change those you rebuild. Live
-mount internals are a later milestone.
+**What's live (M2.6):** ALL assembly params are live — root-shape params
+(length/width/...), **leaf-shape params** (wheel_radius, wheel_tube_r,
+cabin_length, ...), **leaf scale**, and **origin offset** all reference the
+container's spare parms via `ch("../<name>")`, so changing any one in the UI
+recooks the whole model without rebuilding. The ONLY exception is a mount's
+*internal* params (grid rows/cols/margin, array count/step/origin, the
+tabular-fill layout table) — those are resolved at build time and baked into
+the wrangle's VEX. To change those you rebuild. Live mount internals are a
+later milestone.
 
 **Proven live in hython** (real Houdini 21): building a car and changing
 `length` 4→8 (recook, no rebuild) moves the front wheels from x=±2 to x=±4
-automatically; widening a keyboard's `tray_width` 4→8 re-scales the whole
-key grid. See `tests/test_assembly_hython.py::TestLiveBuildHython`.
+automatically; changing `wheel_radius` 0.4→1.2 grows the wheels 3x; changing
+`wheel_tube_r` 0.08→0.4 thickens them 5x; widening a keyboard's `tray_width`
+4→8 re-scales the whole key grid. See
+`tests/test_assembly_hython.py::TestLiveBuildHython`.
 
 ### Origin normalization — clear the root
 
@@ -592,6 +598,12 @@ fill/square/unit machinery, and fill the root exactly (measurement-driven).
 **Per-instance orient within a grid/array is DONE** (`tiles`/`blocks` write a
 per-cell `p@orient` via `setpointattrib`, so each instance spins
 independently — a herringbone floor, a checkerboard).
+
+**Leaf params live (M2.6):** every param — root-shape, leaf-shape, leaf scale,
+and origin offset — is now wired as a live `ch("../<name>")` reference, not a
+baked number. Previously only root-shape params were live (leaf params like
+wheel_radius/cabin_length silently did nothing when tweaked — a real Pi-agent
+test surfaced this). Now changing any spare recooks the whole model.
 
 **Later milestones:** live mount internals (grid rows/cols, array step, and
 the tabular-fill layout tables are currently baked at build); named anchors

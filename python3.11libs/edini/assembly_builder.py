@@ -782,15 +782,15 @@ def _group_leaves(leaves: list[dict], mounts_by_id: dict[str, dict]) -> list[dic
 
 
 def _eval_shape_params(shape_params: dict | None, params: dict[str, float]) -> dict:
-    """Resolve a shape's param values: numbers pass through, strings are
-    evaluated against the param library.
+    """Resolve a shape's param values to NUMBERS: numbers pass through, strings
+    are evaluated against the param library.
 
-    NOTE (M2): used for VALIDATION and leaf-shape numeric resolution. The ROOT
-    shape no longer goes through this — see :func:`_build_shape_live`, which
-    keeps the root's size parametric by referencing spare parms via ``ch()``
-    expressions so changing a param recooks the bbox live. Leaf shapes still
-    resolve to numbers here because their FORM is independent of the root
-    (only their PLACEMENT is live, via the CTP point cloud)."""
+    Used only for VALIDATION (e.g. checking that a referenced param exists and
+    that sizes are positive). The build path (:func:`_build_shape`) no longer
+    uses this — instead it keeps params LIVE via :func:`_param_ref_expr`
+    (``ch("../<name>")`` references) so BOTH root and leaf shapes re-cook when a
+    spare changes. Previously (pre-M2.6) leaf shapes baked to numbers here,
+    which silently broke the live guarantee for leaf params like wheel_radius."""
     out: dict[str, Any] = {}
     for k, v in (shape_params or {}).items():
         if isinstance(v, bool) or isinstance(v, (int, float)):
@@ -843,14 +843,19 @@ def _install_param_spares(container, params: dict[str, float]) -> None:
             pass
 
 
-def _root_param_ref_expr(value: Any, shape_node) -> Any:
-    """For the ROOT shape only: turn a param-name string into a ``ch()``
-    expression referencing the container's spare parm, so the root size stays
-    parametric and recooks live. A bare number passes through unchanged.
+def _param_ref_expr(value: Any, shape_node) -> Any:
+    """Turn a param-name string into a ``ch()`` expression referencing the
+    container's spare parm, so a shape size stays parametric and recooks live.
+    A bare number passes through unchanged. Used for BOTH root and leaf shapes
+    (they live at the same level — one below the container holding the spares).
 
-    The root shape lives one level below the container that holds the spare
+    The shape node lives one level below the container that holds the spare
     parms, hence ``ch("../<name>")``. Multi-component values (a size vector)
-    produce a list of ch() expressions — Houdini's parmTuple accepts these."""
+    produce a list of ch() expressions — Houdini's parmTuple accepts these.
+
+    A bare param name (e.g. ``"wheel_radius"``) becomes ``ch("../wheel_radius")``;
+    an expression (e.g. ``"wheel_clearance*(-0.5)"``) has each referenced name
+    substituted → ``ch("../wheel_clearance")*(-0.5)``."""
     if isinstance(value, str):
         # A param name or param-expression. If it's a bare name, reference the
         # spare directly; if it's an expression, substitute names → ch() refs.
@@ -861,7 +866,7 @@ def _root_param_ref_expr(value: Any, shape_node) -> Any:
             expr = expr.replace(ref, f'ch("../{ref}")')
         return expr
     if isinstance(value, (list, tuple)):
-        return [_root_param_ref_expr(el, shape_node) for el in value]
+        return [_param_ref_expr(el, shape_node) for el in value]
     return value
 
 
@@ -1039,12 +1044,13 @@ def _build_shape(parent_path: str, shape: dict, params: dict[str, float],
                  name: str, *, is_root: bool = False):
     """Build ONE native-SOP shape (box/tube/torus/sphere) and return the node.
 
-    For the ROOT shape (``is_root=True``), param-name values become ``ch()``
-    expressions referencing the container's spare parms — so the root size
-    stays parametric and recooks live when a param changes. For leaf shapes,
-    values resolve to numbers (the leaf's form is independent of the root;
-    only its placement via CTP is live). (cylinder is not a SOP in H21 — use
-    tube.)"""
+    Param-name values become ``ch()`` expressions referencing the container's
+    spare parms — so EVERY shape (root AND leaf) stays parametric and recooks
+    live when a param changes. This is the M2.6 leaf-live fix: previously leaf
+    shapes had their params baked to numbers (only root was live), which broke
+    the live guarantee for leaf params like wheel_radius/cabin_length. Now leaf
+    shapes reference spares the same way root does (they sit at the same level
+    under the container). (cylinder is not a SOP in H21 — use tube.)"""
     stype = shape.get("type")
     node = _create_node(parent_path, stype, name)
     # tube defaults to 'Primitive' type on H21 → a single degenerate prim;
@@ -1054,12 +1060,12 @@ def _build_shape(parent_path: str, shape: dict, params: dict[str, float],
             node.parm("type").set(1)
         except Exception:
             pass
-    if is_root:
-        # Keep size parametric: reference the container's spares via ch().
-        resolved = {pname: _root_param_ref_expr(pval, node)
-                    for pname, pval in (shape.get("params") or {}).items()}
-    else:
-        resolved = _eval_shape_params(shape.get("params"), params)
+    # ALL shapes (root + leaf) keep params live via ch() refs to the container
+    # spares. is_root is now only a semantic marker (kept for the call site's
+    # readability); the wiring is identical because root and leaf shapes live
+    # at the same depth under the container.
+    resolved = {pname: _param_ref_expr(pval, node)
+                for pname, pval in (shape.get("params") or {}).items()}
     for pname, pval in resolved.items():
         _set_parm(node, pname, pval)
     return node
@@ -1102,40 +1108,21 @@ def _build_origin_normalize(root_path: str, origin_spec: dict,
             f'__c[{fa}] = ({fs} > 0) ? __mx[{fa}] : __mn[{fa}]; '
             f'@P -= __c;')
     elif isinstance(anchor, (list, tuple)) and len(anchor) == 3:
-        ax, ay, az = (_maybe_eval(c, params) for c in anchor)
-        body = f'@P -= set({float(ax)}, {float(ay)}, {float(az)});'
+        ax, ay, az = (_param_ref_expr(c, None) for c in anchor)
+        body = f'@P -= set({ax}, {ay}, {az});'
     else:
         raise AssemblyError(f"origin.anchor unrecognized: {anchor!r}")
 
-    body += ' @P += chv("offset");'
-
-    # Install offset as a vector spare (three float spares: offsetx/y/z), set
-    # to the resolved offset values.
-    try:
-        ptg = wr.parmTemplateGroup()
-    except Exception:
-        ptg = None
-    ox = _maybe_eval(offset[0], params) if len(offset) > 0 else 0.0
-    oy = _maybe_eval(offset[1], params) if len(offset) > 1 else 0.0
-    oz = _maybe_eval(offset[2], params) if len(offset) > 2 else 0.0
-    if ptg is not None:
-        for sname, sval in (("offsetx", float(ox)), ("offsety", float(oy)),
-                            ("offsetz", float(oz))):
-            if ptg.find(sname) is None:
-                try:
-                    ptg.append(hou.FloatParmTemplate(sname, sname, 1, (sval,)))
-                except Exception:
-                    continue
-        try:
-            wr.setParmTemplateGroup(ptg)
-        except Exception:
-            pass
-    for sname, sval in (("offsetx", float(ox)), ("offsety", float(oy)),
-                        ("offsetz", float(oz))):
-        try:
-            wr.parm(sname).set(sval)
-        except Exception:
-            pass
+    # offset: a 3-vector that may contain param-name/expression components.
+    # Reference the CONTAINER's spare parms via ch("../<name>") so offset tracks
+    # the param live (e.g. wheel_clearance changes → the offset re-evaluates).
+    # A bare number stays a literal. The wrangle is a child of the container,
+    # same depth as the shape nodes, so ch("../..") is NOT needed — ch("../..")
+    # would reach above the container.
+    ox = (_param_ref_expr(offset[0], None) if len(offset) > 0 else 0.0)
+    oy = (_param_ref_expr(offset[1], None) if len(offset) > 1 else 0.0)
+    oz = (_param_ref_expr(offset[2], None) if len(offset) > 2 else 0.0)
+    body += f' @P += set({ox}, {oy}, {oz});'
 
     try:
         wr.parm("snippet").set(body)
@@ -1294,6 +1281,10 @@ def build_assembly(
                     shape_node = norm
 
                 # Scale: stamp @pscale onto the group's mount points via a wrangle.
+                # The scale value references the container's spare parm via ch()
+                # (the wrangle is a child of the container, same depth as the
+                # shape nodes), so changing the param live re-stamps the scale —
+                # no baked numbers.
                 scale = lf0.get("scale")
                 scale_nodes: list = []
                 for mid in group_mounts:
@@ -1302,8 +1293,10 @@ def build_assembly(
                         raise AssemblyError(
                             f"leaf group {lid0!r} mount {mid!r} not declared")
                     if scale is not None:
-                        scale_val = (evaluate(scale, params)
-                                     if isinstance(scale, str) else float(scale))
+                        # A bare number stays a number; a param-name/expression
+                        # string becomes a ch("../<name>") ref so it's LIVE.
+                        scale_expr = (_param_ref_expr(scale, None)
+                                      if isinstance(scale, str) else float(scale))
                         sw = _create_node(root_path, "attribwrangle",
                                           f"{lid0}_{mid}_pscale")
                         sw.setInput(0, mount_wr)
@@ -1312,7 +1305,7 @@ def build_assembly(
                         except Exception:
                             pass
                         try:
-                            sw.parm("snippet").set(f"f@pscale = {float(scale_val)};")
+                            sw.parm("snippet").set(f"f@pscale = {scale_expr};")
                         except Exception:
                             pass
                         scale_nodes.append(sw)
@@ -1356,11 +1349,13 @@ def build_assembly(
         except Exception:
             pass
 
-        # The spare parms installed on the container (see _install_param_spares)
-        # are the LIVE params: changing them in the Houdini UI makes the root
-        # re-cook → bbox re-reads → mount points move → copies re-stamp. Expose
-        # their names so an agent/user knows what to tweak without scanning the
-        # container's parm table.
+        # Every assembly param is now wired as a LIVE ch("../<name>") reference
+        # on the nodes that use it — root shape, leaf shapes, leaf scale, and
+        # origin offset all reference the container's spares (M2.6 leaf-live
+        # fix). So changing any spare in the UI propagates everywhere WITHOUT
+        # rebuilding: root re-cooks → bbox re-reads → mount points move → leaf
+        # shapes/scales re-evaluate → copies re-stamp. Mount-internal values
+        # (grid rows/cols/margin, array step) are still baked (design limit).
         live_parm_names = sorted(params.keys())
 
         return {

@@ -22,6 +22,7 @@ import sys
 import unittest
 
 _HOUDINI_CANDIDATES = [
+    r"D:\houdini",  # this machine's actual install
     r"C:\Program Files\Side Effects Software",
     "/Applications/Houdini",
     "/opt/hfs",
@@ -171,17 +172,21 @@ probe = {}
 if res.get("success"):
     probe["centers"] = instance_centers()
     probe["root_bbox"] = root_bbox()
-    if probe_kind in ("piece_bboxes", "facing"):
+    if probe_kind in ("piece_bboxes", "facing", "live_leaf_recook"):
         probe["pieces"] = instance_piece_bboxes()
         probe["cloud_orient"] = mount_cloud_orient()
     # THE LIVE TEST: change a param, recook, re-read — WITHOUT rebuilding.
-    if probe_kind == "live_recook":
+    if probe_kind in ("live_recook", "live_leaf_recook"):
         param = req["change_param"]; newval = req["new_value"]
         p = root.parm(param)
         if p is not None:
             p.set(newval)
         probe["centers_after"] = instance_centers()
         probe["root_bbox_after"] = root_bbox()
+    # live_leaf_recook: also re-read the OUT's piece bboxes so we can verify a
+    # LEAF param (e.g. wheel_radius) changed the leaf's SIZE, not just position.
+    if probe_kind == "live_leaf_recook":
+        probe["pieces_after"] = instance_piece_bboxes()
 
 print("EDINI_RESULT_JSON:" + json.dumps({**res, "_probe": probe}))
 '''
@@ -588,6 +593,53 @@ class TestLiveBuildHython(unittest.TestCase):
         x_facing = sum(1 for a in thin_axes if a == 0)
         self.assertGreaterEqual(x_facing, 4,
             f"car wheels lost axle facing: thin_axes={thin_axes}")
+
+    def test_wheel_radius_LIVE_changes_wheel_size(self):
+        """M2.6 leaf-live proof: changing the LEAF param `wheel_radius` (which
+        drives the leaf's @pscale via a ch() ref) makes the wheels GROW without
+        rebuilding. This was the bug surfaced by the real Pi-agent test —
+        previously wheel_radius was baked and did nothing. Now it's live."""
+        res = _run(_car(), probe="live_leaf_recook",
+                   change_param="wheel_radius", new_value=1.2)
+        self.assertTrue(res["success"], res.get("error"))
+        before = res["_probe"]["pieces"]
+        after = res["_probe"]["pieces_after"]
+        self.assertEqual(len(before), 4, f"expected 4 wheel pieces, got {before}")
+        self.assertEqual(len(after), 4, f"expected 4 wheels after, got {after}")
+        # wheel_radius 0.4 → 1.2 is a 3x scale. Each wheel's non-thin bbox
+        # dimension (the wheel DIAMETER direction) must grow substantially.
+        # The thin axis is the axle (X); the wide axes (Y, Z) carry diameter.
+        def wide_span(piece):
+            sizes = piece["size"]
+            return max(sizes[1], sizes[2])  # the larger of the two non-axle dims
+        before_spans = sorted(wide_span(p) for p in before)
+        after_spans = sorted(wide_span(p) for p in after)
+        # 3x radius → the diameter span should at least double (allow slack for
+        # torus tessellation; the point is it GREW, proving the param is live).
+        self.assertGreater(after_spans[0] / before_spans[0], 2.0,
+            f"wheel_radius change did not grow wheels: before={before_spans}, "
+            f"after={after_spans}")
+
+    def test_wheel_tube_r_LIVE_changes_wheel_thickness(self):
+        """M2.6 leaf-live proof: changing the LEAF param `wheel_tube_r` (which
+        drives the torus rady via a ch() ref) makes the wheels THICKER without
+        rebuilding. This proves leaf SHAPE params are live too, not just scale."""
+        res = _run(_car(), probe="live_leaf_recook",
+                   change_param="wheel_tube_r", new_value=0.4)
+        self.assertTrue(res["success"], res.get("error"))
+        before = res["_probe"]["pieces"]
+        after = res["_probe"]["pieces_after"]
+        self.assertEqual(len(before), 4)
+        self.assertEqual(len(after), 4)
+        # wheel_tube_r 0.08 → 0.4 is 5x. The thin axis (axle, X) carries the
+        # tube thickness (2*tube_r after orient), so it must grow substantially.
+        def thin_span(piece):
+            return piece["size"][0]  # axle/X axis = the thin dimension
+        before_thin = sorted(thin_span(p) for p in before)
+        after_thin = sorted(thin_span(p) for p in after)
+        self.assertGreater(after_thin[0] / before_thin[0], 3.0,
+            f"wheel_tube_r change did not thicken wheels: before={before_thin}, "
+            f"after={after_thin}")
 
 
 def _fence():
