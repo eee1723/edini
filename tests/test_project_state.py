@@ -149,5 +149,26 @@ class TestPlanHelpers(unittest.TestCase):
             set_step_status(decl, "base", "banana")
 
 
+class TestAppendLog(unittest.TestCase):
+    def test_append_log_adds_entry(self):
+        from edini.project.state import empty_declaration, append_log
+        decl = empty_declaration("x")
+        append_log(decl, kind="atom", summary="created chassis subnet",
+                   payload={"node": "/obj/proj/chassis"}, result_ok=True)
+        self.assertEqual(len(decl["log"]), 1)
+        entry = decl["log"][0]
+        self.assertEqual(entry["kind"], "atom")
+        self.assertTrue(entry["result_ok"])
+        self.assertIn("ts", entry)
+
+    def test_append_log_preserves_order(self):
+        from edini.project.state import empty_declaration, append_log
+        decl = empty_declaration("x")
+        append_log(decl, kind="atom", summary="first", payload={}, result_ok=True)
+        append_log(decl, kind="atom", summary="second", payload={}, result_ok=True)
+        self.assertEqual(decl["log"][0]["summary"], "first")
+        self.assertEqual(decl["log"][1]["summary"], "second")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -83,3 +83,17 @@ def set_step_status(declaration: dict, step_id: str, status: str) -> None:
             step["status"] = status
             return
     raise KeyError(f"unknown plan step id: {step_id}")
+
+
+def append_log(declaration: dict, kind: str, summary: str,
+               payload: dict | None = None, result_ok: bool = True) -> dict:
+    """Append an audit/experience entry to the declaration log."""
+    entry = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "kind": kind,
+        "summary": summary,
+        "payload": payload or {},
+        "result_ok": result_ok,
+    }
+    declaration["log"].append(entry)
+    return entry
