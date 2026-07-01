@@ -29,3 +29,22 @@ def empty_declaration(project_name: str, goal: str | None = None) -> dict:
         "log": [],
         "drift": [],
     }
+
+
+def load_declaration(node) -> dict:
+    """Read the declaration JSON from the node's hidden parm.
+
+    Returns a safe empty skeleton if the parm is absent, empty, or corrupt.
+    Never raises.
+    """
+    parm = node.parm(STATE_PARM)
+    raw = parm.eval() if parm is not None else ""
+    if not raw:
+        return empty_declaration(None)
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict) or "version" not in data:
+            return empty_declaration(None)
+        return data
+    except (json.JSONDecodeError, TypeError):
+        return empty_declaration(None)

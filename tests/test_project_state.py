@@ -46,5 +46,36 @@ class TestEmptyDeclaration(unittest.TestCase):
         self.assertIn("created_at", d["project"])
 
 
+class TestLoadDeclaration(unittest.TestCase):
+    def test_load_reads_json_from_parm(self):
+        from edini.project.state import empty_declaration, load_declaration, STATE_PARM
+        node = _FakeNode()
+        expected = empty_declaration("car")
+        node.set_parm_value(STATE_PARM, json.dumps(expected))
+        loaded = load_declaration(node)
+        self.assertEqual(loaded["project"]["name"], "car")
+
+    def test_load_missing_parm_returns_empty(self):
+        from edini.project.state import load_declaration
+        node = _FakeNode()  # no parm set
+        loaded = load_declaration(node)
+        self.assertIsNone(loaded["project"]["name"])
+
+    def test_load_empty_string_returns_empty(self):
+        from edini.project.state import load_declaration, STATE_PARM
+        node = _FakeNode()
+        node.set_parm_value(STATE_PARM, "")
+        loaded = load_declaration(node)
+        self.assertEqual(loaded["plan"], [])
+
+    def test_load_corrupt_json_returns_empty(self):
+        from edini.project.state import load_declaration, STATE_PARM
+        node = _FakeNode()
+        node.set_parm_value(STATE_PARM, "{not valid json")
+        loaded = load_declaration(node)
+        self.assertEqual(loaded["version"], 1)
+        self.assertEqual(loaded["plan"], [])
+
+
 if __name__ == "__main__":
     unittest.main()
