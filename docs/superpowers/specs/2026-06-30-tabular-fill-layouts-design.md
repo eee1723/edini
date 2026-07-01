@@ -556,7 +556,7 @@ For each layout:
    negative sizes, unknown measure, malformed `basis`/`axes`/`layers`).
 2. **mock network-structure** — each measure produces the correct wrangle + CTP node tree.
 3. **hython real-machine proof** — VEX ↔ oracle point-by-point. The local hython is
-   confirmed at `C:\Program Files\Side Effects Software\Houdini 21.0.440\bin\hython.exe`.
+   confirmed at `D:\houdini\bin\hython.exe`.
 
 **Regression gate (HARD):** the existing `cells` keyboard layout and all 599 M3 tests
 remain green at every step. Generalizing the base class must not change 2D behavior — the

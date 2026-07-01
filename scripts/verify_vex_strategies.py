@@ -10,7 +10,7 @@ For each measurement primitive (bbox_corner, grid_on_face, array, ...) this:
 If every strategy matches, the VEX port is correct and the live build layer can
 trust it. Run:
 
-    "C:\Program Files\Side Effects Software\Houdini 21.0.440\bin\hython.exe" scripts/verify_vex_strategies.py
+    "D:\houdini\bin\hython.exe" scripts/verify_vex_strategies.py
 """
 import os
 import sys

@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-06-30-tabular-fill-layouts-design.md`
 
-**Critical environment note:** The local hython is at `C:\Program Files\Side Effects Software\Houdini 21.0.440\bin\hython.exe` (NOT `D:/houdini/` as stale comments claim). The mock suite runs under `python -m pytest`. Tests needing PySide6 (`test_md_render`, `test_streaming_render`, `test_reflect_worker`, `test_error_surfacing`) are unrelated to this work and can be ignored — they fail only due to missing PySide6 in the bare Python env, not from our changes.
+**Critical environment note:** The local hython is at `D:\houdini\bin\hython.exe` (NOT `C:\Program Files\Side Effects Software\Houdini 21.0.440\bin\hython.exe` — that path does NOT exist on this machine; the real install is on the D drive). The mock suite runs under `python -m pytest`. Tests needing PySide6 (`test_md_render`, `test_streaming_render`, `test_reflect_worker`, `test_error_surfacing`) are unrelated to this work and can be ignored — they fail only due to missing PySide6 in the bare Python env, not from our changes.
 
 **Development order (the generalization roadmap):**
 ```
@@ -54,29 +54,31 @@ This is a cheap cleanup that prevents every downstream agent from chasing a wron
 
 - [ ] **Step 1: Fix the verify script docstring**
 
+> ⚠️ **CORRECTION (2026-07-01):** The original Task 0 below was based on a wrong assumption — it assumed `C:\Program Files\...` was correct and `D:/houdini/` was stale. The REALITY is the opposite: hython lives at `D:\houdini\bin\hython.exe`; the `C:\Program Files\...` path does NOT exist on this machine. Task 0 as originally written made the path worse. The steps below are kept for the historical record but should NOT be followed verbatim — the docs have since been corrected back to `D:\houdini\bin\hython.exe`.
+
 In `scripts/verify_vex_strategies.py`, change line 13's docstring from:
 ```
-    D:/houdini/bin/hython.exe scripts/verify_vex_strategies.py
+    C:\Program Files\Side Effects Software\Houdini 21.0.440\bin\hython.exe scripts/verify_vex_strategies.py
 ```
 to:
 ```
-    "C:\Program Files\Side Effects Software\Houdini 21.0.440\bin\hython.exe" scripts/verify_vex_strategies.py
+    "D:\houdini\bin\hython.exe" scripts/verify_vex_strategies.py
 ```
 
 - [ ] **Step 2: Check show_assemblies.py for the same stale path**
 
-Run: `grep -n "D:/houdini\|D:\\\\houdini" scripts/show_assemblies.py`
-If found, replace with the same correct path. If not found, skip.
+Run: `grep -n "C:/Program Files\|C:\\\\Program Files" scripts/show_assemblies.py`
+If found, replace with `D:\houdini\bin\hython.exe`. If not found, skip.
 
 - [ ] **Step 3: Fix handoff.md hython path mentions**
 
-In `wiki/pages/handoff.md`, find all occurrences of `D:\houdini\bin\hython.exe` or `D:/houdini/bin/hython.exe` (there are ~3: lines ~7, ~78, ~81) and replace with `C:\Program Files\Side Effects Software\Houdini 21.0.440\bin\hython.exe`.
+In `wiki/pages/handoff.md`, find all occurrences of `C:\Program Files\Side Effects Software\Houdini 21.0.440\bin\hython.exe` (there are ~3: lines ~7, ~78, ~81) and replace with `D:\houdini\bin\hython.exe`.
 
 - [ ] **Step 4: Verify the correct path actually runs the VEX proof**
 
 Run:
 ```bash
-"C:/Program Files/Side Effects Software/Houdini 21.0.440/bin/hython.exe" scripts/verify_vex_strategies.py
+"D:/houdini/bin/hython.exe" scripts/verify_vex_strategies.py
 ```
 Expected: ends with `ALL STRATEGIES MATCH ORACLE` (the M3 baseline). This confirms the env is healthy before we start.
 
@@ -275,7 +277,7 @@ Expected: all PASS. If any fail, the axes refactor changed 2D behavior — fix b
 
 Run:
 ```bash
-"C:/Program Files/Side Effects Software/Houdini 21.0.440/bin/hython.exe" scripts/verify_vex_strategies.py
+"D:/houdini/bin/hython.exe" scripts/verify_vex_strategies.py
 ```
 Expected: `ALL STRATEGIES MATCH ORACLE` (unchanged). This is the strongest regression check — real VEX output vs oracle.
 
@@ -517,7 +519,7 @@ class TestPicketsHython(unittest.TestCase):
 
 Run:
 ```bash
-"C:/Program Files/Side Effects Software/Houdini 21.0.440/bin/hython.exe" -m pytest tests/test_assembly_hython.py::TestPicketsHython -v
+"D:/houdini/bin/hython.exe" -m pytest tests/test_assembly_hython.py::TestPicketsHython -v
 ```
 Expected: PASS (8 posts built, evenly spaced).
 
@@ -691,7 +693,7 @@ Hython: `TestTilesHython` — a 4×4 herringbone mosaic; verify each instance's 
 
 ```bash
 python -m pytest tests/ -q -k "not hython" --ignore=...  # expected 562+
-"C:/Program Files/Side Effects Software/Houdini 21.0.440/bin/hython.exe" -m pytest tests/test_assembly_hython.py::TestTilesHython -v
+"D:/houdini/bin/hython.exe" -m pytest tests/test_assembly_hython.py::TestTilesHython -v
 git commit -m "feat(rooted): ② tiles strategy (per-cell orient) — deferred milestone resolved, named rules"
 ```
 
@@ -847,7 +849,7 @@ git commit -m "feat(rooted): ④ blocks strategy (synthesis) — composes ①②
 
 In `scripts/verify_vex_strategies.py` `main()`, add 4 cases to the `cases` list (pickets 1D, tiles herringbone, shelf 3 layers, blocks cityscape), each comparing VEX output to its oracle. Run:
 ```bash
-"C:/Program Files/Side Effects Software/Houdini 21.0.440/bin/hython.exe" scripts/verify_vex_strategies.py
+"D:/houdini/bin/hython.exe" scripts/verify_vex_strategies.py
 ```
 Expected: `ALL STRATEGIES MATCH ORACLE` with the 4 new cases listed.
 
@@ -863,7 +865,7 @@ Add a new section per layout (pickets/tiles/shelf/blocks) with: when to use it, 
 
 ```bash
 python -m pytest tests/ -q -k "not hython" --ignore=tests/test_md_render.py --ignore=tests/test_streaming_render.py --ignore=tests/test_reflect_worker.py --ignore=tests/test_error_surfacing.py
-"C:/Program Files/Side Effects Software/Houdini 21.0.440/bin/hython.exe" -m pytest tests/test_assembly_hython.py -v
+"D:/houdini/bin/hython.exe" -m pytest tests/test_assembly_hython.py -v
 ```
 Expected: all mock green (565+), all hython green.
 
