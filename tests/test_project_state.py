@@ -20,11 +20,16 @@ class _FakeParm:
 
 
 class _FakeNode:
-    """Duck-typed node: parm(name) -> _FakeParm or None."""
+    """Duck-typed node modeling a node whose hidden STATE parm is installed
+    on its type (so always present). parm(name) lazily materializes a
+    _FakeParm on first access — mirroring how a real Project HDA node exposes
+    its type-installed parms. set_parm_value() also creates if needed."""
     def __init__(self):
         self._parms = {}
     def parm(self, name):
-        return self._parms.get(name)
+        if name not in self._parms:
+            self._parms[name] = _FakeParm()
+        return self._parms[name]
     def set_parm_value(self, name, value):
         if name not in self._parms:
             self._parms[name] = _FakeParm()
@@ -75,6 +80,28 @@ class TestLoadDeclaration(unittest.TestCase):
         loaded = load_declaration(node)
         self.assertEqual(loaded["version"], 1)
         self.assertEqual(loaded["plan"], [])
+
+
+class TestSaveDeclaration(unittest.TestCase):
+    def test_save_writes_json_to_parm(self):
+        from edini.project.state import save_declaration, load_declaration, STATE_PARM
+        node = _FakeNode()
+        decl = {"version": 1, "project": {"name": "bike"}, "plan": [],
+                "design_params": [], "components": [], "log": [], "drift": []}
+        save_declaration(node, decl)
+        self.assertEqual(node.parm(STATE_PARM).eval(), json.dumps(decl))
+        self.assertEqual(load_declaration(node)["project"]["name"], "bike")
+
+    def test_save_then_load_preserves_plan(self):
+        from edini.project.state import save_declaration, load_declaration, empty_declaration
+        node = _FakeNode()
+        decl = empty_declaration("tower")
+        decl["plan"] = [{"id": "base", "title": "Base", "parent": None,
+                         "status": "pending", "detail": ""}]
+        save_declaration(node, decl)
+        loaded = load_declaration(node)
+        self.assertEqual(len(loaded["plan"]), 1)
+        self.assertEqual(loaded["plan"][0]["id"], "base")
 
 
 if __name__ == "__main__":

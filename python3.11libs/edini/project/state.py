@@ -48,3 +48,8 @@ def load_declaration(node) -> dict:
         return data
     except (json.JSONDecodeError, TypeError):
         return empty_declaration(None)
+
+
+def save_declaration(node, declaration: dict) -> None:
+    """Write the declaration JSON to the node's hidden parm."""
+    node.parm(STATE_PARM).set(json.dumps(declaration))
