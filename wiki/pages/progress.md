@@ -209,6 +209,20 @@ recipe 教惯用法，资产管道教结构。
 <div class="timeline">
 
 <div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-07-01</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第三十八阶段：rooted-modeling M3.5 — TabularFill 四布局扩展（pickets/tiles/shelf/blocks）+ 方案 C 分层泛化 + per-cell orient milestone</span>
+      <span class="status-tag status-done">完成 · 真机 hython 7 项铁证</span>
+    </div>
+    <div class="timeline-summary">用户要求「扩展 cells/skill 能力，要足够通用稳定泛化，从第一性原理优化框架」。<strong>brainstorming → spec → plan → subagent-driven 执行 → 最终 code review</strong> 全流程。<strong>第一性原理诊断</strong>：4 个目标布局（栅栏/瓷砖/书架/街区）的差异全是「槽位 schema 列」的差异，共享「N 维槽位空间 + 填充声明」这一个抽象；当前 cells 把槽位维度写死 2D 且无 per-cell 朝向。<strong>架构决策（方案 C 分层泛化）</strong>：一布局一子类（清晰可测），但每个布局驱动真实泛化下沉到 TabularFillStrategy 基类；泛化由真实布局驱动而非预测（避开方案 B 过度抽象的陷阱）。<strong>开发顺序 = 泛化路线图</strong>（从简单到复杂打磨抽象）：①栅栏(1D) → ②瓷砖(per-cell orient) → ③书架(3D layers) → ④街区(合成考试)。<strong>五大交付</strong>：① <strong>pickets（1D 栅栏）</strong>——驱动 axes[] 解析基础设施 + count→cells 语法糖；1D 通过「退化第二轴」技巧复用 2D 循环（gz=0/d=1，所有点共享 Z），真机铁证 8 栏杆均匀分布在 [-1.75,+1.75]。② <strong>tiles（2D 瓷砖 + per-cell orient）</strong>——<strong>解决 SKILL.md 点名的 deferred milestone「per-instance orient」</strong>：每个 cell 携带 rot（度），绕 face 法线生成四元数 quaternion(radians(rot), nvec)，setpointattrib 写 POINT-class p@orient（避开 M2.5 的 detail-class 被忽略 bug）；命名 orient 规则 herringbone/checker/running（agent 只选名字不算角度，延续「不让 LLM 写表达式」铁律）；hython 铁证 rot=90 的 p@orient = (0, sin45, 0, cos45) 用点积验证（q ≡ -q）。③ <strong>shelf（3D 书架）</strong>——layers 预处理（_expand_shelf_layers 拍平 layers→3D cells），layer 概念是 subclass-only（ShelfStrategy._parse_table 设 _shelf_layers，base/cells/pickets/tiles 都不设）；_build_vex 加 gated shelf fragment（_shelf_layers 非空才发），覆写每个点的 face 轴 P（层中心）+ face 轴 scale（层高）；<strong>hython 手算验证 VEX 数学严格等于预言机</strong>（Y=[3.889, 3.889, 6.889]，unit_axis=5/18，layer-0 center≈3.889，layer-1 center≈6.889）。④ <strong>blocks（城市街区，合成考试）</strong>——<strong>近零新 VEX，纯组合 ①②③</strong>：BlockStrategy = tiles 的 rot 机制（_rot_vals→p@orient）+ 新的 height fragment（_block_h_vals→face 轴 scale 覆写），两个 fragment 独立（orient 写 p@orient，height 写 scale 分量）无冲突；hython 铁证 3 街区高度成比例（tower/podium ratio=4.0=40/10，unit 守恒）。⑤ <strong>三层 gate 防御 byte-identical</strong>——_rot_vals / _shelf_layers / _block_h_vals 三个 gated fragment，getattr 默认 None，cells/pickets 永不触发；test_cells_2d_byte_identical_after_axes_refactor 全程钉死 2D VEX 变量名。<strong>最终 code review（opus）发现 1 阻塞</strong>：shelf oracle 每层独立算 in-plane unit 而 VEX 用单一 unit，不等宽层上静默分歧（违反项目 #1 契约 oracle==VEX）。<strong>按用户决策处理</strong>：C1 加 shift-left 校验（强制 layers 等宽）+ 文档；I1 真 bug 修（basis.face 在 cells/tiles/blocks 统一接受，加 _resolve_face_str helper）；I2/I3/I4 de-spec（删死代码 _resolve_axes + 移除未实现的 basis.edge/picket h 主张，诚实反映「1D=退化2D」真实实现）。<strong>真机铁证</strong>（hython 21.0.440）：栅栏 8 栏杆 1D 行 live / 瓷砖 rot=90 四元数 / 书架 3 书 2 层 Y 精确匹配 / 街区 3 高度成比例 + rot+height 合成。<strong>测试</strong>：595 mock + 21 hython 全绿，零回归，verify 脚本 14/14 ALL MATCH ORACLE。<strong>新展示</strong>：`edini_showcase.hip` 含 car + bicycle + 65 键键盘 + stairs + fence + shelf 六例（均可 live recook）。</div>
+    <div class="timeline-tags">
+      <span>方案C分层泛化</span><span>按需下沉</span><span>YAGNI</span><span>pickets-1D</span><span>退化轴技巧</span><span>tiles-per-cell-orient</span><span>四元数</span><span>命名orient规则</span><span>orient-milestone解决</span><span>shelf-3D-layers</span><span>layer预处理</span><span>subclass-only</span><span>blocks-合成考试</span><span>近零新VEX</span><span>三层gate防御</span><span>byte-identical</span><span>code-review-C1</span><span>shift-left校验</span><span>de-spec</span><span>595测试</span>
+    </div>
+  </div>
+</div>
+
+<div class="timeline-item timeline-done">
   <div class="timeline-date">2026-06-30</div>
   <div class="timeline-card">
     <div class="timeline-card-header">
