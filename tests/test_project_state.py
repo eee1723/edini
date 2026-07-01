@@ -170,5 +170,38 @@ class TestAppendLog(unittest.TestCase):
         self.assertEqual(decl["log"][1]["summary"], "second")
 
 
+class TestInstallStateParm(unittest.TestCase):
+    """Tests that build_state_parm_template builds a hidden string parm template.
+    Uses the repo's mock_hou so no Houdini runtime is needed."""
+    @classmethod
+    def setUpClass(cls):
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
+        from mock_hou import create_mock_hou
+        cls._mock = create_mock_hou()
+        cls._saved_hou = sys.modules.get("hou")
+        sys.modules["hou"] = cls._mock
+        for _m in list(sys.modules):
+            if _m.startswith("edini.project.node"):
+                del sys.modules[_m]
+        from edini.project.node import build_state_parm_template
+        cls.build_state_parm_template = staticmethod(build_state_parm_template)
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls._saved_hou is not None:
+            sys.modules["hou"] = cls._saved_hou
+        else:
+            sys.modules.pop("hou", None)
+
+    def test_template_is_string_type(self):
+        import hou
+        tmpl = self.build_state_parm_template()
+        self.assertEqual(tmpl.dataType(), hou.parmData.String)
+
+    def test_template_is_hidden(self):
+        tmpl = self.build_state_parm_template()
+        self.assertTrue(tmpl.isHidden())
+
+
 if __name__ == "__main__":
     unittest.main()
