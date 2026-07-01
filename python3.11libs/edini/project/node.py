@@ -16,3 +16,26 @@ def build_state_parm_template() -> hou.StringParmTemplate:
     tmpl.setHidden(True)
     tmpl.setTags({"editor": "1"})  # multi-line string editor
     return tmpl
+
+
+def create_project_hda(name: str = "project", parent_path: str = "/obj",
+                       goal: str | None = None) -> "hou.Node":
+    """Create a Project HDA node and seed it with an empty declaration.
+
+    The node type `edini::project` must already be registered (via
+    HOUDINI_OTLSCAN_PATH pointing at otls/edini_project.hda).
+    """
+    parent = hou.node(parent_path)
+    if parent is None:
+        raise ValueError(f"parent not found: {parent_path}")
+    node = parent.createNode("edini::project", node_name=name)
+
+    # Install the hidden state parm via the node's spare-parm group,
+    # then seed the declaration JSON.
+    grp = node.spareParmGroup()
+    grp.appendToFolder("Spare", build_state_parm_template())
+    node.setSpareParmGroup(grp)
+
+    declaration = empty_declaration(project_name=name, goal=goal)
+    save_declaration(node, declaration)
+    return node
