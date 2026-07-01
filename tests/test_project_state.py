@@ -104,5 +104,50 @@ class TestSaveDeclaration(unittest.TestCase):
         self.assertEqual(loaded["plan"][0]["id"], "base")
 
 
+class TestPlanHelpers(unittest.TestCase):
+    def test_add_plan_step_appends(self):
+        from edini.project.state import empty_declaration, add_plan_step
+        decl = empty_declaration("x")
+        add_plan_step(decl, step_id="base", title="Base", parent=None)
+        self.assertEqual(len(decl["plan"]), 1)
+        self.assertEqual(decl["plan"][0]["id"], "base")
+        self.assertEqual(decl["plan"][0]["status"], "pending")
+
+    def test_add_plan_step_rejects_duplicate_id(self):
+        from edini.project.state import empty_declaration, add_plan_step
+        decl = empty_declaration("x")
+        add_plan_step(decl, step_id="base", title="Base")
+        with self.assertRaises(ValueError):
+            add_plan_step(decl, step_id="base", title="Base again")
+
+    def test_add_plan_step_child_links_parent(self):
+        from edini.project.state import empty_declaration, add_plan_step
+        decl = empty_declaration("x")
+        add_plan_step(decl, step_id="wheels", title="Wheels")
+        add_plan_step(decl, step_id="wheel_fr", title="Front-right wheel",
+                      parent="wheels")
+        self.assertEqual(decl["plan"][1]["parent"], "wheels")
+
+    def test_set_step_status_changes_state(self):
+        from edini.project.state import empty_declaration, add_plan_step, set_step_status
+        decl = empty_declaration("x")
+        add_plan_step(decl, step_id="base", title="Base")
+        set_step_status(decl, "base", "done")
+        self.assertEqual(decl["plan"][0]["status"], "done")
+
+    def test_set_step_status_rejects_unknown_id(self):
+        from edini.project.state import empty_declaration, set_step_status
+        decl = empty_declaration("x")
+        with self.assertRaises(KeyError):
+            set_step_status(decl, "nope", "done")
+
+    def test_set_step_status_rejects_bad_status(self):
+        from edini.project.state import empty_declaration, add_plan_step, set_step_status
+        decl = empty_declaration("x")
+        add_plan_step(decl, step_id="base", title="Base")
+        with self.assertRaises(ValueError):
+            set_step_status(decl, "base", "banana")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -53,3 +53,33 @@ def load_declaration(node) -> dict:
 def save_declaration(node, declaration: dict) -> None:
     """Write the declaration JSON to the node's hidden parm."""
     node.parm(STATE_PARM).set(json.dumps(declaration))
+
+
+_STEP_STATUSES = ("pending", "in_progress", "done", "skipped")
+
+
+def add_plan_step(declaration: dict, step_id: str, title: str,
+                  parent: str | None = None, detail: str = "",
+                  status: str = "pending") -> dict:
+    """Append a plan step to the declaration. Returns the new step.
+
+    Raises ValueError if step_id already exists.
+    """
+    if any(s["id"] == step_id for s in declaration["plan"]):
+        raise ValueError(f"plan step id already exists: {step_id}")
+    step = {"id": step_id, "title": title, "parent": parent,
+            "status": status, "detail": detail}
+    declaration["plan"].append(step)
+    return step
+
+
+def set_step_status(declaration: dict, step_id: str, status: str) -> None:
+    """Set a plan step's status. Raises KeyError if step_id unknown,
+    ValueError if status not in _STEP_STATUSES."""
+    if status not in _STEP_STATUSES:
+        raise ValueError(f"bad status: {status}")
+    for step in declaration["plan"]:
+        if step["id"] == step_id:
+            step["status"] = status
+            return
+    raise KeyError(f"unknown plan step id: {step_id}")
