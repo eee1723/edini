@@ -18,6 +18,8 @@ class ProjectPanelWidget(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None):
         super().__init__(parent)
         self._bound_node_path: str | None = None
+        self._stream_wired = False
+        self._current_ai = None
         self._build_ui()
 
     # --- UI construction -------------------------------------------------
@@ -40,7 +42,17 @@ class ProjectPanelWidget(QtWidgets.QWidget):
         # Three columns.
         cols = QtWidgets.QHBoxLayout()
         self.plan_column = self._placeholder("Plan Tree\n(plan)")
-        self.chat_column = self._placeholder("Chat\n(timeline)")
+        # Chat column: reuse the existing timeline + bubbles from edini.ui.
+        from edini.ui.agent_panel import _TimelineView
+        self.chat_column = QtWidgets.QFrame()
+        cl = QtWidgets.QVBoxLayout(self.chat_column)
+        cl.setContentsMargins(0, 0, 0, 0)
+        self.timeline = _TimelineView()
+        cl.addWidget(self.timeline, 1)
+        self.input_edit = QtWidgets.QPlainTextEdit()
+        self.input_edit.setFixedHeight(56)
+        self.input_edit.installEventFilter(self)  # Enter to send (handled in eventFilter)
+        cl.addWidget(self.input_edit)
         self.state_column = self._placeholder("State + Graph\n(statistics)")
         cols.addWidget(self.plan_column, 1)
         cols.addWidget(self.chat_column, 2)
@@ -80,6 +92,62 @@ class ProjectPanelWidget(QtWidgets.QWidget):
     def _bind(self, node_path: str) -> None:
         self._bound_node_path = node_path
         self.status_label.setText(f"bound: {node_path}")
+
+    # --- Chat: send + stream back via shared singleton RpcClient ---------
+
+    def eventFilter(self, obj, event):
+        from PySide2 import QtCore
+        if obj is self.input_edit and event.type() == QtCore.QEvent.KeyPress:
+            if event.key() in (QtCore.Qt.Key_Return, QtCore.Qt.Key_Enter) \
+               and not (event.modifiers() & (QtCore.Qt.ShiftModifier | QtCore.Qt.ControlModifier)):
+                self._send()
+                return True  # swallow the key
+        return super().eventFilter(obj, event)
+
+    def _get_rpc(self):
+        """Return the singleton RpcClient from the main chat window.
+
+        Reuses the already-running Pi subprocess + HTTP server. Never spawns
+        a new one (would collide on port 9876). Opens the main window if it
+        isn't already (which bootstraps the agent).
+        """
+        from edini.ui.windows import open_chat_window
+        return open_chat_window()._rpc_client
+
+    def _send(self) -> None:
+        text = self.input_edit.toPlainText().strip()
+        if not text or self._bound_node_path is None:
+            return
+        self.input_edit.clear()
+        # Show the user's message immediately.
+        from edini.ui.agent_panel import _UserBubble
+        self.timeline.add_widget(_UserBubble(text))
+        # Drive the LLM via the shared RpcClient; each project gets its own
+        # Pi session, named after the bound node path.
+        rpc = self._get_rpc()
+        rpc.send_set_session_name(self._bound_node_path)
+        # Connect streaming once: route text deltas into a fresh AI bubble.
+        if not self._stream_wired:
+            rpc.text_delta.connect(self._on_stream_delta)
+            rpc.agent_finished.connect(self._on_turn_done)
+            self._stream_wired = True
+        rpc.send_prompt(text)
+
+    def _on_stream_delta(self, chunk: str) -> None:
+        # Mirrors edini.ui.agent_panel.AgentPanel.append_stream_chunk:
+        # accumulate full text, call update_streaming(full_text). The AiBubble
+        # itself has no .text(); read back via get_raw_text().
+        from edini.ui.agent_panel import _AiBubble
+        if self._current_ai is None:
+            self._current_ai = _AiBubble()
+            self.timeline.add_widget(self._current_ai)
+        full = self._current_ai.get_raw_text() + chunk
+        self._current_ai.update_streaming(full)
+
+    def _on_turn_done(self) -> None:
+        if self._current_ai is not None:
+            self._current_ai.finalize()
+            self._current_ai = None
 
     @property
     def bound_node_path(self) -> str | None:
