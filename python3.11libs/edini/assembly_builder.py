@@ -143,7 +143,7 @@ def validate_assembly(assembly: dict) -> dict[str, Any]:
                 errors.append({"code": "MOUNT_BAD_AXES", "message":
                     f"mount {mid!r} position.axes must be a 6-char sign string "
                     f"like '+X-Y+Z'"})
-            elif kind == "bbox_face_center" and not _is_face_str(pos.get("face")):
+            elif kind == "bbox_face_center" and not _is_face_str(_resolve_face_str(pos)):
                 errors.append({"code": "MOUNT_BAD_FACE", "message":
                     f"mount {mid!r} position.face must be a 2-char string like '+Y'"})
             elif kind == "point_on_edge":
@@ -151,7 +151,7 @@ def validate_assembly(assembly: dict) -> dict[str, Any]:
                     errors.append({"code": "MOUNT_BAD_EDGE", "message":
                         f"mount {mid!r} position needs axes_a + axes_b (6-char each)"})
             elif kind == "grid_on_face":
-                if not _is_face_str(pos.get("face")):
+                if not _is_face_str(_resolve_face_str(pos)):
                     errors.append({"code": "MOUNT_BAD_FACE", "message":
                         f"mount {mid!r} position.face must be a 2-char string like '+Y'"})
                 rc = pos.get("rows"), pos.get("cols")
@@ -177,7 +177,7 @@ def validate_assembly(assembly: dict) -> dict[str, Any]:
                 # world space) is DERIVED live from the root's span so the layout
                 # FILLS the root and rescales automatically — it is NOT a field.
                 # A legacy `unit` field is accepted but ignored.
-                if not _is_face_str(pos.get("face")):
+                if not _is_face_str(_resolve_face_str(pos)):
                     errors.append({"code": "MOUNT_BAD_FACE", "message":
                         f"mount {mid!r} position.face must be a 2-char string like '+Y'"})
                 cells = pos.get("cells")
@@ -279,7 +279,7 @@ def validate_assembly(assembly: dict) -> dict[str, Any]:
                 # (degrees about the face normal → per-cell p@orient), and the
                 # mount may declare an `orient` rule (herringbone|checker|
                 # running) that supplies rot for cells without an explicit one.
-                if not _is_face_str(pos.get("face")):
+                if not _is_face_str(_resolve_face_str(pos)):
                     errors.append({"code": "MOUNT_BAD_FACE", "message":
                         f"mount {mid!r} position.face must be a 2-char string like '+Y'"})
                 cells = pos.get("cells")
@@ -328,7 +328,7 @@ def validate_assembly(assembly: dict) -> dict[str, Any]:
                 # an optional out-of-plane `h` (height, along the face normal).
                 # A block = 2D footprint + height + optional rotation. Empty
                 # grid slots (parks/streets) are simply undeclared cells.
-                if not _is_face_str(pos.get("face")):
+                if not _is_face_str(_resolve_face_str(pos)):
                     errors.append({"code": "MOUNT_BAD_FACE", "message":
                         f"mount {mid!r} position.face must be a 2-char string like '+Y'"})
                 cells = pos.get("cells")
@@ -437,6 +437,27 @@ def validate_assembly(assembly: dict) -> dict[str, Any]:
                                     errors.append({"code": "MOUNT_BAD_SHELF", "message":
                                         f"mount {mid!r} shelf.layers[{li}].cells[{ci}] bad values for {bad} "
                                         f"(gx numeric; w > 0)"})
+                    # All layers MUST span the same in-plane width. The in-plane
+                    # unit is derived ONCE from the flattened table (mirroring
+                    # the VEX), so differing layer widths would make the oracle
+                    # (per-layer unit) and the VEX (single unit) disagree. Enforce
+                    # the constraint here (shift-left) so the oracle==VEX contract
+                    # can never be violated by a mis-declared bookshelf.
+                    widths = []
+                    for layer in layers:
+                        if isinstance(layer, dict) and isinstance(layer.get("cells"), list):
+                            lw = max((float(c["gx"]) + float(c["w"]))
+                                     for c in layer["cells"]
+                                     if isinstance(c, dict)
+                                     and isinstance(c.get("gx"), (int, float))
+                                     and isinstance(c.get("w"), (int, float)))
+                            widths.append(lw)
+                    if len(set(round(w, 9) for w in widths)) > 1:
+                        errors.append({"code": "MOUNT_BAD_SHELF", "message":
+                            f"mount {mid!r} shelf layers must all span the SAME "
+                            f"in-plane width (max(gx+w)); got {widths}. The in-plane "
+                            f"unit is derived once across all layers, so differing "
+                            f"widths would break the oracle↔VEX contract."})
 
         # Orient: optional. If present, derive from a measured direction.
         orient = mt.get("orient")
@@ -525,6 +546,20 @@ def _is_axis_str(v: Any) -> bool:
 
 def _is_face_str(v: Any) -> bool:
     return isinstance(v, str) and len(v) == 2
+
+
+def _resolve_face_str(pos: dict) -> Any:
+    """Resolve the face string from a position spec: `basis.face` (the canonical
+    field) or the legacy bare `face` field. Returns None if neither is present.
+
+    Used by every tabular-fill validation branch (cells/tiles/blocks/shelf/
+    pickets) so `basis:{face:"+Y"}` is accepted everywhere, not just in the
+    strategies that happened to be written last. Mirrors
+    :meth:`TabularFillStrategy._resolve_face`."""
+    basis = pos.get("basis")
+    if isinstance(basis, dict) and isinstance(basis.get("face"), str):
+        return basis["face"]
+    return pos.get("face")
 
 
 def _check_param_refs(shape_params: Any, known: set[str], where: str,
@@ -696,7 +731,6 @@ def _expand_shelf_layers(position_spec: dict) -> dict:
             flat_cells.append(cell)
         cum += h
     out_spec["cells"] = flat_cells
-    out_spec["__shelf_layer_axis"] = face  # signal to the strategy
     return out_spec
 
 

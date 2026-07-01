@@ -319,39 +319,6 @@ class TabularFillStrategy(VexStrategy):
         raise VexStrategyError(
             "position needs a face: give basis.face or a bare face field")
 
-    @staticmethod
-    def _resolve_axes(position_spec: dict, face_axis: int) -> list[int]:
-        """Resolve the layout axes as a list of axis INDICES (0/1/2).
-
-        DEFAULT (no `axes` in spec): the two in-plane axes other than the face
-        axis, in index order — EXACTLY the current 2D behavior. This keeps the
-        existing cells VEX byte-identical (the __a0/__a1 derivation is unchanged).
-
-        OVERRIDE (spec declares `axes`): the named axes, validated. This is the
-        1D/3D path used by pickets/shelf. Length 1-3, each in {X,Y,Z}, no repeat.
-
-        Returns axis indices so the VEX body can index __mn/__mx/__p by number.
-        """
-        axes = position_spec.get("axes")
-        if axes is None:
-            # Default: the two in-plane axes (current behavior). The caller
-            # (_build_vex) still emits the __a0/__a1 derivation for this case,
-            # so this default is only consulted by 1D/3D subclasses today.
-            return [i for i in range(3) if i != face_axis]
-        if not isinstance(axes, list) or not (1 <= len(axes) <= 3):
-            raise VexStrategyError(
-                f"axes must be a list of 1-3 entries, got {axes!r}")
-        idx_map = {"X": 0, "Y": 1, "Z": 2}
-        out: list[int] = []
-        for a in axes:
-            if a not in idx_map:
-                raise VexStrategyError(f"axis must be X/Y/Z, got {a!r}")
-            i = idx_map[a]
-            if i in out:
-                raise VexStrategyError(f"axis {a!r} repeated in {axes!r}")
-            out.append(i)
-        return out
-
     # ── VEX generation ───────────────────────────────────────────────
     @staticmethod
     def _arr(vals) -> str:

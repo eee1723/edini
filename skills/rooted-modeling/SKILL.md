@@ -152,24 +152,27 @@ and only overrides the cell schema. They cover the four common fill patterns:
 
 ### `pickets` — a 1D row (a fence / railing / balusters)
 
-When the parts form a **single row** along ONE edge (a line of fence posts, a
-handrail's balusters), use `pickets`. It is `cells` restricted to one in-plane
-axis: each cell declares `{gx, w}` (no depth — the second axis is degenerate).
-Give `count: N` for N equal-width posts, or an explicit `cells` table for
-uneven widths.
+When the parts form a **single row** along one in-plane axis (a line of fence
+posts, a handrail's balusters), use `pickets`. It is `cells` restricted to one
+in-plane axis: each cell declares `{gx, w}` (no depth — the second in-plane
+axis is degenerate, forced to 1u, so all posts share the same Z). Give
+`count: N` for N equal-width posts, or an explicit `cells` table for uneven
+widths.
 
 ```jsonc
 "position": {
   "measure": "pickets", "from": "root",
-  "basis": {"face": "+Y"}, "axes": ["X"], "count": 8
+  "basis": {"face": "+Y"}, "count": 8
 }
 ```
-- `axes: ["X"]` names the **layout axis** the posts step along (the edge's
-  direction). `basis.face` is the face the posts sit on. `basis.edge`
-  optionally restricts to one edge of that face.
+- `basis.face` is the face the posts sit on (a bare `face` field is also
+  accepted). The posts step along the face's FIRST in-plane axis (X for `+Y`).
 - `count: 8` → 8 equal-width posts; the unit is DERIVED from the face's span,
   so the row FILLS the edge and rescales when the root resizes. For uneven
   posts, drop `count` and declare `cells: [{gx, w}, ...]`.
+- A post's HEIGHT comes from the leaf shape (e.g. `size: [0.1, 1.0, 0.1]`), not
+  from the cell — `pickets` has no per-cell `h` column. (Use `blocks` for
+  per-cell out-of-plane height.)
 
 ### `tiles` — a 2D mosaic with per-cell rotation
 
@@ -215,6 +218,12 @@ from the root's span so the stack FILLS the root and rescales live.
 ```
 - `axis` MUST equal the face's normal axis (`Y` for `+Y`). `height` is in 1u;
   the world height is derived so the layers fill the root's normal span.
+- **All layers must span the SAME in-plane width** (`max(gx+w)` identical across
+  layers). The in-plane unit is derived ONCE from the flattened table, so layers
+  of differing width would under/over-fill inconsistently. (Each layer's book
+  COUNT may differ as long as the total width matches — e.g. one layer of two
+  1u books and another of one 2u book, both spanning 2u.) This matches the VEX
+  build path and the oracle.
 - **Separation of concerns:** `shelf` places BOOKS — the root builds the
   boards. The layer concept is subclass-side; the inherited base loop places
   each cell in-plane (X/Z), and a per-point face-axis override lifts each onto

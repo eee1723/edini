@@ -529,9 +529,15 @@ def measure_pickets(
     cells=None, margin: float = 0.0, gap: float = 0.0, h: float = 1.0,
 ):
     """A 1D row of pickets along ONE in-plane axis of a face, each carrying
-    (position, scale, orient). Pickets step along `edge_axis` (the layout axis);
-    `count` produces N equal-width cells (uniform sugar), or an explicit `cells`
-    table overrides it with uneven widths. `h` is the out-of-plane height.
+    (position, scale, orient). `count` produces N equal-width cells (uniform
+    sugar), or an explicit `cells` table overrides it with uneven widths.
+
+    Implementation note: pickets always step along the face's FIRST in-plane
+    axis (X for face ``+Y``) — the 1D row is achieved by reusing the 2D
+    :func:`measure_cells` with the second in-plane axis degenerate (gz=0, d=1).
+    ``edge_axis`` and ``h`` are accepted for signature symmetry but are NOT
+    consumed (the axis is fixed to the first in-plane axis; a post's height
+    comes from its leaf shape, not the cell). This mirrors the VEX strategy.
 
     Implementation: reuse :func:`measure_cells` with a 1D cell table (the
     non-edge in-plane axis forced to a degenerate 1u), then wrap each pair with
@@ -565,7 +571,13 @@ def _axis_angle_quat(axis, deg):
 def _rule_rot(rule, ci, cell):
     """Named orient rules → per-cell rotation degrees. Used by measure_tiles
     when a cell has no explicit `rot`. The agent picks a rule name instead of
-    computing angles (the "agent never writes expressions" contract)."""
+    computing angles (the "agent never writes expressions" contract).
+
+    NOTE: ``ci`` (the cell index) is currently UNUSED — all rules derive the
+    angle from the cell's grid coords (gx/gz), not its position in the table.
+    It is kept in the signature for forward-compat (a future index-based rule
+    would need it) and for call-site uniformity with the VEX strategy layer."""
+    _ = ci  # currently unused; see docstring.
     if rule == "checker":
         r, col = int(cell.get("gz", 0)), int(cell.get("gx", 0))
         return 0.0 if (r + col) % 2 == 0 else 90.0
