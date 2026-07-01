@@ -81,6 +81,21 @@ class TestLoadDeclaration(unittest.TestCase):
         self.assertEqual(loaded["version"], 1)
         self.assertEqual(loaded["plan"], [])
 
+    def test_load_none_parm_returns_empty(self):
+        """Directly exercise the `parm is None` branch of load_declaration.
+
+        The lazy _FakeNode.parm() never returns None, so we use an inline
+        node whose parm() always returns None to cover the absent-parm path.
+        """
+        from edini.project.state import load_declaration
+
+        class _NoStateParmNode:
+            def parm(self, name):
+                return None  # truly-absent parm
+
+        loaded = load_declaration(_NoStateParmNode())
+        self.assertIsNone(loaded["project"]["name"])
+
 
 class TestSaveDeclaration(unittest.TestCase):
     def test_save_writes_json_to_parm(self):
