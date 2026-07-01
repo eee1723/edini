@@ -40,6 +40,77 @@ be numbers or param-expression strings.
 **No `cylinder`** — it is not a SOP in H21; use `tube`. **No `rad1`/`rad2` on
 torus/sphere** — those names belong only to tube.
 
+## Shape chains — adding detail (bevels, extrudes, subdivision)
+
+A single SOP shape (`{type: "box", ...}`) is a bare primitive — no edges, no
+extrusion, no smoothness. For real detail (a keycap with a raised rim, a
+bracket with rounded edges, a smooth handle), use a **shape chain**: an
+ordered list of SOPs that feed each other, where the first is a base shape
+and the rest are detail modifiers.
+
+```json
+"shape": {
+  "chain": [
+    {"type": "box", "params": {"size": ["w", "h", "d"]}},
+    {"type": "polyextrude::2.0", "params": {"group": "0", "dist": "rim_h", "divs": 1}},
+    {"type": "polybevel::2.0", "params": {"offset": 0.02, "divisions": 2}}
+  ]
+}
+```
+
+Each node feeds the next (linear `setInput`). Param values work exactly like
+single shapes — numbers pass through, param-name strings become live
+`ch("../<name>")` references. The chain's tail node drops into the leaf build
+(origin/scale/CTP) unchanged, so chains and single shapes are interchangeable.
+
+### Available modifiers (verified against Houdini 21.0.440)
+
+| modifier | what it does | key params |
+|----------|-------------|------------|
+| `polyextrude::2.0` | extrude faces inward/outward | `group` (face selection), `dist`, `inset`, `twist`, `divs` |
+| `polybevel::2.0` | round/bevel edges | `group`, `offset` (width), `divisions`, `filletshape` |
+| `subdivide` | smooth by subdividing | `iterations` (depth) |
+
+Plus all base shapes (`box`/`tube`/`torus`/`sphere`/`grid`) may appear in a
+chain — e.g. chain `[grid, polyextrude]` makes an extruded panel.
+
+### ⚠️ Selecting faces/edges (the `group` param) — critical
+
+polyextrude and polybevel need to know **which** faces/edges to act on. The
+`group` param takes a **Houdini group spec**, NOT VEX `@P` syntax:
+
+| what you want | `group` value | notes |
+|---------------|---------------|-------|
+| the Nth primitive | `"0"`, `"2"`, etc. | simplest; a box SOP's face order is deterministic |
+| a named group | `"top"`, `"rim"` | requires a `group` SOP upstream in the chain to create it |
+| a range of prims | `"0-3"` | standard Houdini group range syntax |
+
+**`"@P.y>0.5"` does NOT work** on polyextrude::2.0 — that's VEX attrib-syntax
+(for wrangles), not group syntax. To select "the top face by position",
+insert a `group` SOP before the extrude (not yet in the chain whitelist — use
+prim numbers for now, or request the named-group mechanism).
+
+### Worked example: a keycap with a raised rim
+
+```json
+{
+  "id": "keycap",
+  "params": {"cap_w": 1.0, "cap_h": 0.3, "cap_d": 1.0, "rim_h": 0.08},
+  "root": {"shape": {"type": "box", "params": {"size": ["cap_w", "cap_h", "cap_d"]}}},
+  "mounts": [{"id": "cap", "position": {
+    "measure": "bbox_face_center", "from": "root", "face": "+Y"}}],
+  "leaves": [{"id": "cap", "mount": "cap", "shape": {"chain": [
+    {"type": "box", "params": {"size": ["cap_w", "cap_h", "cap_d"]}},
+    {"type": "polyextrude::2.0", "params": {"group": "0", "dist": "rim_h", "divs": 1}},
+    {"type": "polybevel::2.0", "params": {"offset": 0.015, "divisions": 2}}
+  ]}}]
+}
+```
+
+Changing `rim_h` live-recooks the extrusion height; changing `cap_w` resizes
+the whole keycap. Both stay parametric because every chain node's params
+reference the container's spares via `ch()`.
+
 ## The one rule you must not break
 
 **Never write a coordinate.** Every position is a *measurement* of geometry
@@ -605,12 +676,22 @@ baked number. Previously only root-shape params were live (leaf params like
 wheel_radius/cabin_length silently did nothing when tweaked — a real Pi-agent
 test surfaced this). Now changing any spare recooks the whole model.
 
+**Shape chains (M2.7):** a leaf shape may now be a CHAIN of SOPs (`shape.chain
+= [{type, params}, ...]`) — a base shape followed by detail modifiers
+(polyextrude for raised rims/brackets, polybevel for rounded edges, subdivide
+for smoothness). This is the detail-quality upgrade: instead of bare boxes
+and tori, leaves can have beveled edges, extruded features, smoothed surfaces.
+All chain params stay live via ch() refs. Face selection uses Houdini group
+specs (prim numbers or named groups), NOT VEX @P syntax.
+
 **Later milestones:** live mount internals (grid rows/cols, array step, and
-the tabular-fill layout tables are currently baked at build); named anchors
-the root exposes explicitly (so a root can mark "hub_point" instead of you
-inferring the corner); and **multi-level derivation** where a placed leaf
-becomes the root for the next level (bike frame → fork → handlebar). The
-measurement-first contract won't change — only the menu of measurements grows.
+the tabular-fill layout tables are currently baked at build); named group
+support inside chains (a `group` SOP to select faces by position, not just
+prim number); named anchors the root exposes explicitly (so a root can mark
+"hub_point" instead of you inferring the corner); and **multi-level
+derivation** where a placed leaf becomes the root for the next level (bike
+frame → fork → handlebar). The measurement-first contract won't change —
+only the menu of measurements grows.
 
 ## Reference
 

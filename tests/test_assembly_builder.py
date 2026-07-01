@@ -758,6 +758,161 @@ class TestLeafParamsLive(unittest.TestCase):
                           f"ch('../{p}') reference anywhere in the network")
 
 
+class TestLeafShapeChain(unittest.TestCase):
+    """M2.7 leaf shape chains: a leaf may declare shape.chain = [{type, params},
+    ...] — a linear SOP chain (box → polyextrude → polybevel) that adds detail.
+    The chain's tail node drops into the leaf build like a single shape."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls._saved_ref = MockNode._hou_ref
+        cls._saved_mod = sys.modules.get("hou")
+        cls._hou = create_mock_hou()
+        sys.modules["hou"] = cls._hou
+        MockNode._hou_ref = cls._hou
+        for _m in list(sys.modules):
+            if _m.startswith("edini"):
+                del sys.modules[_m]
+        from edini import assembly_builder  # noqa: E402
+        cls.build_assembly = staticmethod(assembly_builder.build_assembly)
+        cls.validate_assembly = staticmethod(assembly_builder.validate_assembly)
+
+    @classmethod
+    def tearDownClass(cls):
+        MockNode._hou_ref = cls._saved_ref
+        sys.modules["hou"] = cls._saved_mod
+        for _m in list(sys.modules):
+            if _m.startswith("edini"):
+                del sys.modules[_m]
+        super().tearDownClass()
+
+    def _build(self, assembly):
+        hou = sys.modules["hou"]
+        root = hou.node("/obj").createNode("geo", "test_chain")
+        res = self.build_assembly(assembly, root.path(),
+                                  root_geometry_provider=_provider_for(assembly))
+        return root.path(), res
+
+    def _chain_car(self):
+        """A car whose wheels are CHAIN shapes: a torus + polybevel for rounded
+        edges. Tests that a chain leaf builds end-to-end and groups correctly."""
+        asm = _car_assembly()
+        for lf in asm["leaves"]:
+            lf["shape"] = {"chain": [
+                {"type": "torus", "params": {
+                    "radx": 1.0, "rady": "wheel_tube_r", "rows": 24, "cols": 12}},
+                {"type": "polybevel::2.0", "params": {
+                    "offset": 0.01, "divisions": 2}},
+            ]}
+        return asm
+
+    def test_chain_validates(self):
+        """A chain leaf passes validate_assembly."""
+        r = self.validate_assembly(self._chain_car())
+        self.assertTrue(r["success"], r.get("errors"))
+
+    def test_bad_chain_op_rejected(self):
+        """An unknown SOP type in a chain is rejected with LEAF_BAD_CHAIN_OP."""
+        asm = _car_assembly()
+        asm["leaves"][0]["shape"] = {"chain": [
+            {"type": "box", "params": {}},
+            {"type": "nonexistent_sop", "params": {}}]}
+        r = self.validate_assembly(asm)
+        self.assertFalse(r["success"])
+        self.assertTrue(any("chain" in str(e.get("message", "")).lower()
+                            for e in r["errors"]),
+                        f"expected a chain error, got {r['errors']}")
+
+    def test_empty_chain_rejected(self):
+        """An empty chain list is rejected."""
+        asm = _car_assembly()
+        asm["leaves"][0]["shape"] = {"chain": []}
+        r = self.validate_assembly(asm)
+        self.assertFalse(r["success"])
+
+    def test_chain_creates_linear_nodes(self):
+        """A 2-node chain creates 2 SOP nodes wired input0→prev (linear)."""
+        root_path, res = self._build(self._chain_car())
+        self.assertTrue(res["success"], res.get("error"))
+        hou = sys.modules["hou"]
+        names = {c.name() for c in hou.node(root_path).children()}
+        # The grouped wheel shape: a chain of [torus, polybevel] → 2 nodes
+        # named wheel_fr_geoshape_n0 and _n1 (len>1 → _n{ci} suffix).
+        self.assertIn("wheel_fr_geoshape_n0", names)
+        self.assertIn("wheel_fr_geoshape_n1", names)
+        # The polybevel (n1) must be wired to the torus (n0).
+        bevel = hou.node(f"{root_path}/wheel_fr_geoshape_n1")
+        torus = hou.node(f"{root_path}/wheel_fr_geoshape_n0")
+        self.assertIsNotNone(bevel.inputs())
+        inputs = bevel.inputs()
+        self.assertTrue(len(inputs) > 0 and inputs[0] is torus,
+                        f"polybevel not wired to torus: inputs={inputs}")
+
+    def test_single_node_chain_no_suffix(self):
+        """A 1-node chain uses the plain name (no _n0 suffix) — matches the
+        single-shape naming so downstream origin/scale nodes find it."""
+        asm = _car_assembly()
+        asm["leaves"][0]["shape"] = {"chain": [
+            {"type": "torus", "params": {"radx": 1.0, "rady": "wheel_tube_r"}}]}
+        root_path, res = self._build(asm)
+        self.assertTrue(res["success"], res.get("error"))
+        hou = sys.modules["hou"]
+        names = {c.name() for c in hou.node(root_path).children()}
+        self.assertIn("wheel_fr_geoshape", names)
+        self.assertNotIn("wheel_fr_geoshape_n0", names)
+
+    def test_chain_param_refs_are_live(self):
+        """A param-name ref in a chain node becomes a ch() expression, not a
+        baked number (the M2.6 live guarantee extends to chains)."""
+        root_path, res = self._build(self._chain_car())
+        self.assertTrue(res["success"], res.get("error"))
+        hou = sys.modules["hou"]
+        torus = hou.node(f"{root_path}/wheel_fr_geoshape_n0")
+        rady = torus.parm("rady")
+        self.assertTrue(rady.hasExpression(),
+                        "chain torus rady should carry a ch() expression")
+        self.assertIn('ch("../wheel_tube_r")', rady.expression())
+
+    def test_chain_group_expr_passed_through(self):
+        """A polyextrude group expression like '@P.y>0.5' is passed through
+        UNCHANGED — it's Houdini group syntax, not a param reference. It must
+        NOT be mangled into ch("../P") or similar."""
+        asm = {
+            "id": "extruded", "params": {"w": 1.0, "h": 0.3, "d": 1.0, "rim": 0.1},
+            "root": {"shape": {"type": "box", "params": {"size": ["w", "h", "d"]}}},
+            "mounts": [{"id": "m", "position": {
+                "measure": "bbox_face_center", "from": "root", "face": "+Y"}}],
+            "leaves": [{"id": "cap", "mount": "m", "shape": {"chain": [
+                {"type": "box", "params": {"size": ["w", "h", "d"]}},
+                {"type": "polyextrude::2.0", "params": {
+                    "group": "@P.y>0.5", "dist": "rim", "divs": 2}},
+            ]}}]}
+        root_path, res = self._build(asm)
+        self.assertTrue(res["success"], res.get("error"))
+        hou = sys.modules["hou"]
+        extrude = hou.node(f"{root_path}/cap_geoshape_n1")
+        group_val = extrude.parm("group")
+        # The group expression survived intact (set, not setExpression).
+        self.assertEqual(group_val.eval(), "@P.y>0.5")
+        # And dist IS a param ref (rim → ch("../rim")), so it's an expression.
+        dist_parm = extrude.parm("dist")
+        self.assertTrue(dist_parm.hasExpression(),
+                        "polyextrude dist should be a live ch() ref")
+        self.assertIn('ch("../rim")', dist_parm.expression())
+
+    def test_chain_leaf_groups_correctly(self):
+        """4 identical chain leaves (the chain car) still collapse to ONE
+        shape chain + ONE CTP (grouping works on chain shapes too)."""
+        root_path, res = self._build(self._chain_car())
+        self.assertTrue(res["success"], res.get("error"))
+        hou = sys.modules["hou"]
+        names = {c.name() for c in hou.node(root_path).children()}
+        ctp_nodes = [n for n in names if n.endswith("_ctp")]
+        self.assertEqual(len(ctp_nodes), 1,
+                         f"4 identical chain wheels should group to 1 CTP: {ctp_nodes}")
+
+
 class TestKeyboardGrid(unittest.TestCase):
     """The keyboard's geometry correctness (15 keys on the tray face, rescaling
     with tray width) is verified in hython against the Python oracle. Here we

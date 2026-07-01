@@ -58,7 +58,19 @@ class AssemblyError(ValueError):
 # parm names (verified against hython 21.0.440). NOTE: 'cylinder' is NOT a SOP
 # in H21 (use 'tube'); 'torus' uses independent radx/rady parms (not a rad
 # parmTuple); 'sphere' uses radx/rady/radz; 'box'/'tube' use size/rad+height.
-_VALID_SHAPES = {"box", "tube", "torus", "sphere"}
+# 'grid' uses a 2-component size (sizex/sizey) + rows/cols.
+_VALID_SHAPES = {"box", "tube", "torus", "sphere", "grid"}
+
+# SOP types allowed inside a leaf shape CHAIN (M2.7). A chain is an ordered
+# list of {type, params?}; each node feeds the next (linear setInput). The
+# first node is usually a base shape (box/grid/...); later nodes are modifiers
+# (polyextrude/polybevel/subdivide) that add detail. Param values may be
+# numbers, param-name refs (→ ch("../<name>")), or raw Houdini strings (e.g.
+# a polyextrude group expression like "@P.y>0.5" — passed through unchanged).
+_VALID_CHAIN_OPS = {
+    "box", "tube", "torus", "sphere", "grid",          # base shapes
+    "polyextrude::2.0", "polybevel::2.0", "subdivide",  # detail modifiers
+}
 
 
 def validate_assembly(assembly: dict) -> dict[str, Any]:
@@ -492,10 +504,39 @@ def validate_assembly(assembly: dict) -> dict[str, Any]:
                 f"leaves[{li}] mount {lmount!r} is not a declared mount "
                 f"(known: {sorted(mount_ids)})"})
         lshape = lf.get("shape")
-        if not isinstance(lshape, dict) or lshape.get("type") not in _VALID_SHAPES:
+        if not isinstance(lshape, dict):
             errors.append({"code": "LEAF_BAD_SHAPE", "message":
-                f"leaves[{li}] shape.type must be one of {sorted(_VALID_SHAPES)}"})
-        _check_param_refs(lshape.get("params"), param_names, f"leaves[{li}].shape", errors)
+                f"leaves[{li}] shape must be an object"})
+        elif "chain" in lshape:
+            # M2.7: a leaf shape may be a CHAIN of SOPs (base + modifiers).
+            chain = lshape["chain"]
+            if not isinstance(chain, list) or not chain:
+                errors.append({"code": "LEAF_BAD_CHAIN", "message":
+                    f"leaves[{li}] shape.chain must be a non-empty list"})
+            else:
+                for ci, cnode in enumerate(chain):
+                    if not isinstance(cnode, dict) or cnode.get("type") not in _VALID_CHAIN_OPS:
+                        errors.append({"code": "LEAF_BAD_CHAIN_OP", "message":
+                            f"leaves[{li}] shape.chain[{ci}].type must be one "
+                            f"of {sorted(_VALID_CHAIN_OPS)}, got "
+                            f"{cnode.get('type') if isinstance(cnode, dict) else cnode!r}"})
+                    # A chain node may carry raw Houdini strings (e.g. a
+                    # polyextrude group expression "@P.y>0.5") alongside
+                    # param-name refs. Only validate refs from values that are
+                    # PURE param references (every extracted name is a known
+                    # param); a value with unknown names is a Houdini-native
+                    # string and passes through unchecked. This mirrors
+                    # _resolve_chain_param's classification at build time.
+                    _check_chain_param_refs(cnode.get("params"), param_names,
+                                            f"leaves[{li}].shape.chain[{ci}]",
+                                            errors)
+        elif lshape.get("type") not in _VALID_SHAPES:
+            errors.append({"code": "LEAF_BAD_SHAPE", "message":
+                f"leaves[{li}] shape.type must be one of {sorted(_VALID_SHAPES)} "
+                f"(or use shape.chain for a multi-SOP chain)"})
+        else:
+            _check_param_refs(lshape.get("params"), param_names,
+                              f"leaves[{li}].shape", errors)
         # scale (optional): expression over params.
         if "scale" in lf and isinstance(lf["scale"], str):
             _check_expr_refs(lf["scale"], param_names, f"leaves[{li}].scale", errors)
@@ -576,6 +617,37 @@ def _check_param_refs(shape_params: Any, known: set[str], where: str,
             if ref not in known:
                 errors.append({"code": "PARAM_REF_DANGLING", "message":
                     f"{where}.params.{pname} references unknown param {ref!r}"})
+
+
+def _check_chain_param_refs(node_params: Any, known: set[str], where: str,
+                            errors: list[dict]) -> None:
+    """Validate a shape-CHAIN node's params. Unlike single shapes, a chain node
+    may carry raw Houdini strings (e.g. polyextrude ``group: "@P.y>0.5"``) that
+    are NOT param references. So we only flag a value as a dangling ref when
+    it is a PURE param reference — i.e. every name extract_refs finds is a
+    known param. A value containing unknown names (P, y, N, etc.) is treated
+    as a Houdini-native expression and left unchecked. This mirrors
+    :func:`_resolve_chain_param`'s build-time classification exactly."""
+    if node_params is None:
+        return
+    if not isinstance(node_params, dict):
+        errors.append({"code": "SHAPE_PARAMS_BAD", "message":
+            f"{where}.params must be an object"})
+        return
+    from edini.exprs import extract_refs
+    for pname, pval in node_params.items():
+        for ref in _value_refs(pval):
+            # Only complain if ALL refs in this value are known params — a
+            # mixed value (some known, some not) is ambiguous, but in practice
+            # param refs are bare names and group exprs have NO known names,
+            # so the pure-ref check is reliable.
+            all_refs = extract_refs(pval) if isinstance(pval, str) else (
+                [r for el in pval if isinstance(el, str) for r in extract_refs(el)]
+                if isinstance(pval, (list, tuple)) else [])
+            if all_refs and all(r in known for r in all_refs):
+                if ref not in known:  # redundant but keeps the message shape
+                    errors.append({"code": "PARAM_REF_DANGLING", "message":
+                        f"{where}.params.{pname} references unknown param {ref!r}"})
 
 
 def _check_expr_refs(expr: str, known: set[str], where: str,
@@ -1040,6 +1112,75 @@ def _set_parm(node, pname: str, value: Any) -> None:
         p.set(value)
 
 
+def _resolve_chain_param(value: Any, known_params: dict[str, float]) -> Any:
+    """Resolve ONE param value for a shape-chain node, classifying it:
+
+    - number (int/float) → passed through unchanged.
+    - string whose every extracted ref is a KNOWN param name → converted to a
+      ``ch("../<name>")`` live reference (e.g. ``"rim_depth"`` → ``'ch("../rim_depth")'``).
+    - string with refs that are NOT known params (e.g. a polyextrude group
+      expression ``"@P.y>0.5"`` extracts P/y, which aren't params) → passed
+      through UNCHANGED as a raw Houdini string. This is the key distinction:
+      group expressions, VEX-style selectors, and SOP-native strings survive
+      intact while param references go live.
+    - list/tuple → resolved element-wise (a size vector may mix numbers + refs).
+    """
+    if isinstance(value, str):
+        from edini.exprs import extract_refs
+        refs = extract_refs(value)
+        # Only convert to ch() refs if EVERY extracted name is a declared param.
+        # A bare number string ("0.3") has no refs → falls to the else branch
+        # and is returned as-is (_set_parm will .set() it correctly).
+        if refs and all(r in known_params for r in refs):
+            return _param_ref_expr(value, None)
+        return value  # raw string: a number literal, or a Houdini group expr
+    if isinstance(value, (list, tuple)):
+        return [_resolve_chain_param(el, known_params) for el in value]
+    return value
+
+
+def _build_shape_chain(parent_path: str, shape: dict,
+                       params: dict[str, float], name: str):
+    """Build a LINEAR chain of SOP nodes (M2.7) and return the tail node.
+
+    ``shape`` must carry a ``chain`` key: an ordered list of
+    ``{type, params?}`` specs. Each node feeds the next via setInput(0, prev).
+    The first node is typically a base shape (box/grid/...); later nodes are
+    detail modifiers (polyextrude/polybevel/subdivide). Param values are
+    resolved by :func:`_resolve_chain_param` — param-name refs go live via
+    ch(), raw Houdini strings (group expressions) pass through unchanged.
+
+    The returned tail node drops into the leaf build exactly like a single
+    shape would (→ optional origin_normalize → CTP), so the downstream is
+    zero-change whether the leaf used a chain or a single shape.
+    """
+    chain = shape.get("chain")
+    if not isinstance(chain, list) or not chain:
+        raise AssemblyError(f"shape chain for {name!r} is empty/missing")
+    prev = None
+    for ci, cspec in enumerate(chain):
+        ctype = cspec.get("type")
+        cname = f"{name}_n{ci}" if len(chain) > 1 else name
+        node = _create_node(parent_path, ctype, cname)
+        # grid: a 2-component size needs the parmTuple, which _set_parm handles
+        # via the multi-component path. No special-casing needed beyond what
+        # _set_parm already does (it dispatches on len(value) > 1).
+        # tube in a chain: same Primitive→Polygon fix as the single-shape path.
+        if ctype == "tube" and "type" not in (cspec.get("params") or {}):
+            try:
+                node.parm("type").set(1)
+            except Exception:
+                pass
+        resolved = {pn: _resolve_chain_param(pv, params)
+                    for pn, pv in (cspec.get("params") or {}).items()}
+        for pn, pv in resolved.items():
+            _set_parm(node, pn, pv)
+        if prev is not None:
+            node.setInput(0, prev)
+        prev = node
+    return prev
+
+
 def _build_shape(parent_path: str, shape: dict, params: dict[str, float],
                  name: str, *, is_root: bool = False):
     """Build ONE native-SOP shape (box/tube/torus/sphere) and return the node.
@@ -1270,7 +1411,15 @@ def build_assembly(
                 lid0 = lf0["id"]
                 group_mounts = group["mount_ids"]
 
-                shape_in = _build_shape(root_path, lf0["shape"], params, f"{lid0}_geoshape")
+                # Build the leaf's shape: either a single SOP ({type, params})
+                # or a multi-SOP chain ({chain: [...]}). Both return one tail
+                # node that the origin/scale/CTP path connects to unchanged.
+                if isinstance(lf0.get("shape"), dict) and "chain" in lf0["shape"]:
+                    shape_in = _build_shape_chain(
+                        root_path, lf0["shape"], params, f"{lid0}_geoshape")
+                else:
+                    shape_in = _build_shape(
+                        root_path, lf0["shape"], params, f"{lid0}_geoshape")
                 shape_node = shape_in
                 # Origin normalization (optional, applied to the group's shared shape).
                 origin_spec = lf0.get("origin")

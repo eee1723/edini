@@ -1338,6 +1338,52 @@ def _make_torus_ptg():
     return g
 
 
+def _make_polyextrude_ptg():
+    """PolyExtrude 2.0 parm template group (H21) — only the parms the shape-
+    chain builder sets. `group` is a STRING (a group expression like
+    "@P.y>0.5"); dist/inset/twist are floats; divs is int. The real node has
+    ~89 parms; we register just the geometric-control subset."""
+    g = MockParmTemplateGroup()
+    g.append(MockStringParmTemplate("group", "Group", default=""))
+    g.append(MockFloatParmTemplate("dist", "Distance", 1, default_value=(0.0,)))
+    g.append(MockFloatParmTemplate("inset", "Inset", 1, default_value=(0.0,)))
+    g.append(MockFloatParmTemplate("twist", "Twist", 1, default_value=(0.0,)))
+    g.append(MockIntParmTemplate("divs", "Divisions", 1, default_value=(1,)))
+    return g
+
+
+def _make_polybevel_ptg():
+    """PolyBevel 2.0 parm template group (H21) — geometric-control subset.
+    NOTE: bevel WIDTH is `offset` (not 'width'/'bevel'); divisions is
+    `divisions` (not polyextrude's `divs`); shape is `filletshape`."""
+    g = MockParmTemplateGroup()
+    g.append(MockStringParmTemplate("group", "Group", default=""))
+    g.append(MockFloatParmTemplate("offset", "Offset", 1, default_value=(0.0,)))
+    g.append(MockIntParmTemplate("divisions", "Divisions", 1, default_value=(2,)))
+    return g
+
+
+def _make_subdivide_ptg():
+    """Subdivide SOP parm template group (H21). NOTE: the group-selection parm
+    is named `subdivide` (NOT 'group') on this node; depth is `iterations`."""
+    g = MockParmTemplateGroup()
+    g.append(MockStringParmTemplate("subdivide", "Group", default=""))
+    g.append(MockIntParmTemplate("iterations", "Depth", 1, default_value=(1,)))
+    return g
+
+
+def _make_grid_ptg():
+    """Grid SOP parm template group (H21). Grid's `size` is 2-COMPONENT
+    (sizex/sizey — NOT the 3-vec box uses), plus rows/cols. Registered so a
+    leaf shape with type=grid builds under the mock."""
+    g = MockParmTemplateGroup()
+    g.append(MockFloatParmTemplate("sizex", "Size X", 1, default_value=(10.0,)))
+    g.append(MockFloatParmTemplate("sizey", "Size Y", 1, default_value=(10.0,)))
+    g.append(MockIntParmTemplate("rows", "Rows", 1, default_value=(10,)))
+    g.append(MockIntParmTemplate("cols", "Cols", 1, default_value=(10,)))
+    return g
+
+
 def _make_copytopoints_ptg():
     """Copy to Points 2.0 parm template group (H21.0.440 structure).
 
@@ -1479,7 +1525,8 @@ class MockHou:
                                 parm_template_group=_make_vector_ptg(
                                     "size", [1.0, 1.0, 1.0])),
             "sphere": MockNodeType("sphere", "Sphere", "Sop", 2, 0),
-            "grid": MockNodeType("grid", "Grid", "Sop", 2, 0),
+            "grid": MockNodeType("grid", "Grid", "Sop", 2, 0,
+                                 parm_template_group=_make_grid_ptg()),
             "null": MockNodeType("null", "Null", "Sop", 1, 0),
             "merge": MockNodeType("merge", "Merge", "Sop", 4, 0),
             "attribwrangle": MockNodeType(
@@ -1519,6 +1566,24 @@ class MockHou:
                 parm_template_group=_make_transform_ptg()),
             "torus": MockNodeType("torus", "Torus", "Sop", 1, 0,
                                 parm_template_group=_make_torus_ptg()),
+            # M2.7 shape-chain modifiers (registered under both the bare name
+            # and the ::2.0 version, since _create_node's namespace fallback
+            # may try either). Only the geometric-control parms are populated.
+            "polyextrude": MockNodeType(
+                "polyextrude::2.0", "PolyExtrude", "Sop", 1, 1,
+                parm_template_group=_make_polyextrude_ptg()),
+            "polyextrude::2.0": MockNodeType(
+                "polyextrude::2.0", "PolyExtrude", "Sop", 1, 1,
+                parm_template_group=_make_polyextrude_ptg()),
+            "polybevel": MockNodeType(
+                "polybevel::2.0", "PolyBevel", "Sop", 1, 1,
+                parm_template_group=_make_polybevel_ptg()),
+            "polybevel::2.0": MockNodeType(
+                "polybevel::2.0", "PolyBevel", "Sop", 1, 1,
+                parm_template_group=_make_polybevel_ptg()),
+            "subdivide": MockNodeType(
+                "subdivide", "Subdivide", "Sop", 1, 1,
+                parm_template_group=_make_subdivide_ptg()),
         })
         obj_cat = MockCategory("Object", {
             "geo": MockNodeType("geo", "Geometry", "Object", 1, 0),
