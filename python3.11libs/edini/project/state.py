@@ -26,11 +26,6 @@ def empty_declaration(project_name: str, goal: str | None = None) -> dict:
         "plan": [],
         "design_params": [],
         "components": [],
-        # The rooted-modeling assembly declaration: {id, params, root, mounts,
-        # leaves}. None until the user/agent defines what to build. Consumed
-        # directly by edini.assembly_builder.build_assembly (zero adapter — the
-        # rooted format is stored verbatim). See builder.build_project_model.
-        "assembly": None,
         "log": [],
         "drift": [],
     }
@@ -113,40 +108,4 @@ def append_log(declaration: dict, kind: str, summary: str,
     }
     declaration["log"].append(entry)
     return entry
-
-
-# --- Assembly (rooted-modeling declaration) -------------------------------
-#
-# The `assembly` field holds a rooted assembly declaration verbatim — the exact
-# shape edini.assembly_builder.build_assembly consumes: {id, params, root,
-# mounts, leaves}. We store it verbatim (no adapter) so build_assembly is
-# unchanged. Structural validation is delegated to validate_assembly at build
-# time (shift-left); these helpers only guard the basic top-level shape so a
-# corrupted blob fails fast with a clear message rather than deep inside the
-# builder.
-
-_REQUIRED_ASSEMBLY_KEYS = ("id", "root")
-
-
-def set_assembly(declaration: dict, assembly: dict | None) -> None:
-    """Set the rooted assembly declaration on the project.
-
-    Pass None to clear it. A non-None assembly must be a dict with at least
-    `id` and `root` (the minimal rooted shape); deeper validation (mounts,
-    leaves, param refs) happens in validate_assembly at build time.
-    """
-    if assembly is None:
-        declaration["assembly"] = None
-        return
-    if not isinstance(assembly, dict):
-        raise TypeError(f"assembly must be a dict or None, got {type(assembly).__name__}")
-    missing = [k for k in _REQUIRED_ASSEMBLY_KEYS if k not in assembly]
-    if missing:
-        raise ValueError(f"assembly missing required keys: {missing}")
-    declaration["assembly"] = assembly
-
-
-def get_assembly(declaration: dict) -> dict | None:
-    """Return the rooted assembly declaration, or None if not set."""
-    return declaration.get("assembly")
 
