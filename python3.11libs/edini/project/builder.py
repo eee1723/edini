@@ -53,6 +53,15 @@ def build_project_scaffold(core_node: "hou.Node",
         _ensure_scaffold_nodes(subnet)
         built.append(cid) if cid not in skipped else None
 
+    # 第二遍：跨组件输入连线。必须在所有 subnet 建好之后做——外部连线
+    # setInput(i, upstream, port) 要求 upstream/downstream subnet 都已存在。
+    for comp in components:
+        cid = comp["id"]
+        subnet = core_node.node(cid)
+        if subnet is None:
+            continue
+        _ensure_input_scaffold(core_node, comp, subnet)
+
     # 记日志（成功）。
     decl = load_declaration(core_node)
     append_log(decl, kind="scaffold",
@@ -97,6 +106,40 @@ def _ensure_scaffold_nodes(subnet: "hou.Node") -> None:
 
     # 整理布局（真机观感，不影响逻辑）。
     subnet.layoutChildren()
+
+
+def _ensure_input_scaffold(core_node: "hou.Node", comp: dict,
+                           subnet: "hou.Node") -> None:
+    """为一个组件建/维护输入脚手架（外部连线 + 内部命名 null）。幂等。
+
+    对 comp 的 ports.in[] 的第 i 条：
+      - 外部：downstream.setInput(i, upstream, from_port) — downstream 的第 i
+        个输入连接器 ← upstream（in_entry["from"]）的第 from_port 个输出。
+      - 内部：建命名 null in_<from>_<anchor>，setInput(0, indirectInputs()[i])。
+        indirectInputs()[i] 对应外部第 i 个输入连接器。
+
+    upstream 不存在则跳过该条（局部声明安全）。已存在的内部节点跳过创建，
+    setInput 幂等——重跑只补缺失，不碰 LLM 接在 in_* 下游的连线。
+    """
+    in_ports = comp.get("ports", {}).get("in", [])
+    if not in_ports:
+        return
+    indirect_inputs = subnet.indirectInputs()
+    for i, in_entry in enumerate(in_ports):
+        from_id = in_entry["from"]
+        from_port = in_entry["port"]
+        anchor = in_entry["anchor"]
+        upstream = core_node.node(from_id)
+        if upstream is None:
+            # upstream 组件未建（局部声明）——跳过，留以后补。
+            continue
+        # 外部：下游第 i 输入 ← 上游第 from_port 输出。
+        subnet.setInput(i, upstream, from_port)
+        # 内部：命名 null ← indirectInputs()[i]。
+        in_name = f"in_{from_id}_{anchor}"
+        in_node = _ensure_node(subnet, "null", in_name)
+        indirect = indirect_inputs[i]
+        in_node.setInput(0, indirect)
 
 
 def _ensure_node(parent: "hou.Node", node_type: str,

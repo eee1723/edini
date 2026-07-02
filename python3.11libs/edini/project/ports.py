@@ -63,10 +63,24 @@ def validate_component_ports(ports: dict) -> None:
                         f"anchor point missing/illegal @name: {name!r}. "
                         f"Must match [A-Za-z][A-Za-z0-9_]*.")
 
+    seen_in_anchors: set[str] = set()
     for ip in in_ports:
         if not ip.get("from"):
             raise ValueError(
                 f"ports.in entry missing 'from' (source component id): {ip}")
+        # anchor 必填 + 合法名（= 内部命名节点 in_<from>_<anchor> 的键）。
+        anchor = ip.get("anchor")
+        if not anchor or not _ANCHOR_NAME_RE.match(anchor):
+            raise ValueError(
+                f"ports.in entry missing/illegal 'anchor': {anchor!r}. "
+                f"Must match [A-Za-z][A-Za-z0-9_]* — it names the internal "
+                f"input node in_<from>_<anchor>.")
+        # 同组件内 anchor 撞名 → 节点名冲突（幂等重建会撞 duplicate node name）。
+        if anchor in seen_in_anchors:
+            raise ValueError(
+                f"duplicate ports.in[].anchor within one component: {anchor!r}. "
+                f"In-port anchors must be unique (they form node names).")
+        seen_in_anchors.add(anchor)
 
 
 if __name__ == "__main__":

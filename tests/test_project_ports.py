@@ -82,6 +82,23 @@ class TestInPortValidation(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_component_ports(ports)
 
+    def test_validate_in_port_needs_anchor(self):
+        from edini.project.ports import validate_component_ports
+        ports = {"out": [{"index": 0, "kind": "geometry"}],
+                 "in": [{"from": "chassis", "port": 1}]}  # 缺 anchor
+        with self.assertRaises(ValueError):
+            validate_component_ports(ports)
+
+    def test_validate_in_port_rejects_duplicate_anchor(self):
+        """同组件内 in[].anchor 撞名拒绝（避免节点名冲突）。"""
+        from edini.project.ports import validate_component_ports
+        ports = {"out": [{"index": 0, "kind": "geometry"}],
+                 "in": [
+                     {"from": "chassis", "port": 1, "anchor": "wheel_mount"},
+                     {"from": "frame", "port": 0, "anchor": "wheel_mount"}]}
+        with self.assertRaises(ValueError):
+            validate_component_ports(ports)
+
 
 if __name__ == "__main__":
     unittest.main()
