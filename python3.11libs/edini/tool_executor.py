@@ -408,3 +408,31 @@ class ToolExecutor:
         if self._thread is not None:
             self._thread.join(timeout=2)
             self._thread = None
+
+
+# --- Process-level singleton: decoupled from any UI window -----------------
+#
+# The ToolExecutor is a global, stateless HTTP server (port 9876) that every
+# Pi subprocess calls back into via the EDINI_TOOL_PORT env var (see
+# config.get_pi_env). It carries no per-client state, so N Pi processes can
+# share one server. Previously its lifetime was bound to EdiniMainWindow
+# (constructed in __init__, stopped in closeEvent), which forced any other
+# RPC consumer (e.g. the Project HDA panel) to go through the main window.
+# This accessor makes it a process-level singleton: the first caller creates
+# + starts it, all callers share it, and it is never torn down by a single
+# window close (it lives until the Houdini process exits; its server thread
+# is a daemon, so it is reaped automatically).
+
+_global_executor: ToolExecutor | None = None
+
+
+def get_tool_executor() -> ToolExecutor:
+    """Return the process-level ToolExecutor singleton (creating + starting it
+    on first call). Safe to call from any thread; idempotent.
+    """
+    global _global_executor
+    if _global_executor is None:
+        _global_executor = ToolExecutor()
+        _global_executor.start()
+    return _global_executor
+

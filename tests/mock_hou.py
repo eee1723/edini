@@ -96,6 +96,12 @@ class MockParmTemplate:
         self.min_val = 0.0
         self.max_val = 10.0
         self._type_name = "Float"
+        # Hidden-flag / tags parity — real hou.ParmTemplate carries these on the
+        # base, so every subclass (incl. StringParmTemplate) supports them. The
+        # Project HDA builds a hidden string parm via hide(True) (the real hou
+        # API); this state is queried back with isHidden().
+        self._hidden = False
+        self._tags: dict[str, str] = {}
 
     def name(self) -> str:
         return self.name
@@ -107,6 +113,31 @@ class MockParmTemplate:
     # enum member name (e.g. "Float", "Menu").
     def type(self):
         return _MockTypeEnum(self._type_name)
+
+    # hou.parmData parity: dataType() returns the parmData enum member matching
+    # this template's value type (String/Float/Int). Mirrors real Houdini where
+    # e.g. StringParmTemplate.dataType() == hou.parmData.String.
+    def dataType(self):
+        return _parm_data_for_type(self._type_name)
+
+    def setHidden(self, value: bool) -> None:
+        """Mock of hou.ParmTemplate.setHidden (legacy alias)."""
+        self._hidden = bool(value)
+
+    def hide(self, value: bool) -> None:
+        """Mock of hou.ParmTemplate.hide — the real hou API name."""
+        self._hidden = bool(value)
+
+    def isHidden(self) -> bool:
+        """Mock of hou.ParmTemplate.isHidden."""
+        return self._hidden
+
+    def setTags(self, tags) -> None:
+        """Mock of hou.ParmTemplate.setTags — stores the tag dict."""
+        self._tags = dict(tags)
+
+    def tags(self) -> dict:
+        return dict(self._tags)
 
     def setMin(self, v: float) -> None:
         self.min_val = float(v)
@@ -140,6 +171,39 @@ class _MockTypeEnum:
 
     def name(self) -> str:
         return self._n
+
+
+class _ParmDataEnum:
+    """Stand-in for a hou.parmData enum member (e.g. hou.parmData.String).
+
+    Equality is value-based so a template's dataType() compares equal to the
+    same member exposed on the hou module (hou.parmData.String)."""
+    def __init__(self, n: str):
+        self._n = n
+
+    def __eq__(self, other) -> bool:
+        return isinstance(other, _ParmDataEnum) and other._n == self._n
+
+    def __hash__(self) -> int:
+        return hash(self._n)
+
+    def name(self) -> str:
+        return self._n
+
+
+# Singletons mirroring hou.parmData members, keyed by name.
+_PARM_DATA = type("_parmData_singletons", (), {
+    name: _ParmDataEnum(name) for name in (
+        "Int", "Float", "String", "Ramp", "Toggle", "Menu",
+        "Button", "Color", "File", "Font",
+    )
+})()
+
+
+def _parm_data_for_type(type_name: str) -> _ParmDataEnum:
+    """Map a parmTemplateType name (e.g. 'String') to its hou.parmData member."""
+    name = type_name if hasattr(_PARM_DATA, type_name) else "String"
+    return getattr(_PARM_DATA, name)
 
 
 class MockFloatParmTemplate(MockParmTemplate):
@@ -1499,6 +1563,10 @@ class MockHou:
     parmLook = type("parmLook", (), {"Regular": 0})()
     parmNaming = type("parmNaming", (), {"Base1": 0})()
     folderType = type("folderType", (), {"Tabs": 0, "Simple": 1})()
+
+    # hou.parmData enum — value-type members for each parm template kind.
+    # Used by ParmTemplate.dataType() comparisons (e.g. == hou.parmData.String).
+    parmData = _PARM_DATA
 
     def applicationVersionString(self) -> str:
         return "20.0.0 (mock)"
