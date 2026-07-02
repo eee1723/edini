@@ -1,6 +1,6 @@
 # 📊 仪表盘
 
-> **当前阶段**：Project HDA — 程序化建模"项目化身"容器（长期协作伙伴）&nbsp;|&nbsp; **状态**：最小闭环实现完成（11/12 任务，112 tests），待真机验证 &nbsp;|&nbsp; **最后更新**：2026-07-02
+> **当前阶段**：Project HDA — 组件建模地基（子系统 1）已交付，subnet 组件 + 端口信息点流水线协作（hython 6 测全过）&nbsp;|&nbsp; **状态**：地基交付，待 GUI 验证 → 子系统 2/3/4 &nbsp;|&nbsp; **最后更新**：2026-07-02
 
 ## 快速导航
 
@@ -12,6 +12,7 @@
 | [Procedural Harness](procedural-harness.html) | 程序化建模沙盒、诊断、验证、提交流程与手测重点 |
 | [踩坑记录](pitfalls.html) | 开发中的踩坑记录，支持分类/优先级/状态筛选 |
 | [参考资料](references.html) | 外部文档 · 设计决策 · API 参考 |
+| [组件地基验证](project-component-foundation.html) | Project HDA 组件建模地基的 GUI 验证指南（subnet 组件 + 端口信息点 + 输入/输出脚手架 + promote）|
 | [Agent交接](handoff.html) | 给新 Agent 和开发者的快速上下文 |
 | [评估系统](evaluation.html) | 智能体评估系统的设计理念与迭代记录 |
 | [知识→Skills演化](skills-evolution.html) | Hivemind 式持续学习：Traces → Knowledge → Pi Skills 闭环设计 |
@@ -41,7 +42,7 @@
 | 评估系统 | ✅ 5 维度评分 · LogParser · SQLite · EvalDashboard · edini_get_eval_stats · LLM-as-Judge (deepseek-chat) |
 | Recipe Library | ✅ **schema v2** · 5 工具（list/read/capture/**capture_tree**/rebuild）· 递归树抓取（树路径 recipe_id 防撞名）· kind（network\|vex）· vex_snippets（wrangle 代码+runover 可搜）· tree_path 分类面包屑 · 自动忽略 output/stashed 节点 · 空 Notes 自动生成 · 真实 Houdini 闭环已验证（6 叶子分类树一次性抓取）· popnet 穿透 bug 已修 · 30+2 subtests 全绿 · **2026-06-26 manifest 精度大修**（向量真实分量名/multiparm/版本别名/中英检索/孤儿清理）|
 | 声明式资产管道 | ✅ **里程碑2 完整交付** · 2 backend（native_chain + python 值注入）· 3 placement（attach / instances / **from-to 两点连接**）· orient 旋转 · 真机生成桌子/椅子/**自行车**（4 管材 + 2 轮子，224 点）· 实战测试暴露并修复 3 真实缺陷 · [路线图](progress.html#下一步计划) |
-| **Project HDA**（新主线） | 🚧 **最小闭环实现完成，待真机验证** · 一个程序化建模项目 = 一个 Project HDA（几何 subnet + 知识图谱富化声明 JSON 存隐藏 parm + 嵌入 PySide 面板 + 日志）· 本仓库**第一个真正的 Houdini Python Pane**（.pypanel 注册）· 11 brainstorming 决策（混合真实来源 / C 档图谱 / 检测偏离人确定 / subnet 浅镜像 / 富化声明即图谱 / 复用单例 RpcClient / 始终可 cook）· 把"语义同步"降级为"结构 diff"（架构支柱）· 112 tests 全绿 · [spec](../docs/superpowers/specs/2026-07-01-project-hda-design.md) · [计划](../docs/superpowers/plans/2026-07-01-project-hda-minimal-loop.md) · 分支 `feat/project-hda` |
+| **Project HDA**（新主线） | 🚧 **组件建模地基已交付（子系统 1），待 GUI 验证 → 子系统 2/3/4** · 范式重构：subnet 组件 + 端口信息点协议（`out[0]`=主几何 / `out[1..n]`=带属性锚点云）+ 输入脚手架（`in_<from>_<anchor>`）+ 组件流水线协作 + promote 参数提取 · 旧 rooted assembly 范式已移除 · 声明即知识图谱，drift = diff 意图 vs 实际网络（子系统 4）· builder=脚手架（确定性）/ 几何=LLM 自由活 · hython 决定性验证 6 测全过（subnet output 节点机制 + indirectInputs 输入 + spare parm 真实 API 三项真机发现）· [地基 spec](../docs/superpowers/specs/2026-07-02-project-component-foundation-design.md) · [地基计划](../docs/superpowers/plans/2026-07-02-project-component-foundation.md) · [GUI 验证指南](project-component-foundation.html) · 分支 `feat/project-component-foundation`（已合并 master）|
 | Procedural Harness（已关闭） | ⚰️ **已备份到 `_disabled_backup/`**，部分高质量前身（exprs/component_registry）被资产管道复活复用。旧版：`houdini_run_python_sandbox` · 声明式 Recipe Builder（`houdini_build_procedural_asset`）· 构造轴 · commit/discard lifecycle · [手测清单](procedural-harness.html) |
 
 ## 技术栈

@@ -9,7 +9,7 @@
   "wiki": {
     "version": "2.0",
     "created": "2026-06-03",
-    "last_updated": "2026-07-01-rooted-modeling-m3.5-tabular-fill-four-layouts"
+    "last_updated": "2026-07-02-project-component-foundation"
   },
   "features": {
     "search": true,
@@ -32,8 +32,9 @@
     {"id": "procedural-harness", "title": "Procedural Harness", "icon": "🧪", "order": 5},
     {"id": "pitfalls", "title": "踩坑记录", "icon": "⚠️", "order": 6, "filterable": true},
     {"id": "references", "title": "参考资料", "icon": "📚", "order": 7},
-    {"id": "handoff", "title": "Agent交接", "icon": "🤖", "order": 8},
-    {"id": "evaluation", "title": "评估系统", "icon": "📐", "order": 9},
-    {"id": "skills-evolution", "title": "知识→Skills演化", "icon": "🧠", "order": 10}
+    {"id": "project-component-foundation", "title": "组件地基验证", "icon": "🧱", "order": 8},
+    {"id": "handoff", "title": "Agent交接", "icon": "🤖", "order": 9},
+    {"id": "evaluation", "title": "评估系统", "icon": "📐", "order": 10},
+    {"id": "skills-evolution", "title": "知识→Skills演化", "icon": "🧠", "order": 11}
   ]
 }
