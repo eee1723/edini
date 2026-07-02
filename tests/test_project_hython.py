@@ -223,5 +223,71 @@ class TestPromoteHython(unittest.TestCase):
                       f"expression should ref chassis/length: {expr!r}")
 
 
+_FULL_HARNESS = r"""
+import json, sys, os
+sys.path.insert(0, os.path.join(r"%s", "python3.11libs"))
+import hou
+_hda = os.path.join(r"%s", "otls", "edini_project.hda")
+if os.path.isfile(_hda):
+    hou.hda.installFile(_hda)
+from edini.project.state import empty_declaration, add_component
+from edini.project.node import create_project_hda
+from edini.project.builder import build_project_scaffold, promote_params
+
+result = {"steps": {}}
+core = create_project_hda(name="proj_full")
+decl = empty_declaration("proj_full")
+add_component(decl, "chassis", purpose="车架",
+              ports_out=[
+                  {"index": 0, "kind": "geometry"},
+                  {"index": 1, "kind": "anchors", "points": [
+                      {"name": "wheel_mount", "role": "mount"}]}])
+add_component(decl, "wheels", purpose="车轮")
+
+# 全链路：scaffold → 加锚点 → 加 spare parm → promote
+build_project_scaffold(core, declaration=decl)
+chassis = core.node("chassis")
+wr = chassis.createNode("attribwrangle", "make_anchors")
+wr.parm("snippet").set('addpoint(0, set(2,0,1));\n'
+    'setpointattrib(0, "name", 0, "wheel_mount", "set");')
+wr.parm("class").set("detail")  # detail 模式：空输入也跑一次 addpoint
+chassis.node("out_anchors").setInput(0, wr)
+chassis.node("out_anchors").cook(force=True)  # 强制 cook 确保 output_1 有几何
+
+tmpl = hou.FloatParmTemplate("length", "Length", 1)
+chassis.addSpareParmTuple(tmpl)  # 真实 API（Task 5 验证）：addSpareParmTuple
+promote_params(core)
+
+result["steps"]["anchors_ok"] = (len(chassis.node("output_1").geometry().points()) == 1)
+result["steps"]["promote_ok"] = (core.parm("chassis_length") is not None)
+# 再跑 scaffold 确认幂等不破坏已加的内容。
+build_project_scaffold(core)
+result["steps"]["anchors_after_rebuild"] = (
+    len(chassis.node("output_1").geometry().points()) == 1)
+print("RESULT_JSON:" + json.dumps(result))
+""" % (_REPO, _REPO)
+
+
+@unittest.skipUnless(HYTHON, "hython not installed")
+class TestFullChainHython(unittest.TestCase):
+    def _run(self):
+        proc = subprocess.run(
+            [HYTHON, "-c", _FULL_HARNESS],
+            capture_output=True, text=True, timeout=180, cwd=_REPO)
+        combined = proc.stdout + proc.stderr
+        for line in combined.splitlines():
+            if line.startswith("RESULT_JSON:"):
+                return json.loads(line[len("RESULT_JSON:"):]), combined
+        self.fail(f"no RESULT_JSON.\nstdout:{proc.stdout}\nstderr:{proc.stderr}")
+
+    def test_full_chain(self):
+        """scaffold→锚点→promote→重建幂等 全链路。"""
+        res, _ = self._run()
+        self.assertTrue(res["steps"]["anchors_ok"], f"anchors: {res}")
+        self.assertTrue(res["steps"]["promote_ok"], f"promote: {res}")
+        self.assertTrue(res["steps"]["anchors_after_rebuild"],
+                        f"rebuild broke anchors: {res}")
+
+
 if __name__ == "__main__":
     unittest.main()
