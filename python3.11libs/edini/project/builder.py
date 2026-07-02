@@ -65,8 +65,10 @@ def build_project_model(core_node: "hou.Node", *, assembly: dict | None = None) 
 
     # Clear existing children of the core so rebuild is idempotent. The core is
     # a SOP-context HDA whose internal network holds the rooted geometry.
-    # HDAs ship locked by default (contents read-only); unlock so we can build
-    # and the user can hand-edit afterward.
+    # The HDA definition is authored UNLOCKED (lockContents=False +
+    # unlockNewInstances=True, see make_project_hda.py) so fresh instances are
+    # editable by design. _ensure_editable is kept as a defensive fallback for
+    # legacy/locked instances (no-op if already editable).
     _ensure_editable(core_node)
     _clear_children(core_node)
 

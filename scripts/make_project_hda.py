@@ -41,6 +41,16 @@ def main() -> None:
         # Python reference. Re-fetch by path before touching it again.
         subnet = hou.node(subnet_path)
         d = subnet.type().definition()
+        # Make the HDA UNLOCKED by default: the Project HDA hosts dynamically
+        # built + hand-editable geometry, so its contents must be editable
+        # without a runtime allowEditingOfContents() hack. This sets BOTH:
+        #   - lockContents=False  ("Save Contents as Locked" unchecked)
+        #   - unlockNewInstances=True  (new instances ship editable)
+        # so build_project_model can create SOPs inside directly.
+        opts = d.options()
+        opts.setLockContents(False)
+        opts.setUnlockNewInstances(True)
+        d.setOptions(opts)
         # Minimal default parms: none. The hidden __edini_state parm and design
         # params are added per-instance at runtime by create_project_hda.
         d.save(hda_file)
