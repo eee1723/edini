@@ -128,6 +128,34 @@ builder 对每个 component 建如下脚手架（subnet 内部，共 4 个节点
 - `output_0` / `output_1` 是 Houdini 的 subnet 子节点类型（subnet 内可建多个 output 节点，按节点顺序对应输出端序号）。
 - LLM 往 `out_geometry` 上游接节点建模（产主几何），往 `out_anchors` 上游接 addpoint/wrangle 产锚点云。`output_*` 节点和它们到 null 的连线由 builder 维护，LLM 不动。
 
+### 3.3b 输入脚手架（组件消费上游数据，builder 自动建）
+
+组件既有输出又有输入（spec §1 用户设想："subnet 第一输入端是组件输出，后续端口做信息端口"）。输出半边（§3.3）外，**输入半边也由 builder 标准化**，让 LLM 消费上游数据时不必自己摸索 subnet 输入机制。
+
+**Houdini subnet 输入机制（2026-07-02 hython 真机确认）：**
+- **外部连线**：`downstream.setInput(input_idx, upstream_node, output_idx)` —— downstream 的第 N 个输入端接 upstream 的第 output_idx 个输出端。
+- **内部取数**：`subnet.indirectInputs()` 返回 `OpSubnetIndirectInput` 列表（默认 4 个），`indirectInputs()[input_idx]` 对应外部第 input_idx 个输入端。内部节点 `setInput(0, indirect_input)` 即拿到上游数据。
+
+**builder 对声明里每个 `ports.in[]` 条目做两件事：**
+
+```
+ports.in[]: [{from:"chassis", port:1, anchor:"wheel_mount"}, ...]
+  ↓
+① 外部：downstream.setInput(<列表序号 i>, <from 节点>, <port>)
+        例：wheels.setInput(0, chassis, 1)  # wheels input0 ← chassis output1
+② 内部：downstream 内建命名 null "in_<from>_<anchor>"，
+        setInput(0, indirectInputs()[i])
+        例：wheels/in_chassis_wheel_mount (null) ← indirectInputs()[0]
+```
+
+LLM 消费上游只需：把自己的建模节点接在 `in_<from>_<anchor>` 之后，无需知道 indirectInputs 机制。
+
+**命名规则**：`in_<from>_<anchor>`（anchor 必填）。可读（一眼看出"从哪来的什么点"）、drift 可按名查、幂等（重跑识别已存在）。
+
+**anchor 校验**：`ports.in[].anchor` 必填；同一组件内跨条目 anchor 撞名拒绝（否则幂等建出重名节点）。加进 `validate_component_ports`。
+
+**幂等**：已存在的 `in_*` 节点跳过；rebuild 不碰 LLM 已接在 `in_*` 下游的建模节点（hython 验证：rebuild 后 my_wheel → in_chassis_wheel_mount 连线保持）。
+
 ### 3.4 设计依据
 
 - **subnet 多输出端**是 Houdini 原生能力（subnet 内建多个 `output` 节点即可形成多个 output connector），不造新机制。每个 output 节点按内部顺序对应一个对外输出端。
