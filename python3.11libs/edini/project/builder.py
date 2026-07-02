@@ -106,3 +106,84 @@ def _ensure_node(parent: "hou.Node", node_type: str,
     if existing is not None:
         return existing
     return parent.createNode(node_type, node_name=node_name)
+
+
+def promote_params(core_node: "hou.Node") -> dict:
+    """把所有组件 subnet 的 spare parm 提取到 core HDA 顶层。
+
+    对 core 下每个组件 subnet（./chassis, ./wheels, ...）：
+      读它的 spareParms() → 每个 hou.Parm <name>：
+        在 core 建 parm "<component>_<name>"（放 "<component>" folder）
+        设其表达式 ch("./<component>/<name>")
+    结果：用户在 core 顶层调 chassis_length → 驱动 chassis subnet → 几何 live。
+
+    幂等：已存在的 core parm 只更新表达式，不重复建。
+    返回 {success, promoted: [{component, parm}], project}。
+
+    真机 API（H21 hython 验证，Task 5）：节点上没有 spareParmGroup()/
+    setSpareParmGroup()（handoff bug#1 假设错误）。读用 spareParms()，
+    写用 addSpareParmFolder()/addSpareParmTuple()。
+    """
+    decl = load_declaration(core_node)
+    promoted = []
+
+    for comp in decl.get("components", []):
+        cid = comp["id"]
+        subnet = core_node.node(cid)
+        if subnet is None:
+            continue
+        # 读组件 subnet 的 spare parm 列表（真机 API：spareParms()）。
+        try:
+            spare_parms = subnet.spareParms()
+        except Exception:
+            continue
+        for sparmparm in spare_parms:
+            pname = _parm_name(sparmparm)
+            if pname is None:
+                continue
+            core_parm_name = f"{cid}_{pname}"
+            _install_core_parm(core_node, cid, pname, core_parm_name)
+            promoted.append({"component": cid, "parm": core_parm_name})
+
+    append_log(decl, kind="promote",
+               summary=f"promoted {len(promoted)} parm(s)",
+               payload={"promoted": promoted}, result_ok=True)
+    save_declaration(core_node, decl)
+    return {"success": True, "promoted": promoted,
+            "project": core_node.path()}
+
+
+def _parm_name(sparmparm) -> str | None:
+    """从 spare parm 取 parm 名。
+
+    真机 spareParms() 返回 list[hou.Parm]，每个有 .name()。
+    """
+    try:
+        return sparmparm.name()
+    except Exception:
+        return None
+
+
+def _install_core_parm(core_node: "hou.Node", component_id: str,
+                       subnet_parm: str, core_parm: str) -> None:
+    """在 core HDA 安装一个 parm，表达式引用组件 subnet 的同名 parm。
+
+    真机 API（H21 验证）：用 addSpareParmFolder() 建 folder +
+    addSpareParmTuple(template, in_folder=(folder,), create_missing_folders=True)
+    把 Float parm 放进该 folder。表达式设为相对 channel 引用。
+    幂等：已存在则只更新表达式（不再重复建 folder/parm）。
+    """
+    # 幂等：已存在的 core parm 只更新表达式。
+    existing = core_node.parm(core_parm)
+    if existing is not None:
+        existing.setExpression(f'ch("./{component_id}/{subnet_parm}")')
+        return
+    # 建 Float parm template（最常见类型）。
+    tmpl = hou.FloatParmTemplate(core_parm, core_parm, 1)
+    # create_missing_folders=True：folder 不存在则自动建，幂等友好。
+    core_node.addSpareParmTuple(tmpl, in_folder=(component_id,),
+                                create_missing_folders=True)
+    # 建完后设表达式。
+    p = core_node.parm(core_parm)
+    if p is not None:
+        p.setExpression(f'ch("./{component_id}/{subnet_parm}")')
