@@ -71,49 +71,86 @@ class _StreamBubble(QtWidgets.QFrame):
         self._label.setText(f'<div style="{_ai_bubble_style()}">{rendered}</div>')
 
 
-class _InputEdit(QtWidgets.QPlainTextEdit):
-    """Input box that survives IME (input method) candidate-window focus theft.
+class _InputDialog(QtWidgets.QDialog):
+    """Popout text-input dialog with full IME (Chinese/CJK) support.
 
-    Symptom being fixed: when typing Chinese (or any IME language) inside a
-    Houdini Python Panel, the IME candidate window pops up as a separate
-    top-level window and STEALS focus from the embedded QPlainTextEdit. The
-    Python Panel container doesn't restore focus afterward, so the user can't
-    keep typing. This doesn't happen in the standalone EdiniMainWindow (a real
-    top-level QMainWindow manages its own focus chain).
+    Why this exists: Houdini's Python Panel container intercepts keyboard
+    events BEFORE Qt's input-method pipeline (SideFX-acknowledged bug), so IME
+    composition (preedit) never reaches an embedded QPlainTextEdit — the
+    candidate window doesn't appear and the widget loses focus. This does NOT
+    affect Houdini's native parameter pane (different UI toolkit) or a real
+    top-level Qt window parented to hou.qt.mainWindow().
 
-    Fix: if focus is lost WHILE the input method is composing (a preedit string
-    is active), immediately reclaim focus. This lets the IME candidate window
-    do its job without orphaning the input box. We also force StrongFocus +
-    WA_InputMethodEnabled so Qt treats this widget as an IME target from the
-    start.
+    Fix from first principles: since a genuine top-level Qt window is the one
+    condition under which IME already works, move text entry into this QDialog
+    (parented to hou.qt.mainWindow). It's a real OS window, so the IME attaches
+    normally and Chinese input works perfectly.
+
+    Usage: the panel keeps a small inline box for quick English input; a
+    "input" button opens this dialog for CJK / longer messages. Enter or the
+    Send button returns the text to the panel via the submitted signal.
     """
+
+    # Emitted with the typed text when the user sends (Enter / Send button).
+    submitted = QtCore.Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFocusPolicy(QtCore.Qt.StrongFocus)
-        self.setAttribute(QtCore.Qt.WA_InputMethodEnabled, True)
-        # Track whether an IME preedit is in progress so focusOutEvent knows
-        # whether the loss is IME-induced.
-        self._ime_composing = False
+        self.setWindowTitle("Edini Project — Input")
+        self.resize(520, 220)
+        self._build_ui()
 
-    def inputMethodEvent(self, event):
-        # A non-empty preedit string means the IME is mid-composition (candidate
-        # window up). Empty preedit + commit string means composition finished.
-        if event.preeditString():
-            self._ime_composing = True
-        else:
-            self._ime_composing = False
-        super().inputMethodEvent(event)
+    def _build_ui(self) -> None:
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(8)
 
-    def focusOutEvent(self, event):
-        # If focus is lost while the IME is composing, the candidate window
-        # stole it. Reclaim focus so the user can continue typing. We defer
-        # via QTimer.singleShot(0) to avoid fighting Qt's internal focus
-        # negotiation during the same event delivery.
-        if self._ime_composing:
-            QtCore.QTimer.singleShot(0, self.setFocus)
+        hint = QtWidgets.QLabel("在此输入消息(支持中文输入法)。Enter 发送,Shift+Enter 换行。")
+        hint.setStyleSheet(f"color:#8b8fa8;font-size:{fs(10)};")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+
+        self.edit = QtWidgets.QPlainTextEdit()
+        self.edit.setAttribute(QtCore.Qt.WA_InputMethodEnabled, True)
+        self.edit.setFocusPolicy(QtCore.Qt.StrongFocus)
+        self.edit.setPlaceholderText("输入消息…")
+        self.edit.keyPressEvent = self._on_key  # Enter to send
+        lay.addWidget(self.edit, 1)
+
+        btn_row = QtWidgets.QHBoxLayout()
+        btn_row.addStretch(1)
+        cancel_btn = QtWidgets.QPushButton("取消")
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(cancel_btn)
+        send_btn = QtWidgets.QPushButton("发送")
+        send_btn.setDefault(True)
+        send_btn.clicked.connect(self._do_send)
+        btn_row.addWidget(send_btn)
+        lay.addLayout(btn_row)
+
+    def _on_key(self, event):
+        from PySide6 import QtCore as _qc
+        if event.key() in (_qc.Qt.Key_Return, _qc.Qt.Key_Enter) \
+           and not (event.modifiers() & (_qc.Qt.ShiftModifier | _qc.Qt.ControlModifier)):
+            self._do_send()
             return
-        super().focusOutEvent(event)
+        QtWidgets.QPlainTextEdit.keyPressEvent(self.edit, event)
+
+    def _do_send(self) -> None:
+        text = self.edit.toPlainText().strip()
+        if not text:
+            return
+        self.submitted.emit(text)
+        self.edit.clear()
+        self.accept()
+
+    def open_for_input(self) -> None:
+        """Show the dialog modally and clear it for fresh input."""
+        self.edit.clear()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self.edit.setFocus()
 
 
 class ProjectPanelWidget(QtWidgets.QWidget):
@@ -128,6 +165,11 @@ class ProjectPanelWidget(QtWidgets.QWidget):
         # See _get_rpc — independent of EdiniMainWindow, per spec decision #11.
         self._rpc = None
         self._build_ui()
+        # Popout input dialog for CJK/IME input (Houdini Python Panel embedded
+        # widgets can't receive IME composition — host event interception).
+        # Parented to hou.qt.mainWindow() so it's a real top-level OS window
+        # where IME works. Created lazily in _open_input_dialog.
+        self._input_dialog = None
 
     # --- UI construction -------------------------------------------------
 
@@ -156,10 +198,22 @@ class ProjectPanelWidget(QtWidgets.QWidget):
         cl.setContentsMargins(0, 0, 0, 0)
         self.timeline = _TimelineView()
         cl.addWidget(self.timeline, 1)
-        self.input_edit = _InputEdit()
+        # Input row: inline box (English / quick input) + a button that opens a
+        # popout dialog for CJK/IME input (embedded widgets can't receive IME).
+        input_row = QtWidgets.QHBoxLayout()
+        input_row.setSpacing(4)
+        self.input_edit = QtWidgets.QPlainTextEdit()
         self.input_edit.setFixedHeight(56)
+        self.input_edit.setPlaceholderText("输入消息 (Enter 发送)…")
         self.input_edit.installEventFilter(self)  # Enter to send (handled in eventFilter)
-        cl.addWidget(self.input_edit)
+        input_row.addWidget(self.input_edit, 1)
+        self.input_btn = QtWidgets.QPushButton("💬\n输入")
+        self.input_btn.setFixedHeight(56)
+        self.input_btn.setMaximumWidth(56)
+        self.input_btn.setToolTip("打开输入窗口(支持中文输入法)")
+        self.input_btn.clicked.connect(self._open_input_dialog)
+        input_row.addWidget(self.input_btn)
+        cl.addLayout(input_row)
         self.state_column = self._placeholder("State + Graph\n(statistics)")
         cols.addWidget(self.plan_column, 1)
         cols.addWidget(self.chat_column, 2)
@@ -205,10 +259,6 @@ class ProjectPanelWidget(QtWidgets.QWidget):
     def eventFilter(self, obj, event):
         from PySide6 import QtCore
         if obj is self.input_edit and event.type() == QtCore.QEvent.KeyPress:
-            # Don't intercept Enter while the IME is composing — that Enter
-            # confirms a candidate character, it must NOT send the message.
-            if getattr(self.input_edit, "_ime_composing", False):
-                return super().eventFilter(obj, event)
             if event.key() in (QtCore.Qt.Key_Return, QtCore.Qt.Key_Enter) \
                and not (event.modifiers() & (QtCore.Qt.ShiftModifier | QtCore.Qt.ControlModifier)):
                 self._send()
@@ -253,17 +303,40 @@ class ProjectPanelWidget(QtWidgets.QWidget):
         return self._rpc
 
     def _send(self) -> None:
+        """Send the inline input box's text (English / quick input)."""
         text = self.input_edit.toPlainText().strip()
-        if not text or self._bound_node_path is None:
+        if not text:
             return
         self.input_edit.clear()
-        # Show the user's message immediately.
+        self._send_text(text)
+
+    def _send_text(self, text: str) -> None:
+        """Core send path shared by inline input and the popout dialog.
+
+        Shows a user bubble immediately, then drives the LLM via this panel's
+        OWN RpcClient (independent Pi session, per spec decision #11).
+        """
+        if not text or self._bound_node_path is None:
+            return
         from edini.ui.agent_panel import _UserBubble
         self.timeline.add_widget(_UserBubble(text))
-        # Drive the LLM via this panel's OWN RpcClient (independent Pi session,
-        # per spec decision #11). Session setup happens once in _get_rpc.
         rpc = self._get_rpc()
         rpc.send_prompt(text)
+
+    def _open_input_dialog(self) -> None:
+        """Open the popout input dialog for CJK/IME input.
+
+        Houdini's Python Panel container intercepts keyboard events before Qt's
+        input-method pipeline, so IME (Chinese input) doesn't work in the
+        embedded inline box. A real top-level QDialog parented to
+        hou.qt.mainWindow() is the one condition where IME works, so we route
+        CJK text entry through here.
+        """
+        if self._input_dialog is None:
+            import hou
+            self._input_dialog = _InputDialog(hou.qt.mainWindow())
+            self._input_dialog.submitted.connect(self._send_text)
+        self._input_dialog.open_for_input()
 
     def _on_stream_delta(self, chunk: str) -> None:
         # Append to the lightweight _StreamBubble. append_chunk is plain-text
