@@ -967,3 +967,54 @@ Recipe Library 已完成「参考样本」定位转向，Dashboard HDA 的捕获
 - ✅ **degenerate 误报修复**（`inspect_geometry_health`）：改用 `prim.intrinsicValue("measuredarea")` 真实多边形面积（含 n-gon），异常回退修正 shoelace（全顶点扇形求和）；消除 `0.5·|cross|²`(=2·area²) 单位错误 + "只看前 3 顶点"采样偏差；fan-cap/n-gon cap 不再误报
 - ✅ **mock_hou 参数模板模拟**：`MockFloatParmTemplate`/`MockFolderParmTemplate`/`MockParmTemplateGroup` + `MockNode.parmTemplateGroup()`/`setParmTemplateGroup()`/`evalParm()` + subnet 注册，成功安装路径可测
 - ✅ **真实 Houdini 验证脚本**（`tests/manual_verify_fixes.py`）：pre-flight 组件代码 isolation cook 抓真实 traceback + 双修复端到端断言（参数挂载 + degenerate 不误报），13/13 全过
+
+---
+
+## 2026-07-02 组件建模地基（子系统 1）交付
+
+**范式重构**：Project HDA 建模能力从 rooted 扁平网络（root+mount+leaf+CTP）重构为**组件流水线范式**。这是 4 子系统全栈设计的**地基**（子系统 1）。
+
+### 核心架构（用户拍板，第一性原理）
+
+- **subnet = 组件间信息总线**：一个组件 = core 内一个 subnet，多输出端口对外暴露。`out[0]`=主几何，`out[1..n]`=**信息点云**（带 `@P`/`@orient`/`@name` 的 point）。组件流水线协作：车架输出 wheel_mount 锚点 → 车轮消费定位 → 车轮再输出锚点供辐条。LLM 自由决定组件粒度。
+- **新范式取代旧范式**：mount/leaf 扁平网络被组件流水线取代，旧 `assembly` 字段整套移除。
+- **声明 = 知识图谱**：`components`（含 `ports`/`params`）即组件关系图，drift = diff 意图 vs 实际网络（子系统 4）。
+- **Builder = 脚手架（确定性），几何 = LLM 自由活**：builder 只建空 subnet+4节点+连线，几何和跨 subnet 连线归 LLM。
+- **promote 脚本**：组件 subnet spare parm 一键按组件分组提取到 core HDA，两层 ch() live 引用。
+
+### 交付内容（8 任务，分支 feat/project-component-foundation）
+
+| 模块 | 内容 |
+|---|---|
+| `state.py` | 新 components schema（add_component/get_component，组件 id=subnet 名校验）+ 删 assembly |
+| `ports.py` | 端口协议常量（4 节点名）+ validate_component_ports 校验 |
+| `builder.py` | build_project_scaffold（脚手架）+ promote_params（参数提取），重写取代旧 build_project_model |
+| `tool_executor.py` | project_build_scaffold + project_promote_params handler |
+| `project.ts` | project_build_scaffold 工具（components 参数，删 assembly） |
+| 测试 | state 26 + ports 8（mock）+ project_hython 5（hython 决定性）|
+
+### 真实 API 发现（hython 决定性验证的价值，mock 测不出）
+
+1. **subnet output 节点机制**：subnet 内建 `output` 节点（`createNode("output")`），两个 output 节点按 `outputidx` 形成两个独立 subnet 输出端。decisive proof：两个端口放不同 marker 几何，下游消费者各取所需，确认端口独立且有序。**spec §12 最高风险点验证通过，plan 的猜测完全正确。**
+2. **spare parm 真实 API（纠正旧记录）**：READ 用 `node.spareParms()`（`list[hou.Parm]`），WRITE 用 `node.addSpareParmTuple(tmpl, in_folder=(folder,), create_missing_folders=True)`。**`spareParmGroup()`/`setSpareParmGroup()` 在真机不存在**（mock_hou 支持但真机没有，mock 误导了之前的实现——上方"spare 参数挂载修复"记录里 `setParmTemplateGroup`/`setSpareParmGroup` 的描述对真机不准确，以此 hython 验证为准）。
+
+### hython 决定性验证（5 测全过）
+
+- 脚手架结构：2 组件 subnet，各有 4 节点（out_geometry/out_anchors/output_0/output_1）
+- 锚点发射：LLM 加的锚点从 output_1 cook 出，带 @name
+- 幂等：重跑 builder 不重复建节点
+- promote：chassis_length 创建，表达式含 chassis/length
+- 全链路：scaffold→锚点→promote→重建，重建不破坏 LLM 已加内容
+
+### 全量回归
+
+672 passed（含新 39 测：state 26 + ports 8 + project_hython 5）。5 failed 均为 PySide6 import（test_error_surfacing.py，预存环境问题，与本次改动无关）。rooted-modeling 的 26 hython 测全过（旧能力零回归）。
+
+### 下一步（后续 spec，地基已稳）
+
+- **子系统 2**：多组件流水线 agent 端到端（LLM network_mode sandbox 在 subnet 内建模 + 跨 subnet 连线）
+- **子系统 3**：知识图谱描述生成（components/ports → 给 LLM 的"组件联系"自然语言）
+- **子系统 4**：drift 检测算法（声明意图 vs 实际网络确定性 diff，schema 已预埋接口）
+- **LLM 建模纪律 skill**：VEX 优先/禁纯 Python 单 SOP/native node 兜底（capability 验证后沉淀）
+
+**设计文档**：`docs/superpowers/specs/2026-07-02-project-component-foundation-design.md` + `docs/superpowers/plans/2026-07-02-project-component-foundation.md`。

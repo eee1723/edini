@@ -2,13 +2,14 @@
 
 > **用途**：让新 Agent 或开发者在 Edini 仓库里快速上手。
 
-**最后更新**：2026-07-02（Project HDA **接入 rooted 建模能力** — 从"能聊天"到"能干活"的根本跨越。SOP 上下文 HDA + assembly build inside + 定义层解锁。真机铁证：car 1152 点 + length live）
-**当前阶段**：**Project HDA**（新主线）—— 把程序化建模从"一次性生成器"升级为"长期协作伙伴"。一个程序化建模项目 = 一个 Project HDA（**SOP 上下文**：geo 外壳 + 内部 SOP HDA core 承载几何 + 知识图谱富化声明 JSON 存隐藏 parm + 嵌入 PySide 面板 + 日志）。rooted-modeling（M0–M3.5 全交付，607 tests + 26 hython 铁证）是其基础，build_assembly/测量链已**接入** Project HDA（非"将来"，是"现在"）。
-**建模能力状态**：✅ **已接入并真机验证**（2026-07-02，hython 端到端）。agent 调 `project_build_model` → rooted assembly 声明 → `build_assembly` → **几何直接建在 HDA core 内部**（零 /obj temp 污染）。真机铁证：car assembly → OUT 1152 点（底盘 box + 4 轮子），**LIVE**：length 4→8 → wheel 点 x 从 +2 移到 +4（轴距 live 跟随 root bbox，零烤值），重建幂等（13 子节点一致）。
-**最小闭环状态**：✅ **已真机验证通过**（2026-07-02，Houdini 21.0.440 GUI）。建 Project HDA → 开 Edini Project pane → 三栏布局 + 项目选择器 → 中英对话（独立 Pi 进程，每项目隔离 session）。
-**关键架构决策（本次确立）**：① HDA 用 **SOP 上下文**（非 Object）—— 内部直接是 SOP 环境，rooted 扁平网络可直接建在 HDA 内部，用户可手改，spare parm ch() 引用深度天然正确；② HDA **定义层解锁**（lockContents=False + unlockNewInstances=True）—— 实例天生可编辑，无需运行时 allowEditingOfContents hack；③ 声明新增 `assembly` 字段 —— rooted 格式 verbatim 存储，build_assembly 零 adapter 消费；④ **先接能力，drift 后说** —— 不碰 subnet 镜像/drift，先跑通建模主链路（用户实际可能很少手改几何）。
-**下一步**：① **GUI 端到端真实验证**（Houdini 里对话让 agent 建模，确认 LLM 能正确驱动 project_build_model）；② **drift 检测**（有了真实几何后，diff 参数/subnet vs JSON）；③ **计划树/图谱 UI**（按需）；④ Task 12（agent 侧 project_hda_create 工具）。
-**工作分支**：master（建模能力直接在 master，2 commits）。feat/project-hda 已合并（最小闭环 23 commits）。
+**最后更新**：2026-07-02（Project HDA **组件建模地基交付** — 范式重构：subnet 组件 + 端口信息点协议，取代旧 rooted assembly。hython 决定性验证 5 测全过）。
+**当前阶段**：**Project HDA**（新主线）—— 把程序化建模从"一次性生成器"升级为"长期协作伙伴"。一个程序化建模项目 = 一个 Project HDA（**SOP 上下文**：geo 外壳 + 内部 SOP HDA core 承载几何 + 知识图谱富化声明 JSON 存隐藏 parm + 嵌入 PySide 面板 + 日志）。
+**组件建模地基状态（2026-07-02 交付，子系统 1）**：✅ **hython 决定性验证通过**。新范式：一个组件 = core 内一个 **subnet**，通过**多输出端口**对外暴露——`out[0]`=主几何（null `out_geometry` → `output_0` output 节点形成 subnet 输出端 1），`out[1..n]`=**信息点云**（带 `@P`/`@orient`/`@name` 的 point，null `out_anchors` → `output_1`）。组件间流水线协作（车架输出 wheel_mount 锚点 → 车轮消费定位）。真机铁证：subnet output 节点机制验证通过（两个 output 节点映射到两个独立输出端，下游各取所需）；锚点 @name 发射正确；重建幂等不破坏 LLM 已加内容；promote 生成 chassis_length 两层 ch() live 引用。
+**旧 assembly 范式已移除**：`assembly` 字段、`get_assembly`/`set_assembly`、`build_project_model`、`project_build_model` 工具全部清除。rooted-modeling skill（assembly_builder/vex_strategies/measure）**保留**给 skill 用，只是 Project HDA 不再调。
+**关键架构决策（本次确立）**：① **subnet = 组件间信息总线**（端口=信息锚点，非 drift 容器）—— 第一输入端是组件输出，后续端口输出给其他组件做定位定向；② **新范式取代旧范式** —— mount/leaf 扁平网络被组件流水线取代；③ **声明 = 知识图谱** —— `components`（含 `ports`/`params`）即组件关系图，drift = diff 这份意图 vs 实际网络；④ **Builder = 脚手架（确定性），几何 = LLM 自由活** —— builder 只建空 subnet+4节点+连线，几何和跨 subnet 连线归 LLM；⑤ **promote 脚本** —— 组件 subnet spare parm 一键按组件分组提取到 core HDA，两层 ch() live 引用。
+**真实 API 发现（2026-07-02 hython 验证，重要）**：① subnet 内建 `output` 节点类型就是 `"output"`（`createNode("output")`），两个 output 节点按 `outputidx` 形成两个独立 subnet 输出端；② **spare parm API**：READ 用 `node.spareParms()`（返回 `list[hou.Parm]`），WRITE 用 `node.addSpareParmTuple(tmpl, in_folder=(folder,), create_missing_folders=True)`——`spareParmGroup()`/`setSpareParmGroup()` 在真机**不存在**（旧 handoff bug#1 描述不准确，以此为准）。
+**下一步**：① **子系统 2：多组件流水线 agent 端到端**（LLM 用 network_mode sandbox 在 subnet 内建模 + 跨 subnet 连线）；② **子系统 3：知识图谱描述生成**（components/ports 渲染成给 LLM 的"组件联系"自然语言）；③ **子系统 4：drift 检测算法**（声明意图 vs 实际网络的确定性 diff，schema 已预埋接口）；④ LLM 建模纪律 skill（VEX 优先/禁纯 Python 单 SOP）。
+**工作分支**：`feat/project-component-foundation`（组件地基，8 commits）。master 上的旧 assembly 已合并。
 
 ---
 
@@ -40,17 +41,20 @@ rooted-modeling 的 `build_assembly` 是**一次性生成器**：agent 产声明
 
 ```
 python3.11libs/edini/project/
-  state.py        # 声明 schema（含 assembly 字段）+ JSON↔隐藏 parm + plan/log/assembly 助手（纯 Python，25 单测）
+  state.py        # 声明 schema（components/ports/params）+ JSON↔隐藏 parm + plan/log 助手 + add_component/get_component（纯 Python，26 单测）
+  ports.py        # 端口协议常量（out_geometry/out_anchors/output_0/output_1 节点名）+ validate_component_ports（纯逻辑，8 单测）
   node.py         # 隐藏 string parm 模板 + create_project_hda（SOP 上下文：geo 外壳 + 内部 core）+ find_project_cores
-  builder.py      # build_project_model：声明→validate→unlock→build_assembly→log+components 镜像（几何建在 core 内部）
+  builder.py      # build_project_scaffold（建组件 subnet+4节点脚手架）+ promote_params（spare parm→core HDA 两层 ch() live）
   panel/
     project_widget.py    # 三栏面板 + 项目选择器 + 对话接线 + 轻量流式渲染 + IME popout
     project_pane.py      # onCreateInterface() 入口函数（Houdini Python Panel 真实写法）
 python_panels/edini_project.pypanel  # .pypanel XML（走 HOUDINI_PYTHON_PANEL_PATH 发现）
 otls/edini_project.hda   # edini::project 类型（SOP 上下文 + 定义层解锁，hython + GUI 验证）
 scripts/make_project_hda.py  # 一次性 HDA 生成脚本（SOP 上下文 + lockContents=False + unlockNewInstances=True）
-pi-extensions/edini-tools/tools/project.ts  # project_build_model TS schema（agent 调用入口）
-tests/test_project_state.py  # 25 单测（含 assembly 字段）
+pi-extensions/edini-tools/tools/project.ts  # project_build_scaffold TS schema（agent 调用入口）
+tests/test_project_state.py   # 26 单测（components schema，无 assembly）
+tests/test_project_ports.py   # 8 单测（端口协议）
+tests/test_project_hython.py  # 5 hython 决定性测试（脚手架结构/锚点发射/幂等/promote/全链路）
 ```
 
 **关键设计点（真机验证后定稿）**：
