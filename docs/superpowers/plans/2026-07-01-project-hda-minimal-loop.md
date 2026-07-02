@@ -856,7 +856,17 @@ git commit -m "feat(project-hda): ProjectPanelWidget three-column skeleton + pro
 
 The `.pypanel` XML (format per Shotgun `tk-houdini` reference + SideFX docs) defines an `<interface>` whose `<script>` creates a `hou.pypanel.PythonPanelInterface` subclass. That subclass's `createInterface()` returns the `ProjectPanelWidget`.
 
-- [ ] **Step 1: Write the PythonPanelInterface subclass**
+- [x] **Step 1: Write the PythonPanelInterface subclass** ✅ CORRECTED during verification
+
+> **VERIFICATION CORRECTION (2026-07-02, real-hython):** The original plan below
+> assumed `hou.pypanel.PythonPanelInterface` is a base class to subclass, and that
+> the `.pypanel` `<script>` must define an `interface` object. **Both are wrong.**
+> `hou.pypanel` has no classes (only functions); `hou.PythonPanelInterface` exists
+> but is a metadata class, not meant for subclassing. The real pattern (see
+> Houdini's shipped `BookmarksEditor.pypanel`): the `<script>` defines (or imports)
+> a **module-level function `onCreateInterface()`** that builds and **returns** the
+> root QWidget. Houdini calls it per pane-tab. No class, no `createInterface`
+> method, no `kwargs`. Also PySide**6** not PySide2 on Houdini 21.
 
 Create `python3.11libs/edini/project/panel/project_pane.py`:
 

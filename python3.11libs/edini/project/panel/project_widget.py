@@ -5,9 +5,9 @@ version: project selector + placeholder columns. Reuses edini.ui.theme.
 """
 from __future__ import annotations
 
-from PySide2 import QtCore, QtWidgets
-# NOTE: Houdini 21 ships PySide2. If your Houdini uses PySide6, swap the import;
-# the Qt API used here is identical between PySide2 and PySide6.
+from PySide6 import QtCore, QtWidgets
+# NOTE: Houdini 21 ships PySide6 (matches the rest of edini.ui). The Qt API used
+# here is identical to PySide2's.
 
 from edini.ui.theme import apply_theme, accent_color, fs
 
@@ -96,7 +96,7 @@ class ProjectPanelWidget(QtWidgets.QWidget):
     # --- Chat: send + stream back via shared singleton RpcClient ---------
 
     def eventFilter(self, obj, event):
-        from PySide2 import QtCore
+        from PySide6 import QtCore
         if obj is self.input_edit and event.type() == QtCore.QEvent.KeyPress:
             if event.key() in (QtCore.Qt.Key_Return, QtCore.Qt.Key_Enter) \
                and not (event.modifiers() & (QtCore.Qt.ShiftModifier | QtCore.Qt.ControlModifier)):

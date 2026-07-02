@@ -1,11 +1,8 @@
-<?xml version='1.0' encoding='UTF-8'?>
+<?xml version="1.0" encoding="UTF-8"?>
 <pythonPanelDocument>
   <interface name="edini_project" label="Edini Project" icon="MISC_python">
-    <script><![CDATA[
-from edini.project.panel.project_pane import ProjectPanelInterface
-interface = ProjectPanelInterface(**kwargs)
+    <script><![CDATA[from edini.project.panel.project_pane import onCreateInterface
 ]]></script>
+    <includeInPaneTabMenu menu_position="100" create_separator="false"/>
   </interface>
-  <interfacesMenu type="toolbar"><interfaceItem name="edini_project" /></interfacesMenu>
-  <interfacesMenu type="panetab"><interfaceItem name="edini_project" /></interfacesMenu>
 </pythonPanelDocument>

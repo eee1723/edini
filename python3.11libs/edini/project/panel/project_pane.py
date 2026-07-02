@@ -1,22 +1,24 @@
-"""PythonPanelInterface for the Project HDA panel.
+"""Project HDA Python Panel entry point.
 
-Houdini's Python Panel system instantiates this and calls createInterface()
-to get the widget shown in the pane tab.
+Houdini's Python Panel system evaluates the .pypanel <script> whenever a pane
+tab of this interface is created. The script must define (or import) a module-
+level function ``onCreateInterface()`` that builds and returns the root QWidget.
+See the official BookmarksEditor.pypanel shipped with Houdini for the canonical
+pattern.
+
+We keep the widget construction in project_widget.py and just expose the entry
+function here.
 """
 from __future__ import annotations
 
-import hou
-from PySide2 import QtWidgets
 
-from edini.project.panel.project_widget import ProjectPanelWidget
+def onCreateInterface():
+    """Build and return the Project HDA panel's root widget.
 
+    Called by Houdini each time an "Edini Project" pane tab is created.
+    """
+    from edini.project.panel.project_widget import ProjectPanelWidget
 
-class ProjectPanelInterface(hou.pypanel.PythonPanelInterface):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self._widget: ProjectPanelWidget | None = None
-
-    def createInterface(self) -> QtWidgets.QWidget:
-        self._widget = ProjectPanelWidget(self.parent())
-        self._widget.refresh_project_list()
-        return self._widget
+    widget = ProjectPanelWidget()
+    widget.refresh_project_list()
+    return widget
