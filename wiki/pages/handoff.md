@@ -2,10 +2,11 @@
 
 > **用途**：让新 Agent 或开发者在 Edini 仓库里快速上手。
 
-**最后更新**：2026-07-02（Project HDA — 程序化建模"项目化身"容器：brainstorming 11 决策 + spec + 12 任务计划 + subagent-driven 最小闭环实现，11/12 任务完成，112 tests 全绿，待真机验证）
+**最后更新**：2026-07-02（Project HDA 最小闭环**真机验证通过** — Houdini 21 GUI 端到端：建 HDA + 开面板 + 中英对话。23 commits 合并 master。真机抓修 8 个 mock 测不出的 bug）
 **当前阶段**：**Project HDA**（新主线）—— 把程序化建模从"一次性生成器"升级为"长期协作伙伴"。一个程序化建模项目 = 一个 Project HDA（几何 subnet + 知识图谱富化声明 JSON 存隐藏 parm + 嵌入 PySide 面板 + 日志）。rooted-modeling（M0–M3.5 全交付，607 tests + 26 hython 铁证）是其基础，但 Project HDA 是其上的**容器化 + 协作化升级**，不是取代——rooted 的 build_assembly/测量链是将来"按需接入"的建模能力。
-**下一步**：① **用户真机验证最小闭环**（跑 `python scripts/install.py` 注册 pypanel 路径 → 重启 Houdini → `from edini.project.node import create_project_hda; create_project_hda(name="project_test")` → 开 Edini Project pane → 对话）；② 验证通过后用 `finishing-a-development-branch` 把 `feat/project-hda` 合回 master；③ 后续候选：drift 检测实现 / 计划树 UI 交互 / 接入 rooted 建模能力 / Task 12（agent 侧 project_hda_create 工具）。
-**工作分支**：`feat/project-hda`（实现在此分支，13 commits，**尚未合并 master**，待真机验证）
+**最小闭环状态**：✅ **已真机验证通过**（2026-07-02，Houdini 21.0.440 GUI）。建 Project HDA → 开 Edini Project pane → 三栏布局 + 项目选择器 → 中英对话（独立 Pi 进程，每项目隔离 session）。真机抓修 8 个 bug（全是 mock 测不出的真实环境问题：API 签名差异 / pypanel 发现机制 / PySide6 / IME / Pi bootstrap 时序）。
+**下一步**：① **计划树 UI 交互**（左栏可视化 plan 待办树，checkbox 四态，"推进选中"让 agent 做该项）；② **drift 检测**（diff 参数/subnet vs JSON，偏离提示人裁决）；③ **接入 rooted 建模能力**（build_assembly/测量链）；④ Task 12（agent 侧 project_hda_create 工具）。
+**工作分支**：`feat/project-hda` 已合并 master（23 commits）。后续新方向开新分支。
 
 ---
 
@@ -33,26 +34,38 @@ rooted-modeling 的 `build_assembly` 是**一次性生成器**：agent 产声明
 10. 参数管理=**HDA 原生参数接口**
 11. 多项目=**每个 HDA 独立面板 + 独立 Pi session**
 
-### 最小闭环（已实现，待真机验证）
+### 最小闭环（✅ 已真机验证通过，2026-07-02）
 
 ```
 python3.11libs/edini/project/
   state.py        # 声明 schema + JSON↔隐藏 parm + plan/log 助手（纯 Python，19 单测）
   node.py         # 隐藏 string parm 模板 + create_project_hda（唯一 import hou 的模块）
   panel/
-    project_widget.py    # 三栏面板（计划树/对话/状态）+ 项目选择器 + 对话接线
-    project_pane.py      # PythonPanelInterface（createInterface 返回 widget）
-python_panels/edini_project.pypanel  # .pypanel XML 注册（本仓库第一个真正的 Houdini Python Pane；放 python_panels/ 走 HOUDINI_PYTHON_PANEL_PATH 发现，见下方纠正）
-otls/edini_project.hda   # edini::project 类型（hython 验证 found:True）
+    project_widget.py    # 三栏面板 + 项目选择器 + 对话接线 + 轻量流式渲染 + IME popout
+    project_pane.py      # onCreateInterface() 入口函数（Houdini Python Panel 真实写法）
+python_panels/edini_project.pypanel  # .pypanel XML（走 HOUDINI_PYTHON_PANEL_PATH 发现）
+otls/edini_project.hda   # edini::project 类型（hython + GUI 验证）
 scripts/make_project_hda.py  # 一次性 HDA 生成脚本
 tests/test_project_state.py  # 19 单测
 ```
 
-**关键设计点**：面板复用**单例 RpcClient**（via `open_chat_window()._rpc_client`），绝不每 HDA 起 Pi 进程（会撞端口 9876）；每项目靠 `send_set_session_name` 开独立 Pi session。声明 JSON 存在隐藏 string parm `__edini_state`（随 .hip 自包含）。**刻意不导入** assembly_builder/vex_strategies——这些是将来按需接入的建模能力。
+**关键设计点（真机验证后定稿）**：
+- **每面板独立 RpcClient + 独立 Pi 进程**（spec 决策 #11）。不寄生主窗口——Pi 找 9876 工具执行器靠 `EDINI_TOOL_PORT` 环境变量，不依赖对象引用，多个 Pi 天然共享一个无状态 HTTP server。
+- **ToolExecutor 是进程级单例**（`get_tool_executor()`），与 EdiniMainWindow 生命周期解耦。主窗口 closeEvent 不再 stop 它（否则关一个窗口会杀死所有项目的工具通道）。
+- **对话 bootstrap 时序**：连接 `status_changed`，首次 connected 时 `set_session_name` + `set_model`（Pi 冷启动无模型配置，必须设否则首条消息无回复）。**不要** `send_new_session`（进程已自带全新 session，且会触发 visionizer stale-ctx 报错阻塞 LLM）。
+- 声明 JSON 存在隐藏 string parm `__edini_state`（随 .hip 自包含）。**刻意不导入** assembly_builder/vex_strategies——这些是将来按需接入的建模能力。
 
-### 参考文档
-- spec：`docs/superpowers/specs/2026-07-01-project-hda-design.md`（§13 定义最小闭环）
-- 实现计划：`docs/superpowers/plans/2026-07-01-project-hda-minimal-loop.md`（12 TDD 任务）
+**真机验证抓修的 8 个 bug**（全是 mock 测不出的真实环境问题）：
+1. `setHidden`/`spareParmGroup` → 真实 API 是 `hide()`/`addSpareParmTuple`
+2. pane 找不到 → 包 JSON 用无效的 `houdini.python_panels` 键，改 `HOUDINI_PYTHON_PANEL_PATH` 环境变量 + `python_panels/` 目录
+3. PySide2 + 继承 `hou.pypanel.PythonPanelInterface` 崩溃 → Houdini 21 用 PySide6；`.pypanel` 真实写法是模块级函数 `onCreateInterface()` 返回 widget
+4. 每次发送弹主窗口 → 独立 RpcClient + ToolExecutor 进程单例（不再寄生 `open_chat_window`）
+5. 流式卡顿（输入框冻结）→ `_AiBubble.update_streaming` 每 chunk 跑全文 mistune + QLabel 富文本重排；改轻量 `_StreamBubble`（纯文本流式，finalize 才跑一次 markdown）
+6. 中文输入失焦 → Houdini Python Panel 容器在 Qt 输入法管道前拦截键盘事件（SideFX 确认的 bug），嵌入 widget IME 不可用；改 popout 输入对话框（父窗口 `hou.qt.mainWindow()`，真实顶层窗口 IME 正常）
+7. 首条消息无回复 → bootstrap 时未 `set_model`（Pi 冷启动无 provider/model）
+8. visionizer stale-ctx 阻塞 LLM → 去掉多余的 `send_new_session`（每面板已是独立 Pi 进程，session 天然隔离）
+
+**已知限制**：嵌入面板的内联输入框不支持中文 IME（Houdini 容器层限制，非配置问题），中文需点 💬 按钮走 popout 对话框。英文/粘贴不受影响。
 
 ---
 
