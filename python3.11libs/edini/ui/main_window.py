@@ -9,7 +9,7 @@ import os
 from PySide6 import QtCore, QtWidgets
 
 from edini.rpc_client import RpcClient
-from edini.tool_executor import ToolExecutor
+from edini.tool_executor import ToolExecutor, get_tool_executor
 from edini import screenshots
 from edini.ui.chat_runtime import ChatRuntime
 from edini.ui.theme import apply_theme, accent_color
@@ -49,7 +49,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self.setWindowTitle("Edini Agent")
         self.resize(1520, 1000)
 
-        self._tool_executor = ToolExecutor()
+        self._tool_executor = get_tool_executor()
         self._rpc_client = RpcClient()
         self._chat_runtime = ChatRuntime(self._rpc_client, self)
         self._current_session_path = ""
@@ -200,6 +200,10 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self._rpc_client.set_cwd(cwd)
         self.history_panel.set_cwd(cwd)
 
+        # ToolExecutor is now a process-level singleton (get_tool_executor),
+        # already started on first access. start() is idempotent — kept as a
+        # defensive no-op. NOTE: closeEvent no longer stops it, so the shared
+        # HTTP server survives window close/reopen (other consumers depend on it).
         self._tool_executor.start()
         self._rpc_client.start()
         self.history_panel.load_sessions()
@@ -1166,7 +1170,11 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
     def closeEvent(self, event):
         from edini.ui.windows import _main_window as global_main
         self._rpc_client.stop()
-        self._tool_executor.stop()
+        # NOTE: ToolExecutor is a process-level singleton shared by all RPC
+        # consumers (main window + Project HDA panels + future ones). Do NOT
+        # stop it here — closing one window must not kill the HTTP server
+        # other panels' Pi subprocesses are still calling. It is reaped on
+        # Houdini process exit (daemon thread).
         super().closeEvent(event)
         # Release the global singleton so reopen creates a fresh window
         if global_main is self:
