@@ -233,12 +233,11 @@ class ProjectPanelWidget(QtWidgets.QWidget):
     # --- Project binding -------------------------------------------------
 
     def refresh_project_list(self) -> None:
-        """Populate the dropdown with all edini::project nodes in the scene."""
-        import hou
+        """Populate the dropdown with all Project cores in the scene."""
+        from edini.project.node import find_project_cores
         self.project_combo.blockSignals(True)
         self.project_combo.clear()
-        nodes = hou.nodeTypeCategories()["Object"].nodeType("edini::project").instances()
-        for n in nodes:
+        for n in find_project_cores():
             self.project_combo.addItem(n.path(), userData=n.path())
         self.project_combo.blockSignals(False)
         if self.project_combo.count():

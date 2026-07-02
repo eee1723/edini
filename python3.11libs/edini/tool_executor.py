@@ -42,6 +42,7 @@ from edini.recipe_library import (
     set_node_notes,
 )
 from edini.assembly_builder import build_assembly as _build_assembly_network
+from edini.project.builder import build_project_model as _build_project_model
 
 # NOTE: Two procedural pipelines are archived under _disabled_backup/:
 #   1. procedural-modeling/  — prompt-driven build_procedural_asset + G1-G3 gates.
@@ -133,6 +134,30 @@ def build_assembly(assembly: dict | None = None, assembly_path: str | None = Non
     result = _build_assembly_network(assembly, root_path)
     result["sandbox_root"] = root_path
     return result
+
+
+def _project_build(core_path: str | None = None,
+                   assembly: dict | None = None, **_) -> dict[str, Any]:
+    """Build rooted geometry inside a Project HDA core node.
+
+    `core_path` is the edini::project SOP HDA instance (e.g.
+    /obj/proj/project_core). If `assembly` is given (rooted declaration dict),
+    it is set into the declaration before building; otherwise the existing
+    declaration's assembly is rebuilt. Wraps builder.build_project_model with
+    error guarding so tool failures never raise to the HTTP handler.
+    """
+    if not core_path:
+        return {"success": False, "error": "'core_path' is required (the edini::project SOP HDA instance path)"}
+    try:
+        import hou
+        node = hou.node(core_path)
+        if node is None:
+            return {"success": False, "error": f"core node not found: {core_path}"}
+        return _build_project_model(node, assembly=assembly)
+    except Exception as e:
+        import traceback
+        return {"success": False, "error": str(e),
+                "traceback": traceback.format_exc()}
 
 
 # Map tool names to handler functions
@@ -301,6 +326,11 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
         assembly_path=kw.get("assembly_path"),
         sandbox_name=kw.get("sandbox_name", "assembly"),
     ),
+    # Build the rooted geometry INSIDE a Project HDA core node (SOP context).
+    # Either pass an inline `assembly` (rooted declaration) to set+build in one
+    # shot, or omit it to rebuild the existing declaration. `core_path` is the
+    # edini::project SOP HDA instance path (e.g. /obj/proj/project_core).
+    "project_build_model": lambda **kw: _project_build(**kw),
 }
 
 # Backward-compatibility tool aliases (pre-Task-7 rename).

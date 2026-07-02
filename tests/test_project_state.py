@@ -194,6 +194,54 @@ class TestAppendLog(unittest.TestCase):
         self.assertEqual(decl["log"][1]["summary"], "second")
 
 
+class TestAssembly(unittest.TestCase):
+    def test_empty_declaration_has_assembly_none(self):
+        from edini.project.state import empty_declaration
+        d = empty_declaration("x")
+        self.assertIsNone(d["assembly"])
+
+    def test_set_assembly_stores_dict(self):
+        from edini.project.state import empty_declaration, set_assembly, get_assembly
+        d = empty_declaration("x")
+        asm = {"id": "car", "root": {"shape": {"type": "box"}}}
+        set_assembly(d, asm)
+        self.assertEqual(get_assembly(d), asm)
+
+    def test_set_assembly_none_clears(self):
+        from edini.project.state import empty_declaration, set_assembly, get_assembly
+        d = empty_declaration("x")
+        set_assembly(d, {"id": "car", "root": {"shape": {"type": "box"}}})
+        set_assembly(d, None)
+        self.assertIsNone(get_assembly(d))
+
+    def test_set_assembly_rejects_missing_keys(self):
+        from edini.project.state import empty_declaration, set_assembly
+        d = empty_declaration("x")
+        with self.assertRaises(ValueError):
+            set_assembly(d, {"id": "car"})  # missing 'root'
+        with self.assertRaises(ValueError):
+            set_assembly(d, {"root": {}})  # missing 'id'
+
+    def test_set_assembly_rejects_non_dict(self):
+        from edini.project.state import empty_declaration, set_assembly
+        d = empty_declaration("x")
+        with self.assertRaises(TypeError):
+            set_assembly(d, "not a dict")
+
+    def test_assembly_round_trips_through_save_load(self):
+        from edini.project.state import (empty_declaration, set_assembly,
+                                         save_declaration, load_declaration)
+        node = _FakeNode()
+        d = empty_declaration("car")
+        set_assembly(d, {"id": "car", "params": {"length": 4.0},
+                         "root": {"shape": {"type": "box"}}})
+        save_declaration(node, d)
+        loaded = load_declaration(node)
+        self.assertIsNotNone(loaded["assembly"])
+        self.assertEqual(loaded["assembly"]["id"], "car")
+        self.assertEqual(loaded["assembly"]["params"]["length"], 4.0)
+
+
 class TestInstallStateParm(unittest.TestCase):
     """Tests that build_state_parm_template builds a hidden string parm template.
     Uses the repo's mock_hou so no Houdini runtime is needed."""
