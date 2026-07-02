@@ -11,9 +11,13 @@ from .state import STATE_PARM, empty_declaration, save_declaration
 
 
 def build_state_parm_template() -> hou.StringParmTemplate:
-    """Build the hidden string parm template that holds the declaration JSON."""
+    """Build the hidden string parm template that holds the declaration JSON.
+
+    Hidden via ``hide(True)`` (the real hou API) — hidden parms still eval and
+    can be channel-referenced, they just don't show in the parameter pane.
+    """
     tmpl = hou.StringParmTemplate(STATE_PARM, "Edini State", 1)
-    tmpl.setHidden(True)
+    tmpl.hide(True)
     tmpl.setTags({"editor": "1"})  # multi-line string editor
     return tmpl
 
@@ -30,11 +34,10 @@ def create_project_hda(name: str = "project", parent_path: str = "/obj",
         raise ValueError(f"parent not found: {parent_path}")
     node = parent.createNode("edini::project", node_name=name)
 
-    # Install the hidden state parm via the node's spare-parm group,
-    # then seed the declaration JSON.
-    grp = node.spareParmGroup()
-    grp.appendToFolder("Spare", build_state_parm_template())
-    node.setSpareParmGroup(grp)
+    # Install the hidden state parm via the node's spare-parm API, then seed
+    # the declaration JSON. addSpareParmTuple is the real hou API for adding
+    # a single spare parm (the parm template carries the hidden flag).
+    node.addSpareParmTuple(build_state_parm_template())
 
     declaration = empty_declaration(project_name=name, goal=goal)
     save_declaration(node, declaration)

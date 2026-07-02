@@ -98,8 +98,8 @@ class MockParmTemplate:
         self._type_name = "Float"
         # Hidden-flag / tags parity — real hou.ParmTemplate carries these on the
         # base, so every subclass (incl. StringParmTemplate) supports them. The
-        # Project HDA builds a hidden string parm via setHidden(True); this state
-        # is queried back with isHidden().
+        # Project HDA builds a hidden string parm via hide(True) (the real hou
+        # API); this state is queried back with isHidden().
         self._hidden = False
         self._tags: dict[str, str] = {}
 
@@ -121,7 +121,11 @@ class MockParmTemplate:
         return _parm_data_for_type(self._type_name)
 
     def setHidden(self, value: bool) -> None:
-        """Mock of hou.ParmTemplate.setHidden."""
+        """Mock of hou.ParmTemplate.setHidden (legacy alias)."""
+        self._hidden = bool(value)
+
+    def hide(self, value: bool) -> None:
+        """Mock of hou.ParmTemplate.hide — the real hou API name."""
         self._hidden = bool(value)
 
     def isHidden(self) -> bool:
