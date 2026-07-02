@@ -1,8 +1,8 @@
 # 🚀 开发进度
 
-> 最后更新：2026-07-01 &nbsp;|&nbsp; **🔴 主线：rooted-modeling skill M2.6+M2.7 — 真机测试驱动的三大修复（leaf 参数全 live + 视觉自检 + shape 链细节），607 测试 + 26 真机 hython 铁证全绿** &nbsp;|&nbsp; 用户首次用真实 Pi agent 端到端测试小车模型，暴露三个真实问题，全部修复：① **M2.6 leaf 参数 live**——实测发现只有 root 的 length/width/thickness 三个参数能 live 调节，wheel_radius/cabin_length 等所有 leaf 参数改了不动（被 evaluate() 烤成死数字）。修复：leaf shape/scale/offset 统一改成 `ch("../<name>")` 通道引用（leaf 跟 root 同层，路径相同）。真机铁证：wheel_radius 0.4→1.2 轮子长大 >2x；wheel_tube_r 0.08→0.4 变厚 >3x。② **视觉自检修复**——describe_image 报 "Vision model aliyun/qwen-vl-max not found"（硬编码 provider 名 aliyun ≠ models.json 注册名 ali）。修复：默认改 ali + 加 registry 兜底搜索。③ **M2.7 shape 链**——模型"太简易"的直接根因：每个 leaf 是裸 SOP 无倒角/挤出。新增 `shape.chain = [{type, params}, ...]`，支持 polyextrude/polybevel/subdivide 修饰符。真机铁证：box 6 面 → polyextrude 10 面；polybevel 8 点 → 20+ 点；chain 参数 live recook。
+> 最后更新：2026-07-02 &nbsp;|&nbsp; **🟢 新主线启动：Project HDA — 把程序化建模从"一次性生成器"升级为"长期协作伙伴"**。一个程序化建模项目 = 一个 Project HDA，内部承载几何 subnet + 知识图谱（富化声明 JSON，存隐藏 parm）+ 嵌入面板 + 日志。用户可直接手工编辑几何网络，agent 靠**确定性结构 diff** 检测偏离、请人裁决。brainstorming 走完 11 个核心决策 + 写 spec + 写 12 任务计划 + subagent-driven 执行，**最小闭环已实现（11/12 任务，112 tests pass）**，待用户真机验证。详见下方"Project HDA 设计与最小闭环"时间线卡片 + [spec](../../docs/superpowers/specs/2026-07-01-project-hda-design.md) + [实现计划](../../docs/superpowers/plans/2026-07-01-project-hda-minimal-loop.md)。
 >
-> 上一轮：M3.5 — TabularFill 四布局扩展（pickets/tiles/shelf/blocks，595 测试 + 7 真机 hython 铁证全绿）。方案 C 分层泛化：一布局一子类，每个布局驱动真实泛化下沉到 TabularFillStrategy 基类，2D cells 全程 byte-identical。agent 零 VEX，纯声明式 JSON。下方旧的资产管道卡片保留作历史记录。
+> 上一轮（rooted-modeling）：M2.6+M2.7 — 真机测试驱动的三大修复（leaf 参数全 live + 视觉自检 + shape 链细节），607 测试 + 26 真机 hython 铁证全绿。Project HDA 是在其上的**容器化 + 协作化升级**，不是取代——rooted 的 build_assembly/测量链是 Project HDA 将来"按需接入"的建模能力。
 
 ## ⚠️ 重大架构转向（2026-06-29）：rooted-modeling 取代声明式资产管道
 
@@ -207,6 +207,20 @@ recipe 教惯用法，资产管道教结构。
 </div>
 
 <div class="timeline">
+
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-07-01 → 07-02</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第四十阶段：Project HDA — 程序化建模的"项目化身"容器（brainstorming 11 决策 + spec + 12 任务计划 + subagent-driven 最小闭环实现）</span>
+      <span class="status-tag status-done">最小闭环实现完成 · 112 tests · 待真机验证</span>
+    </div>
+    <div class="timeline-summary"><strong>新子系统，不是 rooted 里程碑的延续，而是其上的容器化 + 协作化升级。</strong>rooted 的 build_assembly 是<strong>一次性生成器</strong>（agent 产声明 → builder 构建 → 完成，agent 是唯一作者）。用户想要的体验要求<strong>有意打破这条不变量</strong>：让用户也能直接在 Houdini 里改几何网络，让 agent 持续理解、优化、迭代项目。这是从"一次性生成器"到"长期协作伙伴"的范式升级。<strong>第一性原理</strong>：易用/正确程序化逻辑/长期迭代三个目标里，有两个全部系于"同步"一件事——如何在用户自由编辑前提下保持 agent 维护的知识图谱与真实网络同步。<strong>核心策略（架构支柱）</strong>：把"语义同步"降级为"结构 diff"——让 subnet 的物理嵌套结构镜像组件分解，使"哪些节点属于哪个组件""组件是否还存在""参数依赖"全部变成确定性查询，无需 LLM 语义推断。<br><br><strong>brainstorming 11 个核心决策</strong>（全部用户拍板）：① 真实来源=<strong>混合</strong>（网络管几何事实，图谱管意图）；② 图谱范围=<strong>C 档</strong>（结构+语义+参数化意图）；③ 同步策略=<strong>检测偏离+人确定</strong>（不解逆程序化建模难题）；④ "优化"=<strong>四向并行</strong>（参数化整洁/图谱准确/性能可维护/持续加组件细节 + HDA 输出日志供跨项目复用）；⑤ 面板=<strong>PySide 全自绘嵌入 HDA</strong>；⑥ 半成品=<strong>始终可 cook</strong>（每步原子、失败回滚）；⑦ 图谱表示=<strong>富化声明即图谱</strong>（路线1，一个意图来源无双重同步，直接长在现有声明上）；⑧ 计划=<strong>强制、详细、可 review、用户控序</strong>；⑨ 组件管理=<strong>subnet 浅镜像</strong>（组件组一层，把语义同步降级为结构 diff——分水岭决策）；⑩ 参数管理=<strong>HDA 原生参数接口</strong>（live ch() 引用有真实 parm 落点）；⑪ 多项目=<strong>每个 HDA 独立面板+独立 Pi session</strong>。<br><br><strong>实现（subagent-driven，分支 feat/project-hda）</strong>：纯 Python 核心 <code>state.py</code>（声明 schema：version/project{name,created_at,goal}/plan/design_params/components/log/drift；load/save JSON↔隐藏 parm；plan-step 助手；log 助手）+ <code>node.py</code>（隐藏 string parm 模板 + create_project_hda）→ <code>otls/edini_project.hda</code>（edini::project 类型，hython 验证 found:True）→ 嵌入面板（<strong>本仓库第一个真正的 Houdini Python Pane</strong>，.pypanel XML 注册，三栏：计划树/对话/状态，复用 edini.ui.theme + _TimelineView/_AiBubble）→ 对话接线（<strong>复用单例 RpcClient</strong> via open_chat_window()._rpc_client，绝不每 HDA 起 Pi 进程撞端口 9876；每项目 send_set_session_name 开独立 session）。<strong>两轮 review 各发现并修真实问题</strong>：① load 的 parm-is-None 分支被偷懒 fake 漏掉→补专属测试；② save 无 None 守卫→加清晰报错；③ 计划里两处 H21 API 写错（createDigitalAsset 引用失效需按 path 重取；hou.nodeType 两参字符串签名错误，正确是 nodeTypeCategories()['Object'].nodeType(...)）→ 实现时按真实 API 改正。<strong>测试</strong>：19 新 state 单测（纯 Python，mock hou）+ 93 既有 node_utils 全绿 = 112 tests，零回归。<strong>状态</strong>：最小闭环（空 Project HDA + 嵌入面板 + 对话）11/12 任务完成，Task 12（agent 侧 project_hda_create 工具）按用户要求暂不做。<strong>待用户真机验证</strong>：跑 install.py 注册 pypanel 路径 → 重启 Houdini → create_project_hda → 开 Edini Project pane → 对话。<strong>刻意保持距离</strong>：Project HDA 是新模块 python3.11libs/edini/project/，<strong>不导入</strong> assembly_builder/vex_strategies——这些是将来"按需接入"的建模能力，声明 schema 刻意通用不预设建模结构。<strong>下一步候选</strong>：① drift 检测实现（结构 diff 规则 + 人裁决流程）；② 计划树 UI 交互（checkbox + 推进选中/顺序推进）；③ 接入 rooted 建模能力让 agent 能真正建模；④ Task 12。详见 [spec](../../docs/superpowers/specs/2026-07-01-project-hda-design.md) §13 最小闭环定义 + [实现计划](../../docs/superpowers/plans/2026-07-01-project-hda-minimal-loop.md)。</div>
+    <div class="timeline-tags">
+      <span>新子系统</span><span>项目化身</span><span>长期协作伙伴</span><span>混合真实来源</span><span>C档图谱</span><span>检测偏离人确定</span><span>subnet浅镜像</span><span>结构diff非语义推断</span><span>富化声明即图谱</span><span>隐藏parm持久化</span><span>第一个Python-Pane</span><span>复用单例RpcClient</span><span>per-project-session</span><span>始终可cook</span><span>subagent-driven</span><span>feat/project-hda分支</span><span>112tests</span><span>11/12任务</span><span>H21-API修正</span><span>待真机验证</span>
+    </div>
+  </div>
+</div>
 
 <div class="timeline-item timeline-done">
   <div class="timeline-date">2026-07-01</div>
