@@ -42,7 +42,7 @@ python3.11libs/edini/project/
   panel/
     project_widget.py    # 三栏面板（计划树/对话/状态）+ 项目选择器 + 对话接线
     project_pane.py      # PythonPanelInterface（createInterface 返回 widget）
-  edini_project.pypanel  # .pypanel XML 注册（本仓库第一个真正的 Houdini Python Pane）
+python_panels/edini_project.pypanel  # .pypanel XML 注册（本仓库第一个真正的 Houdini Python Pane；放 python_panels/ 走 HOUDINI_PYTHON_PANEL_PATH 发现，见下方纠正）
 otls/edini_project.hda   # edini::project 类型（hython 验证 found:True）
 scripts/make_project_hda.py  # 一次性 HDA 生成脚本
 tests/test_project_state.py  # 19 单测

@@ -905,7 +905,17 @@ interface = ProjectPanelInterface(**kwargs)
 
 > The `<script>` is evaluated with `kwargs` in scope (Houdini's convention). It must define `interface` as a `PythonPanelInterface` instance.
 
-- [ ] **Step 3: Register the pypanel search path in install.py**
+- [x] **Step 3: Register the pypanel search path in install.py** ✅ CORRECTED during verification
+
+> **VERIFICATION CORRECTION (2026-07-02, real-hython):** The original plan below
+> used a `"python_panels"` key inside the `"houdini"` block of the package JSON.
+> **That key does not exist** — Houdini does not read it, so the pane never
+> appeared. The correct mechanism is the environment variable
+> **`HOUDINI_PYTHON_PANEL_PATH`** set in the package `env` block, pointing at a
+> directory containing the `.pypanel` file. Additionally the `.pypanel` file was
+> moved from `python3.11libs/edini/project/` to `python_panels/` at the repo
+> root (mirroring Houdini's own `HFS/houdini/python_panels/` convention).
+> Verified via `hou.pypanel.installFile()` + `interfaceByName()` in hython.
 
 Read `scripts/install.py` first to confirm the exact dict structure (it writes the edini package JSON). The package JSON needs a `python_panels` path entry so Houdini finds the `.pypanel`. Add to the `houdini` section of the written JSON, alongside `python3.11libs`:
 

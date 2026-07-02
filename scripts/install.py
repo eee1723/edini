@@ -49,7 +49,12 @@ def install() -> None:
     with open(package_file, "w") as f:
         json.dump({
             "env": [
-                {"EDINI_PATH": path_forward}
+                {"EDINI_PATH": path_forward},
+                # Python Panels (.pypanel) are discovered via this path var.
+                # Houdini scans each dir here for *.pypanel files. (The repo
+                # also has python_panels/ which would be found via $HOUDINI_PATH
+                # auto-scan, but setting the var explicitly is robust.)
+                {"HOUDINI_PYTHON_PANEL_PATH": "$EDINI_PATH/python_panels"},
             ],
             "path": "$EDINI_PATH",
             "hpath": {
@@ -63,7 +68,6 @@ def install() -> None:
             },
             "houdini": {
                 "python3.11libs": "$EDINI_PATH/python3.11libs",
-                "python_panels": "$EDINI_PATH/python3.11libs/edini/project",
             }
         }, f, indent=2)
 
