@@ -1,6 +1,6 @@
 # 🚀 开发进度
 
-> 最后更新：2026-07-02 &nbsp;|&nbsp; **🟢 Project HDA 最小闭环真机验证通过（Houdini 21 GUI 端到端）**。一个程序化建模项目 = 一个 Project HDA（几何 subnet + 知识图谱富化声明 JSON 存隐藏 parm + 嵌入面板 + 日志）。用户可直接手工编辑几何网络，agent 靠**确定性结构 diff** 检测偏离、请人裁决。brainstorming 11 核心决策 + spec + 12 任务计划 + subagent-driven 执行，**最小闭环已真机验证：建 HDA + 开面板 + 中英对话全通**。真机抓修 8 个 mock 测不出的 bug（API 签名差异 / pypanel 发现机制 / PySide6 / IME / Pi bootstrap 时序）。23 commits 合并 master。**下一步候选**：计划树 UI 交互 / drift 检测 / 接入 rooted 建模能力。详见 [spec](../../docs/superpowers/specs/2026-07-01-project-hda-design.md) + [实现计划](../../docs/superpowers/plans/2026-07-01-project-hda-minimal-loop.md) + [交接](handoff.md)。
+> 最后更新：2026-07-02 &nbsp;|&nbsp; **🟢 Project HDA 接入 rooted 建模能力 — 从"能聊天"到"能干活"的根本跨越**。一个程序化建模项目 = 一个 Project HDA（**SOP 上下文**：geo 外壳 + 内部 SOP HDA core 承载几何 + 富化声明 JSON 存隐藏 parm + 嵌入面板 + 日志）。agent 调 `project_build_model` → rooted assembly 声明 → `build_assembly` → **几何直接建在 HDA core 内部**（零 /obj temp 污染）。**真机铁证**：car assembly → OUT 1152 点（底盘 + 4 轮子），**LIVE**：length 4→8 → wheel 点 x 从 +2 移到 +4（轴距 live 跟随 root bbox，零烤值），重建幂等。最小闭环（建 HDA + 开面板 + 中英对话）也已 GUI 真机验证通过。HDA 定义层解锁（天生可编辑，无需运行时 hack）。**下一步候选**：GUI 端到端真实验证（对话让 agent 建模）/ drift 检测 / 计划树 UI。详见 [交接](handoff.md) + [spec](../../docs/superpowers/specs/2026-07-01-project-hda-design.md)。
 >
 > 上一轮（rooted-modeling）：M2.6+M2.7 — 真机测试驱动的三大修复（leaf 参数全 live + 视觉自检 + shape 链细节），607 测试 + 26 真机 hython 铁证全绿。Project HDA 是在其上的**容器化 + 协作化升级**，不是取代——rooted 的 build_assembly/测量链是 Project HDA 将来"按需接入"的建模能力。
 

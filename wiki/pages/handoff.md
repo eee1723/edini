@@ -2,11 +2,13 @@
 
 > **用途**：让新 Agent 或开发者在 Edini 仓库里快速上手。
 
-**最后更新**：2026-07-02（Project HDA 最小闭环**真机验证通过** — Houdini 21 GUI 端到端：建 HDA + 开面板 + 中英对话。23 commits 合并 master。真机抓修 8 个 mock 测不出的 bug）
-**当前阶段**：**Project HDA**（新主线）—— 把程序化建模从"一次性生成器"升级为"长期协作伙伴"。一个程序化建模项目 = 一个 Project HDA（几何 subnet + 知识图谱富化声明 JSON 存隐藏 parm + 嵌入 PySide 面板 + 日志）。rooted-modeling（M0–M3.5 全交付，607 tests + 26 hython 铁证）是其基础，但 Project HDA 是其上的**容器化 + 协作化升级**，不是取代——rooted 的 build_assembly/测量链是将来"按需接入"的建模能力。
-**最小闭环状态**：✅ **已真机验证通过**（2026-07-02，Houdini 21.0.440 GUI）。建 Project HDA → 开 Edini Project pane → 三栏布局 + 项目选择器 → 中英对话（独立 Pi 进程，每项目隔离 session）。真机抓修 8 个 bug（全是 mock 测不出的真实环境问题：API 签名差异 / pypanel 发现机制 / PySide6 / IME / Pi bootstrap 时序）。
-**下一步**：① **计划树 UI 交互**（左栏可视化 plan 待办树，checkbox 四态，"推进选中"让 agent 做该项）；② **drift 检测**（diff 参数/subnet vs JSON，偏离提示人裁决）；③ **接入 rooted 建模能力**（build_assembly/测量链）；④ Task 12（agent 侧 project_hda_create 工具）。
-**工作分支**：`feat/project-hda` 已合并 master（23 commits）。后续新方向开新分支。
+**最后更新**：2026-07-02（Project HDA **接入 rooted 建模能力** — 从"能聊天"到"能干活"的根本跨越。SOP 上下文 HDA + assembly build inside + 定义层解锁。真机铁证：car 1152 点 + length live）
+**当前阶段**：**Project HDA**（新主线）—— 把程序化建模从"一次性生成器"升级为"长期协作伙伴"。一个程序化建模项目 = 一个 Project HDA（**SOP 上下文**：geo 外壳 + 内部 SOP HDA core 承载几何 + 知识图谱富化声明 JSON 存隐藏 parm + 嵌入 PySide 面板 + 日志）。rooted-modeling（M0–M3.5 全交付，607 tests + 26 hython 铁证）是其基础，build_assembly/测量链已**接入** Project HDA（非"将来"，是"现在"）。
+**建模能力状态**：✅ **已接入并真机验证**（2026-07-02，hython 端到端）。agent 调 `project_build_model` → rooted assembly 声明 → `build_assembly` → **几何直接建在 HDA core 内部**（零 /obj temp 污染）。真机铁证：car assembly → OUT 1152 点（底盘 box + 4 轮子），**LIVE**：length 4→8 → wheel 点 x 从 +2 移到 +4（轴距 live 跟随 root bbox，零烤值），重建幂等（13 子节点一致）。
+**最小闭环状态**：✅ **已真机验证通过**（2026-07-02，Houdini 21.0.440 GUI）。建 Project HDA → 开 Edini Project pane → 三栏布局 + 项目选择器 → 中英对话（独立 Pi 进程，每项目隔离 session）。
+**关键架构决策（本次确立）**：① HDA 用 **SOP 上下文**（非 Object）—— 内部直接是 SOP 环境，rooted 扁平网络可直接建在 HDA 内部，用户可手改，spare parm ch() 引用深度天然正确；② HDA **定义层解锁**（lockContents=False + unlockNewInstances=True）—— 实例天生可编辑，无需运行时 allowEditingOfContents hack；③ 声明新增 `assembly` 字段 —— rooted 格式 verbatim 存储，build_assembly 零 adapter 消费；④ **先接能力，drift 后说** —— 不碰 subnet 镜像/drift，先跑通建模主链路（用户实际可能很少手改几何）。
+**下一步**：① **GUI 端到端真实验证**（Houdini 里对话让 agent 建模，确认 LLM 能正确驱动 project_build_model）；② **drift 检测**（有了真实几何后，diff 参数/subnet vs JSON）；③ **计划树/图谱 UI**（按需）；④ Task 12（agent 侧 project_hda_create 工具）。
+**工作分支**：master（建模能力直接在 master，2 commits）。feat/project-hda 已合并（最小闭环 23 commits）。
 
 ---
 
@@ -34,26 +36,38 @@ rooted-modeling 的 `build_assembly` 是**一次性生成器**：agent 产声明
 10. 参数管理=**HDA 原生参数接口**
 11. 多项目=**每个 HDA 独立面板 + 独立 Pi session**
 
-### 最小闭环（✅ 已真机验证通过，2026-07-02）
+### 最小闭环 + 建模能力（✅ 均已真机验证，2026-07-02）
 
 ```
 python3.11libs/edini/project/
-  state.py        # 声明 schema + JSON↔隐藏 parm + plan/log 助手（纯 Python，19 单测）
-  node.py         # 隐藏 string parm 模板 + create_project_hda（唯一 import hou 的模块）
+  state.py        # 声明 schema（含 assembly 字段）+ JSON↔隐藏 parm + plan/log/assembly 助手（纯 Python，25 单测）
+  node.py         # 隐藏 string parm 模板 + create_project_hda（SOP 上下文：geo 外壳 + 内部 core）+ find_project_cores
+  builder.py      # build_project_model：声明→validate→unlock→build_assembly→log+components 镜像（几何建在 core 内部）
   panel/
     project_widget.py    # 三栏面板 + 项目选择器 + 对话接线 + 轻量流式渲染 + IME popout
     project_pane.py      # onCreateInterface() 入口函数（Houdini Python Panel 真实写法）
 python_panels/edini_project.pypanel  # .pypanel XML（走 HOUDINI_PYTHON_PANEL_PATH 发现）
-otls/edini_project.hda   # edini::project 类型（hython + GUI 验证）
-scripts/make_project_hda.py  # 一次性 HDA 生成脚本
-tests/test_project_state.py  # 19 单测
+otls/edini_project.hda   # edini::project 类型（SOP 上下文 + 定义层解锁，hython + GUI 验证）
+scripts/make_project_hda.py  # 一次性 HDA 生成脚本（SOP 上下文 + lockContents=False + unlockNewInstances=True）
+pi-extensions/edini-tools/tools/project.ts  # project_build_model TS schema（agent 调用入口）
+tests/test_project_state.py  # 25 单测（含 assembly 字段）
 ```
 
 **关键设计点（真机验证后定稿）**：
+- **HDA 用 SOP 上下文**（`edini::project` 注册在 Sop category）。结构：`/obj/<project>`（geo 外壳，显示节点）→ 内部 `/obj/<project>/project_core`（SOP HDA，建模核心）。rooted 扁平网络直接建在 core 内部，用户可手改，spare parm `ch("../<name>")` 引用深度天然正确。
+- **HDA 定义层解锁**：`lockContents=False` + `unlockNewInstances=True`（make_project_hda.py save 前）。实例天生可编辑，无需运行时 `allowEditingOfContents` hack（builder 的 `_ensure_editable` 仅作防御性兜底）。
+- **建模链路自包含**：`build_project_model` 把 `core_node.path()` 作为 `build_assembly` 的 `root_path`，几何全部建在 core 内部，**零 /obj temp 污染**（真机监控确认：build 后 /obj 只有项目本身的 geo 外壳）。
+- **声明新增 `assembly` 字段**：rooted 格式 `{id,params,root,mounts,leaves}` verbatim 存储，`build_assembly` 零 adapter 直接消费。`set_assembly`/`get_assembly` helper（基本结构守卫，深层验证靠 `validate_assembly` shift-left）。
 - **每面板独立 RpcClient + 独立 Pi 进程**（spec 决策 #11）。不寄生主窗口——Pi 找 9876 工具执行器靠 `EDINI_TOOL_PORT` 环境变量，不依赖对象引用，多个 Pi 天然共享一个无状态 HTTP server。
-- **ToolExecutor 是进程级单例**（`get_tool_executor()`），与 EdiniMainWindow 生命周期解耦。主窗口 closeEvent 不再 stop 它（否则关一个窗口会杀死所有项目的工具通道）。
+- **ToolExecutor 是进程级单例**（`get_tool_executor()`），与 EdiniMainWindow 生命周期解耦。主窗口 closeEvent 不再 stop 它。
 - **对话 bootstrap 时序**：连接 `status_changed`，首次 connected 时 `set_session_name` + `set_model`（Pi 冷启动无模型配置，必须设否则首条消息无回复）。**不要** `send_new_session`（进程已自带全新 session，且会触发 visionizer stale-ctx 报错阻塞 LLM）。
-- 声明 JSON 存在隐藏 string parm `__edini_state`（随 .hip 自包含）。**刻意不导入** assembly_builder/vex_strategies——这些是将来按需接入的建模能力。
+- 声明 JSON 存在隐藏 string parm `__edini_state`（随 .hip 自包含）。
+
+**建模能力真机铁证（hython，car assembly）**：
+- build 成功，OUT **1152 点**（底盘 box + 4 轮子），core 内 13 个 SOP（扁平结构：root_shape + 4 mount wrangle + wheel shape/pscale/cloud/ctp + OUT）
+- **LIVE**：`length` 4→8 → mount_wheel_fr 第一个点 x 从 +2 移到 **+4**（轴距 live 跟随 root bbox，零烤值）
+- **重建幂等**：再次 build 子节点数一致（13），无重复
+- build 后 `/obj` 只有 `project_car`，**零 temp 节点**；用户可在 core 内手改（加 null 节点 OK）
 
 **真机验证抓修的 8 个 bug**（全是 mock 测不出的真实环境问题）：
 1. `setHidden`/`spareParmGroup` → 真实 API 是 `hide()`/`addSpareParmTuple`
