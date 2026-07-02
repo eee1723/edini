@@ -154,16 +154,29 @@ scripts/
 edini_showcase.hip           # 三个 live 模型，可 GUI 打开改参数看效果
 ```
 
+### 开发机环境（两台，跨机协作）
+
+项目在两台机器间切换开发，hython 路径不同。**hython 测试会自动发现**（`tests/test_assembly_hython.py:_find_hython()` 的 `_HOUDINI_CANDIDATES` 已覆盖两台机器；或设 `EDINI_HYTHON` / `HYTHON` 环境变量覆盖），缺失则 skip。两台机器无需改任何代码。
+
+| 机器 | hython 路径 | 发现方式 |
+|------|------------|---------|
+| **精创机**（Houdini 完整安装） | `C:\Program Files\Side Effects Software\Houdini 21.0.440\bin\hython.exe` | `_HOUDINI_CANDIDATES` 的 `C:\Program Files\Side Effects Software` 自动列出 `Houdini 21.0.440` 子目录 |
+| **另一台** | `D:\houdini\bin\hython.exe` | `_HOUDINI_CANDIDATES[0]`（已列首位） |
+
+> ⚠️ 精创机上 `D:\houdini` 不存在——下方命令里的 `D:\houdini\bin\hython.exe` 是另一台机器的路径，精创机请替换为上面的完整安装路径，或直接 `python -m pytest tests/`（hython 自动发现）。
+
 ### 怎么跑
 
 ```bash
 # 真机验证 VEX 策略
 "D:\houdini\bin\hython.exe" scripts/verify_vex_strategies.py
+# 精创机：
+"C:\Program Files\Side Effects Software\Houdini 21.0.440\bin\hython.exe" scripts/verify_vex_strategies.py
 
 # 构建 + live demo + 存 .hip
 "D:\houdini\bin\hython.exe" scripts/show_assemblies.py
 
-# 全量测试（mock + hython，本机全跑）
+# 全量测试（mock + hython，本机全跑；hython 路径自动发现）
 python -m pytest tests/ -q
 ```
 
