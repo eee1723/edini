@@ -20,6 +20,17 @@ class ProjectPanelWidget(QtWidgets.QWidget):
         self._bound_node_path: str | None = None
         self._stream_wired = False
         self._current_ai = None
+        # Stream-throttle state: accumulate chunks in a buffer and re-render the
+        # AI bubble at most every STREAM_FLUSH_MS, instead of on every chunk.
+        # edini.ui's _AiBubble.update_streaming runs a full mistune markdown
+        # parse + Qt word-wrap relayout over the ENTIRE accumulated text per
+        # call, which freezes the panel's input box during long replies.
+        # Throttling keeps the input responsive (the cost moves off the hot path).
+        self._stream_buf = ""
+        self._stream_timer = QtCore.QTimer(self)
+        self._stream_timer.setSingleShot(True)
+        self._stream_timer.setInterval(120)  # ms between renders
+        self._stream_timer.timeout.connect(self._flush_stream)
         self._build_ui()
 
     # --- UI construction -------------------------------------------------
@@ -108,11 +119,17 @@ class ProjectPanelWidget(QtWidgets.QWidget):
         """Return the singleton RpcClient from the main chat window.
 
         Reuses the already-running Pi subprocess + HTTP server. Never spawns
-        a new one (would collide on port 9876). Opens the main window if it
-        isn't already (which bootstraps the agent).
+        a new one (would collide on port 9876). The first call bootstraps the
+        main window (and thus Pi); subsequent calls reuse the singleton WITHOUT
+        re-raising the window, so chatting from the Project panel doesn't keep
+        popping the global panel to the front.
         """
-        from edini.ui.windows import open_chat_window
-        return open_chat_window()._rpc_client
+        from edini.ui import windows as _w
+        win = _w._main_window
+        if win is None:
+            # First time: must create + show the window — that bootstraps Pi.
+            win = _w.open_chat_window()
+        return win._rpc_client
 
     def _send(self) -> None:
         text = self.input_edit.toPlainText().strip()
@@ -134,17 +151,35 @@ class ProjectPanelWidget(QtWidgets.QWidget):
         rpc.send_prompt(text)
 
     def _on_stream_delta(self, chunk: str) -> None:
-        # Mirrors edini.ui.agent_panel.AgentPanel.append_stream_chunk:
-        # accumulate full text, call update_streaming(full_text). The AiBubble
-        # itself has no .text(); read back via get_raw_text().
+        # Accumulate into a buffer and defer the (expensive) markdown render to
+        # the throttle timer. Creating the AI bubble eagerly on first content
+        # keeps the user seeing immediate feedback.
         from edini.ui.agent_panel import _AiBubble
-        if self._current_ai is None:
+        self._stream_buf += chunk
+        if self._current_ai is None and self._stream_buf.strip():
             self._current_ai = _AiBubble()
             self.timeline.add_widget(self._current_ai)
-        full = self._current_ai.get_raw_text() + chunk
+        # (Re)start the throttle timer; the actual render happens in _flush_stream.
+        if not self._stream_timer.isActive():
+            self._stream_timer.start()
+
+    def _flush_stream(self) -> None:
+        """Render the accumulated stream buffer into the current AI bubble.
+
+        Called by the throttle timer (every STREAM_FLUSH_MS at most). This is
+        where the expensive mistune parse + Qt relayout happens, kept off the
+        per-chunk hot path so the input box stays responsive.
+        """
+        if self._current_ai is None or not self._stream_buf:
+            return
+        full = self._current_ai.get_raw_text() + self._stream_buf
+        self._stream_buf = ""
         self._current_ai.update_streaming(full)
 
     def _on_turn_done(self) -> None:
+        # Drain any buffered tail before finalizing.
+        self._stream_timer.stop()
+        self._flush_stream()
         if self._current_ai is not None:
             self._current_ai.finalize()
             self._current_ai = None
