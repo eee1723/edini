@@ -71,6 +71,51 @@ class _StreamBubble(QtWidgets.QFrame):
         self._label.setText(f'<div style="{_ai_bubble_style()}">{rendered}</div>')
 
 
+class _InputEdit(QtWidgets.QPlainTextEdit):
+    """Input box that survives IME (input method) candidate-window focus theft.
+
+    Symptom being fixed: when typing Chinese (or any IME language) inside a
+    Houdini Python Panel, the IME candidate window pops up as a separate
+    top-level window and STEALS focus from the embedded QPlainTextEdit. The
+    Python Panel container doesn't restore focus afterward, so the user can't
+    keep typing. This doesn't happen in the standalone EdiniMainWindow (a real
+    top-level QMainWindow manages its own focus chain).
+
+    Fix: if focus is lost WHILE the input method is composing (a preedit string
+    is active), immediately reclaim focus. This lets the IME candidate window
+    do its job without orphaning the input box. We also force StrongFocus +
+    WA_InputMethodEnabled so Qt treats this widget as an IME target from the
+    start.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFocusPolicy(QtCore.Qt.StrongFocus)
+        self.setAttribute(QtCore.Qt.WA_InputMethodEnabled, True)
+        # Track whether an IME preedit is in progress so focusOutEvent knows
+        # whether the loss is IME-induced.
+        self._ime_composing = False
+
+    def inputMethodEvent(self, event):
+        # A non-empty preedit string means the IME is mid-composition (candidate
+        # window up). Empty preedit + commit string means composition finished.
+        if event.preeditString():
+            self._ime_composing = True
+        else:
+            self._ime_composing = False
+        super().inputMethodEvent(event)
+
+    def focusOutEvent(self, event):
+        # If focus is lost while the IME is composing, the candidate window
+        # stole it. Reclaim focus so the user can continue typing. We defer
+        # via QTimer.singleShot(0) to avoid fighting Qt's internal focus
+        # negotiation during the same event delivery.
+        if self._ime_composing:
+            QtCore.QTimer.singleShot(0, self.setFocus)
+            return
+        super().focusOutEvent(event)
+
+
 class ProjectPanelWidget(QtWidgets.QWidget):
     """The root widget shown inside the Houdini Python Pane tab."""
 
@@ -111,7 +156,7 @@ class ProjectPanelWidget(QtWidgets.QWidget):
         cl.setContentsMargins(0, 0, 0, 0)
         self.timeline = _TimelineView()
         cl.addWidget(self.timeline, 1)
-        self.input_edit = QtWidgets.QPlainTextEdit()
+        self.input_edit = _InputEdit()
         self.input_edit.setFixedHeight(56)
         self.input_edit.installEventFilter(self)  # Enter to send (handled in eventFilter)
         cl.addWidget(self.input_edit)
@@ -160,6 +205,10 @@ class ProjectPanelWidget(QtWidgets.QWidget):
     def eventFilter(self, obj, event):
         from PySide6 import QtCore
         if obj is self.input_edit and event.type() == QtCore.QEvent.KeyPress:
+            # Don't intercept Enter while the IME is composing — that Enter
+            # confirms a candidate character, it must NOT send the message.
+            if getattr(self.input_edit, "_ime_composing", False):
+                return super().eventFilter(obj, event)
             if event.key() in (QtCore.Qt.Key_Return, QtCore.Qt.Key_Enter) \
                and not (event.modifiers() & (QtCore.Qt.ShiftModifier | QtCore.Qt.ControlModifier)):
                 self._send()
