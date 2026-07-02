@@ -159,7 +159,6 @@ class ProjectPanelWidget(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None):
         super().__init__(parent)
         self._bound_node_path: str | None = None
-        self._stream_wired = False
         self._current_ai = None
         # Per-panel RpcClient (own Pi subprocess), created lazily on first send.
         # See _get_rpc — independent of EdiniMainWindow, per spec decision #11.
@@ -291,16 +290,49 @@ class ProjectPanelWidget(QtWidgets.QWidget):
         # (stdin/stdout JSON-RPC, no port) and wires the worker signals.
         from edini.rpc_client import RpcClient
         self._rpc = RpcClient(parent=self)
+        self._rpc.text_delta.connect(self._on_stream_delta)
+        self._rpc.agent_finished.connect(self._on_turn_done)
+        # status_changed drives the bootstrap sequence: Pi reports "connecting"
+        # then "connected". Session creation + model selection must happen AFTER
+        # connected, or the first message is lost (Pi isn't ready). Mirrors
+        # EdiniMainWindow._on_status_changed.
+        self._rpc.status_changed.connect(self._on_rpc_status)
+        self._rpc_ready = False
+        self._pending_prompt: str | None = None  # buffered if sent pre-connect
         self._rpc.start()
-        # Fresh isolated session for this project, named after the node path.
+        return self._rpc
+
+    def _on_rpc_status(self, status: str) -> None:
+        """Bootstrap the Pi session once it reports connected.
+
+        On first connect: create a fresh isolated session, set its name, and
+        select the model (read from pi's own settings, same as the main
+        window). Without setting the model, Pi has no provider/model and the
+        first message gets no reply.
+        """
+        if status != "connected" or self._rpc_ready or self._rpc is None:
+            return
+        self._rpc_ready = True
+        # Fresh isolated session for this project.
         self._rpc.send_new_session()
         if self._bound_node_path:
             self._rpc.send_set_session_name(self._bound_node_path)
-        # Wire streaming signals once.
-        self._rpc.text_delta.connect(self._on_stream_delta)
-        self._rpc.agent_finished.connect(self._on_turn_done)
-        self._stream_wired = True
-        return self._rpc
+        # Select model from pi's settings (auth.json + models.json). Without
+        # this, Pi doesn't know which LLM to call → first message silently
+        # dropped (the bug this fixes).
+        try:
+            from edini.config import read_pi_settings
+            pi_sett = read_pi_settings()
+            provider = pi_sett.get("defaultProvider", "")
+            model_id = pi_sett.get("defaultModel", "")
+            if provider and model_id:
+                self._rpc.send_set_model(provider, model_id)
+        except Exception:
+            pass
+        # Flush any message that was typed before Pi finished connecting.
+        if self._pending_prompt is not None:
+            text, self._pending_prompt = self._pending_prompt, None
+            self._rpc.send_prompt(text)
 
     def _send(self) -> None:
         """Send the inline input box's text (English / quick input)."""
@@ -314,14 +346,21 @@ class ProjectPanelWidget(QtWidgets.QWidget):
         """Core send path shared by inline input and the popout dialog.
 
         Shows a user bubble immediately, then drives the LLM via this panel's
-        OWN RpcClient (independent Pi session, per spec decision #11).
+        OWN RpcClient (independent Pi session, per spec decision #11). If Pi is
+        still connecting (cold start), the prompt is buffered and flushed when
+        it reports connected — otherwise the first message is lost (Pi isn't
+        ready / has no model selected yet).
         """
         if not text or self._bound_node_path is None:
             return
         from edini.ui.agent_panel import _UserBubble
         self.timeline.add_widget(_UserBubble(text))
         rpc = self._get_rpc()
-        rpc.send_prompt(text)
+        if getattr(self, "_rpc_ready", False):
+            rpc.send_prompt(text)
+        else:
+            # Pi not connected yet — buffer; _on_rpc_status will flush it.
+            self._pending_prompt = text
 
     def _open_input_dialog(self) -> None:
         """Open the popout input dialog for CJK/IME input.
