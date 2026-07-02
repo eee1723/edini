@@ -109,3 +109,47 @@ def append_log(declaration: dict, kind: str, summary: str,
     declaration["log"].append(entry)
     return entry
 
+
+import re as _re
+
+# 组件 id = subnet 名，必须是合法 Houdini 节点名（字母/数字/下划线）。
+# 这也是 drift 检测的承重键（subnet 名 ↔ 组件 id 一一对应）。
+_COMPONENT_ID_RE = _re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+
+
+def add_component(declaration: dict, component_id: str, purpose: str = "",
+                  params: list | None = None,
+                  ports_out: list | None = None,
+                  ports_in: list | None = None) -> dict:
+    """向声明追加一个组件。返回新组件 dict。
+
+    组件 id 必须合法（= subnet 名规则）。ports_out/ports_in/params 为 None
+    时置空列表。详见 spec §4.1。
+    """
+    if not _COMPONENT_ID_RE.match(component_id or ""):
+        raise ValueError(
+            f"bad component id: {component_id!r}. Must match "
+            f"[A-Za-z][A-Za-z0-9_]* (it becomes the subnet name).")
+    if any(c["id"] == component_id for c in declaration["components"]):
+        raise ValueError(f"component id already exists: {component_id}")
+    component = {
+        "id": component_id,
+        "subnet_path": f"./{component_id}",
+        "purpose": purpose,
+        "params": list(params or []),
+        "ports": {
+            "out": list(ports_out or []),
+            "in": list(ports_in or []),
+        },
+    }
+    declaration["components"].append(component)
+    return component
+
+
+def get_component(declaration: dict, component_id: str) -> dict | None:
+    """按 id 查找组件，找不到返回 None。"""
+    for c in declaration["components"]:
+        if c["id"] == component_id:
+            return c
+    return None
+

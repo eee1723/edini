@@ -227,5 +227,69 @@ class TestInstallStateParm(unittest.TestCase):
         self.assertTrue(tmpl.isHidden())
 
 
+class TestComponentSchema(unittest.TestCase):
+    def test_empty_declaration_has_no_assembly_field(self):
+        """新范式：declaration 不再有 assembly 字段。"""
+        from edini.project.state import empty_declaration
+        d = empty_declaration("car")
+        self.assertNotIn("assembly", d)
+
+    def test_add_component_appends_to_components(self):
+        from edini.project.state import empty_declaration, add_component
+        decl = empty_declaration("car")
+        add_component(decl, component_id="chassis", purpose="车架")
+        self.assertEqual(len(decl["components"]), 1)
+        self.assertEqual(decl["components"][0]["id"], "chassis")
+        self.assertEqual(decl["components"][0]["purpose"], "车架")
+
+    def test_add_component_with_ports(self):
+        from edini.project.state import empty_declaration, add_component
+        decl = empty_declaration("car")
+        add_component(decl, component_id="chassis", purpose="车架",
+                      ports_out=[
+                          {"index": 0, "kind": "geometry", "description": "车架几何"},
+                          {"index": 1, "kind": "anchors", "points": [
+                              {"name": "wheel_mount_fr", "role": "mount",
+                               "description": "前轮安装点"}],
+                           "description": "信息锚点"}],
+                      ports_in=[])
+        comp = decl["components"][0]
+        self.assertEqual(len(comp["ports"]["out"]), 2)
+        self.assertEqual(comp["ports"]["out"][1]["points"][0]["name"],
+                         "wheel_mount_fr")
+
+    def test_add_component_with_params(self):
+        from edini.project.state import empty_declaration, add_component
+        decl = empty_declaration("car")
+        add_component(decl, component_id="chassis", purpose="车架",
+                      params=[{"name": "length", "label": "车长",
+                               "default": 4, "min": 1, "max": 20}])
+        self.assertEqual(decl["components"][0]["params"][0]["name"], "length")
+
+    def test_add_component_rejects_duplicate_id(self):
+        from edini.project.state import empty_declaration, add_component
+        decl = empty_declaration("car")
+        add_component(decl, component_id="chassis", purpose="车架")
+        with self.assertRaises(ValueError):
+            add_component(decl, component_id="chassis", purpose="再来")
+
+    def test_add_component_rejects_bad_id(self):
+        """组件 id = subnet 名，必须合法（字母数字下划线）。"""
+        from edini.project.state import empty_declaration, add_component
+        decl = empty_declaration("car")
+        with self.assertRaises(ValueError):
+            add_component(decl, component_id="bad name!", purpose="x")
+        with self.assertRaises(ValueError):
+            add_component(decl, component_id="has/slash", purpose="x")
+
+    def test_get_component_by_id(self):
+        from edini.project.state import empty_declaration, add_component, get_component
+        decl = empty_declaration("car")
+        add_component(decl, component_id="chassis", purpose="车架")
+        add_component(decl, component_id="wheels", purpose="车轮")
+        self.assertEqual(get_component(decl, "wheels")["purpose"], "车轮")
+        self.assertIsNone(get_component(decl, "nonexistent"))
+
+
 if __name__ == "__main__":
     unittest.main()
