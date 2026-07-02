@@ -305,16 +305,23 @@ class ProjectPanelWidget(QtWidgets.QWidget):
     def _on_rpc_status(self, status: str) -> None:
         """Bootstrap the Pi session once it reports connected.
 
-        On first connect: create a fresh isolated session, set its name, and
-        select the model (read from pi's own settings, same as the main
-        window). Without setting the model, Pi has no provider/model and the
-        first message gets no reply.
+        On first connect: name the session and select the model (read from pi's
+        own settings, same as the main window). Without setting the model, Pi
+        has no provider/model and the first message gets no reply.
+
+        NOTE: we do NOT call send_new_session() here. Each panel already runs
+        its OWN Pi subprocess (per spec decision #11), which starts with a
+        fresh session — so session isolation is already guaranteed. Calling
+        new_session on top of that invalidates the ctx that extensions like
+        pi-visionizer captured, producing a "stale ctx" error that BLOCKS the
+        LLM call (the context hook throws and Pi aborts the turn). The main
+        window likewise only set_session_name on connect, never new_session.
         """
         if status != "connected" or self._rpc_ready or self._rpc is None:
             return
         self._rpc_ready = True
-        # Fresh isolated session for this project.
-        self._rpc.send_new_session()
+        # Name the session after the bound node (display only; the session is
+        # already fresh because this is a dedicated Pi subprocess).
         if self._bound_node_path:
             self._rpc.send_set_session_name(self._bound_node_path)
         # Select model from pi's settings (auth.json + models.json). Without
