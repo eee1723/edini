@@ -173,36 +173,36 @@ import hou
 _hda = os.path.join(r"%s", "otls", "edini_project.hda")
 if os.path.isfile(_hda):
     hou.hda.installFile(_hda)
-from edini.project.state import empty_declaration, add_component, add_design_param
+from edini.project.state import empty_declaration, add_component
 from edini.project.node import create_project_hda
 from edini.project.builder import build_project_scaffold, promote_params
 
 result = {"steps": {}}
 core = create_project_hda(name="proj_promote")
 decl = empty_declaration("proj_promote")
-# 新范式: design_param 定义在 core 层 (source of truth).
-add_design_param(decl, "length", default=4.0, min=1.0, max=20.0, label="车长")
 add_component(decl, "chassis", purpose="车架")
 build_project_scaffold(core, declaration=decl)
 
-# build_scaffold 应在 core 建 length parm (带 default/min/max).
-cp = core.parm("length")
+# 自底向上: agent 在 chassis subnet 建 spare parm (建模副产物, 带 min/max).
+chassis = core.node("chassis")
+tmpl = hou.FloatParmTemplate("length", "车长", 1, (4.0,), 1.0, 20.0)
+chassis.addSpareParmTuple(tmpl)
+
+# promote: 扫 subnet spareParms → core 按分组建 chassis_length (带 min/max),
+# subnet length 改引用 core (ch("../chassis_length")).
+res = promote_params(core)
+result["steps"]["promote_result"] = res
+cp = core.parm("chassis_length")
 result["steps"]["s4_core_parm_exists"] = cp is not None
 if cp is not None:
     result["steps"]["s4_core_default"] = cp.eval()
     t = cp.parmTemplate()
     result["steps"]["s4_core_min"] = t.minValue()
     result["steps"]["s4_core_max"] = t.maxValue()
-
-# promote: 在 chassis subnet 建 length parm, 表达式引用 core.
-res = promote_params(core)
-result["steps"]["promote_result"] = res
-chassis = core.node("chassis")
+# subnet length 应改成引用 core.
 sp = chassis.parm("length")
-result["steps"]["s4_subnet_parm_exists"] = sp is not None
-if sp is not None:
-    result["steps"]["s4_expr"] = sp.expression()
-    result["steps"]["s4_subnet_follows_core"] = sp.eval()  # should be 4.0
+result["steps"]["s4_subnet_expr"] = sp.expression() if sp else None
+result["steps"]["s4_subnet_follows_core"] = sp.eval() if sp else None
 print("RESULT_JSON:" + json.dumps(result))
 """ % (_REPO, _REPO)
 
@@ -220,18 +220,18 @@ class TestPromoteHython(unittest.TestCase):
         self.fail(f"no RESULT_JSON.\nstdout:{proc.stdout}\nstderr:{proc.stderr}")
 
     def test_step4_promote_creates_core_parm(self):
-        """新范式: design_param 在 core 建 parm (带 default/min/max), promote 在 subnet 建引用。"""
+        """自底向上: subnet 建 parm (带 min/max) → promote 提到 core 按分组 + subnet 改引用 core。"""
         res, _ = self._run()
         s = res["steps"]
-        # core 是源: build_scaffold 建 length parm 带 default/min/max.
-        self.assertTrue(s["s4_core_parm_exists"], f"core length not created: {res}")
+        # core 按 分组建 chassis_length (带 default/min/max 透传).
+        self.assertTrue(s["s4_core_parm_exists"], f"core chassis_length not created: {res}")
         self.assertEqual(s["s4_core_default"], 4.0)
         self.assertEqual(s["s4_core_min"], 1.0)
         self.assertEqual(s["s4_core_max"], 20.0)
-        # promote: subnet 引用 core (表达式 ch("../length")).
-        self.assertTrue(s["s4_subnet_parm_exists"], f"subnet length not created by promote: {res}")
-        self.assertIn("length", s["s4_expr"], f"expression should ref core length: {s['s4_expr']!r}")
-        self.assertEqual(s["s4_subnet_follows_core"], 4.0, "subnet should follow core value")
+        # subnet length 改成引用 core (ch("../chassis_length")).
+        self.assertIn("chassis_length", s["s4_subnet_expr"],
+                      f"subnet expr should ref core: {s['s4_subnet_expr']!r}")
+        self.assertEqual(s["s4_subnet_follows_core"], 4.0, "subnet should follow core")
 
 
 _FULL_HARNESS = r"""
@@ -241,15 +241,13 @@ import hou
 _hda = os.path.join(r"%s", "otls", "edini_project.hda")
 if os.path.isfile(_hda):
     hou.hda.installFile(_hda)
-from edini.project.state import empty_declaration, add_component, add_design_param
+from edini.project.state import empty_declaration, add_component
 from edini.project.node import create_project_hda
 from edini.project.builder import build_project_scaffold, promote_params, add_anchors
 
 result = {"steps": {}}
 core = create_project_hda(name="proj_full")
 decl = empty_declaration("proj_full")
-# 新范式: design_param 在 core 层定义 (source of truth).
-add_design_param(decl, "length", default=4.0, min=1.0, max=20.0)
 add_component(decl, "chassis", purpose="车架",
               ports_out=[
                   {"index": 0, "kind": "geometry"},
@@ -257,27 +255,27 @@ add_component(decl, "chassis", purpose="车架",
                       {"name": "wheel_mount", "role": "mount"}]}])
 add_component(decl, "wheels", purpose="车轮")
 
-# 全链路: scaffold (建 core parm + subnet 脚手架) → 程序化锚点 → promote
+# 全链路 (自底向上): scaffold → chassis 建几何+spare parm → 程序化锚点 → promote
 build_project_scaffold(core, declaration=decl)
 chassis = core.node("chassis")
 
-# 给 chassis 建主几何 (box), 引用 core 的 length (经 promote 后 subnet 有 length)
-promote_params(core)
+# 给 chassis 建主几何 + spare parm (建模副产物)
 box = chassis.createNode("box", "root_box")
-box.parm("sizex").setExpression('ch("../length")')
-box.parm("sizey").set(0.5); box.parm("sizez").set(2)
+box.parm("sizex").set(4.0); box.parm("sizey").set(0.5); box.parm("sizez").set(2)
 chassis.node("out_geometry").setInput(0, box)
+chassis.addSpareParmTuple(hou.FloatParmTemplate("length", "车长", 1, (4.0,), 1.0, 20.0))
 
 # 程序化锚点 (从 box 几何测量, 不是硬编码!)
 add_anchors(core, "chassis", [
     {"measure": "bbox_corner", "axes": "+X-Y+Z", "name": "wheel_mount"}])
 
+# promote: 自底向上, 把 chassis.length 提到 core (chassis_length), subnet 改引用 core.
+promote_params(core)
+
 result["steps"]["anchors_ok"] = (
     len(chassis.node("output_1").geometry().points()) == 1)
-# core 是源 (length=4.0), subnet 引用它.
-result["steps"]["core_length"] = core.parm("length").eval()
-result["steps"]["subnet_length"] = chassis.parm("length").eval()
-result["steps"]["promote_ok"] = (chassis.parm("length") is not None)
+result["steps"]["promote_ok"] = (core.parm("chassis_length") is not None)
+result["steps"]["subnet_refs_core"] = chassis.parm("length").expression()
 # 再跑 scaffold 确认幂等不破坏已加的内容。
 build_project_scaffold(core)
 result["steps"]["anchors_after_rebuild"] = (
@@ -299,14 +297,13 @@ class TestFullChainHython(unittest.TestCase):
         self.fail(f"no RESULT_JSON.\nstdout:{proc.stdout}\nstderr:{proc.stderr}")
 
     def test_full_chain(self):
-        """全链路 (新范式): design_param→scaffold→程序化锚点→promote→重建幂等。"""
+        """全链路 (自底向上): scaffold→几何+spare parm→程序化锚点→promote→重建幂等。"""
         res, _ = self._run()
         s = res["steps"]
         self.assertTrue(s["anchors_ok"], f"anchors: {res}")
-        self.assertTrue(s["promote_ok"], f"subnet length not created by promote: {res}")
-        # core 是源 (4.0), subnet 引用它 (应跟随 4.0).
-        self.assertEqual(s["core_length"], 4.0)
-        self.assertEqual(s["subnet_length"], 4.0, "subnet should follow core value")
+        self.assertTrue(s["promote_ok"], f"core chassis_length not created by promote: {res}")
+        self.assertIn("chassis_length", s["subnet_refs_core"],
+                      f"subnet should ref core: {s['subnet_refs_core']!r}")
         self.assertTrue(s["anchors_after_rebuild"],
                         f"rebuild broke anchors: {res}")
 
@@ -420,7 +417,7 @@ _hda = os.path.join(r"%s", "otls", "edini_project.hda")
 if os.path.isfile(_hda):
     hou.hda.installFile(_hda)
 
-from edini.project.state import empty_declaration, add_component, add_design_param
+from edini.project.state import empty_declaration, add_component
 from edini.project.node import create_project_hda
 from edini.project.builder import build_project_scaffold, promote_params
 from edini.node_utils import create_node, connect_nodes, set_param
@@ -428,9 +425,6 @@ from edini.node_utils import create_node, connect_nodes, set_param
 result = {"steps": {}}
 core = create_project_hda(name="proj_agent")
 decl = empty_declaration("proj_agent")
-# 新范式: wheel_radius 是 core 层 design_param (source of truth).
-add_design_param(decl, "wheel_radius", default=0.5, min=0.1, max=2.0,
-                 components=["wheels"])
 add_component(decl, "chassis", purpose="车架",
     ports_out=[
         {"index": 0, "kind": "geometry", "description": "车架"},
@@ -447,29 +441,26 @@ wheels_path = core.node("wheels").path()
 # --- agent 在 chassis 内：wrangle 造锚点（set_param 标量 + connect_nodes）---
 wr = create_node("attribwrangle", name="make_anchors", parent_path=chassis_path)
 result["steps"]["create_wr"] = wr
-# set_param 标量 + 菜单强制（class → detail）。
 r_class = set_param(wr["path"], "class", "detail")
 result["steps"]["set_class"] = r_class
-# set_param 标量字符串（VEX snippet）。
 r_snip = set_param(wr["path"], "snippet",
     'addpoint(0, set(2, 0, 1));\n'
     'setpointattrib(0, "name", 0, "wheel_mount", "set");')
 result["steps"]["set_snip"] = r_snip
-# connect_nodes：wr → out_anchors（普通 2 参，output_index 默认 0）。
 r_conn1 = connect_nodes(from_path=wr["path"],
                         to_path=chassis_path + "/out_anchors")
 result["steps"]["conn_wr_to_anchors"] = r_conn1
 core.node("chassis/out_anchors").cook(force=True)
 
-# --- agent 在 wheels 内：建 box，向量 size，表达式 ch()，消费 chassis 锚点 ---
+# --- agent 在 wheels 内：建 box + wheel_radius spare parm (建模副产物) ---
 box = create_node("box", name="wheel_box", parent_path=wheels_path)
 result["steps"]["create_box"] = box
-# set_param 向量：box size = [1,1,1]。
 r_size = set_param(box["path"], "size", [1, 1, 1])
 result["steps"]["set_size_vector"] = r_size
-# set_param 表达式：sizex = ch("../wheel_radius")（live 引用）。
-# 新范式: promote 在 wheels subnet 建 wheel_radius parm (引用 core), 让表达式有落点.
-promote_params(core)
+# agent 在 wheels subnet 建 wheel_radius spare parm (自底向上, 带 min/max)
+wheels_node = core.node("wheels")
+wheels_node.addSpareParmTuple(hou.FloatParmTemplate("wheel_radius", "radius", 1, (0.5,), 0.1, 2.0))
+# box sizex 引用 subnet 的 wheel_radius
 r_expr = set_param(box["path"], "sizex", 'ch("../wheel_radius")')
 result["steps"]["set_sizex_expr"] = r_expr
 # connect_nodes 3 参 output_index：agent 独立取 chassis 的第 2 输出端（锚点云）。
@@ -498,13 +489,14 @@ result["steps"]["sizex_is_expression"] = (
 result["steps"]["sizex_expr_value"] = (
     sizex.expression() if sizex and sizex.expression() else None)
 
-# 新范式: core 是源 (wheel_radius 在 core), wheels subnet 引用它.
-result["steps"]["core_has_wheel_radius"] = (core.parm("wheel_radius") is not None)
-wheels_node = core.node("wheels")
-result["steps"]["subnet_has_wheel_radius"] = (
-    wheels_node.parm("wheel_radius") is not None)
-if wheels_node.parm("wheel_radius"):
-    result["steps"]["subnet_follows_core"] = wheels_node.parm("wheel_radius").eval()
+# 自底向上 promote: 把 wheels.wheel_radius 提到 core (wheels_wheel_radius),
+# subnet wheel_radius 改引用 core.
+promote_params(core)
+result["steps"]["core_has_wheels_wheel_radius"] = (
+    core.parm("wheels_wheel_radius") is not None)
+if core.parm("wheels_wheel_radius"):
+    result["steps"]["core_default"] = core.parm("wheels_wheel_radius").eval()
+result["steps"]["subnet_refs_core"] = wheels_node.parm("wheel_radius").expression()
 
 print("RESULT_JSON:" + json.dumps(result))
 """ % (_REPO, _REPO)
@@ -553,13 +545,12 @@ class TestAgentToolsHython(unittest.TestCase):
         # builder 建的 in_chassis_wheel_mount 也拿到锚点（builder 路径）。
         self.assertTrue(s["wheels_got_anchor"],
                         "builder's in_chassis_wheel_mount didn't receive anchor")
-        # 新范式 promote: core 是源 (wheel_radius), subnet 引用它.
-        self.assertTrue(s["core_has_wheel_radius"],
-                        "core should have wheel_radius (design_param source)")
-        self.assertTrue(s["subnet_has_wheel_radius"],
-                        "subnet should have wheel_radius ref after promote")
-        self.assertEqual(s["subnet_follows_core"], 0.5,
-                         "subnet should follow core default 0.5")
+        # 自底向上 promote: core 有 wheels_wheel_radius (按分组), subnet 引用 core.
+        self.assertTrue(s["core_has_wheels_wheel_radius"],
+                        "core should have wheels_wheel_radius after promote")
+        self.assertEqual(s["core_default"], 0.5, "core should inherit subnet default")
+        self.assertIn("wheels_wheel_radius", s["subnet_refs_core"],
+                      f"subnet should ref core: {s['subnet_refs_core']!r}")
 
 
 if __name__ == "__main__":

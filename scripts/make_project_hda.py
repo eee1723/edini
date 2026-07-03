@@ -13,6 +13,23 @@ what rooted build_assembly needs (it creates box/attribwrangle/copytopoints
 SOPs directly). An Object-context HDA can't host SOP children, which is why
 this was switched from Object to SOP context.
 """
+
+# PythonModule source injected into the HDA definition. The button parm's
+# callback (hou.phm().open_chat()) calls open_chat(), which resolves the node
+# the button belongs to (kwargs['node'] in the callback context) and launches
+# the chat dialog bound to it. The dialog logic itself lives in
+# edini.project.panel.chat_dialog (updatable without re-authoring the HDA).
+_PYTHON_MODULE = '''"""Edini Project HDA PythonModule — chat button entry point."""
+def open_chat(**kwargs):
+    """Called by the 'edini_chat' button. Launches the chat dialog for this HDA."""
+    node = kwargs.get("node")
+    if node is None:
+        import hou
+        node = hou.pwd()
+    from edini.project.panel.chat_dialog import open_chat_for_core
+    open_chat_for_core(node.path())
+'''
+
 import os
 import hou
 
@@ -51,8 +68,27 @@ def main() -> None:
         opts.setLockContents(False)
         opts.setUnlockNewInstances(True)
         d.setOptions(opts)
-        # Minimal default parms: none. The hidden __edini_state parm and design
-        # params are added per-instance at runtime by create_project_hda.
+
+        # Add a "💬 Chat" button parm to the HDA interface (problem C). Its
+        # callback calls the PythonModule's open_chat(), which launches the
+        # ProjectChatDialog (slim chat popup). This makes the HDA's own parameter
+        # panel the chat entry point — no need to open a separate Python Pane.
+        ptg = d.parmTemplateGroup()
+        # Only add if not already present (idempotent on re-runs).
+        if ptg.find("edini_chat") is None:
+            bt = hou.ButtonParmTemplate(
+                "edini_chat", "💬 Chat with Edini",
+                script_callback="hou.phm().open_chat()",
+                script_callback_language=hou.scriptLanguage.Python,
+            )
+            ptg.append(bt)
+            d.setParmTemplateGroup(ptg)
+
+        # Inject the PythonModule: open_chat() reads the current node (the HDA
+        # instance whose button was pressed) and launches the chat dialog bound
+        # to it. The actual dialog logic lives in edini.project.panel.chat_dialog
+        # (kept out of the HDA so it can be updated without re-authoring).
+        d.addSection("PythonModule", _PYTHON_MODULE)
         d.save(hda_file)
 
         # Confirm the type category is Sop (sanity check).

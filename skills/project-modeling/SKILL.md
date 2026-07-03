@@ -49,68 +49,57 @@ This is the only modeling path — there is no build_assembly anymore.
 project_create(name="project_table", goal="a small table")
   → returns { core_path: "/obj/project_table/project_core", ... }
 ```
-Always call this FIRST. It creates the edini::project SOP HDA you build inside.
-Remember the returned `core_path` — every later step needs it.
+Call this FIRST. **Workspace-aware**: if the user has a Project HDA core selected
+in the network editor, project_create REUSES it (returns its path, doesn't
+create new) — so "select a Project HDA → work in it" is the natural flow. Only
+creates new when nothing relevant is selected. Remember the returned `core_path`.
 
-### 2. Declare components + design params + build scaffold — `project_build_scaffold`
-Pass `core_path`, `components` (the decomposition), and `design_params` (the
-adjustable parameters). The **core is the single source of truth for params** —
-each design_param becomes a core-level parm with default/min/max; component
-subnets reference them via `ch("../<name>")` after promote.
+### 2. Declare components + build scaffold — `project_build_scaffold`
+Pass `core_path` and `components` (the decomposition). Each component has an
+`id` (= subnet name), `purpose`, and `ports`.
 
 ```
-project_build_scaffold(core_path="/obj/project_table/project_core",
-  design_params=[
-    { "name": "length", "default": 2.0, "min": 0.5, "max": 10, "label": "桌长" },
-    { "name": "width",  "default": 1.0, "min": 0.3, "max": 5,  "label": "桌宽" },
-    { "name": "leg_height", "default": 0.75, "min": 0.2, "max": 3, "components": ["legs"] }
-  ],
-  components=[
-    { "id": "tabletop", "purpose": "桌面，输出四条腿的安装锚点",
-      "ports": { "out": [
-          { "index": 0, "kind": "geometry", "description": "桌面几何" },
-          { "index": 1, "kind": "anchors", "points": [
-              { "name": "leg_mount_fr", "role": "mount" },
-              { "name": "leg_mount_fl", "role": "mount" },
-              { "name": "leg_mount_br", "role": "mount" },
-              { "name": "leg_mount_bl", "role": "mount" } ] } ] } },
-    { "id": "legs", "purpose": "四条桌腿，消费桌面锚点定位",
-      "ports": { "out": [ { "index": 0, "kind": "geometry" } ],
-                  "in": [
-                    { "from": "tabletop", "port": 1, "anchor": "leg_mount_fr" },
-                    { "from": "tabletop", "port": 1, "anchor": "leg_mount_fl" },
-                    { "from": "tabletop", "port": 1, "anchor": "leg_mount_br" },
-                    { "from": "tabletop", "port": 1, "anchor": "leg_mount_bl" } ] } }
-  ])
+project_build_scaffold(core_path="/obj/project_table/project_core", components=[
+  { "id": "tabletop", "purpose": "桌面，输出四条腿的安装锚点",
+    "ports": { "out": [
+        { "index": 0, "kind": "geometry", "description": "桌面几何" },
+        { "index": 1, "kind": "anchors", "points": [
+            { "name": "leg_mount_fr", "role": "mount" },
+            { "name": "leg_mount_fl", "role": "mount" },
+            { "name": "leg_mount_br", "role": "mount" },
+            { "name": "leg_mount_bl", "role": "mount" } ] } ] } },
+  { "id": "legs", "purpose": "四条桌腿，消费桌面锚点定位",
+    "ports": { "out": [ { "index": 0, "kind": "geometry" } ],
+                "in": [
+                  { "from": "tabletop", "port": 1, "anchor": "leg_mount_fr" },
+                  { "from": "tabletop", "port": 1, "anchor": "leg_mount_fl" },
+                  { "from": "tabletop", "port": 1, "anchor": "leg_mount_br" },
+                  { "from": "tabletop", "port": 1, "anchor": "leg_mount_bl" } ] } }
+])
 ```
 The builder creates, **deterministically and idempotently**:
 - One subnet per component (`tabletop/`, `legs/`) — **id = subnet name**
 - Inside each: `out_geometry` + `out_anchors` (nulls) → `output_0`/`output_1`
 - For each `ports.in[]`: external wire + internal `in_<from>_<anchor>` null
-- **Core-level design_params** (with default/min/max) under a "Design" folder —
-  these are the source of truth; subnets get references after promote
 - A core `OUT` (merge of all component geometry) with display flag
+- A "💬 Chat with Edini" button on the core's parameter panel (click → chat popup)
 
-The builder does NOT build geometry — that's your job, freely, inside each subnet.
+The builder does NOT build geometry or parameters — those are your job, bottom-up.
 
-### 3. Promote params (wire subnets to core) — `project_promote_params`
-After scaffold, run promote so each component subnet that uses a design_param
-gets a reference parm (`ch("../<name>")` pointing at the core). Do this BEFORE
-modeling, so your in-subnet nodes can `ch("../<name>")` and have it resolve.
+### 3. Model inside each component subnet — standard node tools
+Use `houdini_create_node`, `houdini_connect_nodes`, `houdini_set_param`. Model
+freely inside each subnet. **Parameters are a byproduct of modeling**: when you
+need an adjustable value, add a spare parm ON THE SUBNET (via houdini_set_param
+on the subnet node, or addSpareParmTuple), then reference it from your geometry
+nodes with `ch("../<parm>")`.
+
+**Build the main geometry** (e.g. tabletop box, with an adjustable length):
 ```
-project_promote_params(core_path="/obj/project_table/project_core")
-# now tabletop.length = ch("../length"), legs.leg_height = ch("../leg_height")
-```
-
-### 4. Model inside each component subnet — standard node tools
-Use `houdini_create_node`, `houdini_connect_nodes`, `houdini_set_param`. Inside
-a subnet, reference the component's (promoted) params with `ch("../<name>")`.
-
-**Build the main geometry** (e.g. tabletop box, driven by core params):
-```
+# 1. Add a spare parm on the SUBNET (parameters are a byproduct of modeling).
+houdini_set_param(node_path="<tabletop subnet>", "length", 2.0)  # creates a spare parm
+# 2. Build geometry referencing the subnet's parm.
 houdini_create_node(node_type="box", parent_path="<tabletop subnet>")
-houdini_set_param(node_path, "sizex", 'ch("../length")')   # LIVE ref to core param
-houdini_set_param(node_path, "sizez", 'ch("../width")')
+houdini_set_param(node_path, "sizex", 'ch("../length")')   # LIVE ref to subnet parm
 houdini_set_param(node_path, "sizey", 0.05)
 houdini_connect_nodes(from_path=box_path, to_path="<tabletop>/out_geometry")
 ```
@@ -152,18 +141,30 @@ houdini_connect_nodes(from_path="<tabletop>", to_path="<something>", input_index
 # output_index=1 = tabletop's anchor cloud (out[1]); 0 = its main geometry
 ```
 
-## Parameter LIVE references (core is the source)
+### 4. Promote params to the core (bottom-up) — `project_promote_params`
+After modeling (when subnet spare parms exist + tested), lift them to the core
+HDA so the whole model is adjustable from one place:
+```
+project_promote_params(core_path="<core>")
+# scans each subnet's spareParms() → creates <component>_<parm> on the core
+# (grouped under a <component> folder, with min/max copied) → rewires the subnet
+# parm to ch("../<component>_<parm>") so the core drives it.
+```
+Bottom-up: params originate in subnets (where you model + test them), then get
+promoted to the core for unified control. The core becomes the adjustment
+entry point; subnets follow via ch() refs.
 
-The core HDA owns the parameter values (default/min/max, defined via
-`design_params` in build_scaffold). Component subnets REFERENCE them. After
-`project_promote_params`, each using subnet has a parm with expression
-`ch("../<name>")` pointing at the core. So inside a subnet, your nodes use
-`ch("../<name>")` to read the core-driven value.
+## Parameter LIVE references (bottom-up, core drives after promote)
+
+Parameters originate on component subnets (spare parms you add while modeling).
+After `project_promote_params`, each is lifted to the core as
+`<component>_<parm>` (grouped, with min/max), and the subnet parm is rewired to
+`ch("../<component>_<parm>")` — so the CORE drives the value.
 
 | Where you are | What you reference | Example |
 |---|---|---|
-| A node INSIDE a component subnet | the subnet's promoted parm (= core's) | a box in `tabletop/` uses `ch("../length")` |
-| The core HDA (user adjusts here) | the core's own parm (source) | user sets `length` on the core → all subnets follow |
+| A geometry node INSIDE a subnet | the subnet's parm | a box in `tabletop/` uses `ch("../length")` |
+| The user (after promote) | the core's `<component>_<parm>` | user sets `tabletop_length` → subnet follows → geometry + anchors update |
 
 `houdini_set_param` accepts expression strings containing `ch(...)` and routes
 them to `setExpression` automatically — so LIVE params work through the tool.
@@ -197,9 +198,10 @@ understandable, editable, and (later) drift-detectable.
 | Mistake | Fix |
 |---|---|
 | **Anchors don't move when you resize the component** | You hardcoded `addpoint(x,y,z)`. Use `project_add_anchors` so anchors are measured from geometry and recompute live. NEVER hardcode anchor coordinates. |
-| Box can't read a param | inside a subnet, reference the core's param via the subnet's promoted parm: `ch("../length")`. Run `project_promote_params` first so the subnet parm exists. |
+| Box can't read a param | inside a subnet, add the parm ON THE SUBNET (houdini_set_param on the subnet node), then reference it from geometry with `ch("../length")`. |
 | connect_nodes can't reach the anchor cloud | pass `output_index=1` (default 0 = main geometry) |
-| Param has no min/max on the core | define it via `design_params` in build_scaffold (`{name,default,min,max}`), not by adding a bare spare parm. |
+| Param has no min/max on the core | add the spare parm on the subnet WITH min/max (FloatParmTemplate), then promote copies them up. |
+| project_create made a new HDA instead of using the selected one | project_create reuses a selected Project HDA core. To force new, deselect first. |
 | Built geometry but nothing shows at core OUT | your geometry must feed into `out_geometry` → `output_0` → core's OUT merge |
 
 ## What this supports (and what's coming)

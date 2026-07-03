@@ -141,14 +141,30 @@ def _project_create(name: str | None = None, goal: str | None = None, **_) -> di
 
     Returns the core node path (feed to project_build_scaffold). The Project
     HDA is a SOP-context edini::project instance inside a geo shell.
+
+    Workspace-aware: if the user has an edini::project core selected in the
+    network editor, REUSE it (return its path) instead of creating a new one.
+    This makes "select a Project HDA → work in it" the natural flow, rather
+    than always spawning a new project. Only creates new when nothing relevant
+    is selected.
     """
     try:
         from edini.project.node import create_project_hda
         import hou
+        # Workspace awareness: reuse a selected Project HDA if present.
+        try:
+            for node in hou.selectedNodes():
+                if node.type().name() == "edini::project":
+                    return {"success": True, "core_path": node.path(),
+                            "shell_path": node.parent().path(),
+                            "reused": True}
+        except Exception:
+            pass
         n = name or "project"
         core = create_project_hda(name=n, goal=goal)
         return {"success": True, "core_path": core.path(),
-                "shell_path": hou.node(core.path()).parent().path()}
+                "shell_path": hou.node(core.path()).parent().path(),
+                "reused": False}
     except Exception as e:
         import traceback
         return {"success": False, "error": str(e),

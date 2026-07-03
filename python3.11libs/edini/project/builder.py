@@ -20,7 +20,6 @@ import hou  # real hou at runtime
 
 from edini.project.state import (
     load_declaration, save_declaration, append_log,
-    get_design_params_for_component,
 )
 from edini.project.ports import (
     OUT_GEOMETRY_NODE, OUT_ANCHORS_NODE, OUTPUT_0_NODE, OUTPUT_1_NODE,
@@ -71,11 +70,6 @@ def build_project_scaffold(core_node: "hou.Node",
     # 不会在 core/viewport 显示（spec §3.1 画的 OUT 之前缺失，导致 agent 放弃
     # 新流程退回 sandbox）。幂等：重建只补缺失，不重复。
     _ensure_core_output(core_node, [c["id"] for c in components])
-
-    # 第四遍：core 层 design_params —— 在 core HDA 顶层安装声明里的设计参数
-    # （带 default/min/max）。core 是参数的单一真相源（spec §6 / 参数方向反转）；
-    # 组件 subnet 在 promote 后用 ch("../<name>") 引用它们。幂等：已存在的跳过。
-    _ensure_core_design_params(core_node, decl)
 
     # 记日志（成功）。
     decl = load_declaration(core_node)
@@ -166,35 +160,9 @@ def _ensure_node(parent: "hou.Node", node_type: str,
     return parent.createNode(node_type, node_name=node_name)
 
 
-def _ensure_core_design_params(core_node: "hou.Node", decl: dict) -> None:
-    """在 core HDA 顶层安装声明里的 design_params（带 default/min/max）。
-
-    core 是参数的单一真相源。每个 design_param 成为一个 core spare parm
-    （放 "Design" folder），带具体的 default/min/max 值（不是表达式）。
-    组件 subnet 在 promote 时用 ch("../<name>") 引用它们。
-
-    幂等：已存在的 parm 跳过（不覆盖用户调整过的值）。
-    """
-    for p in decl.get("design_params", []):
-        name = p["name"]
-        if core_node.parm(name) is not None:
-            continue  # 已存在，不覆盖用户改过的值
-        default = p.get("default", 0.0)
-        pmin = p.get("min")
-        pmax = p.get("max")
-        # FloatParmTemplate kwargs: min/max are the slider range; use the
-        # declared range if given, else a sensible default around the value.
-        rmin = float(pmin) if pmin is not None else 0.0
-        rmax = float(pmax) if pmax is not None else max(10.0, float(default) * 2)
-        tmpl = hou.FloatParmTemplate(
-            name, p.get("label", name), 1,
-            default_value=([float(default)]),
-            min=rmin, max=rmax,
-        )
-        core_node.addSpareParmTuple(tmpl, in_folder=("Design",),
-                                    create_missing_folders=True)
-
-
+from edini.project.state import (
+    load_declaration, save_declaration, append_log,
+)
 def _ensure_core_output(core_node: "hou.Node", component_ids: list[str]) -> None:
     """确保 core 有一个 OUT 收集所有组件的主几何（subnet output 0）。
 
@@ -230,17 +198,18 @@ def _ensure_core_output(core_node: "hou.Node", component_ids: list[str]) -> None
 
 
 def promote_params(core_node: "hou.Node") -> dict:
-    """把 core 的 design_params 接到引用它们的组件 subnet（core 为源）。
+    """把组件 subnet 的 spare parm 提到 core HDA（自底向上，按组件分组）。
 
-    方向（反转后的新范式）：core 顶层 parm 是单一真相源（带 default/min/max，
-    由 build_scaffold 的 _ensure_core_design_params 安装）。本函数对每个
-    design_param，在引用它的组件 subnet 上建一个同名 spare parm，表达式
-    ch("../<name>") 引用 core。这样组件内部节点用 ch("./<name>") 或
-    ch("<name>") 就拿到 core 驱动的值。用户改 core → 所有 subnet 跟变 →
-    几何 + 程序化锚点 live 重算。
+    流程（用户拍板的方向，符合建模直觉）：
+      1. agent 在 subnet 建模时自然建 spare parm（测试好，参数是建模的副产物）
+      2. 本函数扫每个组件 subnet 的 spareParms()
+      3. 在 core 按组件分组创建 parm（<component>_<parm>，放 "<component>" folder），
+         带 min/max/default（从 subnet parm 的 template 读，解决问题2）
+      4. 把 subnet parm 改成引用 core：subnet.parm 表达式 = ch("../<component>_<parm>")
+         —— 这样用户改 core → subnet 跟变 → 几何/锚点 live
 
-    幂等：已存在的 subnet parm 只更新表达式，不重复建。
-    返回 {success, promoted: [{component, parm}], project}。
+    core 是最终的调整入口（带 min/max），subnet 是引用（被 core 驱动）。
+    幂等：已存在的 core parm 只更新表达式。
     """
     decl = load_declaration(core_node)
     promoted = []
@@ -250,39 +219,54 @@ def promote_params(core_node: "hou.Node") -> dict:
         subnet = core_node.node(cid)
         if subnet is None:
             continue
-        # 这个组件引用哪些 design_param（components=None 表示全部组件）。
-        for p in get_design_params_for_component(decl, cid):
-            pname = p["name"]
-            # core 必须已有这个 parm（build_scaffold 建的）；没有则跳过。
-            if core_node.parm(pname) is None:
-                continue
-            _install_subnet_parm_ref(subnet, pname)
-            promoted.append({"component": cid, "parm": pname})
+        try:
+            spare_parms = subnet.spareParms()
+        except Exception:
+            continue
+        for sparmparm in spare_parms:
+            pname = sparmparm.name()
+            core_parm_name = f"{cid}_{pname}"
+            _promote_one_parm(core_node, subnet, cid, pname, core_parm_name)
+            promoted.append({"component": cid, "parm": core_parm_name})
 
     append_log(decl, kind="promote",
-               summary=f"promoted {len(promoted)} parm ref(s)",
+               summary=f"promoted {len(promoted)} parm(s)",
                payload={"promoted": promoted}, result_ok=True)
     save_declaration(core_node, decl)
     return {"success": True, "promoted": promoted,
             "project": core_node.path()}
 
 
-def _install_subnet_parm_ref(subnet: "hou.Node", parm_name: str) -> None:
-    """在组件 subnet 上建/更新一个 spare parm，表达式引用 core 的同名 parm。
+def _promote_one_parm(core_node: "hou.Node", subnet: "hou.Node",
+                      component_id: str, subnet_parm: str,
+                      core_parm: str) -> None:
+    """把一个 subnet spare parm 提到 core（按组件 folder 分组）+ subnet 改引用 core。
 
-    subnet 内部节点用 ch("./<parm_name>") 或 ch("<parm_name>") 取值。
-    幂等：已存在则只更新表达式。
+    - 读 subnet parm 的 template（含 default/min/max），在 core 建同名 parm。
+    - core parm 放 "<component_id>" folder，命名 <component_id>_<subnet_parm>。
+    - subnet parm 表达式改成 ch("../<core_parm>") —— subnet 被 core 驱动。
+    幂等：core parm 已存在则只更新；subnet 表达式每次确保。
     """
-    existing = subnet.parm(parm_name)
-    if existing is not None:
-        existing.setExpression(f'ch("../{parm_name}")')
+    sub_p = subnet.parm(subnet_parm)
+    if sub_p is None:
         return
-    tmpl = hou.FloatParmTemplate(parm_name, parm_name, 1)
-    subnet.addSpareParmTuple(tmpl, in_folder=("Design",),
-                             create_missing_folders=True)
-    p = subnet.parm(parm_name)
-    if p is not None:
-        p.setExpression(f'ch("../{parm_name}")')
+    sub_tmpl = sub_p.parmTemplate()
+    default_val = sub_p.eval()
+
+    existing = core_node.parm(core_parm)
+    if existing is None:
+        # 在 core 建 parm，复制 subnet parm 的类型/default/min/max。
+        # 复用 subnet 的 template 但改名 + 放 component folder。
+        new_tmpl = sub_tmpl.clone()
+        new_tmpl.setName(core_parm)
+        new_tmpl.setLabel(f"{component_id} {subnet_parm}")
+        core_node.addSpareParmTuple(new_tmpl, in_folder=(component_id,),
+                                    create_missing_folders=True)
+        cp = core_node.parm(core_parm)
+        if cp is not None:
+            cp.set(default_val)
+    # subnet parm 改成引用 core（ch("../<core_parm>")）—— subnet 被 core 驱动。
+    sub_p.setExpression(f'ch("../{core_parm}")')
 
 
 def add_anchors(core_node: "hou.Node", component_id: str,
