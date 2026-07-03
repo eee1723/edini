@@ -164,6 +164,10 @@ class ProjectPanelWidget(QtWidgets.QWidget):
         # See _get_rpc — independent of EdiniMainWindow, per spec decision #11.
         self._rpc = None
         self._build_ui()
+        # Track selection so the panel auto-binds a Project HDA core when the
+        # user selects one in the network editor (problem 5: selecting a Project
+        # HDA should make this panel follow it).
+        self._setup_selection_tracking()
         # Popout input dialog for CJK/IME input (Houdini Python Panel embedded
         # widgets can't receive IME composition — host event interception).
         # Parented to hou.qt.mainWindow() so it's a real top-level OS window
@@ -251,6 +255,55 @@ class ProjectPanelWidget(QtWidgets.QWidget):
     def _bind(self, node_path: str) -> None:
         self._bound_node_path = node_path
         self.status_label.setText(f"bound: {node_path}")
+
+    # --- Selection tracking (problem 5: panel follows selected Project HDA) --
+
+    def _setup_selection_tracking(self) -> None:
+        """Register to follow node selection: when the user selects a Project
+        HDA core (edini::project) in the network editor, auto-bind this panel
+        to it. Uses a lightweight event-loop poll (Houdini has no per-widget
+        selection signal). GUI-only; no-ops silently under headless hython.
+        """
+        try:
+            import hou
+            if not hasattr(hou, "ui") or hou.ui is None:
+                return  # headless
+            self._last_selected = None
+            hou.ui.addEventLoopCallback(self._poll_selection)
+        except Exception:
+            pass  # headless / no UI — silently skip
+
+    def _poll_selection(self) -> None:
+        """Event-loop callback: if the current selection is a single Project
+        HDA core, bind to it (idempotent — skip if already bound).
+        """
+        try:
+            import hou
+            sel = hou.selectedNodes()
+            if len(sel) != 1:
+                return
+            node = sel[0]
+            # Is it an edini::project SOP HDA instance?
+            if node.type().name() != "edini::project":
+                return
+            path = node.path()
+            if path == self._bound_node_path or path == getattr(self, "_last_selected", None):
+                return
+            self._last_selected = path
+            self._bind_from_selection(path)
+        except Exception:
+            pass
+
+    def _bind_from_selection(self, node_path: str) -> None:
+        """Bind to a node selected in the editor + sync the dropdown."""
+        self._bind(node_path)
+        # Sync the dropdown if this node is in the list.
+        for i in range(self.project_combo.count()):
+            if self.project_combo.itemData(i) == node_path:
+                self.project_combo.blockSignals(True)
+                self.project_combo.setCurrentIndex(i)
+                self.project_combo.blockSignals(False)
+                break
 
     # --- Chat: send + stream back via shared singleton RpcClient ---------
 

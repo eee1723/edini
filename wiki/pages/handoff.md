@@ -2,7 +2,7 @@
 
 > **用途**：让新 Agent 或开发者在 Edini 仓库里快速上手。
 
-**最后更新**：2026-07-03（**移除旧 build_assembly 引导 + 补全 project 工具链** — agent 现在只能走 Project HDA 组件流水线。读 session 发现 agent 仍选 build_assembly 因引导偏向 + 缺 create/promote 工具。移除旧引导层 + 补 project_create/project_promote_params 工具，真机验证完整工具链）。
+**最后更新**：2026-07-03（**锚点程序化 + 参数方向反转(core为源) + 面板跟选中** — 从第一性原理重做建模范式根基。锚点不再硬编码(复用 vex_strategies 测量),改 core 参数锚点 live 重算;core 是参数单一真相源带 min/max;选中 Project HDA 面板自动跟随。真机铁证:length 2→4 锚点±1→±2 live）。
 **当前阶段**：**Project HDA**（新主线）—— 把程序化建模从"一次性生成器"升级为"长期协作伙伴"。一个程序化建模项目 = 一个 Project HDA（**SOP 上下文**：geo 外壳 + 内部 SOP HDA core 承载几何 + 知识图谱富化声明 JSON 存隐藏 parm + 嵌入 PySide 面板 + 日志）。
 **组件建模地基状态（2026-07-02 交付，子系统 1）**：✅ **hython 决定性验证通过**。新范式：一个组件 = core 内一个 **subnet**，通过**多输出端口**对外暴露——`out[0]`=主几何（null `out_geometry` → `output_0` output 节点形成 subnet 输出端 1），`out[1..n]`=**信息点云**（带 `@P`/`@orient`/`@name` 的 point，null `out_anchors` → `output_1`）。组件间流水线协作（车架输出 wheel_mount 锚点 → 车轮消费定位）。真机铁证：subnet output 节点机制验证通过（两个 output 节点映射到两个独立输出端，下游各取所需）；锚点 @name 发射正确；重建幂等不破坏 LLM 已加内容；promote 生成 chassis_length 两层 ch() live 引用。
 **旧 assembly 范式已移除**：`assembly` 字段、`get_assembly`/`set_assembly`、`build_project_model`、`project_build_model` 工具全部清除。rooted-modeling skill（assembly_builder/vex_strategies/measure）**保留**给 skill 用，只是 Project HDA 不再调。
