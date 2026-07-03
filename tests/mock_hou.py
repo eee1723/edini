@@ -945,7 +945,10 @@ class MockNode:
     def outputs(self) -> list[MockNode]:
         return list(self._outputs)
 
-    def setInput(self, index: int, node: MockNode | None) -> None:
+    def setInput(self, index: int, node, output_index: int = 0) -> None:
+        # output_index selects which of the source node's output ports to wire
+        # from (real hou's 3-arg setInput). The mock doesn't model multi-output
+        # ports, so it's accepted for signature compatibility but not stored.
         while len(self._inputs) <= index:
             self._inputs.append(None)
         self._inputs[index] = node

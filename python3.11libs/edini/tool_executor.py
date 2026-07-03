@@ -191,6 +191,7 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     "houdini_connect_nodes": lambda **kw: connect_nodes(
         from_path=kw["from_path"], to_path=kw["to_path"],
         input_index=kw.get("input_index", 0),
+        output_index=kw.get("output_index", 0),
     ),
     "houdini_set_param": lambda **kw: set_param(
         kw["node_path"], kw["param_name"], kw["value"],

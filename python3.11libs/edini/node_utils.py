@@ -254,8 +254,16 @@ def connect_nodes(
     from_path: str,
     to_path: str,
     input_index: int = 0,
+    output_index: int = 0,
 ) -> dict[str, Any]:
-    """Connect the output of one node to the input of another."""
+    """Connect an output port of one node to an input of another.
+
+    output_index selects which of the source node's output ports to wire from
+    (0 = primary output). This matters for Project HDA component subnets, which
+    expose multiple outputs: out[0]=main geometry, out[1..n]=anchor/info point
+    clouds. A downstream component consumes an upstream anchor by connecting
+    with output_index=1. Default 0 preserves the old 2-arg setInput behavior.
+    """
     try:
         from_node = hou.node(from_path)
         to_node = hou.node(to_path)
@@ -264,12 +272,13 @@ def connect_nodes(
         if to_node is None:
             return {"success": False, "error": f"Destination node not found: {to_path}"}
 
-        to_node.setInput(input_index, from_node)
+        to_node.setInput(input_index, from_node, output_index)
         return {
             "success": True,
             "from": from_path,
             "to": to_path,
             "input_index": input_index,
+            "output_index": output_index,
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -330,6 +339,16 @@ def _coerce_menu_value(parm, value, menu_items: list[str]):
     return None
 
 
+def _looks_like_expr(value: Any) -> bool:
+    """True if value is an HScript expression string (contains ch()).
+
+    Used to route live channel-reference values (e.g. ch("../length")) to
+    setExpression instead of .set() — a numeric parm can't .set() a string.
+    Mirrors assembly_builder._looks_like_expr.
+    """
+    return isinstance(value, str) and "ch(" in value
+
+
 def _set_parm_value(parm, value) -> tuple[bool, Any, str | None]:
     """Set a parm value with menu-token coercion fallback.
 
@@ -374,15 +393,55 @@ def _set_parm_value(parm, value) -> tuple[bool, Any, str | None]:
 def set_param(node_path: str, param_name: str, value: Any) -> dict[str, Any]:
     """Set a parameter value on a node.
 
-    Menu parms are coerced automatically: if a numeric value like ``"0"``
-    (stringified from the manifest default) is rejected as "Invalid menu
-    item", it is remapped to the menu index or matching token and retried.
+    Three value shapes are supported:
+      - scalar (number/string/bool): set via .set(), with menu-token coercion
+        fallback (a stringified menu index like "0" is remapped automatically).
+      - vector (list/tuple with len > 1): set via parmTuple — e.g. a box's
+        ``size`` as [1,2,3]. Components that are expression strings
+        (ch("../x")) are routed to per-component setExpression.
+      - expression string (contains "ch("): set via setExpression (Hscript) —
+        a numeric parm can't .set() a string, so live channel references must
+        go through this path. Enables Project HDA's two-layer ch() live params.
     """
     try:
         node = hou.node(node_path)
         if node is None:
             return {"success": False, "error": f"Node not found: {node_path}"}
 
+        # Vector parm (list/tuple, >1 component) → parmTuple.
+        if isinstance(value, (list, tuple)) and len(value) > 1:
+            pt = node.parmTuple(param_name)
+            if pt is None:
+                return {"success": False,
+                        "error": f"Parameter tuple '{param_name}' not found on {node_path}"}
+            # If any component is an expression, set per-component (some expr,
+            # some literal) — mirrors assembly_builder._set_parm.
+            if any(_looks_like_expr(v) for v in value):
+                for sub, v in zip(pt, value):
+                    if _looks_like_expr(v):
+                        try:
+                            sub.setExpression(v, language=hou.exprLanguage.Hscript)
+                        except (AttributeError, TypeError):
+                            sub.setExpression(v)
+                    else:
+                        sub.set(v)
+            else:
+                pt.set(tuple(value))
+            return {"success": True, "path": node_path, "param": param_name, "value": list(value)}
+
+        # Scalar expression string → setExpression.
+        if _looks_like_expr(value):
+            parm = node.parm(param_name)
+            if parm is None:
+                return {"success": False,
+                        "error": f"Parameter '{param_name}' not found on {node_path}"}
+            try:
+                parm.setExpression(value, language=hou.exprLanguage.Hscript)
+            except (AttributeError, TypeError):
+                parm.setExpression(value)
+            return {"success": True, "path": node_path, "param": param_name, "value": value}
+
+        # Plain scalar → existing path (menu coercion fallback).
         parm = node.parm(param_name)
         if parm is None:
             return {"success": False, "error": f"Parameter '{param_name}' not found on {node_path}"}

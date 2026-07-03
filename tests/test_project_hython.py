@@ -384,5 +384,153 @@ class TestInputScaffoldHython(unittest.TestCase):
                         "rebuild broke LLM's downstream wiring")
 
 
+# ============================================================================
+# 子系统 1.5: agent 工具链建模验证 — 扩展后的 connect_nodes (output_index)
+# + set_param (vector/expression) 能否驱动 agent 在 Project HDA 内完整建模。
+# 这条 harness 全程用工具函数 (node_utils.connect_nodes / set_param) 而非直接
+# hou.node 操作，证明 agent 工具面足够建模，地基能被"用起来"。
+# ============================================================================
+_AGENT_HARNESS = r"""
+import json, sys, os
+sys.path.insert(0, os.path.join(r"%s", "python3.11libs"))
+import hou
+_hda = os.path.join(r"%s", "otls", "edini_project.hda")
+if os.path.isfile(_hda):
+    hou.hda.installFile(_hda)
+
+from edini.project.state import empty_declaration, add_component
+from edini.project.node import create_project_hda
+from edini.project.builder import build_project_scaffold, promote_params
+from edini.node_utils import create_node, connect_nodes, set_param
+
+result = {"steps": {}}
+core = create_project_hda(name="proj_agent")
+decl = empty_declaration("proj_agent")
+add_component(decl, "chassis", purpose="车架",
+    ports_out=[
+        {"index": 0, "kind": "geometry", "description": "车架"},
+        {"index": 1, "kind": "anchors", "points": [
+            {"name": "wheel_mount", "role": "mount"}]}])
+add_component(decl, "wheels", purpose="车轮",
+    ports_in=[{"from": "chassis", "port": 1, "anchor": "wheel_mount",
+               "description": "前轮定位"}])
+build_project_scaffold(core, declaration=decl)
+
+chassis_path = core.node("chassis").path()
+wheels_path = core.node("wheels").path()
+
+# --- agent 在 chassis 内：wrangle 造锚点（set_param 标量 + connect_nodes）---
+wr = create_node("attribwrangle", name="make_anchors", parent_path=chassis_path)
+result["steps"]["create_wr"] = wr
+# set_param 标量 + 菜单强制（class → detail）。
+r_class = set_param(wr["path"], "class", "detail")
+result["steps"]["set_class"] = r_class
+# set_param 标量字符串（VEX snippet）。
+r_snip = set_param(wr["path"], "snippet",
+    'addpoint(0, set(2, 0, 1));\n'
+    'setpointattrib(0, "name", 0, "wheel_mount", "set");')
+result["steps"]["set_snip"] = r_snip
+# connect_nodes：wr → out_anchors（普通 2 参，output_index 默认 0）。
+r_conn1 = connect_nodes(from_path=wr["path"],
+                        to_path=chassis_path + "/out_anchors")
+result["steps"]["conn_wr_to_anchors"] = r_conn1
+core.node("chassis/out_anchors").cook(force=True)
+
+# --- agent 在 wheels 内：建 box，向量 size，表达式 ch()，消费 chassis 锚点 ---
+box = create_node("box", name="wheel_box", parent_path=wheels_path)
+result["steps"]["create_box"] = box
+# set_param 向量：box size = [1,1,1]。
+r_size = set_param(box["path"], "size", [1, 1, 1])
+result["steps"]["set_size_vector"] = r_size
+# set_param 表达式：sizex = ch("../wheel_radius")（live 引用，even if parm 不存在也证明走 setExpression 路径）。
+# 先在 wheels subnet 加一个 wheel_radius spare parm，让表达式有落点。
+wheels_node = core.node("wheels")
+wheels_node.addSpareParmTuple(hou.FloatParmTemplate("wheel_radius", "radius", 1, (0.5,)))
+r_expr = set_param(box["path"], "sizex", 'ch("../wheel_radius")')
+result["steps"]["set_sizex_expr"] = r_expr
+# connect_nodes 3 参 output_index：agent 独立取 chassis 的第 2 输出端（锚点云）。
+# builder 已按 ports.in 建了 in_chassis_wheel_mount 并接好 chassis output1（验证 builder 路径）；
+# 这里 agent 再用一个独立 null 直接接 chassis output1，证明工具本身能取多输出端。
+probe = create_node("null", name="anchor_probe", parent_path=core.path())
+r_conn2 = connect_nodes(from_path=chassis_path, to_path=probe["path"],
+                        input_index=0, output_index=1)
+result["steps"]["conn_chassis_anchor_to_probe"] = r_conn2
+probe_node = core.node("anchor_probe")
+probe_node.cook(force=True) if probe_node else None
+result["steps"]["probe_got_anchor"] = (
+    probe_node is not None and
+    len(probe_node.geometry().points()) == 1)
+# 验证 builder 建的 in_chassis_wheel_mount 也拿到锚点（builder 路径用 output_index）。
+in_node = core.node("wheels/in_chassis_wheel_mount")
+in_node.cook(force=True) if in_node else None
+result["steps"]["wheels_got_anchor"] = (
+    in_node is not None and
+    len(in_node.geometry().points()) == 1)
+
+# 验证 box sizex 是表达式（live）。
+sizex = core.node("wheels/wheel_box").parm("sizex")
+result["steps"]["sizex_is_expression"] = (
+    sizex is not None and len(sizex.expression()) > 0)
+result["steps"]["sizex_expr_value"] = (
+    sizex.expression() if sizex and sizex.expression() else None)
+
+# promote：把 wheels 的 wheel_radius spare parm 提到 core。
+rp = promote_params(core)
+result["steps"]["promote"] = rp
+result["steps"]["core_has_wheel_radius"] = (
+    core.parm("wheels_wheel_radius") is not None)
+
+print("RESULT_JSON:" + json.dumps(result))
+""" % (_REPO, _REPO)
+
+
+@unittest.skipUnless(HYTHON, "hython not installed")
+class TestAgentToolsHython(unittest.TestCase):
+    """agent 用扩展后的工具（connect_nodes output_index + set_param 向量/表达式）
+    能在 Project HDA 内完整建模。这是地基能被 agent '用起来' 的决定性证据。"""
+
+    def _run(self):
+        proc = subprocess.run(
+            [HYTHON, "-c", _AGENT_HARNESS],
+            capture_output=True, text=True, timeout=180, cwd=_REPO)
+        combined = proc.stdout + proc.stderr
+        for line in combined.splitlines():
+            if line.startswith("RESULT_JSON:"):
+                return json.loads(line[len("RESULT_JSON:"):]), combined
+        self.fail(f"no RESULT_JSON.\nstdout:{proc.stdout}\nstderr:{proc.stderr}")
+
+    def test_agent_modeling_via_tools(self):
+        res, _ = self._run()
+        s = res["steps"]
+        # create_node 工作。
+        self.assertTrue(s["create_wr"]["success"], f"create wrangle failed: {s['create_wr']}")
+        self.assertTrue(s["create_box"]["success"], f"create box failed: {s['create_box']}")
+        # set_param 标量（class detail + VEX snippet）。
+        self.assertTrue(s["set_class"]["success"], f"set class failed: {s['set_class']}")
+        self.assertTrue(s["set_snip"]["success"], f"set snippet failed: {s['set_snip']}")
+        # connect_nodes 2 参（wr → out_anchors）。
+        self.assertTrue(s["conn_wr_to_anchors"]["success"])
+        # set_param 向量（box size [1,1,1]）。
+        self.assertTrue(s["set_size_vector"]["success"],
+                        f"set vector size failed: {s['set_size_vector']}")
+        # set_param 表达式（sizex = ch("../wheel_radius")）—— 走 setExpression。
+        self.assertTrue(s["set_sizex_expr"]["success"],
+                        f"set expression failed: {s['set_sizex_expr']}")
+        self.assertTrue(s["sizex_is_expression"],
+                        "sizex should be an expression after ch() set")
+        self.assertIn("wheel_radius", s["sizex_expr_value"])
+        # connect_nodes 3 参 output_index=1：agent 独立取 chassis 锚点端。
+        self.assertTrue(s["conn_chassis_anchor_to_probe"]["success"],
+                        f"3-arg connect failed: {s['conn_chassis_anchor_to_probe']}")
+        self.assertTrue(s["probe_got_anchor"],
+                        "probe didn't receive chassis anchor via output_index=1")
+        # builder 建的 in_chassis_wheel_mount 也拿到锚点（builder 路径）。
+        self.assertTrue(s["wheels_got_anchor"],
+                        "builder's in_chassis_wheel_mount didn't receive anchor")
+        # promote 工作（wheel_radius 提到 core）。
+        self.assertTrue(s["core_has_wheel_radius"],
+                        f"promote didn't lift wheel_radius: {s['promote']}")
+
+
 if __name__ == "__main__":
     unittest.main()

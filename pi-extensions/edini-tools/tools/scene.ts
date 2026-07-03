@@ -72,19 +72,30 @@ export const houdiniDeleteNode = {
 export const houdiniConnectNodes = {
   name: "houdini_connect_nodes",
   label: "Connect Houdini Nodes",
-  description: "Connect the output of one node to the input of another.",
+  description:
+    "Connect an output port of one node to an input of another. " +
+    "For Project HDA component subnets, output_index selects which upstream " +
+    "port to consume: 0 = main geometry, 1+ = anchor/info point clouds.",
   promptSnippet:
-    "Connect from node to another node, optionally specifying input index",
+    "Connect from node to another node, optionally specifying input/output index",
   parameters: Type.Object({
     from_path: Type.String({ description: "Source node path" }),
     to_path: Type.String({ description: "Destination node path" }),
     input_index: Type.Optional(
       Type.Number({ description: "Input index on destination (0-based), default 0" })
     ),
+    output_index: Type.Optional(
+      Type.Number({
+        description:
+          "Source node output port index (0-based). 0 = primary output (default). " +
+          "Use 1+ to consume a subnet's anchor/info output ports (e.g. chassis's " +
+          "anchor cloud). Default 0.",
+      })
+    ),
   }),
   async execute(
     _toolCallId: string,
-    params: { from_path: string; to_path: string; input_index?: number }
+    params: { from_path: string; to_path: string; input_index?: number; output_index?: number }
   ) {
     return forwardTool("houdini_connect_nodes", params);
   },
@@ -93,15 +104,23 @@ export const houdiniConnectNodes = {
 export const houdiniSetParam = {
   name: "houdini_set_param",
   label: "Set Houdini Parameter",
-  description: "Set a parameter value on a Houdini node.",
-  promptSnippet: "Set a Houdini node parameter to a value",
+  description:
+    "Set a parameter value on a Houdini node. " +
+    "Supports scalars (number/string/bool), vector parms as arrays " +
+    "(e.g. [1,2,3] for box 'size'), and live channel-reference expressions " +
+    "(e.g. ch('../length') — set as an expression, not a literal).",
+  promptSnippet: "Set a Houdini node parameter (scalar, vector, or live ch() expression)",
   parameters: Type.Object({
     node_path: Type.String({ description: "Full node path" }),
     param_name: Type.String({
-      description: "Parameter name, e.g. 'tx', 'file'",
+      description: "Parameter name, e.g. 'tx', 'size', 'snippet'",
     }),
     value: Type.Unknown({
-      description: "New value (number, string, or bool)",
+      description:
+        "New value. Scalar (number/string/bool), array for vector parms " +
+        "(e.g. [1,2,3]), or expression string like ch('../length') for a live " +
+        "channel reference. Arrays with expression components are supported " +
+        "(e.g. [\"ch('../length')\", 2, 3]).",
     }),
   }),
   async execute(

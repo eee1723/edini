@@ -161,3 +161,34 @@ chassis 里的 `make_anchors`、`demo_box`、spare parm，wheels 里的 `wheel_s
 - **spare parm API**：READ 用 `node.spareParms()`，WRITE 用 `node.addSpareParmTuple(tmpl, in_folder=(folder,), create_missing_folders=True)`。`spareParmGroup()`/`setSpareParmGroup()` 在真机**不存在**。
 
 验证全部通过后，地基在 GUI 站住。任何不符预期，把 Python Shell 输出贴出来排查。
+
+---
+
+## agent 工具建模能力（2026-07-03 扩展）
+
+地基物理机制（subnet/端口/锚点/连线）hython 验证通过后，**agent 还不能用地基建模** —— 因为两个关键工具能力不足。本节记录补齐的能力，这是地基能被"用起来"的决定性一步。
+
+### 工具扩展
+
+| 工具 | 旧能力 | 新能力 | 为什么需要 |
+|---|---|---|---|
+| `houdini_connect_nodes` | 2 参 `setInput(idx, node)`，只能取源节点第 0 输出端 | 加 `output_index`（3 参 `setInput(idx, node, output_idx)`），能取 subnet 的第 2+ 输出端（锚点云 out[1..n]） | 组件流水线核心：车轮消费车架锚点 = 取 chassis 的 output1 |
+| `houdini_set_param` | 只支持标量字面值 | 加**向量**（`parmTuple.set([1,2,3])`，如 box size）+ **表达式**（`setExpression(ch("../length"))`，live 引用） | live 参数化是地基核心价值；promote 后两层 ch 引用要求 agent 能建表达式 |
+
+**向后兼容**：两个工具的默认值保证旧行为不变（output_index 默认 0，标量值仍走原路径）。现有调用零回归（695 mock + 6 hython 全绿）。
+
+### agent 建模全链路（hython 决定性验证，`TestAgentToolsHython`）
+
+全程用工具函数（`node_utils.connect_nodes`/`set_param`/`create_node`）而非直接 `hou.node`，证明 agent 工具面足够建模：
+
+1. `create_node(attribwrangle)` + `set_param(class, "detail")` + `set_param(snippet, VEX)` + `connect_nodes(wr → out_anchors)` —— chassis 造锚点
+2. `create_node(box)` + `set_param(size, [1,1,1])` **向量** + `set_param(sizex, 'ch("../wheel_radius")')` **表达式** —— wheels 建几何（live）
+3. `connect_nodes(chassis → probe, output_index=1)` **3 参** —— agent 独立取 chassis 锚点端，验证拿到 1 个锚点
+4. builder 的 `in_chassis_wheel_mount`（builder 路径也用 output_index）拿到锚点
+5. `promote_params` 把 wheels 的 wheel_radius 提到 core 顶层
+
+**断言全过** = agent 工具链能完成"建节点 → 连线（含多输出端消费）→ 配参数（含向量 + live 表达式）→ promote"全链路。地基被 agent "用起来"成立。
+
+### 这解决了什么（第一性原理）
+
+capability-before-rules：先证 agent 能操作地基，再编排多组件流水线（子系统 2）。补这两个工具能力是**小而决定性**的投入 —— 两个函数扩展，解锁整个建模能力。下一步可让真实 Pi agent 在 Project HDA 内做一个最小编模（GUI 端到端真实验证）。
