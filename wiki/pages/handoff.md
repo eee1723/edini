@@ -2,14 +2,15 @@
 
 > **用途**：让新 Agent 或开发者在 Edini 仓库里快速上手。
 
-**最后更新**：2026-07-02（Project HDA **组件建模地基交付** — 范式重构：subnet 组件 + 端口信息点协议，取代旧 rooted assembly。hython 决定性验证 5 测全过）。
+**最后更新**：2026-07-03（**引导 agent 走组件流水线** — 写 project-modeling skill + system prompt 决策表改新流程首选。修复 agent 默认走旧 build_assembly 的引导偏向。地基 + 工具 + 引导三件齐备，待 GUI 真机验证 agent 主动选新流程）。
 **当前阶段**：**Project HDA**（新主线）—— 把程序化建模从"一次性生成器"升级为"长期协作伙伴"。一个程序化建模项目 = 一个 Project HDA（**SOP 上下文**：geo 外壳 + 内部 SOP HDA core 承载几何 + 知识图谱富化声明 JSON 存隐藏 parm + 嵌入 PySide 面板 + 日志）。
 **组件建模地基状态（2026-07-02 交付，子系统 1）**：✅ **hython 决定性验证通过**。新范式：一个组件 = core 内一个 **subnet**，通过**多输出端口**对外暴露——`out[0]`=主几何（null `out_geometry` → `output_0` output 节点形成 subnet 输出端 1），`out[1..n]`=**信息点云**（带 `@P`/`@orient`/`@name` 的 point，null `out_anchors` → `output_1`）。组件间流水线协作（车架输出 wheel_mount 锚点 → 车轮消费定位）。真机铁证：subnet output 节点机制验证通过（两个 output 节点映射到两个独立输出端，下游各取所需）；锚点 @name 发射正确；重建幂等不破坏 LLM 已加内容；promote 生成 chassis_length 两层 ch() live 引用。
 **旧 assembly 范式已移除**：`assembly` 字段、`get_assembly`/`set_assembly`、`build_project_model`、`project_build_model` 工具全部清除。rooted-modeling skill（assembly_builder/vex_strategies/measure）**保留**给 skill 用，只是 Project HDA 不再调。
 **关键架构决策（本次确立）**：① **subnet = 组件间信息总线**（端口=信息锚点，非 drift 容器）—— 第一输入端是组件输出，后续端口输出给其他组件做定位定向；② **新范式取代旧范式** —— mount/leaf 扁平网络被组件流水线取代；③ **声明 = 知识图谱** —— `components`（含 `ports`/`params`）即组件关系图，drift = diff 这份意图 vs 实际网络；④ **Builder = 脚手架（确定性），几何 = LLM 自由活** —— builder 只建空 subnet+4节点+连线，几何和跨 subnet 连线归 LLM；⑤ **promote 脚本** —— 组件 subnet spare parm 一键按组件分组提取到 core HDA，两层 ch() live 引用。
 **真实 API 发现（2026-07-02 hython 验证，重要）**：① subnet 内建 `output` 节点类型就是 `"output"`（`createNode("output")`），两个 output 节点按 `outputidx` 形成两个独立 subnet 输出端；② **spare parm API**：READ 用 `node.spareParms()`（返回 `list[hou.Parm]`），WRITE 用 `node.addSpareParmTuple(tmpl, in_folder=(folder,), create_missing_folders=True)`——`spareParmGroup()`/`setSpareParmGroup()` 在真机**不存在**（旧 handoff bug#1 描述不准确，以此为准）。
-**下一步**：① **子系统 2：多组件流水线 agent 端到端**（LLM 用 network_mode sandbox 在 subnet 内建模 + 跨 subnet 连线）；② **子系统 3：知识图谱描述生成**（components/ports 渲染成给 LLM 的"组件联系"自然语言）；③ **子系统 4：drift 检测算法**（声明意图 vs 实际网络的确定性 diff，schema 已预埋接口）；④ LLM 建模纪律 skill（VEX 优先/禁纯 Python 单 SOP）。
-**工作分支**：`feat/project-component-foundation`（组件地基，8 commits）。master 上的旧 assembly 已合并。
+**引导状态（2026-07-03）**：✅ **agent 引导已就绪**。写 `skills/project-modeling/SKILL.md`（组件流水线范式 + 工作流 + 端口协议 + 桌子示例 + 何时用 vs build_assembly）；system prompt 决策表改为"多组件模型首选 Project HDA 组件流水线，build_assembly 降为简单 root+leaf 兼容路径"。工具能力已扩展（connect_nodes 加 output_index 取锚点端；set_param 加向量 + ch() 表达式 live 引用）。三件齐备（地基 + 工具 + 引导），hython 决定性验证 agent 工具链能建模（TestAgentToolsHython）。
+**下一步**：⓪ **GUI 真机验证 agent 选新流程**（重启 Houdini，让 agent "做一个桌子"，确认它调 project_build_scaffold 而非 build_assembly —— 这是引导生效的唯一铁证）；① 子系统 3：知识图谱描述生成；② 子系统 4：drift 检测；③ LLM 建模纪律细化。
+**工作分支**：master（引导改动直接在 master）。feat/project-component-foundation 已合并（组件地基）。
 
 ---
 

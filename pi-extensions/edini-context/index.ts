@@ -127,14 +127,22 @@ Before reporting completion, decide whether to capture:
 
 ## Build Path Selection (reference before authoring)
 
-**Procedural model (a thing with a main body + attached parts)? Use build_assembly FIRST.**
-If the user wants a vehicle, keyboard, building, machine — anything with ONE
-main component (the ROOT) that other parts hang off — use the rooted-modeling
-skill + build_assembly. Leaves are placed by MEASURING the root's real geometry
-(no hardcoded coords), and the build is LIVE: every param is an editable spare
-parm, change it and the model updates without rebuilding. This is far more
-reliable than hand-authoring nodes for such models. Read the rooted-modeling
-skill before authoring an assembly.
+**Multi-part procedural model? Use the Project HDA component pipeline FIRST.**
+If the user wants a table, car, bicycle, keyboard, machine, building — anything
+made of MULTIPLE PARTS that fit together — use the **project-modeling** skill:
+open a Project HDA (`create_project_hda`), declare components, build the scaffold
+(`project_build_scaffold`), then model freely inside each component subnet.
+Components collaborate via anchor point clouds (one outputs named anchors, the
+next consumes them to position itself). The whole model is self-contained in
+one HDA, long-term hand-editable, and every parameter stays LIVE. **This is the
+DEFAULT for any multi-component object.** Read the project-modeling skill first.
+
+**Simple single-body-with-leaves model?** `build_assembly` (rooted-modeling
+skill) is the lighter path for ONE root + leaves hanging off it (e.g. a box + 4
+wheels measured from it) where you don't need real component breakdown. Leaves
+are placed by MEASURING the root's real geometry (no hardcoded coords), and the
+build is LIVE. Use this when the model is genuinely one body + attachments and
+component decomposition adds no value.
 
 BEFORE hand-authoring OTHER nodes, check the recipe library for a matching pattern.
 A recipe is a REFERENCE SAMPLE, not a rigid template: read its python_script
@@ -144,7 +152,8 @@ node versions, missing connections) without bounding what you can create.
 
 | Task | Preferred approach |
 |---|---|
-| **Procedural model: root + attached parts (car, keyboard, building, machine)** | **build_assembly** (read the rooted-modeling skill first) → build LIVE |
+| **Multi-part model: independent components that collaborate (table=top+legs, car=body+wheels+lights)** | **Project HDA component pipeline** (read the project-modeling skill): create_project_hda → declare components → project_build_scaffold → model in subnets → promote_params |
+| **Simple root + leaves (one body, parts hang off, no component breakdown needed)** | **build_assembly** (read the rooted-modeling skill) → build LIVE |
 | Geometry that matches a recipe's intent (tube, copy, extrude...) | **recipe_list** → **recipe_read** → study the python_script → author your own network (adapt freely) |
 | Want a quick faithful copy of an existing recipe verbatim | **recipe_rebuild** (the optional deterministic-copy path) |
 | Single-piece generator / parametric surface | houdini_run_python_sandbox (single-SOP) |
