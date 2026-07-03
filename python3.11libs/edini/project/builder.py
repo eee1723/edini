@@ -71,6 +71,12 @@ def build_project_scaffold(core_node: "hou.Node",
     # 新流程退回 sandbox）。幂等：重建只补缺失，不重复。
     _ensure_core_output(core_node, [c["id"] for c in components])
 
+    # 第四遍：把 design_params 落成 core 的真实 spare parm（自顶向下参数源）。
+    # 没有这步，子网里的 ch('../../width') 引用会归零——core 上根本没有 width。
+    # 文档（state.py add_design_param docstring）一直声称 build_scaffold 会创建
+    # 这些 parm，但此前从未实现，导致 live 参数链断裂。
+    _ensure_design_params(core_node, decl.get("design_params", []))
+
     # 记日志（成功）。
     decl = load_declaration(core_node)
     append_log(decl, kind="scaffold",
@@ -135,9 +141,14 @@ def _ensure_input_scaffold(core_node: "hou.Node", comp: dict,
         return
     indirect_inputs = subnet.indirectInputs()
     for i, in_entry in enumerate(in_ports):
-        from_id = in_entry["from"]
-        from_port = in_entry["port"]
-        anchor = in_entry["anchor"]
+        # validate_component_ports (called before this) guarantees these three
+        # fields exist + are legal, but read defensively — a raw KeyError deep
+        # in the build is a poor experience. Missing → skip this entry.
+        from_id = in_entry.get("from")
+        from_port = in_entry.get("port")
+        anchor = in_entry.get("anchor")
+        if from_id is None or from_port is None or anchor is None:
+            continue
         upstream = core_node.node(from_id)
         if upstream is None:
             # upstream 组件未建（局部声明）——跳过，留以后补。
@@ -195,6 +206,57 @@ def _ensure_core_output(core_node: "hou.Node", component_ids: list[str]) -> None
     out.setDisplayFlag(True)
     out.setRenderFlag(True)
     core_node.layoutChildren()
+
+
+def _ensure_design_params(core_node: "hou.Node",
+                          design_params: list[dict]) -> None:
+    """把 design_params 落成 core 的真实 spare Float parm（自顶向下参数源）。
+
+    design_params 是 core-as-source 的参数定义（state.py §Design params）。文档
+    一直声称「build_scaffold 期间在 core 上创建」，但此前未实现 —— 导致子网里
+    ch('../../width') 引用的 parm 不存在，几何静默归零。本函数补上这一环。
+
+    幂等：core 已有同名 parm 则跳过（不覆盖现有值/不重复创建）。每个 parm 放
+    "Design" folder。FloatParmTemplate 构造兼容多版本（assembly_builder 的同款
+    简洁签名），min/max 可选。
+    """
+    if not design_params:
+        return
+    for spec in design_params:
+        if not isinstance(spec, dict):
+            continue
+        name = spec.get("name")
+        if not name:
+            continue
+        # 幂等：已存在则不动（保留 agent/用户可能已调过的值）。
+        if core_node.parm(name) is not None:
+            continue
+        label = spec.get("label") or name
+        default = float(spec.get("default", 0.0))
+        vmin = spec.get("min")
+        vmax = spec.get("max")
+        try:
+            tmpl = hou.FloatParmTemplate(name, label, 1, (default,))
+            if vmin is not None:
+                tmpl.setMinValue(float(vmin))
+            if vmax is not None:
+                tmpl.setMaxValue(float(vmax))
+            core_node.addSpareParmTuple(tmpl, in_folder=("Design",),
+                                        create_missing_folders=True)
+        except Exception:
+            # Fallback: older FloatParmTemplate signature without default tuple,
+            # then set the value explicitly after install.
+            try:
+                tmpl = hou.FloatParmTemplate(name, label, 1)
+                core_node.addSpareParmTuple(tmpl, in_folder=("Design",),
+                                            create_missing_folders=True)
+                p = core_node.parm(name)
+                if p is not None:
+                    p.set(default)
+            except Exception:
+                # Spare-parm creation can fail on some node types / builds;
+                # don't let one bad parm abort the whole scaffold build.
+                pass
 
 
 def promote_params(core_node: "hou.Node") -> dict:
@@ -303,8 +365,9 @@ def add_anchors(core_node: "hou.Node", component_id: str,
     if subnet is None:
         return {"success": False,
                 "error": f"component subnet not found: {component_id}"}
-    upstream = subnet.node(upstream_node_name)
-    if upstream is None:
+    # Pre-flight check: confirm the upstream node exists so we fail early with a
+    # clear message. (Do NOT hold this handle across the loop — see below.)
+    if subnet.node(upstream_node_name) is None:
         return {"success": False,
                 "error": f"upstream node '{upstream_node_name}' not found in {component_id}"}
 
@@ -326,6 +389,16 @@ def add_anchors(core_node: "hou.Node", component_id: str,
         existing = subnet.node(wr_name)
         if existing is not None:
             existing.destroy()
+        # Re-resolve the upstream handle AFTER the (optional) destroy above.
+        # Holding a hou.Node handle across a destroy() in the same subnet risks
+        # Houdini's "Attempt to access an object that no longer exists" — the
+        # subnet's child table may be invalidated by the destroy. A fresh
+        # subnet.node(...) lookup per iteration is safe.
+        upstream = subnet.node(upstream_node_name)
+        if upstream is None:
+            return {"success": False,
+                    "error": f"upstream node '{upstream_node_name}' vanished "
+                             f"during anchor rebuild in {component_id}"}
         wr = subnet.createNode("attribwrangle", wr_name)
         wr.parm("snippet").set(snippet + f'\nsetpointattrib(0, "name", __newpts[0], "{name}", "set");')
         wr.parm("class").set("detail")

@@ -10,6 +10,16 @@ import { PROCEDURAL_VERIFY_PROMPT } from "../pi-visionizer/src/config";
 const KNOWLEDGE_DIR = path.join(os.homedir(), ".pi", "agent", "edini-knowledge");
 const RULES_FILE = path.join(KNOWLEDGE_DIR, "rules.json");
 
+// Visual verification gate. When "false" (default), the capture_review +
+// describe_image loop is suppressed: no Visual Verification Rules block, no
+// reference-image MUST-VERIFY directive, no PROCEDURAL_VERIFY_PROMPT, and the
+// geometry-verify workflow falls back to numeric evidence (health/inventory).
+// Toggled via settings.json visual_verification_enabled → EDINI_VISUAL_VERIFICATION.
+// [VISUAL-VERIFY-GATE]
+function visualVerificationEnabled(): boolean {
+  return process.env.EDINI_VISUAL_VERIFICATION === "true";
+}
+
 interface IronRule {
   id: string;
   category: string;
@@ -53,9 +63,11 @@ function buildRulesContext(): string {
 
 export default function (pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event, ctx) => {
+    const vv = visualVerificationEnabled(); // [VISUAL-VERIFY-GATE]
     // ── Detect reference images: inject MUST-VERIFY directive ──
+    // Suppressed when visual verification is disabled — no describe_image/capture.
     const hasImages = event.images && event.images.length > 0;
-    const imageDirective = hasImages
+    const imageDirective = (hasImages && vv)
       ? `
 ## ⚠️ REFERENCE IMAGE DETECTED — VERIFICATION REQUIRED
 
@@ -91,7 +103,7 @@ For each task, follow this pattern:
 3. **Create & configure** — create nodes, set parameters, connect
 4. **Set display flag** — after creating geometry, use houdini_set_display_flag so the user sees the result
 5. **Layout** — organize the network with houdini_layout_nodes
-6. **Verify visually** — if the task affects the viewport, capture and verify (see below)
+6. **Verify** — confirm geometry health and inventory via numeric evidence (inspect_health, geometry_inventory).${vv ? " If visual verification is on, also capture & verify (see below)." : ""}
 7. **Report path** — tell the user where to find what you created
 
 ## Error Recovery
@@ -103,6 +115,7 @@ If a tool returns {"success": false, "error": "..."}:
 4. Try an alternative approach
 5. Explain to the user what went wrong and what you're doing to fix it
 
+${vv ? `
 ## Visual Verification Rules
 
 Before reporting completion, decide whether to capture:
@@ -124,7 +137,15 @@ Before reporting completion, decide whether to capture:
 - Layout-only (layout_nodes)
 - Utility nodes (null, switch, merge, output)
 - HDA management
+` : `
+## Visual Verification — disabled
 
+Visual verification (capture_review + describe_image) is currently OFF. Rely on
+NUMERIC evidence instead: houdini_inspect_geometry_health (errors/orphan checks),
+houdini_geometry_inventory (expected components + prim_count), and parameter
+spot-checks via houdini_get_param / houdini_inspect_geo. Do not call
+capture_review or describe_image — they are not available.
+`}
 ## Build Path Selection (reference before authoring)
 
 **Procedural model (anything with parts)? Use the Project HDA component pipeline.**
@@ -161,14 +182,16 @@ node versions, missing connections) without bounding what you can create.
 2. houdini_verify_orientation when the asset has parts with a defined axis
    (optional construction_axis for deterministic axis derivation).
 3. houdini_geometry_inventory — confirm expected components exist with prim_count > 0.
-4. houdini_capture_review with views=['perspective','top','front','right'].
+${vv ? `4. houdini_capture_review with views=['perspective','top','front','right'].
 5. describe_image on the captured file. NOTE: the vision model CANNOT assess
    orientation — do NOT act on any orientation claims it makes. Only act on
    PROPORTIONS, SYMMETRY, INTERSECTION (perspective-confirmed), STRUCTURAL_DETAIL.
 6. If the inventory marks a component SMALL, or vision returns
    VERDICT=closer_capture:<id>: run houdini_capture_component_detail to frame it.
 7. If defects found: fix the specific part, re-verify. Up to 3 rounds, then ask user.
-8. On accept: houdini_commit_sandbox to commit (runs health/orientation hard gates
+8. On accept: houdini_commit_sandbox to commit (runs health/orientation hard gates` : `4. Spot-check key geometry values via houdini_inspect_geo (point/prim counts,
+   bounds, attributes) against your design intent. Visual capture/verify is off.
+5. On accept: houdini_commit_sandbox to commit (runs health/orientation hard gates`}
    and returns a verification_receipt). Reference the receipt's fields in your report.
 
 **For Project HDA models specifically:** build_project_scaffold returns the core
@@ -177,10 +200,14 @@ Feed the core's OUT to steps 1/3/4. After modeling + promote_params, VERIFY the
 live guarantee: set one of the promoted parms on the core to a new value, re-cook,
 and confirm the geometry updated (the two-layer ch() chain should propagate).
 Only consider the model done once the live tweak works.
+${vv ? `
 
 --- BEGIN PROCEDURAL_VERIFY_PROMPT ---
 ${PROCEDURAL_VERIFY_PROMPT}
 --- END PROCEDURAL_VERIFY_PROMPT ---
+` : `
+(Note: PROCEDURAL_VERIFY_PROMPT omitted — visual verification is disabled.)
+`}
 `
 
     // Inject iron rules (enabled rules from knowledge store)

@@ -553,5 +553,108 @@ class TestAgentToolsHython(unittest.TestCase):
                       f"subnet should ref core: {s['subnet_refs_core']!r}")
 
 
+# design_params → real core spare parms (top-down param source). Verifies that
+# build_project_scaffold instantiates design_params as actual core parms so
+# ch('../../width') references resolve (previously they only lived in the
+# declaration JSON, so geometry silently zeroed).
+_DESIGN_PARAMS_HARNESS = r"""
+import json, sys, os
+sys.path.insert(0, os.path.join(r"%s", "python3.11libs"))
+import hou
+_hda = os.path.join(r"%s", "otls", "edini_project.hda")
+if os.path.isfile(_hda):
+    hou.hda.installFile(_hda)
+from edini.project.state import empty_declaration, add_component, add_design_param
+from edini.project.node import create_project_hda
+from edini.project.builder import build_project_scaffold
+
+result = {"steps": {}}
+core = create_project_hda(name="proj_dp")
+decl = empty_declaration("proj_dp")
+add_component(decl, "tabletop", purpose="桌面")
+add_design_param(decl, "width", default=1.2, min=0.1, max=10.0)
+add_design_param(decl, "top_thickness", default=0.04, min=0.001, max=1.0)
+
+# build_scaffold must instantiate design_params as REAL core spare parms.
+build_project_scaffold(core, declaration=decl)
+
+wp = core.parm("width")
+result["steps"]["s1_width_exists"] = wp is not None
+if wp is not None:
+    result["steps"]["s1_width_default"] = wp.eval()
+    t = wp.parmTemplate()
+    result["steps"]["s1_width_min"] = t.minValue()
+    result["steps"]["s1_width_max"] = t.maxValue()
+tp = core.parm("top_thickness")
+result["steps"]["s1_thickness_exists"] = tp is not None
+if tp is not None:
+    result["steps"]["s1_thickness_default"] = tp.eval()
+
+# A ch() reference from a child geometry must now resolve (not silently 0).
+# Build a box inside tabletop whose sizex references ch("../../width").
+tabletop = core.node("tabletop")
+box = tabletop.createNode("box", "probe_box")
+box.parm("sizex").setExpression('ch("../../width")')
+tabletop.node("out_geometry").setInput(0, box)
+tabletop.node("out_geometry").cook(force=True)
+geo = tabletop.node("out_geometry").geometry()
+# box default sizey=1, but sizex should follow width=1.2 (not 0).
+bx = geo.boundingBox()
+result["steps"]["s2_ch_resolves"] = abs(bx.sizevec()[0] - 1.2) < 0.01
+result["steps"]["s2_sizevec"] = list(bx.sizevec())
+
+# Idempotent: rebuild must not duplicate or clobber the design parms.
+wp_before = core.parm("width").eval()
+build_project_scaffold(core)
+result["steps"]["s3_idempotent_value_preserved"] = (core.parm("width").eval() == wp_before)
+# Still only ONE width parm (no duplicate folder/parm creation).
+result["steps"]["s3_width_count"] = sum(1 for p in core.parms() if p.name() == "width")
+print("RESULT_JSON:" + json.dumps(result))
+""" % (_REPO, _REPO)
+
+
+@unittest.skipUnless(HYTHON, "hython not installed")
+class TestDesignParamsHython(unittest.TestCase):
+    def _run(self):
+        proc = subprocess.run(
+            [HYTHON, "-c", _DESIGN_PARAMS_HARNESS],
+            capture_output=True, text=True, timeout=180, cwd=_REPO)
+        combined = proc.stdout + proc.stderr
+        for line in combined.splitlines():
+            if line.startswith("RESULT_JSON:"):
+                return json.loads(line[len("RESULT_JSON:"):]), combined
+        self.fail(f"no RESULT_JSON.\nstdout:{proc.stdout}\nstderr:{proc.stderr}")
+
+    def test_design_params_become_real_core_parms(self):
+        """design_params declared in the scaffold must be instantiated as real
+        core spare parms with the right default/min/max — so ch('../../width')
+        references from child geometry resolve instead of zeroing."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertTrue(s["s1_width_exists"], f"core width parm missing: {res}")
+        self.assertEqual(s["s1_width_default"], 1.2)
+        self.assertEqual(s["s1_width_min"], 0.1)
+        self.assertEqual(s["s1_width_max"], 10.0)
+        self.assertTrue(s["s1_thickness_exists"])
+        self.assertEqual(s["s1_thickness_default"], 0.04)
+
+    def test_design_param_referenced_by_ch_resolves(self):
+        """The whole point: a child node's ch('../../width') must evaluate to
+        the core's width value (1.2), not 0 — proving the live param chain works
+        once design_params are real core parms."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertTrue(s["s2_ch_resolves"],
+                        f"ch('../../width') did not resolve to 1.2: {s.get('s2_sizevec')}")
+
+    def test_design_params_idempotent(self):
+        """Rebuilding the scaffold must not duplicate or clobber design parms."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertTrue(s["s3_idempotent_value_preserved"])
+        self.assertEqual(s["s3_width_count"], 1,
+                         f"expected exactly one width parm after rebuild: {res}")
+
+
 if __name__ == "__main__":
     unittest.main()

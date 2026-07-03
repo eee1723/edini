@@ -390,6 +390,61 @@ def _set_parm_value(parm, value) -> tuple[bool, Any, str | None]:
             )
 
 
+def _apply_one_param(node, param_name: str, value: Any) -> tuple[bool, Any, str | None]:
+    """Apply one parameter value to a node (resolved hou.Node).
+
+    Shared dispatch used by BOTH set_param and set_params_batch, so batch and
+    single-set have identical capabilities. Supports three value shapes
+    (mirrors assembly_builder._set_parm + node_utils menu coercion):
+      - vector (list/tuple, len > 1): parmTuple; per-component setExpression if
+        any component is an expression (ch("../x")), else tuple .set().
+      - scalar expression string (contains "ch("): setExpression (Hscript).
+      - plain scalar: .set() with menu-token coercion fallback.
+
+    Returns (ok, applied_value, error). `applied_value` is the value actually
+    set (may differ from the input for menu coercion, e.g. "0" → 0), so callers
+    can report what landed. On failure, error explains why.
+    """
+    # Vector parm (list/tuple, >1 component) → parmTuple (handles group names
+    # like box "size"/"t" where node.parm("size") is None but parmTuple works).
+    if isinstance(value, (list, tuple)) and len(value) > 1:
+        pt = node.parmTuple(param_name)
+        if pt is None:
+            return False, value, f"parameter tuple '{param_name}' not found"
+        if any(_looks_like_expr(v) for v in value):
+            for sub, v in zip(pt, value):
+                if _looks_like_expr(v):
+                    try:
+                        sub.setExpression(v, language=hou.exprLanguage.Hscript)
+                    except (AttributeError, TypeError):
+                        sub.setExpression(v)
+                else:
+                    sub.set(v)
+        else:
+            pt.set(tuple(value))
+        return True, list(value), None
+
+    # Scalar expression string → setExpression (numeric parms can't .set() a str).
+    if _looks_like_expr(value):
+        parm = node.parm(param_name)
+        if parm is None:
+            return False, value, f"parameter '{param_name}' not found"
+        try:
+            parm.setExpression(value, language=hou.exprLanguage.Hscript)
+        except (AttributeError, TypeError):
+            parm.setExpression(value)
+        return True, value, None
+
+    # Plain scalar → .set() with menu-token coercion fallback.
+    parm = node.parm(param_name)
+    if parm is None:
+        return False, value, f"parameter '{param_name}' not found"
+    ok, applied, err = _set_parm_value(parm, value)
+    if not ok:
+        return False, value, err
+    return True, applied, None
+
+
 def set_param(node_path: str, param_name: str, value: Any) -> dict[str, Any]:
     """Set a parameter value on a node.
 
@@ -407,48 +462,9 @@ def set_param(node_path: str, param_name: str, value: Any) -> dict[str, Any]:
         node = hou.node(node_path)
         if node is None:
             return {"success": False, "error": f"Node not found: {node_path}"}
-
-        # Vector parm (list/tuple, >1 component) → parmTuple.
-        if isinstance(value, (list, tuple)) and len(value) > 1:
-            pt = node.parmTuple(param_name)
-            if pt is None:
-                return {"success": False,
-                        "error": f"Parameter tuple '{param_name}' not found on {node_path}"}
-            # If any component is an expression, set per-component (some expr,
-            # some literal) — mirrors assembly_builder._set_parm.
-            if any(_looks_like_expr(v) for v in value):
-                for sub, v in zip(pt, value):
-                    if _looks_like_expr(v):
-                        try:
-                            sub.setExpression(v, language=hou.exprLanguage.Hscript)
-                        except (AttributeError, TypeError):
-                            sub.setExpression(v)
-                    else:
-                        sub.set(v)
-            else:
-                pt.set(tuple(value))
-            return {"success": True, "path": node_path, "param": param_name, "value": list(value)}
-
-        # Scalar expression string → setExpression.
-        if _looks_like_expr(value):
-            parm = node.parm(param_name)
-            if parm is None:
-                return {"success": False,
-                        "error": f"Parameter '{param_name}' not found on {node_path}"}
-            try:
-                parm.setExpression(value, language=hou.exprLanguage.Hscript)
-            except (AttributeError, TypeError):
-                parm.setExpression(value)
-            return {"success": True, "path": node_path, "param": param_name, "value": value}
-
-        # Plain scalar → existing path (menu coercion fallback).
-        parm = node.parm(param_name)
-        if parm is None:
-            return {"success": False, "error": f"Parameter '{param_name}' not found on {node_path}"}
-
-        ok, applied, err = _set_parm_value(parm, value)
+        ok, applied, err = _apply_one_param(node, param_name, value)
         if not ok:
-            return {"success": False, "error": err}
+            return {"success": False, "error": f"{err} on {node_path}"}
         return {"success": True, "path": node_path, "param": param_name, "value": applied}
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -457,9 +473,10 @@ def set_param(node_path: str, param_name: str, value: Any) -> dict[str, Any]:
 def set_params_batch(node_path: str, params: dict[str, Any]) -> dict[str, Any]:
     """Set multiple parameters on a node in a single call.
 
-    Each value goes through the same menu-coercion fallback as set_param, so
-    batch sets of menu parms (e.g. a whole node's mode toggles) succeed even
-    when values arrive as stringified indices.
+    Each value goes through _apply_one_param — the SAME dispatch as set_param —
+    so batch sets support vectors (group names like box "size"/"t") AND
+    expression strings (ch("../x")), exactly like the single-call path. Menu
+    coercion fallback is also preserved (stringified indices succeed).
     """
     try:
         node = hou.node(node_path)
@@ -468,11 +485,7 @@ def set_params_batch(node_path: str, params: dict[str, Any]) -> dict[str, Any]:
 
         failed: list[str] = []
         for name, value in params.items():
-            parm = node.parm(name)
-            if parm is None:
-                failed.append(name)
-                continue
-            ok, _applied, err = _set_parm_value(parm, value)
+            ok, _applied, err = _apply_one_param(node, name, value)
             if not ok:
                 failed.append(f"{name}: {err}")
 
@@ -534,6 +547,34 @@ def list_nodes(parent_path: str = "/", type_filter: str | None = None) -> dict[s
         return {"success": False, "error": str(e)}
 
 
+def _serialize_parm_value(parm, value) -> Any:
+    """Serialize a parm's value for JSON, handling hou.Ramp specially.
+
+    `get_node_info` (and any path returning live parm values) must not feed a
+    raw hou.Ramp into the result dict — ramp params' .eval() returns a hou.Ramp,
+    which json.dumps cannot serialize, crashing the WHOLE node-info response
+    (not just the ramp parm). A ramp is serialised as its control points so the
+    agent sees something useful instead of an opaque str(). Other value types
+    go through _json_safe (handles vectors/enums, falls back to str).
+    """
+    # Detect a ramp parm via its template type (defensive: some mock/test parms
+    # have no parmTemplate()).
+    try:
+        ptype = parm.parmTemplate().type().name()
+    except Exception:
+        ptype = ""
+    if ptype == "Ramp" and value is not None:
+        try:
+            keys = list(value.keys())
+            vals = [_json_safe(v) for v in value.values()]
+            return {"__type__": "ramp", "keys": keys, "values": vals}
+        except Exception:
+            # Ramp API varies across versions; fall back to a count placeholder
+            # rather than crashing — the rest of the node is still readable.
+            return {"__type__": "ramp", "note": "ramp (control points unavailable)"}
+    return _json_safe(value)
+
+
 def get_node_info(node_path: str) -> dict[str, Any]:
     """Get detailed info about a specific node."""
     try:
@@ -543,7 +584,8 @@ def get_node_info(node_path: str) -> dict[str, Any]:
 
         parms = []
         for p in node.parms():
-            parms.append({"name": p.name(), "label": p.description(), "value": p.eval()})
+            parms.append({"name": p.name(), "label": p.description(),
+                          "value": _serialize_parm_value(p, p.eval())})
 
         return {
             "success": True,
@@ -1111,12 +1153,16 @@ def _enrich_manifest_parms(parms: list[dict[str, Any]]) -> list[dict[str, Any]]:
     code crashes with AttributeError. Regenerating the manifest requires a live
     Houdini, so we heal the data at serve time instead.
 
-    Heuristic: a Float/Int parm whose `default` is a list of length >= 2 (and
-    which isn't already annotated) is treated as a multi-component vector. This
-    matches how _json_safe serialises defaultValue() for FloatParmTemplate with
-    numComponents 2/3/4 (the common Radius/Center/Rotate cases). False positives
-    are low-risk: the worst case is over-annotating a parm that already accepts
-    a tuple via .set((a,b)).
+    Two cases:
+      1. The entry already carries authoritative component info (a `components`
+         list, e.g. tube.rad -> ["rad1","rad2"], box.size -> ["sizex",...]).
+         Trust it — derive component_names from it and do NOT synthesise via the
+         x/y/z suffix heuristic (that heuristic is wrong for tube, which uses
+         numeric suffixes rad1/rad2, not radx/rady).
+      2. A legacy entry with no `components` but a list `default` of length 2/3/4:
+         synthesise <name>+x/y/z[/w]. This matches how _json_safe serialises
+         defaultValue() for FloatParmTemplate with numComponents 2/3/4 (the
+         common Radius/Center/Rotate cases). Only used when components is absent.
     """
     suffixes_by_len = {2: ("x", "y"), 3: ("x", "y", "z"), 4: ("x", "y", "z", "w")}
     enriched: list[dict[str, Any]] = []
@@ -1124,6 +1170,17 @@ def _enrich_manifest_parms(parms: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not isinstance(p, dict) or p.get("num_components"):
             enriched.append(p)
             continue
+
+        # Case 1: authoritative `components` already present — trust it verbatim.
+        existing_components = p.get("components")
+        if isinstance(existing_components, list) and existing_components:
+            p = dict(p)  # copy so we don't mutate the manifest dict in memory
+            p["num_components"] = len(existing_components)
+            p["component_names"] = list(existing_components)
+            enriched.append(p)
+            continue
+
+        # Case 2: legacy entry — synthesise from the default-list length.
         default = p.get("default")
         ptype = p.get("type")
         if (
@@ -1140,8 +1197,29 @@ def _enrich_manifest_parms(parms: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 f"multi-component: use {', '.join(comps)} on the node "
                 f"(not the group name {name!r})"
             )
+
+        # Menu params: append a human-readable index→token mapping so the agent
+        # doesn't have to guess what numeric codes mean (e.g. attribwrangle
+        # class: 0=detail,1=primitive,2=point,3=vertex,4=number). The manifest
+        # stores menu_items as the ordered token list; the index is positional.
+        if p.get("type") == "Menu":
+            items = p.get("menu_items")
+            if isinstance(items, list) and items:
+                p = _annotate_menu_options(p, items)
         enriched.append(p)
     return enriched
+
+
+def _annotate_menu_options(p: dict, items: list) -> dict:
+    """Return a copy of menu parm `p` with a `menu_options` index→token map
+    and a `note` summarising it, so the agent can set the right numeric value
+    without trial-and-error (copies first; never mutates the manifest dict)."""
+    p = dict(p)
+    opts = [{"index": i, "token": str(tok)} for i, tok in enumerate(items)]
+    p["menu_options"] = opts
+    summary = ", ".join(f"{i}={tok}" for i, tok in enumerate(items))
+    p["note"] = f"menu: {summary} (set the numeric index OR the token string)"
+    return p
 
 
 def _now_iso() -> str:
@@ -1215,6 +1293,19 @@ def node_parms(node_type: str, category: str = "Sop") -> dict[str, Any]:
         node_types = manifest.get("node_types", {})
         resolved, nt_entry = _resolve_node_type_in_manifest(node_type, node_types)
         if nt_entry is not None:
+            # Version-sync: when we resolved a name, confirm it matches the
+            # version Houdini's createNode would ACTUALLY instantiate. If the
+            # caller asked for a bare name, create_node creates Houdini's default
+            # version (e.g. "polybevel::3.0") — so we must return that version's
+            # params, not whatever the manifest resolved to. Otherwise the agent
+            # gets params (beveltype/relinset) that don't exist on the created
+            # node (offset/filletshape on ::3.0). Only corrects when a manifest
+            # entry for the live default version exists.
+            if not getattr(hou, "_MOCK", False) and "::" not in resolved:
+                live_default = _hou_default_version(resolved, category)
+                if live_default and live_default in node_types:
+                    resolved = live_default
+                    nt_entry = node_types[live_default]
             parms = _enrich_manifest_parms(nt_entry.get("parms", []))
             result = {
                 "success": True,
@@ -1226,9 +1317,10 @@ def node_parms(node_type: str, category: str = "Sop") -> dict[str, Any]:
                 "houdini_version": manifest.get("houdini_version"),
             }
             if resolved != node_type:
-                # The agent asked for a bare name (e.g. 'boolean') but the
-                # manifest only has a versioned form ('boolean::2.0'). Surface
-                # the resolved name so the agent uses it for create_node too.
+                # The agent asked for a bare name (e.g. 'boolean') but we
+                # resolved it to a versioned form ('boolean::2.0',
+                # 'polybevel::3.0'). Surface the resolved name so the agent uses
+                # it for create_node too.
                 result["resolved_from"] = node_type
             return result
 
@@ -1260,28 +1352,76 @@ def _resolve_node_type_in_manifest(
     'sweep::2.0', etc. An agent that asks for the bare name should still get a
     hit, matching how ``create_node`` resolves namespaces. Returns
     ``(resolved_name, entry)`` or ``(node_type, None)`` on miss.
+
+    IMPORTANT (version-sync): when a bare name (e.g. "polybevel") has BOTH a
+    legacy bare manifest entry AND versioned entries ("polybevel::2.0",
+    "polybevel::3.0"), we prefer the HIGHEST versioned entry. Reason: Houdini's
+    createNode("polybevel") creates the latest version (::3.0), and query_parms
+    must return params for the SAME version the agent will actually create — a
+    bare legacy entry (with old param names like beveltype/relinset) gives the
+    agent params that don't exist on the created node. node_parms() additionally
+    corrects this against the LIVE Houdini default via namespaceOrder().
     """
-    entry = node_types.get(node_type)
-    if entry is not None:
-        return node_type, entry
-    # Bare-name -> highest versioned form ('<base>::<v>').
+    # Versioned siblings of this name (highest-version-first).
     if "::" not in node_type:
         candidates = [
             k for k in node_types
             if k.split("::")[0] == node_type and k.count("::") == 1
         ]
         if candidates:
-            # Pick the highest version suffix. Sort numerically by the token
-            # after the '::' (e.g. '2.0' -> (2, 0)).
-            def _verkey(k: str) -> tuple:
-                try:
-                    return tuple(int(p) for p in k.split("::")[1].split("."))
-                except (ValueError, IndexError):
-                    return (0,)
-            candidates.sort(key=_verkey, reverse=True)
+            candidates.sort(key=_manifest_version_key, reverse=True)
             best = candidates[0]
+            # Prefer the highest versioned entry over a stale bare entry (if any).
             return best, node_types[best]
+
+    entry = node_types.get(node_type)
+    if entry is not None:
+        return node_type, entry
     return node_type, None
+
+
+def _manifest_version_key(k: str) -> tuple:
+    """Numeric sort key for a versioned manifest key's '::' suffix.
+
+    'polybevel::3.0' -> (3, 0); a bare/unparseable key -> (0,) so it sorts last.
+    """
+    try:
+        return tuple(int(p) for p in k.split("::")[1].split("."))
+    except (ValueError, IndexError):
+        return (0,)
+
+
+def _hou_default_version(base: str, category: str) -> str | None:
+    """Ask the LIVE Houdini which version a bare createNode(base) resolves to.
+
+    This mirrors exactly what `create_node` does (Houdini's createNode picks the
+    first entry of the type's namespaceOrder()). Returns the versioned name
+    (e.g. "polybevel::3.0") or None if Houdini isn't real / the type is unknown.
+
+    Used by node_parms() to ensure query_parms returns params for the SAME
+    version create_node will instantiate — closing the polybevel beveltype vs
+    offset mismatch.
+    """
+    if getattr(hou, "_MOCK", False):
+        return None
+    try:
+        categories = hou.nodeTypeCategories()
+        cat = categories.get(category) if hasattr(categories, "get") else None
+        if cat is None or not hasattr(cat, "nodeType"):
+            return None
+        nt = cat.nodeType(base)
+        if nt is None:
+            return None
+        order = nt.namespaceOrder()  # ["polybevel::3.0", "polybevel::2.0", ...]
+        if order:
+            # namespaceOrder()[0] is what createNode uses; it's a qualified name
+            # like "polybevel::3.0" (or "::ns::polybevel" for namespaced).
+            first = order[0]
+            # Strip a leading "::" namespace separator if present.
+            return first.lstrip(":") if "::" in first else first
+    except Exception:
+        return None
+    return None
 
 
 def _node_parms_live(node_type: str, category: str) -> dict[str, Any] | None:
@@ -1302,14 +1442,24 @@ def _node_parms_live(node_type: str, category: str) -> dict[str, Any] | None:
         group = nt.parmTemplateGroup()
     except Exception:
         return None
-    return {
+    # Resolve to the actual versioned name (e.g. "polybevel::3.0") rather than
+    # echoing the bare input — so the agent knows which version it got and can
+    # pass it to create_node for consistency.
+    try:
+        resolved_name = nt.name()
+    except Exception:
+        resolved_name = node_type
+    result = {
         "success": True,
-        "node_type": node_type,
+        "node_type": resolved_name,
         "category": category,
         "parms": _flatten_parm_templates(group),
         "source": "live",
         "houdini_version": getattr(hou, "applicationVersionString", lambda: "?")(),
     }
+    if resolved_name != node_type:
+        result["resolved_from"] = node_type
+    return result
 
 
 def manifest_parm_names(node_type: str) -> set[str] | None:

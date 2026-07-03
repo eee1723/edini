@@ -21,6 +21,7 @@ from edini.node_utils import (
     node_parms,
 )
 from edini import screenshots
+from edini.config import _load_edini_settings
 from edini.harness import (
     collect_diagnostics,
     run_python_sandbox,
@@ -149,12 +150,26 @@ def _project_create(name: str | None = None, goal: str | None = None, **_) -> di
     is selected.
     """
     try:
-        from edini.project.node import create_project_hda
+        from edini.project.node import create_project_hda, build_state_parm_template
+        from edini.project.state import STATE_PARM, save_declaration, empty_declaration
         import hou
         # Workspace awareness: reuse a selected Project HDA if present.
         try:
             for node in hou.selectedNodes():
                 if node.type().name() == "edini::project":
+                    # Guard: a reused node may lack the hidden __edini_state
+                    # spare parm (the HDA type def doesn't bake it in; it's only
+                    # installed at create time). Without it the next call to
+                    # build_scaffold fails with "node has no '__edini_state'
+                    # parm". Reinstall it here so the reused node is usable.
+                    if node.parm(STATE_PARM) is None:
+                        node.addSpareParmTuple(build_state_parm_template())
+                        # Seed an empty declaration so save_declaration has a
+                        # valid base to merge components into.
+                        save_declaration(
+                            node,
+                            empty_declaration(project_name=node.name(), goal=goal),
+                        )
                     return {"success": True, "core_path": node.path(),
                             "shell_path": node.parent().path(),
                             "reused": True}
@@ -288,17 +303,27 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
         kw["node_path"], kw["hda_name"], kw.get("hda_label", ""),
     ),
     "houdini_get_hda_info": lambda **kw: get_hda_info(kw["hda_name"]),
-    "capture_review": lambda **kw: capture_review(
-        screenshots.relocate_filepath(
-            kw["filepath"], screenshots.current_session(), default_prefix="review"
-        ),
-        target_path=kw.get("target_path"),
-        views=kw.get("views"),
-        frames=kw.get("frames"),
-        columns=kw.get("columns", 0),
-        shading_mode=kw.get("shading_mode", "smooth"),
-        home_target=kw.get("home_target", True),
-        resolution=kw.get("resolution"),
+    # capture_review is gated by visual_verification_enabled in settings.json.
+    # Defense-in-depth: even if the agent reaches this handler while VV is off,
+    # refuse instead of capturing. [VISUAL-VERIFY-GATE]
+    "capture_review": lambda **kw: (
+        {"success": False,
+         "error": "Visual verification is disabled (settings.json "
+                  "visual_verification_enabled=false). Rely on numeric evidence "
+                  "(inspect_health, geometry_inventory, inspect_geo)."}
+        if not _load_edini_settings().get("visual_verification_enabled")
+        else capture_review(
+            screenshots.relocate_filepath(
+                kw["filepath"], screenshots.current_session(), default_prefix="review"
+            ),
+            target_path=kw.get("target_path"),
+            views=kw.get("views"),
+            frames=kw.get("frames"),
+            columns=kw.get("columns", 0),
+            shading_mode=kw.get("shading_mode", "smooth"),
+            home_target=kw.get("home_target", True),
+            resolution=kw.get("resolution"),
+        )
     ),
     "houdini_capture_network": lambda **kw: capture_network(
         screenshots.relocate_filepath(

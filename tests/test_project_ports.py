@@ -99,6 +99,72 @@ class TestInPortValidation(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_component_ports(ports)
 
+    def test_validate_in_port_needs_port(self):
+        """ports.in[] 的 port 字段必填（修复前完全不验证，builder 里抛裸 KeyError）。"""
+        from edini.project.ports import validate_component_ports
+        ports = {"out": [{"index": 0, "kind": "geometry"}],
+                 "in": [{"from": "chassis", "anchor": "wheel_mount"}]}  # 缺 port
+        with self.assertRaises(ValueError):
+            validate_component_ports(ports)
+
+    def test_validate_in_port_rejects_non_int_port(self):
+        from edini.project.ports import validate_component_ports
+        ports = {"out": [{"index": 0, "kind": "geometry"}],
+                 "in": [{"from": "chassis", "port": "1", "anchor": "x"}]}
+        with self.assertRaises(ValueError):
+            validate_component_ports(ports)
+
+
+class TestPortSchemaContract(unittest.TestCase):
+    """Tests for the aggregated-error + expected-schema behaviour (Fix: ports
+    schema used to fail one field at a time, forcing 5 trial-and-error rounds)."""
+
+    def test_expected_ports_schema_returns_filled_example(self):
+        from edini.project.ports import expected_ports_schema
+        schema = expected_ports_schema()
+        # Must contain the full contract so it can be shown in one error.
+        out0 = schema["out"][0]
+        self.assertEqual(out0["index"], 0)
+        self.assertEqual(out0["kind"], "geometry")
+        self.assertTrue(any(o.get("kind") == "anchors" for o in schema["out"]))
+        in0 = schema["in"][0]
+        for field in ("from", "port", "anchor"):
+            self.assertIn(field, in0)
+
+    def test_aggregated_error_lists_all_violations(self):
+        """Multiple violations at once → all listed in one error (not first-wins)."""
+        from edini.project.ports import validate_component_ports
+        ports = {
+            "out": [{"index": 0, "kind": "anchors", "points": []}],  # out[0] wrong kind
+            "in": [
+                {"port": 1, "anchor": "x"},          # missing from
+                {"from": "c", "port": -1, "anchor": "bad name!"},  # bad port + bad anchor
+            ],
+        }
+        try:
+            validate_component_ports(ports)
+            self.fail("should have raised")
+        except ValueError as e:
+            msg = str(e)
+            # All distinct violations surfaced in the single error.
+            self.assertIn("out[0]", msg)
+            self.assertIn("'from'", msg)
+            self.assertIn("'port'", msg)
+            self.assertIn("'anchor'", msg)
+            # And the expected schema is appended so the caller learns the
+            # whole contract at once.
+            self.assertIn("Expected ports shape", msg)
+
+    def test_error_includes_full_expected_shape(self):
+        """The error must teach the full contract, not just name the bad field."""
+        from edini.project.ports import validate_component_ports
+        ports = {"out": [{"index": 1, "kind": "geometry"}], "in": []}
+        try:
+            validate_component_ports(ports)
+            self.fail("should have raised")
+        except ValueError as e:
+            self.assertIn("Expected ports shape", str(e))
+
 
 if __name__ == "__main__":
     unittest.main()

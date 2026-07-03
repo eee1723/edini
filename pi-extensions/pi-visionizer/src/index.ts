@@ -36,8 +36,15 @@ import {
 export default function (pi: ExtensionAPI) {
   registerCommands(pi);
 
+  // Visual verification gate — when EDINI_VISUAL_VERIFICATION is not "true",
+  // skip registering the describe_image tool so the agent neither sees nor
+  // calls it. Toggle via settings.json visual_verification_enabled.
+  // [VISUAL-VERIFY-GATE]
+  const visualVerificationOn = process.env.EDINI_VISUAL_VERIFICATION === "true";
+
   // ── Context hook: fired before every LLM call ──
   // ── Tool: describe_image — LLM can actively call this ──
+  if (visualVerificationOn) {
   pi.registerTool({
     name: "describe_image",
     label: "Describe Image",
@@ -221,6 +228,7 @@ export default function (pi: ExtensionAPI) {
       };
     },
   });
+  } // end if (visualVerificationOn)
 
   // ── Context hook: fired before every LLM call ──
   pi.on("context", async (event, ctx) => {

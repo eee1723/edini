@@ -5,6 +5,7 @@ Run: pytest tests/test_node_utils.py -v
 """
 import sys
 import os
+import json
 import unittest
 
 from tests.mock_hou import create_mock_hou, MockParm, MockNode
@@ -585,13 +586,63 @@ class TestSetParamsBatch(unittest.TestCase):
         self.assertEqual(result["total_count"], 3)
         self.assertNotIn("partial", result)
 
+    def test_set_params_batch_vector_via_group_name(self):
+        """Batch must route a list value through parmTuple (group name like
+        box 'size'/'t'). Before the fix, node.parm('size') returned None and
+        the value landed in failed_params. Confirms fix for the box size/center
+        failure seen in the table-build log."""
+        from edini.node_utils import set_params_batch
+        node = _mock_hou.node(self.node_path)
+        # sizex/sizey/sizez are the real per-component parms; "size" is the
+        # group name — node.parm("size") is None but parmTuple("size") resolves.
+        node._parms["sizex"] = MockParm("sizex", 1.0)
+        node._parms["sizey"] = MockParm("sizey", 1.0)
+        node._parms["sizez"] = MockParm("sizez", 1.0)
+        result = set_params_batch(self.node_path, {"size": [1.2, 0.05, 0.8]})
+        self.assertTrue(result["success"])
+        self.assertNotIn("partial", result, f"unexpected failure: {result}")
+        self.assertEqual(node._parms["sizex"].eval(), 1.2)
+        self.assertEqual(node._parms["sizey"].eval(), 0.05)
+        self.assertEqual(node._parms["sizez"].eval(), 0.8)
+
+    def test_set_params_batch_vector_with_expression(self):
+        """A list with an expression component must route each component to
+        setExpression (Project HDA two-layer ch() live params)."""
+        from edini.node_utils import set_params_batch
+        node = _mock_hou.node(self.node_path)
+        node._parms["radx"] = MockParm("radx", 0.0)
+        node._parms["rady"] = MockParm("rady", 0.0)
+        result = set_params_batch(self.node_path,
+                                  {"rad": ["ch('../leg_radius')", "ch('../leg_radius')"]})
+        self.assertTrue(result["success"])
+        self.assertNotIn("partial", result, f"unexpected failure: {result}")
+        self.assertTrue(node._parms["radx"].hasExpression())
+        self.assertTrue(node._parms["rady"].hasExpression())
+
+    def test_set_params_batch_scalar_expression(self):
+        """A scalar ch('../x') value must go through setExpression, not .set().
+        Before the fix batch rejected this with 'Cannot set a numeric parm to a
+        non-numeric value' while single set_param accepted it."""
+        from edini.node_utils import set_params_batch
+        node = _mock_hou.node(self.node_path)
+        node._parms["height"] = MockParm("height", 0.0)
+        result = set_params_batch(self.node_path,
+                                  {"height": "ch('../leg_height')"})
+        self.assertTrue(result["success"])
+        self.assertNotIn("partial", result, f"unexpected failure: {result}")
+        self.assertTrue(node._parms["height"].hasExpression())
+
     def test_set_params_batch_missing_param(self):
         from edini.node_utils import set_params_batch
         result = set_params_batch(self.node_path, {"tx": 1.0, "nonexistent": 99})
         self.assertTrue(result["success"])
         self.assertTrue(result.get("partial"))
         self.assertEqual(result["set_count"], 1)
-        self.assertIn("nonexistent", result["failed_params"])
+        # Each failed entry is "<name>: <reason>" — check the name appears.
+        self.assertTrue(
+            any("nonexistent" in entry for entry in result["failed_params"]),
+            f"expected 'nonexistent' in failed_params, got {result['failed_params']}",
+        )
 
     def test_set_params_batch_node_not_found(self):
         from edini.node_utils import set_params_batch
@@ -1222,6 +1273,221 @@ class TestNodeParmsQuery(unittest.TestCase):
         from edini.node_utils import manifest_parm_names
         # No file written.
         self.assertIsNone(manifest_parm_names("normal"))
+
+
+# ===================================================================
+# Manifest enrichment — component-name preservation (Bug: radx/rady vs rad1/rad2)
+# ===================================================================
+
+class TestEnrichManifestParms(unittest.TestCase):
+    """Regression for the manifest-enrichment guard that clobbered tube's
+    authoritative components:["rad1","rad2"] with a synthesised ["radx","rady"].
+
+    The manifest stores `components` (not `num_components`); the old guard
+    checked num_components, so it was always falsy and the x/y/z heuristic ran
+    unconditionally — corrupting tube (and any parm with non-suffix names).
+    """
+
+    def test_tube_rad_components_preserved(self):
+        """tube.rad has authoritative components ["rad1","rad2"] — enrichment
+        must trust them, NOT synthesise ["radx","rady"]."""
+        from edini.node_utils import _enrich_manifest_parms
+        tube_rad = {"name": "rad", "type": "Float", "label": "Radius",
+                    "default": [1.0, 1.0], "vector_size": 2,
+                    "components": ["rad1", "rad2"]}
+        out = _enrich_manifest_parms([tube_rad])
+        self.assertEqual(out[0]["component_names"], ["rad1", "rad2"],
+                         "tube.rad must keep rad1/rad2, not radx/rady")
+        self.assertEqual(out[0]["components"], ["rad1", "rad2"])
+        self.assertEqual(out[0]["num_components"], 2)
+
+    def test_circle_rad_components_preserved(self):
+        """circle.rad genuinely uses radx/rady — enrichment must still trust
+        the authoritative components and not regress to synthesis."""
+        from edini.node_utils import _enrich_manifest_parms
+        circle_rad = {"name": "rad", "type": "Float", "label": "Radius",
+                      "default": [1.0, 1.0], "vector_size": 2,
+                      "components": ["radx", "rady"]}
+        out = _enrich_manifest_parms([circle_rad])
+        self.assertEqual(out[0]["component_names"], ["radx", "rady"])
+
+    def test_legacy_entry_without_components_synthesises_suffix(self):
+        """A legacy entry lacking `components` but with a list default still
+        falls back to the x/y/z suffix synthesis (the original purpose of
+        enrichment)."""
+        from edini.node_utils import _enrich_manifest_parms
+        legacy = {"name": "center", "type": "Float", "default": [0.0, 0.0, 0.0]}
+        out = _enrich_manifest_parms([legacy])
+        self.assertEqual(out[0]["component_names"], ["centerx", "centery", "centerz"])
+        self.assertEqual(out[0]["num_components"], 3)
+
+    def test_does_not_mutate_input_dict(self):
+        """Enrichment copies before adding fields, so the manifest dict in
+        memory is untouched (avoids corrupting the bundled manifest cache)."""
+        from edini.node_utils import _enrich_manifest_parms
+        tube_rad = {"name": "rad", "type": "Float", "default": [1.0, 1.0],
+                    "components": ["rad1", "rad2"]}
+        _enrich_manifest_parms([tube_rad])
+        self.assertNotIn("component_names", tube_rad)
+        self.assertNotIn("num_components", tube_rad)
+
+    def test_menu_parm_gets_index_token_map(self):
+        """A menu parm must be annotated with a human-readable index→token map
+        so the agent doesn't guess numeric codes (e.g. attribwrangle class:
+        0=detail,1=primitive,2=point)."""
+        from edini.node_utils import _enrich_manifest_parms
+        menu = {"name": "class", "type": "Menu", "label": "Run Over",
+                "default": 2, "menu_items": ["detail", "primitive", "point", "vertex"]}
+        out = _enrich_manifest_parms([menu])
+        opts = out[0]["menu_options"]
+        self.assertEqual(opts, [{"index": 0, "token": "detail"},
+                                {"index": 1, "token": "primitive"},
+                                {"index": 2, "token": "point"},
+                                {"index": 3, "token": "vertex"}])
+        self.assertIn("0=detail", out[0]["note"])
+        self.assertIn("1=primitive", out[0]["note"])
+
+    def test_menu_annotation_does_not_mutate_manifest(self):
+        from edini.node_utils import _enrich_manifest_parms
+        menu = {"name": "class", "type": "Menu",
+                "menu_items": ["a", "b"]}
+        _enrich_manifest_parms([menu])
+        self.assertNotIn("menu_options", menu)
+
+
+# ===================================================================
+# Version resolution: query_parms must match create_node's version
+# ===================================================================
+
+class TestNodeParmsVersionResolution(unittest.TestCase):
+    """Regression for the polybevel version mismatch: query_parms('polybevel')
+    returned stale bare-entry params (beveltype/relinset) while create_node
+    creates polybevel::3.0 (offset/filletshape). A bare name with versioned
+    siblings must resolve to the highest version."""
+
+    def setUp(self):
+        import tempfile
+        self._tmpdir = tempfile.mkdtemp(prefix="edini_ver_test_")
+        self._manifest_file = os.path.join(self._tmpdir, "m.json")
+        # Three distinct schemas for the same base name — mirrors polybevel.
+        self._manifest = {
+            "houdini_version": "21.0.440", "category": "Sop", "node_types": {
+                "polybevel": {"parms": [{"name": "beveltype", "type": "Menu"},
+                                        {"name": "relinset", "type": "Float"}]},
+                "polybevel::2.0": {"parms": [{"name": "offsetmode", "type": "Menu"},
+                                             {"name": "offset", "type": "Float"}]},
+                "polybevel::3.0": {"parms": [{"name": "offset", "type": "Float"},
+                                             {"name": "filletshape", "type": "Menu"},
+                                             {"name": "divisions", "type": "Int"}]},
+                "lonecustom": {"parms": [{"name": "alpha", "type": "Float"}]},
+            }}
+        import edini.node_utils as nu
+        self._nu = nu
+        self._orig_path = nu._node_parms_manifest_path
+        nu._node_parms_manifest_path = lambda: self._manifest_file
+
+    def tearDown(self):
+        import shutil
+        self._nu._node_parms_manifest_path = self._orig_path
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+    def _write(self):
+        with open(self._manifest_file, "w", encoding="utf-8") as f:
+            json.dump(self._manifest, f)
+
+    def test_bare_name_prefers_highest_version(self):
+        """Offline fallback: a bare name with versioned siblings resolves to
+        the highest version (::3.0), NOT the stale bare entry."""
+        from edini.node_utils import node_parms
+        self._write()
+        r = node_parms("polybevel")
+        self.assertTrue(r["success"])
+        # Must be the ::3.0 schema, not the bare beveltype schema.
+        self.assertEqual(r["node_type"], "polybevel::3.0")
+        names = {p["name"] for p in r["parms"]}
+        self.assertIn("offset", names)
+        self.assertIn("filletshape", names)
+        self.assertNotIn("beveltype", names)
+        self.assertIn("polybevel", r.get("resolved_from", ""))
+
+    def test_bare_name_without_versions_stays_bare(self):
+        """A bare name with NO versioned siblings must resolve to itself
+        (don't break custom/unknown nodes)."""
+        from edini.node_utils import node_parms, _resolve_node_type_in_manifest
+        self._write()
+        resolved, entry = _resolve_node_type_in_manifest(
+            "lonecustom", self._manifest["node_types"])
+        self.assertEqual(resolved, "lonecustom")
+        self.assertIsNotNone(entry)
+
+    def test_explicit_version_not_rewritten(self):
+        """An explicit 'polybevel::2.0' request must NOT be silently upgraded
+        to ::3.0 — the agent asked for a specific version."""
+        from edini.node_utils import node_parms
+        self._write()
+        r = node_parms("polybevel::2.0")
+        self.assertEqual(r["node_type"], "polybevel::2.0")
+        names = {p["name"] for p in r["parms"]}
+        self.assertIn("offsetmode", names)
+
+
+# ===================================================================
+# get_node_info: ramp serialization (no crash)
+# ===================================================================
+
+class TestGetNodeRampSerialization(unittest.TestCase):
+    """Regression for 'Object of type Ramp is not JSON serializable': a node
+    with a ramp parm must still return success, with the ramp serialised."""
+
+    def test_ramp_parm_serialized_to_control_points(self):
+        from edini.node_utils import get_node_info, _serialize_parm_value
+
+        class _FakeRamp:
+            def keys(self):
+                return [0.0, 1.0]
+            def values(self):
+                return [0.5, 1.0]
+
+        class _FakeRampTmpl:
+            def type(self):
+                class _T:
+                    def name(self):
+                        return "Ramp"
+                return _T()
+
+        class _FakeRampParm:
+            def name(self):
+                return "profileramp"
+            def description(self):
+                return "Profile Ramp"
+            def eval(self):
+                return _FakeRamp()
+            def parmTemplate(self):
+                return _FakeRampTmpl()
+
+        # The serializer itself.
+        val = _serialize_parm_value(_FakeRampParm(), _FakeRamp())
+        self.assertEqual(val["__type__"], "ramp")
+        self.assertEqual(val["keys"], [0.0, 1.0])
+        # Must be JSON-serializable (the whole point — no hou.Ramp leak).
+        json.dumps(val)
+
+    def test_non_ramp_parm_unchanged(self):
+        """A normal float parm must pass through _json_safe unchanged."""
+        from edini.node_utils import _serialize_parm_value
+
+        class _FloatTmpl:
+            def type(self):
+                class _T:
+                    def name(self):
+                        return "Float"
+                return _T()
+
+        class _FloatParm:
+            def parmTemplate(self):
+                return _FloatTmpl()
+
+        self.assertEqual(_serialize_parm_value(_FloatParm(), 3.5), 3.5)
 
 
 if __name__ == "__main__":

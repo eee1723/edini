@@ -1,6 +1,6 @@
 # 📊 仪表盘
 
-> **当前阶段**：Project HDA — 组件建模地基（子系统 1）已交付，subnet 组件 + 端口信息点流水线协作（hython 6 测全过）&nbsp;|&nbsp; **状态**：地基交付，待 GUI 验证 → 子系统 2/3/4 &nbsp;|&nbsp; **最后更新**：2026-07-02
+> **当前阶段**：Project HDA 组件流水线 + 会话日志驱动两轮修复（接口契约清晰化 + 参数认知自洽，724 测试全过，视觉验证默认关闭待重设计）&nbsp;|&nbsp; **状态**：地基稳定，参数认知自洽 &nbsp;|&nbsp; **最后更新**：2026-07-03
 
 ## 快速导航
 
@@ -36,7 +36,7 @@
 | 节点创建 | ✅ namespace 自动解析 · shelf tool 预设应用 · diff 过滤内部子节点 |
 | 按钮布局 | ✅ 📷 截图 + 📁 上传（文本标签按钮，minHeight 34px，hover/pressed 动效）· 仅对话右对齐 · 执行按钮 minWidth 90px · 6px/8px 间距优化 |
 | 剪贴板 | ✅ Ctrl+V 图片粘贴 · 右键粘贴图片到附件栏 · 右键粘贴文本（defer focus+paste）· 多模式探测（QImage→mimeData→URL→raw png/jpeg）· Houdini PySide6 枚举兼容（整数 mode 值）|
-| 测试 | ✅ 382 测试通过（mock_hou 脱机 + harness/recipe/orientation/health 单测 + 真实 Houdini manual_verify_fixes.py 13/13）|
+| 测试 | ✅ 724 测试通过（mock_hou 脱机 + harness/recipe/orientation/health/ports/node_utils 单测 + 真实 hython project/component/design_params 决定性验证）|
 | 知识检索 | ✅ edini_search_knowledge 工具已实现 |
 | 知识→Skills | ⬜ Traces → Skills 自动提取（规划中） |
 | 评估系统 | ✅ 5 维度评分 · LogParser · SQLite · EvalDashboard · edini_get_eval_stats · LLM-as-Judge (deepseek-chat) |

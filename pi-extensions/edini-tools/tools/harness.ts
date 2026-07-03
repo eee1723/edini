@@ -6,6 +6,19 @@ import { Type } from "typebox";
 const TOOL_PORT = parseInt(process.env.EDINI_TOOL_PORT || "9876", 10);
 const TOOL_URL = `http://127.0.0.1:${TOOL_PORT}/execute`;
 
+// Visual verification gate — when off, the agent is told to rely on numeric
+// evidence (health/inventory) instead of capture_review + describe_image.
+// [VISUAL-VERIFY-GATE]
+const VISUAL_VERIFY_ON = process.env.EDINI_VISUAL_VERIFICATION === "true";
+const VERIFY_GUIDELINES = VISUAL_VERIFY_ON
+  ? [
+      "NEVER set commit_on_success=true on the first sandbox execution. Always capture (4-view quad) and verify with describe_image using the 3D verification prompt BEFORE committing.",
+      "If describe_image reports critical or major defects (wrong orientation, missing components, STRUCTURAL_DETAIL < 3), fix the specific issue and re-verify — do NOT commit until verification passes or user approves.",
+    ]
+  : [
+      "Visual verification (capture_review + describe_image) is disabled. Before committing, confirm success via numeric evidence: the sandbox result's diagnostics/structural_checks, houdini_inspect_geometry_health, and houdini_geometry_inventory. Do NOT call capture_review or describe_image.",
+    ];
+
 async function forwardTool(toolName: string, params: Record<string, unknown>) {
   const response = await fetch(TOOL_URL, {
     method: "POST",
@@ -64,9 +77,12 @@ export const houdiniRunPythonSandbox = {
     "In network mode, use the injected `sandbox_root` variable (the geo container) or hou.node(sandbox_root_path) to create children, and end with a null/merge node named 'OUT' (or pass output_node_name). The harness auto-finds OUT, cooks it, and runs diagnostics on it.",
     "The sandbox result includes diagnostics and structural_checks (has_geometry, point_count, bounds_nonzero) — no need for separate inspect_geo or check_errors calls.",
     "Do not delete a failed sandbox before reviewing the diagnostics in the result.",
-    "NEVER set commit_on_success=true on the first sandbox execution. Always capture (4-view quad) and verify with describe_image using the 3D verification prompt BEFORE committing.",
-    "If describe_image reports critical or major defects (wrong orientation, missing components, STRUCTURAL_DETAIL < 3), fix the specific issue and re-verify — do NOT commit until verification passes or user approves.",
+    ...VERIFY_GUIDELINES,
     "Before using unfamiliar node types in your code, look up their parameter names with houdini_node_parms(type) — do NOT guess or probe manually.",
+    "EXECUTION-MODEL CONSTRAINTS (avoid the most common sandbox errors): " +
+      "(1) Your code is wrapped in a function body, so do NOT use a top-level `return` statement — assign a result variable or use print() to surface info. " +
+      "(2) ch()/hou.ch() RELATIVE paths (e.g. '../width') resolve relative to the SANDBOX container, NOT the live project node you're thinking of — so a sandbox cannot reference a Project HDA core's spare parms via '../width'. To reference an external node's parm, use an ABSOLUTE path: hou.ch('/obj/.../project_core/width'). " +
+      "(3) The sandbox is ISOLATED — it cannot read or modify nodes elsewhere in the scene. To inspect or set params on a LIVE node (outside the sandbox), use houdini_get_node / houdini_set_param / houdini_collect_diagnostics directly — do NOT route that through the sandbox.",
   ],
   parameters: Type.Object({
     code: Type.String({ description: "Python code to execute in the sandbox" }),
@@ -207,7 +223,9 @@ export const commitSandboxTool = {
   promptGuidelines: [
     "HARD GATE: Do NOT call houdini_commit_sandbox unless houdini_verify_orientation has been called on this sandbox AND all checks passed (or the asset has no @component_id tags).",
     "If houdini_verify_orientation returned any failed checks, fix them using the provided hint quaternion and re-verify before committing. You cannot override the gate.",
-    "If you have not yet called houdini_capture_review + describe_image on this sandbox, do that first for visual sanity (note: vision models cannot reliably detect orientation — verify_orientation is authoritative for that).",
+    VISUAL_VERIFY_ON
+      ? "If you have not yet called houdini_capture_review + describe_image on this sandbox, do that first for visual sanity (note: vision models cannot reliably detect orientation — verify_orientation is authoritative for that)."
+      : "Before committing, confirm sanity via numeric evidence: the sandbox diagnostics/structural_checks, houdini_inspect_geometry_health, and houdini_geometry_inventory. Visual verification (capture_review + describe_image) is disabled.",
     "After 3 failed repair attempts, ask the user — do NOT commit anyway.",
     "Pass orientation_checks inline if you have not called houdini_verify_orientation separately; it runs the same gate at commit time.",
     "Use skip_orientation=true ONLY with a documented reason (e.g. abstract art where orientation is intentionally ambiguous).",
@@ -421,7 +439,10 @@ export const harnessTools = [
   verifyOrientationTool,
   commitSandboxTool,
   discardSandboxTool,
-  captureReviewTool,
+  // captureReviewTool is gated by EDINI_VISUAL_VERIFICATION (registered only
+  // when visual verification is on) — kept out of the default array so it's
+  // hidden from the agent when VV is off. [VISUAL-VERIFY-GATE]
+  ...(VISUAL_VERIFY_ON ? [captureReviewTool] : []),
   houdiniCaptureComponentDetail,
   dumpParmCatalogTool,
 ];

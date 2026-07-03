@@ -13,6 +13,12 @@ import { ediniGetEvalStats } from "./tools/eval";
 import { ediniSearchKnowledge } from "./tools/knowledge";
 
 export default function (pi: ExtensionAPI) {
+  // Visual verification gate — when disabled, hide capture_review (and the
+  // vision describe_image tool, gated in pi-visionizer). Toggle via
+  // settings.json visual_verification_enabled → EDINI_VISUAL_VERIFICATION env.
+  // [VISUAL-VERIFY-GATE]
+  const visualVerificationOn = process.env.EDINI_VISUAL_VERIFICATION === "true";
+
   const allTools = [
     ...sceneTools,
     ...queryTools,
@@ -23,7 +29,7 @@ export default function (pi: ExtensionAPI) {
     ...projectTools,
     ediniGetEvalStats,
     ediniSearchKnowledge,
-  ];
+  ].filter((tool) => visualVerificationOn || tool.name !== "capture_review");
 
   for (const tool of allTools) {
     pi.registerTool(tool);

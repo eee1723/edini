@@ -73,6 +73,11 @@ export const projectTools = [
       "Pass `components` (list of {id, purpose, ports}) to define what subnets to scaffold.",
       "Pass `design_params` (list of {name, default, min, max, label, components}) to define core-level adjustable params. The core owns the values; subnets reference them after promote.",
       "Each component becomes a subnet named after its id, with out_geometry/out_anchors nulls + output nodes.",
+      "ports FULL contract (all fields required; build it right the first time — validation reports all errors at once): " +
+        "ports.out is a list where out[0] MUST be {index:0, kind:'geometry'} (main geometry). " +
+        "out[1+] may be {index:1, kind:'anchors', points:[{name:'<id>', role:'<desc>'}]} — each point needs a name matching ^[A-Za-z][A-Za-z0-9_]*$. " +
+        "ports.in is a list; each entry MUST have from (source component id), port (source component's OUTPUT index, int>=0; 1 = its anchor cloud), and anchor (the consumed anchor's @name, unique within this component, same regex). " +
+        "Example (table): tabletop ports.out=[{index:0,kind:'geometry'},{index:1,kind:'anchors',points:[{name:'leg_corners',role:'4 bottom corners'}]}]; legs ports.in=[{from:'tabletop',port:1,anchor:'leg_corners'}].",
     ],
     parameters: Type.Object({
       core_path: Type.String({

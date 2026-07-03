@@ -160,6 +160,12 @@ _EDINI_DEFAULTS: dict[str, Any] = {
     # in Settings → Pi Capabilities. Filtered out of `--skill` args at pi spawn,
     # so a change takes effect after a pi restart.
     "disabled_skills": [],
+    # Visual verification (capture_review + describe_image) on/off. Currently
+    # disabled by default — the vision-driven verify loop added noise/false
+    # positives during modeling. Toggle to True to re-enable once the visual
+    # verification workflow is reworked. Read by get_pi_env() as
+    # EDINI_VISUAL_VERIFICATION so the TS extensions can gate themselves.
+    "visual_verification_enabled": False,
 }
 
 
@@ -251,6 +257,12 @@ def get_pi_env() -> dict[str, str]:
     if vision_provider and vision_model:
         env["VISIONIZER_PROVIDER"] = vision_provider
         env["VISIONIZER_MODEL_ID"] = vision_model
+    # Visual verification gate (capture_review + describe_image). The TS
+    # extensions (edini-context, edini-tools, pi-visionizer) read this env to
+    # decide whether to inject verify rules / register the vision tools.
+    env["EDINI_VISUAL_VERIFICATION"] = (
+        "true" if settings.get("visual_verification_enabled") else "false"
+    )
     return env
 
 
