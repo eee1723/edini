@@ -105,4 +105,10 @@ export const buildAssembly = {
   },
 };
 
-export const rootedTools = [buildAssembly];
+// build_assembly is RETIRED from the agent tool surface (2026-07-03). The
+// Project HDA component pipeline (project_build_scaffold + modeling inside
+// component subnets) is the new default modeling path — see project-modeling
+// skill + tools/project.ts. build_assembly's backend handler + assembly_builder
+// code are KEPT (asset), but the agent no longer sees this tool, so it can't
+// choose the old flat-network path. To restore: re-add buildAssembly here.
+export const rootedTools: typeof buildAssembly[] = [];

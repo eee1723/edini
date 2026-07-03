@@ -41,43 +41,40 @@ Project HDA core (edini::project SOP HDA)
 
 ## The workflow (deterministic steps)
 
-### 1. Open a project
-```python
-# via tool: project tools, or Python shell
-from edini.project.node import create_project_hda
-core = create_project_hda(name="project_table", goal="a table")
-# → /obj/project_table/project_core  (the SOP HDA you build inside)
+The agent drives this via THREE dedicated tools plus the standard node tools.
+This is the only modeling path — there is no build_assembly anymore.
+
+### 1. Create the project — `project_create`
 ```
-
-### 2. Declare the components
-Describe what components exist and how they connect. Each component has an `id`
-(= its subnet name), a `purpose`, output ports, and optional input ports
-(what upstream anchors it consumes).
-
-```python
-from edini.project.state import empty_declaration, add_component
-decl = empty_declaration("project_table", goal="a table")
-add_component(decl, "tabletop", purpose="桌面，输出四条腿的安装锚点",
-    ports_out=[
-        {"index": 0, "kind": "geometry", "description": "桌面几何"},
-        {"index": 1, "kind": "anchors", "points": [
-            {"name": "leg_mount_fr", "role": "mount", "description": "前右桌腿点"},
-            {"name": "leg_mount_fl", "role": "mount", "description": "前左桌腿点"},
-            {"name": "leg_mount_br", "role": "mount", "description": "后右桌腿点"},
-            {"name": "leg_mount_bl", "role": "mount", "description": "后左桌腿点"}]}])
-add_component(decl, "legs", purpose="四条桌腿，消费桌面锚点定位",
-    ports_in=[
-        {"from": "tabletop", "port": 1, "anchor": "leg_mount_fr"},
-        {"from": "tabletop", "port": 1, "anchor": "leg_mount_fl"},
-        {"from": "tabletop", "port": 1, "anchor": "leg_mount_br"},
-        {"from": "tabletop", "port": 1, "anchor": "leg_mount_bl"}])
+project_create(name="project_table", goal="a small table")
+  → returns { core_path: "/obj/project_table/project_core", ... }
 ```
+Always call this FIRST. It creates the edini::project SOP HDA you build inside.
+Remember the returned `core_path` — every later step needs it.
 
-### 3. Build the scaffold
-```python
-# tool: project_build_scaffold (pass the declaration)
-from edini.project.builder import build_project_scaffold
-build_project_scaffold(core, declaration=decl)
+### 2. Declare components + build scaffold — `project_build_scaffold`
+Pass `core_path` (from step 1) and `components` (the decomposition). Each
+component has an `id` (= its future subnet name), a `purpose`, output ports,
+and optional input ports (what upstream anchors it consumes).
+
+```
+project_build_scaffold(core_path="/obj/project_table/project_core", components=[
+  { "id": "tabletop", "purpose": "桌面，输出四条腿的安装锚点",
+    "ports": { "out": [
+        { "index": 0, "kind": "geometry", "description": "桌面几何" },
+        { "index": 1, "kind": "anchors", "points": [
+            { "name": "leg_mount_fr", "role": "mount", "description": "前右桌腿点" },
+            { "name": "leg_mount_fl", "role": "mount", "description": "前左桌腿点" },
+            { "name": "leg_mount_br", "role": "mount", "description": "后右桌腿点" },
+            { "name": "leg_mount_bl", "role": "mount", "description": "后左桌腿点" } ] } ] } },
+  { "id": "legs", "purpose": "四条桌腿，消费桌面锚点定位",
+    "ports": { "out": [ { "index": 0, "kind": "geometry" } ],
+                "in": [
+                  { "from": "tabletop", "port": 1, "anchor": "leg_mount_fr" },
+                  { "from": "tabletop", "port": 1, "anchor": "leg_mount_fl" },
+                  { "from": "tabletop", "port": 1, "anchor": "leg_mount_br" },
+                  { "from": "tabletop", "port": 1, "anchor": "leg_mount_bl" } ] } }
+])
 ```
 The builder creates, **deterministically and idempotently**:
 - One subnet per component (`tabletop/`, `legs/`) — **id = subnet name**
@@ -90,46 +87,45 @@ The builder creates, **deterministically and idempotently**:
 
 The builder does NOT build geometry — that's your job, freely, inside each subnet.
 
-### 4. Model inside each component subnet
-Use the standard node tools (`houdini_create_node`, `houdini_connect_nodes`,
-`houdini_set_param`). Key points specific to this paradigm:
+### 3. Model inside each component subnet — standard node tools
+Use `houdini_create_node`, `houdini_connect_nodes`, `houdini_set_param` inside
+each component's subnet path (e.g. `/obj/project_table/project_core/tabletop`).
+Key points specific to this paradigm:
 
 **Emitting anchors** (in the upstream component, e.g. tabletop):
-```python
+```
 # an attribwrangle that adds points at the table corners, tagged with @name
-houdini_create_node(attribwrangle, parent=<tabletop subnet path>)
-houdini_set_param(node, "snippet", '<VEX: addpoint + setpointattrib name>')
-houdini_set_param(node, "class", "detail")   # MUST be detail for addpoint
-houdini_connect_nodes(wrangle, "<tabletop>/out_anchors")  # feed into the anchor port
+houdini_create_node(node_type="attribwrangle", parent_path="<tabletop subnet>")
+houdini_set_param(node_path, "snippet", '<VEX: addpoint(0, set(x,y,z)); setpointattrib(0,"name",0,"leg_mount_fr","set");>')
+houdini_set_param(node_path, "class", "detail")   # MUST be detail for addpoint
+houdini_connect_nodes(from_path=wrangle_path, to_path="<tabletop>/out_anchors")
 ```
 
 **Consuming anchors** (in the downstream component, e.g. legs):
-```python
+```
 # the builder already wired in_tabletop_leg_mount_fr to the upstream anchor.
 # Just build downstream of it.
-shape = houdini_create_node(tube, parent=<legs subnet path>)   # a leg
-houdini_set_param(shape, "rad", [0.04, 0.04])     # vector parm
-houdini_set_param(shape, "height", 'ch("../leg_height")')  # LIVE expression
-ctp = houdini_create_node(copytopoints, parent=<legs subnet path>)
-houdini_connect_nodes(shape, ctp, input_index=0)
-houdini_connect_nodes("<legs>/in_tabletop_leg_mount_fr", ctp, input_index=1)
-houdini_connect_nodes(ctp, "<legs>/out_geometry")   # main geometry out
+houdini_create_node(node_type="tube", parent_path="<legs subnet>")   # a leg
+houdini_set_param(node_path, "rad", [0.04, 0.04])     # vector parm
+houdini_set_param(node_path, "height", 'ch("../leg_height")')  # LIVE expression
+houdini_create_node(node_type="copytopoints", parent_path="<legs subnet>")
+houdini_connect_nodes(from_path=tube_path, to_path=ctp_path, input_index=0)
+houdini_connect_nodes(from_path="<legs>/in_tabletop_leg_mount_fr", to_path=ctp_path, input_index=1)
+houdini_connect_nodes(from_path=ctp_path, to_path="<legs>/out_geometry")   # main geometry out
 ```
 
 To grab an upstream component's anchor port directly (not via the builder's
 in-node), use `output_index`:
-```python
-houdini_connect_nodes("<tabletop>", "<something>", input_index=0, output_index=1)
+```
+houdini_connect_nodes(from_path="<tabletop>", to_path="<something>", input_index=0, output_index=1)
 # output_index=1 = tabletop's anchor cloud (out[1]); 0 = its main geometry
 ```
 
-### 5. Promote parameters to the top
+### 4. Promote parameters to the top — `project_promote_params`
 After modeling, lift each component's spare parms to the core HDA interface so
 the whole model is adjustable from one place:
-```python
-# tool: project_promote_params (or builder.promote_params)
-from edini.project.builder import promote_params
-promote_params(core)
+```
+project_promote_params(core_path="/obj/project_table/project_core")
 # → core gets tabletop_length, legs_leg_height, etc., each driving its subnet live
 ```
 
@@ -143,18 +139,22 @@ promote_params(core)
 `houdini_set_param` accepts expression strings containing `ch(...)` and routes
 them to `setExpression` automatically — so LIVE params work through the tool.
 
-## When to use this vs build_assembly
+## When to use this
+
+**This is the ONLY path for multi-part procedural models.** build_assembly no
+longer exists as a tool — do not attempt to call it. Any object made of parts
+that fit together (a table, car, bicycle, keyboard, machine, building) is built
+here as a Project HDA.
 
 | Situation | Use |
 |---|---|
-| **Multi-part object, parts are independent components** (table = top + legs; car = body + wheels + lights) | **Project HDA** (this skill) |
+| **Any multi-part object** (table=top+legs, car=body+wheels, keyboard=tray+keys) | **Project HDA** (this skill): project_create → project_build_scaffold → model in subnets → project_promote_params |
 | **Long-term editable model** the user may hand-edit | **Project HDA** |
-| **Simple single body with leaves hanging off** (one box + 4 wheels measured from it, no real component breakdown) | build_assembly (rooted-modeling) — lighter, one shot |
-| Single generator / one SOP | houdini_run_python_sandbox |
+| Single generator / one-off SOP (no components) | houdini_run_python_sandbox |
 
-**Default to Project HDA** for any object with more than one independent
-component. The component breakdown is what makes the model understandable,
-editable, and drift-detectable later.
+Even a "simple" table is a multi-part object (top + legs): decompose it into
+components and build it here. The component breakdown is what makes the model
+understandable, editable, and (later) drift-detectable.
 
 ## Modeling discipline (direction — refined with real cases)
 

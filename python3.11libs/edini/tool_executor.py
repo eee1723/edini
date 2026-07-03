@@ -136,6 +136,25 @@ def build_assembly(assembly: dict | None = None, assembly_path: str | None = Non
     return result
 
 
+def _project_create(name: str | None = None, goal: str | None = None, **_) -> dict[str, Any]:
+    """Create a new Project HDA — the first step of any modeling task.
+
+    Returns the core node path (feed to project_build_scaffold). The Project
+    HDA is a SOP-context edini::project instance inside a geo shell.
+    """
+    try:
+        from edini.project.node import create_project_hda
+        import hou
+        n = name or "project"
+        core = create_project_hda(name=n, goal=goal)
+        return {"success": True, "core_path": core.path(),
+                "shell_path": hou.node(core.path()).parent().path()}
+    except Exception as e:
+        import traceback
+        return {"success": False, "error": str(e),
+                "traceback": traceback.format_exc()}
+
+
 def _project_build_scaffold(core_path: str | None = None,
                             components: list | None = None, **_) -> dict[str, Any]:
     """Build component scaffolds inside a Project HDA core node.
@@ -351,6 +370,7 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     # Pass inline `components` (list of component dicts) to set+build in one
     # shot, or omit it to rebuild the existing declaration. `core_path` is the
     # edini::project SOP HDA instance path (e.g. /obj/proj/project_core).
+    "project_create": lambda **kw: _project_create(**kw),
     "project_build_scaffold": lambda **kw: _project_build_scaffold(**kw),
     "project_promote_params": lambda **kw: _project_promote_params(**kw),
 }

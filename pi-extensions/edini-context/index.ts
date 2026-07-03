@@ -127,22 +127,16 @@ Before reporting completion, decide whether to capture:
 
 ## Build Path Selection (reference before authoring)
 
-**Multi-part procedural model? Use the Project HDA component pipeline FIRST.**
+**Procedural model (anything with parts)? Use the Project HDA component pipeline.**
 If the user wants a table, car, bicycle, keyboard, machine, building — anything
-made of MULTIPLE PARTS that fit together — use the **project-modeling** skill:
-open a Project HDA (create_project_hda), declare components, build the scaffold
+made of parts that fit together — use the **project-modeling** skill: open a
+Project HDA (create_project_hda), declare components, build the scaffold
 (project_build_scaffold), then model freely inside each component subnet.
 Components collaborate via anchor point clouds (one outputs named anchors, the
 next consumes them to position itself). The whole model is self-contained in
 one HDA, long-term hand-editable, and every parameter stays LIVE. **This is the
-DEFAULT for any multi-component object.** Read the project-modeling skill first.
-
-**Simple single-body-with-leaves model?** build_assembly (rooted-modeling
-skill) is the lighter path for ONE root + leaves hanging off it (e.g. a box + 4
-wheels measured from it) where you don't need real component breakdown. Leaves
-are placed by MEASURING the root's real geometry (no hardcoded coords), and the
-build is LIVE. Use this when the model is genuinely one body + attachments and
-component decomposition adds no value.
+ONLY modeling path for multi-part objects** — there is no build_assembly tool
+anymore. Read the project-modeling skill before building.
 
 BEFORE hand-authoring OTHER nodes, check the recipe library for a matching pattern.
 A recipe is a REFERENCE SAMPLE, not a rigid template: read its python_script
@@ -152,8 +146,7 @@ node versions, missing connections) without bounding what you can create.
 
 | Task | Preferred approach |
 |---|---|
-| **Multi-part model: independent components that collaborate (table=top+legs, car=body+wheels+lights)** | **Project HDA component pipeline** (read the project-modeling skill): create_project_hda → declare components → project_build_scaffold → model in subnets → promote_params |
-| **Simple root + leaves (one body, parts hang off, no component breakdown needed)** | **build_assembly** (read the rooted-modeling skill) → build LIVE |
+| **Any multi-part model (table=top+legs, car=body+wheels, keyboard=tray+keys)** | **Project HDA component pipeline** (read the project-modeling skill): create_project_hda → declare components → project_build_scaffold → model in subnets → promote_params |
 | Geometry that matches a recipe's intent (tube, copy, extrude...) | **recipe_list** → **recipe_read** → study the python_script → author your own network (adapt freely) |
 | Want a quick faithful copy of an existing recipe verbatim | **recipe_rebuild** (the optional deterministic-copy path) |
 | Single-piece generator / parametric surface | houdini_run_python_sandbox (single-SOP) |
@@ -178,12 +171,12 @@ node versions, missing connections) without bounding what you can create.
 8. On accept: houdini_commit_sandbox to commit (runs health/orientation hard gates
    and returns a verification_receipt). Reference the receipt's fields in your report.
 
-**For build_assembly models specifically:** the build returns out_path
-(feed to steps 1/3/4), sandbox_root_path (feed to commit), and live_params
-(the editable spare parm names). After building, VERIFY the live guarantee:
-set one of the live_params on the container to a new value, re-cook, and confirm
-the leaves moved to the re-measured positions. If a leaf didn't move, its mount
-was mis-specified (not a measurement). Only commit once the live tweak works.
+**For Project HDA models specifically:** build_project_scaffold returns the core
+path; geometry lives inside component subnets (each has out_geometry → output_0).
+Feed the core's OUT to steps 1/3/4. After modeling + promote_params, VERIFY the
+live guarantee: set one of the promoted parms on the core to a new value, re-cook,
+and confirm the geometry updated (the two-layer ch() chain should propagate).
+Only consider the model done once the live tweak works.
 
 --- BEGIN PROCEDURAL_VERIFY_PROMPT ---
 ${PROCEDURAL_VERIFY_PROMPT}
