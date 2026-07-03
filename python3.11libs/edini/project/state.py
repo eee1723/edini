@@ -153,3 +153,67 @@ def get_component(declaration: dict, component_id: str) -> dict | None:
             return c
     return None
 
+
+# --- Design params (core-as-source parameter definitions) ------------------
+#
+# design_params is the SINGLE SOURCE OF TRUTH for the project's adjustable
+# parameters. Each entry defines a parm that lives on the core HDA top level
+# (with default/min/max), and component subnets REFERENCE it via
+# ch("../<name>"). This is the opposite of the old promote direction (which
+# scanned subnet spare parms and made core follow). Here core owns the value;
+# subnets are dependents.
+#
+# Shape: {"name","label","default","min","max","components":[ids that use it]}
+
+_PARAM_NAME_RE = _re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+
+
+def add_design_param(declaration: dict, name: str, default: float,
+                     min: float | None = None, max: float | None = None,
+                     label: str | None = None,
+                     components: list[str] | None = None) -> dict:
+    """Define an adjustable parameter at the core HDA level (source of truth).
+
+    The parm is created on the core during build_scaffold (with default/min/max),
+    and component subnets reference it via ch("../<name>") after promote. This
+    makes the core the single source — change it and every dependent component
+    (and any procedurally-computed anchors) update live.
+
+    Args:
+        name: parm name (must be a legal parm name; becomes the core parm).
+        default: default value.
+        min/max: optional range (for the core parm's UI slider).
+        label: optional human label.
+        components: optional list of component ids that use this parm (for
+            promote to know which subnets to wire). If None, all components.
+    """
+    if not _PARAM_NAME_RE.match(name or ""):
+        raise ValueError(f"bad param name: {name!r}")
+    if any(p["name"] == name for p in declaration["design_params"]):
+        raise ValueError(f"design param already exists: {name}")
+    param = {
+        "name": name,
+        "label": label or name,
+        "default": float(default),
+        "min": float(min) if min is not None else None,
+        "max": float(max) if max is not None else None,
+        "components": list(components) if components is not None else None,
+    }
+    declaration["design_params"].append(param)
+    return param
+
+
+def get_design_params_for_component(declaration: dict,
+                                    component_id: str) -> list[dict]:
+    """Return the design params that apply to a given component.
+
+    A param applies if its `components` is None (all components) or lists this
+    component id. Used by promote to know which subnet parms to wire.
+    """
+    result = []
+    for p in declaration["design_params"]:
+        comps = p.get("components")
+        if comps is None or component_id in comps:
+            result.append(p)
+    return result
+

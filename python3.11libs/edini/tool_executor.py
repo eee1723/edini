@@ -42,7 +42,7 @@ from edini.recipe_library import (
     set_node_notes,
 )
 from edini.assembly_builder import build_assembly as _build_assembly_network
-from edini.project.builder import build_project_scaffold, promote_params
+from edini.project.builder import build_project_scaffold, promote_params, add_anchors
 
 # NOTE: Two procedural pipelines are archived under _disabled_backup/:
 #   1. procedural-modeling/  — prompt-driven build_procedural_asset + G1-G3 gates.
@@ -156,13 +156,15 @@ def _project_create(name: str | None = None, goal: str | None = None, **_) -> di
 
 
 def _project_build_scaffold(core_path: str | None = None,
-                            components: list | None = None, **_) -> dict[str, Any]:
-    """Build component scaffolds inside a Project HDA core node.
+                            components: list | None = None,
+                            design_params: list | None = None, **_) -> dict[str, Any]:
+    """Build component scaffolds + design params inside a Project HDA core node.
 
     `core_path` is the edini::project SOP HDA instance. If `components` is
     given (list of component dicts), it replaces the declaration's components
-    before scaffolding; otherwise the existing declaration is rebuilt.
-    Wraps builder.build_project_scaffold with error guarding.
+    before scaffolding; if `design_params` is given (list of {name,default,min,
+    max,label,components}), it replaces the design params. Otherwise the existing
+    declaration is rebuilt. Wraps builder.build_project_scaffold with error guarding.
     """
     if not core_path:
         return {"success": False, "error": "'core_path' is required (the edini::project SOP HDA instance path)"}
@@ -172,10 +174,13 @@ def _project_build_scaffold(core_path: str | None = None,
         if node is None:
             return {"success": False, "error": f"core node not found: {core_path}"}
         declaration = None
-        if components is not None:
+        if components is not None or design_params is not None:
             from edini.project.state import load_declaration
             declaration = load_declaration(node)
-            declaration["components"] = components
+            if components is not None:
+                declaration["components"] = components
+            if design_params is not None:
+                declaration["design_params"] = design_params
         return build_project_scaffold(node, declaration=declaration)
     except Exception as e:
         import traceback
@@ -193,6 +198,33 @@ def _project_promote_params(core_path: str | None = None, **_) -> dict[str, Any]
         if node is None:
             return {"success": False, "error": f"core node not found: {core_path}"}
         return promote_params(node)
+    except Exception as e:
+        import traceback
+        return {"success": False, "error": str(e),
+                "traceback": traceback.format_exc()}
+
+
+def _project_add_anchors(core_path: str | None = None,
+                         component_id: str | None = None,
+                         anchors: list | None = None, **_) -> dict[str, Any]:
+    """Procedurally generate anchor points from a component's geometry.
+
+    Each anchor is a measurement spec resolved into a LIVE VEX wrangle (reads
+    the component geometry's bbox on every cook), so anchors recompute when the
+    geometry changes. Replaces hardcoded addpoint coordinates.
+    """
+    if not core_path:
+        return {"success": False, "error": "'core_path' is required"}
+    if not component_id:
+        return {"success": False, "error": "'component_id' is required"}
+    if not anchors:
+        return {"success": False, "error": "'anchors' (list of {measure,name,...}) is required"}
+    try:
+        import hou
+        node = hou.node(core_path)
+        if node is None:
+            return {"success": False, "error": f"core node not found: {core_path}"}
+        return add_anchors(node, component_id, anchors)
     except Exception as e:
         import traceback
         return {"success": False, "error": str(e),
@@ -373,6 +405,7 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     "project_create": lambda **kw: _project_create(**kw),
     "project_build_scaffold": lambda **kw: _project_build_scaffold(**kw),
     "project_promote_params": lambda **kw: _project_promote_params(**kw),
+    "project_add_anchors": lambda **kw: _project_add_anchors(**kw),
 }
 
 # Backward-compatibility tool aliases (pre-Task-7 rename).

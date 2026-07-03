@@ -52,54 +52,85 @@ project_create(name="project_table", goal="a small table")
 Always call this FIRST. It creates the edini::project SOP HDA you build inside.
 Remember the returned `core_path` — every later step needs it.
 
-### 2. Declare components + build scaffold — `project_build_scaffold`
-Pass `core_path` (from step 1) and `components` (the decomposition). Each
-component has an `id` (= its future subnet name), a `purpose`, output ports,
-and optional input ports (what upstream anchors it consumes).
+### 2. Declare components + design params + build scaffold — `project_build_scaffold`
+Pass `core_path`, `components` (the decomposition), and `design_params` (the
+adjustable parameters). The **core is the single source of truth for params** —
+each design_param becomes a core-level parm with default/min/max; component
+subnets reference them via `ch("../<name>")` after promote.
 
 ```
-project_build_scaffold(core_path="/obj/project_table/project_core", components=[
-  { "id": "tabletop", "purpose": "桌面，输出四条腿的安装锚点",
-    "ports": { "out": [
-        { "index": 0, "kind": "geometry", "description": "桌面几何" },
-        { "index": 1, "kind": "anchors", "points": [
-            { "name": "leg_mount_fr", "role": "mount", "description": "前右桌腿点" },
-            { "name": "leg_mount_fl", "role": "mount", "description": "前左桌腿点" },
-            { "name": "leg_mount_br", "role": "mount", "description": "后右桌腿点" },
-            { "name": "leg_mount_bl", "role": "mount", "description": "后左桌腿点" } ] } ] } },
-  { "id": "legs", "purpose": "四条桌腿，消费桌面锚点定位",
-    "ports": { "out": [ { "index": 0, "kind": "geometry" } ],
-                "in": [
-                  { "from": "tabletop", "port": 1, "anchor": "leg_mount_fr" },
-                  { "from": "tabletop", "port": 1, "anchor": "leg_mount_fl" },
-                  { "from": "tabletop", "port": 1, "anchor": "leg_mount_br" },
-                  { "from": "tabletop", "port": 1, "anchor": "leg_mount_bl" } ] } }
-])
+project_build_scaffold(core_path="/obj/project_table/project_core",
+  design_params=[
+    { "name": "length", "default": 2.0, "min": 0.5, "max": 10, "label": "桌长" },
+    { "name": "width",  "default": 1.0, "min": 0.3, "max": 5,  "label": "桌宽" },
+    { "name": "leg_height", "default": 0.75, "min": 0.2, "max": 3, "components": ["legs"] }
+  ],
+  components=[
+    { "id": "tabletop", "purpose": "桌面，输出四条腿的安装锚点",
+      "ports": { "out": [
+          { "index": 0, "kind": "geometry", "description": "桌面几何" },
+          { "index": 1, "kind": "anchors", "points": [
+              { "name": "leg_mount_fr", "role": "mount" },
+              { "name": "leg_mount_fl", "role": "mount" },
+              { "name": "leg_mount_br", "role": "mount" },
+              { "name": "leg_mount_bl", "role": "mount" } ] } ] } },
+    { "id": "legs", "purpose": "四条桌腿，消费桌面锚点定位",
+      "ports": { "out": [ { "index": 0, "kind": "geometry" } ],
+                  "in": [
+                    { "from": "tabletop", "port": 1, "anchor": "leg_mount_fr" },
+                    { "from": "tabletop", "port": 1, "anchor": "leg_mount_fl" },
+                    { "from": "tabletop", "port": 1, "anchor": "leg_mount_br" },
+                    { "from": "tabletop", "port": 1, "anchor": "leg_mount_bl" } ] } }
+  ])
 ```
 The builder creates, **deterministically and idempotently**:
 - One subnet per component (`tabletop/`, `legs/`) — **id = subnet name**
 - Inside each: `out_geometry` + `out_anchors` (nulls) → `output_0`/`output_1`
-  (output nodes forming the subnet's 2 output ports)
-- For each `ports.in[]` entry: an external wire (`legs` input ← `tabletop`
-  output 1) + an internal named null `in_<from>_<anchor>`
-  (e.g. `in_tabletop_leg_mount_fr`) so you can grab the upstream anchor without
-  knowing Houdini's indirectInputs mechanism.
+- For each `ports.in[]`: external wire + internal `in_<from>_<anchor>` null
+- **Core-level design_params** (with default/min/max) under a "Design" folder —
+  these are the source of truth; subnets get references after promote
+- A core `OUT` (merge of all component geometry) with display flag
 
 The builder does NOT build geometry — that's your job, freely, inside each subnet.
 
-### 3. Model inside each component subnet — standard node tools
-Use `houdini_create_node`, `houdini_connect_nodes`, `houdini_set_param` inside
-each component's subnet path (e.g. `/obj/project_table/project_core/tabletop`).
-Key points specific to this paradigm:
+### 3. Promote params (wire subnets to core) — `project_promote_params`
+After scaffold, run promote so each component subnet that uses a design_param
+gets a reference parm (`ch("../<name>")` pointing at the core). Do this BEFORE
+modeling, so your in-subnet nodes can `ch("../<name>")` and have it resolve.
+```
+project_promote_params(core_path="/obj/project_table/project_core")
+# now tabletop.length = ch("../length"), legs.leg_height = ch("../leg_height")
+```
 
-**Emitting anchors** (in the upstream component, e.g. tabletop):
+### 4. Model inside each component subnet — standard node tools
+Use `houdini_create_node`, `houdini_connect_nodes`, `houdini_set_param`. Inside
+a subnet, reference the component's (promoted) params with `ch("../<name>")`.
+
+**Build the main geometry** (e.g. tabletop box, driven by core params):
 ```
-# an attribwrangle that adds points at the table corners, tagged with @name
-houdini_create_node(node_type="attribwrangle", parent_path="<tabletop subnet>")
-houdini_set_param(node_path, "snippet", '<VEX: addpoint(0, set(x,y,z)); setpointattrib(0,"name",0,"leg_mount_fr","set");>')
-houdini_set_param(node_path, "class", "detail")   # MUST be detail for addpoint
-houdini_connect_nodes(from_path=wrangle_path, to_path="<tabletop>/out_anchors")
+houdini_create_node(node_type="box", parent_path="<tabletop subnet>")
+houdini_set_param(node_path, "sizex", 'ch("../length")')   # LIVE ref to core param
+houdini_set_param(node_path, "sizez", 'ch("../width")')
+houdini_set_param(node_path, "sizey", 0.05)
+houdini_connect_nodes(from_path=box_path, to_path="<tabletop>/out_geometry")
 ```
+
+**Emit anchors PROCEDURALLY** (NOT hardcoded!) — `project_add_anchors`:
+```
+# Anchors must be DERIVED FROM GEOMETRY (so they move when params change),
+# never hardcoded addpoint coordinates. project_add_anchors generates a live
+# VEX wrangle that measures the component's bbox on every cook.
+project_add_anchors(core_path="<core>", component_id="tabletop", anchors=[
+    { "measure": "bbox_corner", "axes": "+X-Y+Z", "name": "leg_mount_fr" },
+    { "measure": "bbox_corner", "axes": "-X-Y+Z", "name": "leg_mount_fl" },
+    { "measure": "bbox_corner", "axes": "+X-Y-Z", "name": "leg_mount_br" },
+    { "measure": "bbox_corner", "axes": "-X-Y-Z", "name": "leg_mount_bl" }
+])
+# Now resizing the tabletop (change core 'length') → bbox changes → anchors recompute.
+```
+Available measures: `bbox_corner` (needs `axes` like "+X-Y+Z"), `bbox_face_center`
+(needs `face` like "-Y"), `bbox_center`, `grid_on_face` (needs `face`,`rows`,`cols`),
+`point_on_edge`, `array`. Each emits point(s) tagged with `@name`.
 
 **Consuming anchors** (in the downstream component, e.g. legs):
 ```
@@ -121,20 +152,18 @@ houdini_connect_nodes(from_path="<tabletop>", to_path="<something>", input_index
 # output_index=1 = tabletop's anchor cloud (out[1]); 0 = its main geometry
 ```
 
-### 4. Promote parameters to the top — `project_promote_params`
-After modeling, lift each component's spare parms to the core HDA interface so
-the whole model is adjustable from one place:
-```
-project_promote_params(core_path="/obj/project_table/project_core")
-# → core gets tabletop_length, legs_leg_height, etc., each driving its subnet live
-```
+## Parameter LIVE references (core is the source)
 
-## Parameter LIVE references (two layers, both relative)
+The core HDA owns the parameter values (default/min/max, defined via
+`design_params` in build_scaffold). Component subnets REFERENCE them. After
+`project_promote_params`, each using subnet has a parm with expression
+`ch("../<name>")` pointing at the core. So inside a subnet, your nodes use
+`ch("../<name>")` to read the core-driven value.
 
-| Where you are | Reference direction | Example |
+| Where you are | What you reference | Example |
 |---|---|---|
-| A node INSIDE a component subnet → its own subnet's parm | `../<parm>` | a box in `tabletop/` uses `ch("../length")` |
-| The core HDA → a component subnet's parm | `./<component>/<parm>` | core's `tabletop_length` = `ch("./tabletop/length")` (promote builds this) |
+| A node INSIDE a component subnet | the subnet's promoted parm (= core's) | a box in `tabletop/` uses `ch("../length")` |
+| The core HDA (user adjusts here) | the core's own parm (source) | user sets `length` on the core → all subnets follow |
 
 `houdini_set_param` accepts expression strings containing `ch(...)` and routes
 them to `setExpression` automatically — so LIVE params work through the tool.
@@ -167,10 +196,10 @@ understandable, editable, and (later) drift-detectable.
 
 | Mistake | Fix |
 |---|---|
-| `addpoint` in wrangle produces 0 points | `class` parm must be `detail`, not `points` |
-| Box can't read `length` | inside a subnet, reference the subnet's parm with `ch("../length")` (parent), not `ch("./length")` |
+| **Anchors don't move when you resize the component** | You hardcoded `addpoint(x,y,z)`. Use `project_add_anchors` so anchors are measured from geometry and recompute live. NEVER hardcode anchor coordinates. |
+| Box can't read a param | inside a subnet, reference the core's param via the subnet's promoted parm: `ch("../length")`. Run `project_promote_params` first so the subnet parm exists. |
 | connect_nodes can't reach the anchor cloud | pass `output_index=1` (default 0 = main geometry) |
-| promote didn't lift a parm | the parm must be a spare parm ON the component subnet first, then run promote |
+| Param has no min/max on the core | define it via `design_params` in build_scaffold (`{name,default,min,max}`), not by adding a bare spare parm. |
 | Built geometry but nothing shows at core OUT | your geometry must feed into `out_geometry` → `output_0` → core's OUT merge |
 
 ## What this supports (and what's coming)

@@ -18,11 +18,15 @@ from __future__ import annotations
 
 import hou  # real hou at runtime
 
-from edini.project.state import load_declaration, save_declaration, append_log
+from edini.project.state import (
+    load_declaration, save_declaration, append_log,
+    get_design_params_for_component,
+)
 from edini.project.ports import (
     OUT_GEOMETRY_NODE, OUT_ANCHORS_NODE, OUTPUT_0_NODE, OUTPUT_1_NODE,
     validate_component_ports,
 )
+from edini.vex_strategies import build_mount_vex, VexStrategyError
 
 
 def build_project_scaffold(core_node: "hou.Node",
@@ -67,6 +71,11 @@ def build_project_scaffold(core_node: "hou.Node",
     # 不会在 core/viewport 显示（spec §3.1 画的 OUT 之前缺失，导致 agent 放弃
     # 新流程退回 sandbox）。幂等：重建只补缺失，不重复。
     _ensure_core_output(core_node, [c["id"] for c in components])
+
+    # 第四遍：core 层 design_params —— 在 core HDA 顶层安装声明里的设计参数
+    # （带 default/min/max）。core 是参数的单一真相源（spec §6 / 参数方向反转）；
+    # 组件 subnet 在 promote 后用 ch("../<name>") 引用它们。幂等：已存在的跳过。
+    _ensure_core_design_params(core_node, decl)
 
     # 记日志（成功）。
     decl = load_declaration(core_node)
@@ -157,6 +166,35 @@ def _ensure_node(parent: "hou.Node", node_type: str,
     return parent.createNode(node_type, node_name=node_name)
 
 
+def _ensure_core_design_params(core_node: "hou.Node", decl: dict) -> None:
+    """在 core HDA 顶层安装声明里的 design_params（带 default/min/max）。
+
+    core 是参数的单一真相源。每个 design_param 成为一个 core spare parm
+    （放 "Design" folder），带具体的 default/min/max 值（不是表达式）。
+    组件 subnet 在 promote 时用 ch("../<name>") 引用它们。
+
+    幂等：已存在的 parm 跳过（不覆盖用户调整过的值）。
+    """
+    for p in decl.get("design_params", []):
+        name = p["name"]
+        if core_node.parm(name) is not None:
+            continue  # 已存在，不覆盖用户改过的值
+        default = p.get("default", 0.0)
+        pmin = p.get("min")
+        pmax = p.get("max")
+        # FloatParmTemplate kwargs: min/max are the slider range; use the
+        # declared range if given, else a sensible default around the value.
+        rmin = float(pmin) if pmin is not None else 0.0
+        rmax = float(pmax) if pmax is not None else max(10.0, float(default) * 2)
+        tmpl = hou.FloatParmTemplate(
+            name, p.get("label", name), 1,
+            default_value=([float(default)]),
+            min=rmin, max=rmax,
+        )
+        core_node.addSpareParmTuple(tmpl, in_folder=("Design",),
+                                    create_missing_folders=True)
+
+
 def _ensure_core_output(core_node: "hou.Node", component_ids: list[str]) -> None:
     """确保 core 有一个 OUT 收集所有组件的主几何（subnet output 0）。
 
@@ -192,20 +230,17 @@ def _ensure_core_output(core_node: "hou.Node", component_ids: list[str]) -> None
 
 
 def promote_params(core_node: "hou.Node") -> dict:
-    """把所有组件 subnet 的 spare parm 提取到 core HDA 顶层。
+    """把 core 的 design_params 接到引用它们的组件 subnet（core 为源）。
 
-    对 core 下每个组件 subnet（./chassis, ./wheels, ...）：
-      读它的 spareParms() → 每个 hou.Parm <name>：
-        在 core 建 parm "<component>_<name>"（放 "<component>" folder）
-        设其表达式 ch("./<component>/<name>")
-    结果：用户在 core 顶层调 chassis_length → 驱动 chassis subnet → 几何 live。
+    方向（反转后的新范式）：core 顶层 parm 是单一真相源（带 default/min/max，
+    由 build_scaffold 的 _ensure_core_design_params 安装）。本函数对每个
+    design_param，在引用它的组件 subnet 上建一个同名 spare parm，表达式
+    ch("../<name>") 引用 core。这样组件内部节点用 ch("./<name>") 或
+    ch("<name>") 就拿到 core 驱动的值。用户改 core → 所有 subnet 跟变 →
+    几何 + 程序化锚点 live 重算。
 
-    幂等：已存在的 core parm 只更新表达式，不重复建。
+    幂等：已存在的 subnet parm 只更新表达式，不重复建。
     返回 {success, promoted: [{component, parm}], project}。
-
-    真机 API（H21 hython 验证，Task 5）：节点上没有 spareParmGroup()/
-    setSpareParmGroup()（handoff bug#1 假设错误）。读用 spareParms()，
-    写用 addSpareParmFolder()/addSpareParmTuple()。
     """
     decl = load_declaration(core_node)
     promoted = []
@@ -215,58 +250,136 @@ def promote_params(core_node: "hou.Node") -> dict:
         subnet = core_node.node(cid)
         if subnet is None:
             continue
-        # 读组件 subnet 的 spare parm 列表（真机 API：spareParms()）。
-        try:
-            spare_parms = subnet.spareParms()
-        except Exception:
-            continue
-        for sparmparm in spare_parms:
-            pname = _parm_name(sparmparm)
-            if pname is None:
+        # 这个组件引用哪些 design_param（components=None 表示全部组件）。
+        for p in get_design_params_for_component(decl, cid):
+            pname = p["name"]
+            # core 必须已有这个 parm（build_scaffold 建的）；没有则跳过。
+            if core_node.parm(pname) is None:
                 continue
-            core_parm_name = f"{cid}_{pname}"
-            _install_core_parm(core_node, cid, pname, core_parm_name)
-            promoted.append({"component": cid, "parm": core_parm_name})
+            _install_subnet_parm_ref(subnet, pname)
+            promoted.append({"component": cid, "parm": pname})
 
     append_log(decl, kind="promote",
-               summary=f"promoted {len(promoted)} parm(s)",
+               summary=f"promoted {len(promoted)} parm ref(s)",
                payload={"promoted": promoted}, result_ok=True)
     save_declaration(core_node, decl)
     return {"success": True, "promoted": promoted,
             "project": core_node.path()}
 
 
-def _parm_name(sparmparm) -> str | None:
-    """从 spare parm 取 parm 名。
+def _install_subnet_parm_ref(subnet: "hou.Node", parm_name: str) -> None:
+    """在组件 subnet 上建/更新一个 spare parm，表达式引用 core 的同名 parm。
 
-    真机 spareParms() 返回 list[hou.Parm]，每个有 .name()。
+    subnet 内部节点用 ch("./<parm_name>") 或 ch("<parm_name>") 取值。
+    幂等：已存在则只更新表达式。
     """
-    try:
-        return sparmparm.name()
-    except Exception:
-        return None
-
-
-def _install_core_parm(core_node: "hou.Node", component_id: str,
-                       subnet_parm: str, core_parm: str) -> None:
-    """在 core HDA 安装一个 parm，表达式引用组件 subnet 的同名 parm。
-
-    真机 API（H21 验证）：用 addSpareParmFolder() 建 folder +
-    addSpareParmTuple(template, in_folder=(folder,), create_missing_folders=True)
-    把 Float parm 放进该 folder。表达式设为相对 channel 引用。
-    幂等：已存在则只更新表达式（不再重复建 folder/parm）。
-    """
-    # 幂等：已存在的 core parm 只更新表达式。
-    existing = core_node.parm(core_parm)
+    existing = subnet.parm(parm_name)
     if existing is not None:
-        existing.setExpression(f'ch("./{component_id}/{subnet_parm}")')
+        existing.setExpression(f'ch("../{parm_name}")')
         return
-    # 建 Float parm template（最常见类型）。
-    tmpl = hou.FloatParmTemplate(core_parm, core_parm, 1)
-    # create_missing_folders=True：folder 不存在则自动建，幂等友好。
-    core_node.addSpareParmTuple(tmpl, in_folder=(component_id,),
-                                create_missing_folders=True)
-    # 建完后设表达式。
-    p = core_node.parm(core_parm)
+    tmpl = hou.FloatParmTemplate(parm_name, parm_name, 1)
+    subnet.addSpareParmTuple(tmpl, in_folder=("Design",),
+                             create_missing_folders=True)
+    p = subnet.parm(parm_name)
     if p is not None:
-        p.setExpression(f'ch("./{component_id}/{subnet_parm}")')
+        p.setExpression(f'ch("../{parm_name}")')
+
+
+def add_anchors(core_node: "hou.Node", component_id: str,
+                anchors: list[dict],
+                upstream_node_name: str = OUT_GEOMETRY_NODE) -> dict:
+    """Procedurally generate anchor points from a component's geometry.
+
+    Replaces hardcoded addpoint coordinates: each anchor is a measurement spec
+    (e.g. {"measure":"bbox_corner","axes":"+X-Y+Z","name":"leg_mount_fr"})
+    resolved into a LIVE VEX wrangle (via vex_strategies.build_mount_vex) that
+    reads the upstream geometry's bbox on every cook. Change the geometry (via a
+    core design param) → the bbox changes → the anchor re-computes automatically.
+
+    For each anchor, creates an attribwrangle inside the component subnet:
+      - input 0 = the upstream node (default out_geometry, i.e. the component's
+        main geometry — so anchors derive from the actual built shape)
+      - runs the measurement VEX (emits the measured point(s))
+      - tags the emitted point(s) with @name = the anchor's name
+    All anchor wrangles are merged into out_anchors (the component's anchor port).
+
+    Args:
+        core_node: the edini::project SOP HDA instance.
+        component_id: which component subnet emits these anchors.
+        anchors: list of {measure, name, ...measure-params}. `measure` selects
+            the strategy (bbox_corner/bbox_face_center/grid_on_face/...); `name`
+            is the @name tag (the anchor's identity for downstream consumption).
+        upstream_node_name: name of the node inside the subnet whose cooked
+            geometry is measured (default "out_geometry").
+
+    Returns {success, anchors_built, project}. Idempotent: re-running replaces
+    the anchor wrangles (named anchor_<name>) so changes to the spec take effect.
+    """
+    subnet = core_node.node(component_id)
+    if subnet is None:
+        return {"success": False,
+                "error": f"component subnet not found: {component_id}"}
+    upstream = subnet.node(upstream_node_name)
+    if upstream is None:
+        return {"success": False,
+                "error": f"upstream node '{upstream_node_name}' not found in {component_id}"}
+
+    built = []
+    anchor_wrangles = []
+    for spec in anchors:
+        name = spec.get("name")
+        if not name:
+            return {"success": False, "error": f"anchor missing 'name': {spec}"}
+        # Build the measurement VEX from the spec (minus our 'name' key).
+        vex_spec = {k: v for k, v in spec.items() if k != "name"}
+        try:
+            snippet, parms = build_mount_vex(vex_spec)
+        except VexStrategyError as e:
+            return {"success": False,
+                    "error": f"anchor {name!r}: {e}"}
+        # Create/replace the anchor wrangle (named anchor_<name>).
+        wr_name = f"anchor_{name}"
+        existing = subnet.node(wr_name)
+        if existing is not None:
+            existing.destroy()
+        wr = subnet.createNode("attribwrangle", wr_name)
+        wr.parm("snippet").set(snippet + f'\nsetpointattrib(0, "name", __newpts[0], "{name}", "set");')
+        wr.parm("class").set("detail")
+        wr.setInput(0, upstream)
+        # Install the measurement parms (cx/cy/cz etc.) as concrete values.
+        # These are NOT default attribwrangle parms — they must be added as
+        # spare parms (the VEX reads them via chi("cx") etc.).
+        for pname, pval in parms.items():
+            p = wr.parm(pname)
+            if p is None:
+                tmpl = hou.IntParmTemplate(pname, pname, 1)
+                wr.addSpareParmTuple(tmpl)
+                p = wr.parm(pname)
+            if p is not None:
+                p.set(int(pval))
+        anchor_wrangles.append(wr)
+        built.append(name)
+
+    # Merge all anchor wrangles into out_anchors (the component's anchor port).
+    out_anc = subnet.node(OUT_ANCHORS_NODE)
+    if out_anc is not None:
+        if len(anchor_wrangles) == 1:
+            out_anc.setInput(0, anchor_wrangles[0])
+        else:
+            merge = subnet.node("anchor_merge")
+            if merge is None:
+                merge = subnet.createNode("merge", "anchor_merge")
+            for i, wr in enumerate(anchor_wrangles):
+                merge.setInput(i, wr)
+            out_anc.setInput(0, merge)
+    subnet.layoutChildren()
+
+    # Log it.
+    decl = load_declaration(core_node)
+    append_log(decl, kind="anchors",
+               summary=f"added {len(built)} anchor(s) to {component_id}",
+               payload={"component": component_id, "anchors": built},
+               result_ok=True)
+    save_declaration(core_node, decl)
+    return {"success": True, "anchors_built": built,
+            "project": core_node.path()}
