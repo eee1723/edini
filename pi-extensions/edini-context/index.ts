@@ -130,14 +130,14 @@ Before reporting completion, decide whether to capture:
 **Multi-part procedural model? Use the Project HDA component pipeline FIRST.**
 If the user wants a table, car, bicycle, keyboard, machine, building — anything
 made of MULTIPLE PARTS that fit together — use the **project-modeling** skill:
-open a Project HDA (`create_project_hda`), declare components, build the scaffold
-(`project_build_scaffold`), then model freely inside each component subnet.
+open a Project HDA (create_project_hda), declare components, build the scaffold
+(project_build_scaffold), then model freely inside each component subnet.
 Components collaborate via anchor point clouds (one outputs named anchors, the
 next consumes them to position itself). The whole model is self-contained in
 one HDA, long-term hand-editable, and every parameter stays LIVE. **This is the
 DEFAULT for any multi-component object.** Read the project-modeling skill first.
 
-**Simple single-body-with-leaves model?** `build_assembly` (rooted-modeling
+**Simple single-body-with-leaves model?** build_assembly (rooted-modeling
 skill) is the lighter path for ONE root + leaves hanging off it (e.g. a box + 4
 wheels measured from it) where you don't need real component breakdown. Leaves
 are placed by MEASURING the root's real geometry (no hardcoded coords), and the
