@@ -62,6 +62,12 @@ def build_project_scaffold(core_node: "hou.Node",
             continue
         _ensure_input_scaffold(core_node, comp, subnet)
 
+    # 第三遍：core 层输出收集——把每个组件的主几何（subnet output 0）merge 到
+    # 一个 OUT null，并设 display flag。没有这个，组件内部建模再正确，几何也
+    # 不会在 core/viewport 显示（spec §3.1 画的 OUT 之前缺失，导致 agent 放弃
+    # 新流程退回 sandbox）。幂等：重建只补缺失，不重复。
+    _ensure_core_output(core_node, [c["id"] for c in components])
+
     # 记日志（成功）。
     decl = load_declaration(core_node)
     append_log(decl, kind="scaffold",
@@ -149,6 +155,40 @@ def _ensure_node(parent: "hou.Node", node_type: str,
     if existing is not None:
         return existing
     return parent.createNode(node_type, node_name=node_name)
+
+
+def _ensure_core_output(core_node: "hou.Node", component_ids: list[str]) -> None:
+    """确保 core 有一个 OUT 收集所有组件的主几何（subnet output 0）。
+
+    结构：每个组件 subnet 的 output 0 → merge_all（若 >1 个组件）→ OUT（null,
+    display flag）。单组件则 subnet → OUT 直连。这是 core 层的显示收集——没有
+    它，组件内部建模再正确，几何也不会在 core/viewport 显示。
+
+    幂等：OUT/merge 已存在则跳过创建；连线每次确保（setInput 幂等）。组件
+    subnet 由前序步骤保证存在。
+    """
+    if not component_ids:
+        return
+    # 收集存在的组件 subnet。
+    subnets = [core_node.node(cid) for cid in component_ids
+               if core_node.node(cid) is not None]
+    if not subnets:
+        return
+
+    out = _ensure_node(core_node, "null", "OUT")
+    if len(subnets) == 1:
+        # 单组件：直连 subnet output 0 → OUT。
+        out.setInput(0, subnets[0], 0)
+    else:
+        # 多组件：merge_all 收集所有 subnet output 0 → OUT。
+        merge = _ensure_node(core_node, "merge", "merge_all")
+        for i, sub in enumerate(subnets):
+            merge.setInput(i, sub, 0)
+        out.setInput(0, merge)
+    # OUT 是 core 的显示输出。
+    out.setDisplayFlag(True)
+    out.setRenderFlag(True)
+    core_node.layoutChildren()
 
 
 def promote_params(core_node: "hou.Node") -> dict:
