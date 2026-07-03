@@ -1,6 +1,6 @@
 # 🚀 开发进度
 
-> 最后更新：2026-07-02 &nbsp;|&nbsp; **🟢 Project HDA 接入 rooted 建模能力 — 从"能聊天"到"能干活"的根本跨越**。一个程序化建模项目 = 一个 Project HDA（**SOP 上下文**：geo 外壳 + 内部 SOP HDA core 承载几何 + 富化声明 JSON 存隐藏 parm + 嵌入面板 + 日志）。agent 调 `project_build_model` → rooted assembly 声明 → `build_assembly` → **几何直接建在 HDA core 内部**（零 /obj temp 污染）。**真机铁证**：car assembly → OUT 1152 点（底盘 + 4 轮子），**LIVE**：length 4→8 → wheel 点 x 从 +2 移到 +4（轴距 live 跟随 root bbox，零烤值），重建幂等。最小闭环（建 HDA + 开面板 + 中英对话）也已 GUI 真机验证通过。HDA 定义层解锁（天生可编辑，无需运行时 hack）。**下一步候选**：GUI 端到端真实验证（对话让 agent 建模）/ drift 检测 / 计划树 UI。详见 [交接](handoff.md) + [spec](../../docs/superpowers/specs/2026-07-01-project-hda-design.md)。
+> 最后更新：2026-07-03 &nbsp;|&nbsp; **🟢 Project HDA 组件流水线成熟 — 锚点程序化 + 参数自底向上 + HDA 按钮弹窗**。Project HDA 已从"最小闭环"演进为**组件流水线建模范式**（subnet 组件 + 端口信息点协议 + 程序化锚点 + 自底向上参数管理）。三大 UX 改进：① **工作区感知**（project_create 复用选中 HDA）；② **参数自底向上**（subnet 建→promote 按分组提到 core 带 min/max，core 驱动 subnet）；③ **HDA 参数面板 💬 Chat 按钮 → 精简对话弹窗**（取代原生 Python Pane 主入口，工作区统一在 HDA）。锚点不再硬编码（复用 vex_strategies 测量，改参数 live 重算）。**真机铁证**：promote 分组+min/max+live；HDA button+PythonModule 注入；锚点 length 2→4 ±1→±2。详见 [交接](handoff.md) + [组件地基指南](project-component-foundation.md)。
 >
 > 上一轮（rooted-modeling）：M2.6+M2.7 — 真机测试驱动的三大修复（leaf 参数全 live + 视觉自检 + shape 链细节），607 测试 + 26 真机 hython 铁证全绿。Project HDA 是在其上的**容器化 + 协作化升级**，不是取代——rooted 的 build_assembly/测量链是 Project HDA 将来"按需接入"的建模能力。
 
