@@ -1,0 +1,87 @@
+"""BaseChatDriver — wires ChatRuntime signals to ChatWindowShell components.
+
+Plain QObject (NOT a QWidget base class). Holds runtime + shell. Common chat
+behavior lives here; subclasses override hooks for scope-specific concerns
+(left panel, scene data, session switching).
+"""
+from PySide6 import QtCore, QtWidgets
+from edini.ui.components.bubbles import AiBubble, UserBubble
+
+
+class BaseChatDriver(QtCore.QObject):
+    """Connects a ChatRuntime to a ChatWindowShell's components.
+
+    Handles: stream_chunk → AiBubble (append_chunk + finalize),
+             thinking_chunk → ThinkingPanel, tool_call/result → ToolPanel,
+             stats/status → ContextPanel, send → UserBubble + rpc.send_prompt.
+    """
+
+    def __init__(self, runtime, shell):
+        super().__init__(shell)
+        self._runtime = runtime
+        self._shell = shell
+        self._current_ai = None
+        self._bind_runtime()
+        self._bind_input()
+
+    def _bind_runtime(self):
+        r, s = self._runtime, self._shell
+        r.stream_chunk.connect(self._on_stream_chunk)
+        r.thinking_chunk.connect(s.thinking_panel.append)
+        r.tool_started.connect(self._on_tool_started)
+        r.tool_completed.connect(self._on_tool_completed)
+        r.completed.connect(self._on_turn_done)
+        r.stats_updated.connect(s.context_panel.set_usage)
+        r.status_changed.connect(s.context_panel.set_pi_status)
+        r.started.connect(self._on_started)
+        r.failed.connect(self._on_failed)
+
+    def _bind_input(self):
+        self._shell.input_bar.submit_requested.connect(self.send)
+
+    # ── Stream handling ──
+    def _on_stream_chunk(self, chunk: str):
+        if self._current_ai is None and chunk.strip():
+            self._current_ai = AiBubble()
+            self._shell.timeline.add_widget(self._current_ai)
+        if self._current_ai is not None:
+            self._current_ai.append_chunk(chunk)
+
+    def _on_turn_done(self, _payload=None):
+        if self._current_ai is not None:
+            self._current_ai.finalize()
+            self._current_ai = None
+
+    # ── Tool handling ──
+    def _on_tool_started(self, tool_name: str, tool_call_id: str, args: dict):
+        self._shell.tool_panel.add_card(tool_name, tool_call_id, args)
+
+    def _on_tool_completed(self, tool_name: str, tool_call_id: str, result: str):
+        self._shell.tool_panel.update_result(tool_call_id, result, True)
+
+    # ── Lifecycle ──
+    def _on_started(self, _payload=None):
+        self._shell.input_bar.set_busy(True)
+
+    def _on_failed(self, msg: str):
+        self._shell.input_bar.set_busy(False)
+
+    # ── Send ──
+    def send(self, text: str, images=None):
+        if not text or not text.strip():
+            return
+        self._shell.timeline.add_widget(UserBubble(text, images))
+        self._runtime.rpc.send_prompt(text, images=images)
+
+    # ── Hooks for subclasses (default no-op) ──
+    def build_left_panel(self) -> QtWidgets.QWidget:
+        """Override to provide the left panel (session list / version list)."""
+        return None
+
+    def collect_scene_info(self) -> dict:
+        """Override to provide scene data for ContextPanel."""
+        return {}
+
+    def on_session_changed(self, session_id: str):
+        """Override to handle session/version switching."""
+        pass

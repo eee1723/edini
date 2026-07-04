@@ -209,6 +209,10 @@ class _TimelineView(QtWidgets.QScrollArea):
                 item.widget().deleteLater()
         self._pinned_to_bottom = True
 
+    def clear(self):
+        """Alias for :meth:`clear_all` (remove all message widgets)."""
+        self.clear_all()
+
     def widget_count(self) -> int:
         """Number of message widgets (excluding spacer)."""
         return self._layout.count() - 1
