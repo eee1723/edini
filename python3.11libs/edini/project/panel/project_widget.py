@@ -9,66 +9,16 @@ from PySide6 import QtCore, QtWidgets
 # NOTE: Houdini 21 ships PySide6 (matches the rest of edini.ui). The Qt API used
 # here is identical to PySide2's.
 
-from edini.ui.theme import apply_theme, accent_color, fs
+from edini.ui.theme import apply_theme
 
 
-class _StreamBubble(QtWidgets.QFrame):
-    """Lightweight AI reply bubble for the Project panel.
-
-    Why this exists instead of reusing edini.ui._AiBubble: _AiBubble.update_streaming
-    runs a FULL mistune markdown parse + Qt rich-text word-wrap relayout over the
-    ENTIRE accumulated text on every chunk (O(n^2) over the stream), which freezes
-    the panel's input box during long replies (Houdini's Python Panel shares one
-    main thread with everything).
-
-    This bubble renders stream chunks as PLAIN TEXT (QLabel.setText on plain text
-    skips HTML parsing and the expensive word-wrap relayout chain) — microsecond
-    cost per chunk. Only on finalize() does it run ONE mistune pass for the final
-    markdown rendering. Visual result is identical to _AiBubble after finalize
-    (same _ai_bubble_style); during streaming it's plain text in the same frame.
-
-    Spec §6.2 said "reuse mistune rendering" — this defers markdown to finalize,
-    final display still uses mistune. Annotated as a performance trade-off.
-    """
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        # Match _AiBubble's frame look (bg + rounded) via stylesheet, so the
-        # bubble is visually distinct even during plain-text streaming.
-        from edini.ui.agent_panel import _ai_bubble_bg
-        self.setStyleSheet(
-            f"background:{_ai_bubble_bg()};border-radius:8px;"
-        )
-        lay = QtWidgets.QVBoxLayout(self)
-        lay.setContentsMargins(14, 8, 14, 8)
-        self._label = QtWidgets.QLabel()
-        self._label.setWordWrap(True)
-        self._label.setTextFormat(QtCore.Qt.PlainText)  # CRITICAL: no HTML parse
-        self._label.setStyleSheet(
-            f"color:#e5e5eb;font-size:{fs(12)};line-height:1.45;background:transparent;"
-        )
-        lay.addWidget(self._label)
-        self._raw_text = ""
-
-    def append_chunk(self, chunk: str) -> None:
-        """Accumulate a stream chunk and show plain text. Cheap (no markdown)."""
-        self._raw_text += chunk
-        self._label.setText(self._raw_text)
-
-    def get_raw_text(self) -> str:
-        return self._raw_text
-
-    def finalize(self) -> None:
-        """One-time full markdown render at stream end. Switches to rich text."""
-        from edini.ui.agent_panel import _format_full, _ai_bubble_style
-        try:
-            rendered = _format_full(self._raw_text)
-        except Exception:
-            # Fallback: show the plain text as-is (escaped) if mistune fails.
-            import html
-            rendered = html.escape(self._raw_text).replace("\n", "<br>")
-        self._label.setTextFormat(QtCore.Qt.RichText)
-        self._label.setText(f'<div style="{_ai_bubble_style()}">{rendered}</div>')
+# _StreamBubble was a Project-panel-only O(1) streaming bubble kept separate from
+# AiBubble because AiBubble.update_streaming was O(n^2) (full mistune parse + Qt
+# rich-text word-wrap relayout on every chunk). Task 1.6 merged that optimization
+# into AiBubble itself (append_chunk is now O(1) plain text; finalize does the one
+# markdown render). _StreamBubble is now just an alias for AiBubble so existing
+# imports in chat_dialog.py keep working — there is exactly ONE bubble class.
+from edini.ui.components.bubbles import AiBubble as _StreamBubble  # noqa: F401,E402
 
 
 # _InputDialog (the IME / CJK popout) moved to edini.ui.components.input_bar

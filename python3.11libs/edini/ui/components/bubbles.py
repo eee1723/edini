@@ -170,7 +170,17 @@ class UserBubble(QtWidgets.QFrame):
 
 
 class AiBubble(QtWidgets.QFrame):
-    """Left-aligned AI message bubble — fills available width with right margin."""
+    """Left-aligned AI message bubble with O(1) streaming + one-shot markdown finalize.
+
+    Streaming mode (default when constructed without rich_html): label is
+    ``PlainText`` so ``append_chunk`` is O(1) per chunk (no HTML parse, no
+    rich-text word-wrap relayout). Only ``finalize`` / ``set_stored_content``
+    switch to ``RichText`` and run one mistune pass.
+
+    This eliminates the O(n^2) streaming cost the original ``update_streaming``
+    had (full mistune parse + Qt rich-text relayout on every chunk) that froze
+    Houdini's main thread during long replies.
+    """
     def __init__(self, rich_html: str = "", parent=None):
         super().__init__(parent)
         layout = QtWidgets.QHBoxLayout(self)
@@ -179,7 +189,6 @@ class AiBubble(QtWidgets.QFrame):
 
         self._label = QtWidgets.QLabel()
         self._label.setWordWrap(True)
-        self._label.setTextFormat(QtCore.Qt.RichText)
         self._label.setOpenExternalLinks(False)
         self._label.setTextInteractionFlags(
             QtCore.Qt.TextSelectableByMouse
@@ -195,31 +204,66 @@ class AiBubble(QtWidgets.QFrame):
         layout.addWidget(self._label)
 
         self._raw_text = ""
+        self._streaming = True   # default: streaming mode (PlainText, O(1) append)
+
         if rich_html:
+            # Constructed with pre-rendered HTML → complete mode
+            self._streaming = False
+            self._label.setTextFormat(QtCore.Qt.RichText)
             wrapped = f'<div style="{_ai_bubble_style()}">{rich_html}</div>'
             self._label.setText(wrapped)
+        else:
+            # Streaming mode: plain text, no HTML parse
+            self._label.setTextFormat(QtCore.Qt.PlainText)
 
         self.setStyleSheet("QFrame { background: transparent; border: none; }")
 
+    def append_chunk(self, chunk: str) -> None:
+        """O(1) plain-text append during streaming. No markdown reparse."""
+        if not self._streaming:
+            # Re-enter streaming mode (rare; e.g. new turn reusing bubble)
+            self._streaming = True
+            self._label.setTextFormat(QtCore.Qt.PlainText)
+        self._raw_text += chunk
+        self._label.setText(self._raw_text)
+
     def update_streaming(self, full_text: str):
-        """Update with full accumulated text during streaming. Uses light formatter."""
+        """Legacy API: replace accumulated text.
+
+        During streaming, stays O(1) plain text (matches ``append_chunk``).
+        If called on an already-finalized bubble, preserves the legacy
+        rendered-output expectation by doing the lite render.
+        """
         self._raw_text = full_text
-        rendered = _format_lite(full_text)
-        wrapped = f'<div style="{_ai_bubble_style()}">{rendered}</div>'
-        self._label.setText(wrapped)
+        if self._streaming:
+            self._label.setText(full_text)
+        else:
+            # Legacy callers expected rendered output from update_streaming.
+            self._label.setTextFormat(QtCore.Qt.RichText)
+            rendered = _format_lite(full_text)
+            wrapped = f'<div style="{_ai_bubble_style()}">{rendered}</div>'
+            self._label.setText(wrapped)
 
     def get_raw_text(self) -> str:
         return self._raw_text
 
     def finalize(self):
-        """Called when streaming is complete. Applies full Markdown formatting."""
-        rendered = _format_full(self._raw_text)
+        """Stream complete: ONE markdown full render, switch to RichText."""
+        self._streaming = False
+        self._label.setTextFormat(QtCore.Qt.RichText)
+        try:
+            rendered = _format_full(self._raw_text)
+        except Exception:
+            # Fallback: show the plain text as-is (escaped) if mistune fails.
+            rendered = html.escape(self._raw_text).replace("\n", "<br>")
         wrapped = f'<div style="{_ai_bubble_style()}">{rendered}</div>'
         self._label.setText(wrapped)
 
     def set_stored_content(self, content: str):
-        """Set content from a stored message. Applies full Markdown formatting."""
+        """Set content from a stored message (already complete). Full markdown render."""
+        self._streaming = False
         self._raw_text = content
+        self._label.setTextFormat(QtCore.Qt.RichText)
         rendered = _format_full(content)
         wrapped = f'<div style="{_ai_bubble_style()}">{rendered}</div>'
         self._label.setText(wrapped)
