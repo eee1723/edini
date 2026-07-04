@@ -7,7 +7,7 @@ for pure string functions).
 import sys
 sys.path.insert(0, "python3.11libs")
 
-from edini.ui.agent_panel import _format_full, _format_lite
+from edini.ui.components.markdown import _format_full, _format_lite
 
 
 def test_format_full_renders_code_block():
