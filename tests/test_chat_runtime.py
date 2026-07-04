@@ -18,6 +18,9 @@ class _FakeRpc(QtCore.QObject):
     agent_finished = QtCore.Signal()
     error_occurred = QtCore.Signal(str)
     stats_updated = QtCore.Signal(object)
+    status_changed = QtCore.Signal(str)
+    models_received = QtCore.Signal(object)
+    session_switched = QtCore.Signal(str)
 
 
 def test_text_delta_becomes_stream_chunk():
@@ -54,3 +57,33 @@ def test_stats_passthrough():
     spy = SignalSpy(rt.stats_updated)
     rpc.stats_updated.emit({"tokens": {"total": 100}})
     assert spy.calls == [{"tokens": {"total": 100}}]
+
+
+def test_status_changed_passthrough():
+    rpc = _FakeRpc()
+    rt = ChatRuntime(rpc)
+    spy = SignalSpy(rt.status_changed)
+    rpc.status_changed.emit("connected")
+    assert spy.calls == ["connected"]
+
+
+def test_models_received_passthrough():
+    rpc = _FakeRpc()
+    rt = ChatRuntime(rpc)
+    spy = SignalSpy(rt.models_received)
+    rpc.models_received.emit({"models": ["a", "b"]})
+    assert spy.calls == [{"models": ["a", "b"]}]
+
+
+def test_session_switched_passthrough():
+    rpc = _FakeRpc()
+    rt = ChatRuntime(rpc)
+    spy = SignalSpy(rt.session_switched)
+    rpc.session_switched.emit("/obj/x::v2")
+    assert spy.calls == ["/obj/x::v2"]
+
+
+def test_rpc_property_exposes_underlying_client():
+    rpc = _FakeRpc()
+    rt = ChatRuntime(rpc)
+    assert rt.rpc is rpc

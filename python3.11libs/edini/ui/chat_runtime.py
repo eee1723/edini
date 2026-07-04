@@ -14,11 +14,20 @@ class ChatRuntime(QObject):
     tool_completed = Signal(str, str, str)
     stats_updated = Signal(dict)
     busy_changed = Signal(bool)
+    # NEW passthrough signals (Stage 3):
+    status_changed = Signal(str)
+    models_received = Signal(object)
+    session_switched = Signal(str)
 
     def __init__(self, rpc_client, parent=None):
         super().__init__(parent)
         self._rpc = rpc_client
         self._bind()
+
+    @property
+    def rpc(self):
+        """Expose the underlying RpcClient (drivers need send_prompt etc.)."""
+        return self._rpc
 
     def _bind(self):
         r = self._rpc
@@ -30,6 +39,10 @@ class ChatRuntime(QObject):
         r.agent_finished.connect(self._on_agent_finish)
         r.error_occurred.connect(self._on_error)
         r.stats_updated.connect(self._on_stats)
+        # NEW passthrough bindings:
+        r.status_changed.connect(self.status_changed)
+        r.models_received.connect(self.models_received)
+        r.session_switched.connect(self.session_switched)
 
     def _on_text_delta(self, text: str):
         self.stream_chunk.emit(text)
