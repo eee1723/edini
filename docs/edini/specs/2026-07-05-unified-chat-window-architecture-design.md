@@ -4,12 +4,13 @@
 - **日期:** 2026-07-05
 - **作者:** Edini Pipeline
 - **关联文件:**
-  - `python3.11libs/edini/ui/main_window.py`(`EdiniMainWindow`,1213 行)
+  - `python3.11libs/edini/main_window.py`(`EdiniMainWindow`,1213 行)
   - `python3.11libs/edini/ui/agent_panel.py`(`AgentPanel`,1951 行)
   - `python3.11libs/edini/ui/context_panel.py`(`ContextPanel`,265 行)
   - `python3.11libs/edini/ui/chat_runtime.py`(`ChatRuntime`,59 行)
   - `python3.11libs/edini/ui/theme.py`(4 主题色)
-  - `python3.11libs/edini/ui/history_panel.py`(`HistoryPanel`,177 行)
+  - `python3.11libs/edini/ui/pi_sessions.py`(Pi session 目录读写,`~/.pi/agent/sessions/`)
+  - `python3.11libs/edini/history_panel.py`(`HistoryPanel`,177 行,4 信号)
   - `python3.11libs/edini/project/panel/chat_dialog.py`(`ProjectChatDialog`,189 行)
   - `python3.11libs/edini/project/panel/project_widget.py`(`_StreamBubble` + `_InputDialog`,461 行)
 
