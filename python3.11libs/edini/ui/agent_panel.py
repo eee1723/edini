@@ -20,6 +20,8 @@ from edini.ui.components.bubbles import (
     _user_bubble_style, _ai_bubble_style,
     _ClickableCard, _load_thumb_pixmap, _truncate_name, _open_image_file,
 )
+from edini.ui.components.thinking_panel import ThinkingPanel
+from edini.ui.components.tool_panel import ToolPanel, _ToolCardWidget
 from edini import screenshots
 
 
@@ -52,100 +54,9 @@ def _separator_style() -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Tool Card Widget (unchanged)
+# Tool Card Widget — relocated to edini/ui/components/tool_panel.py.
+# Re-imported above as _ToolCardWidget. Stage 2, Task 1.4.
 # ═══════════════════════════════════════════════════════════════════════
-
-class _ToolCardWidget(QtWidgets.QFrame):
-    """A single collapsible tool call card. Added/updated in real-time."""
-
-    def __init__(self, tool_name: str, args: dict, tool_call_id: str, parent=None):
-        super().__init__(parent)
-        self._tool_call_id = tool_call_id
-        self._expanded = False
-
-        self.setFrameShape(QtWidgets.QFrame.StyledPanel)
-        self.setStyleSheet(f"""
-            _ToolCardWidget {{
-                background: rgba(0,188,212,0.03);
-                border: 1px solid #181830;
-                border-radius: 4px;
-            }}
-            _ToolCardWidget:hover {{
-                background: rgba(0,188,212,0.06);
-                border-color: #253545;
-            }}
-        """)
-        self.setCursor(QtCore.Qt.PointingHandCursor)
-
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(8, 2, 8, 2)
-        layout.setSpacing(1)
-
-        # Header row: icon + name + status
-        header_row = QtWidgets.QHBoxLayout()
-        header_row.setSpacing(2)
-        self._arrow = QtWidgets.QLabel("▸")
-        self._arrow.setStyleSheet(f"color:#80cbc4;font-size:{fs(11)};border:none;")
-        self._arrow.setFixedWidth(16)
-        header_row.addWidget(self._arrow)
-
-        self._name_label = QtWidgets.QLabel(f"🔧 {html.escape(tool_name)}")
-        self._name_label.setStyleSheet(f"color:#80cbc4;font-size:{fs(11)};font-weight:600;border:none;")
-        header_row.addWidget(self._name_label, 1)
-
-        self._status_label = QtWidgets.QLabel("⏳")
-        self._status_label.setStyleSheet(f"color:#d97706;font-size:{fs(10)};border:none;")
-        self._status_label.setFixedWidth(30)
-        self._status_label.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-        header_row.addWidget(self._status_label)
-
-        layout.addLayout(header_row)
-
-        # Detail area (hidden by default)
-        self._detail = QtWidgets.QWidget()
-        detail_layout = QtWidgets.QVBoxLayout(self._detail)
-        detail_layout.setContentsMargins(20, 2, 0, 2)
-        detail_layout.setSpacing(2)
-
-        args_str = _format_args(args)
-        self._args_label = QtWidgets.QLabel(args_str)
-        self._args_label.setWordWrap(True)
-        self._args_label.setStyleSheet(f"color:#78909c;font-size:{fs(10)};font-family:monospace;border:none;")
-        detail_layout.addWidget(self._args_label)
-
-        self._result_label = QtWidgets.QLabel("")
-        self._result_label.setWordWrap(True)
-        self._result_label.setStyleSheet(f"color:#94a3b8;font-size:{fs(10)};border:none;")
-        self._result_label.setVisible(False)
-        detail_layout.addWidget(self._result_label)
-
-        self._detail.setVisible(False)
-        layout.addWidget(self._detail)
-
-    def mousePressEvent(self, event):
-        self._expanded = not self._expanded
-        self._arrow.setText("▾" if self._expanded else "▸")
-        self._detail.setVisible(self._expanded)
-        super().mousePressEvent(event)
-
-    def set_result(self, result_text: str, success: bool = True):
-        self._status_label.setText("✅" if success else "❌")
-        self._status_label.setStyleSheet(
-            f"color:{'#16a34a' if success else '#ef4444'};font-size:{fs(10)};border:none;"
-        )
-        self._result_label.setText(_format_tool_result_short(result_text, success))
-        self._result_label.setVisible(True)
-
-    def set_error(self, error_msg: str):
-        self._status_label.setText("❌")
-        self._status_label.setStyleSheet(f"color:#ef4444;font-size:{fs(10)};border:none;")
-        self._result_label.setText(f"Error: {html.escape(error_msg)}")
-        self._result_label.setVisible(True)
-
-    @property
-    def tool_call_id(self) -> str:
-        return self._tool_call_id
-
 
 # ═══════════════════════════════════════════════════════════════════════
 # Timeline — QScrollArea + widget-based
@@ -232,14 +143,12 @@ class AgentPanel(QtWidgets.QWidget):
         # Thinking
         self._thinking_count = 0
         self._thinking_buf = ""
-        self._thinking_full = ""
         self._thinking_buf_timer = QtCore.QTimer(self)
         self._thinking_buf_timer.setSingleShot(True)
         self._thinking_buf_timer.setInterval(600)
         self._thinking_buf_timer.timeout.connect(self._flush_thinking_buf)
 
-        # Tool cards
-        self._tool_cards: dict[str, _ToolCardWidget] = {}
+        # Tool cards now owned by self._tool_panel (built in _build_ui).
 
         self._stream_flush_timer = QtCore.QTimer(self)
         self._stream_flush_timer.setSingleShot(True)
@@ -263,96 +172,13 @@ class AgentPanel(QtWidgets.QWidget):
         root.addWidget(self.timeline_view, 1)
 
         # ── Thinking Panel (collapsible, below timeline) ──
-        self._thinking_panel = QtWidgets.QFrame()
-        self._thinking_panel.setStyleSheet(f"""
-            QFrame {{
-                background: #0a0a12;
-                border-top: 1px solid #1c1c2a;
-            }}
-        """)
-        tp_layout = QtWidgets.QVBoxLayout(self._thinking_panel)
-        tp_layout.setContentsMargins(10, 3, 10, 4)
-        tp_layout.setSpacing(0)
-
-        think_header = QtWidgets.QHBoxLayout()
-        think_header.setContentsMargins(0, 0, 0, 0)
-        self._thinking_toggle = QtWidgets.QLabel("▸ Thinking (0)")
-        self._thinking_toggle.setCursor(QtCore.Qt.PointingHandCursor)
-        self._thinking_toggle.setStyleSheet(f"color:#4a4a5a;font-size:{fs(10)};border:none;padding:1px 0;")
-        self._thinking_toggle.mousePressEvent = self._toggle_thinking_panel
-        think_header.addWidget(self._thinking_toggle)
-        think_header.addStretch()
-        tp_layout.addLayout(think_header)
-
-        self._thinking_view = QtWidgets.QTextEdit()
-        self._thinking_view.setReadOnly(True)
-        self._thinking_view.setStyleSheet(
-            f"QTextEdit {{ background: transparent; color: #8b8fa8; font-size:{fs(11)}; border: none; }}"
-        )
-        self._thinking_view.setVisible(False)
-        tp_layout.addWidget(self._thinking_view)
-
-        self._thinking_panel_expanded = False
-        self._THINKING_COLLAPSED_H = 24
-        self._THINKING_EXPANDED_H = 200
-        self._thinking_panel.setFixedHeight(self._THINKING_COLLAPSED_H)
+        # Promoted to edini/ui/components/thinking_panel.py (Stage 2, Task 1.4).
+        self._thinking_panel = ThinkingPanel()
         root.addWidget(self._thinking_panel)
 
         # ── Tool Call Panel (collapsible, below timeline) ──
-        self._tool_panel = QtWidgets.QFrame()
-        self._tool_panel.setStyleSheet(f"""
-            QFrame {{
-                background: #0a0a12;
-                border-top: 1px solid #1c1c2a;
-                border-bottom: 1px solid #1c1c2a;
-            }}
-            _ToolCardWidget {{
-                background: rgba(0,188,212,0.04);
-                border: 1px solid #1a1a2e;
-                border-radius: 4px;
-                margin: 1px 0;
-            }}
-            _ToolCardWidget:hover {{
-                background: rgba(0,188,212,0.08);
-                border-color: #253545;
-            }}
-        """)
-        tool_panel_layout = QtWidgets.QVBoxLayout(self._tool_panel)
-        tool_panel_layout.setContentsMargins(10, 3, 10, 4)
-        tool_panel_layout.setSpacing(0)
-
-        tool_header = QtWidgets.QHBoxLayout()
-        tool_header.setContentsMargins(0, 0, 0, 0)
-        self._tool_toggle = QtWidgets.QLabel("▸ Tool Calls (0)")
-        self._tool_toggle.setCursor(QtCore.Qt.PointingHandCursor)
-        self._tool_toggle.setStyleSheet(f"color:#4a4a5a;font-size:{fs(10)};border:none;padding:1px 0;")
-        self._tool_toggle.mousePressEvent = self._toggle_tool_panel
-        tool_header.addWidget(self._tool_toggle)
-        tool_header.addStretch()
-        tool_panel_layout.addLayout(tool_header)
-
-        self._tool_scroll = QtWidgets.QScrollArea()
-        self._tool_scroll.setWidgetResizable(True)
-        self._tool_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
-        self._tool_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
-        self._tool_scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
-
-        self._tool_container = QtWidgets.QWidget()
-        self._tool_container.setStyleSheet("background: transparent;")
-        self._tool_layout = QtWidgets.QVBoxLayout(self._tool_container)
-        self._tool_layout.setAlignment(QtCore.Qt.AlignTop)
-        self._tool_layout.setSpacing(1)
-        self._tool_layout.setContentsMargins(0, 4, 0, 0)
-        self._tool_layout.addStretch()
-        self._tool_scroll.setWidget(self._tool_container)
-
-        self._tool_scroll.setVisible(False)
-        tool_panel_layout.addWidget(self._tool_scroll)
-
-        self._tool_panel_expanded = False
-        self._TOOL_PANEL_COLLAPSED_H = 24
-        self._TOOL_PANEL_EXPANDED_H = 200
-        self._tool_panel.setFixedHeight(self._TOOL_PANEL_COLLAPSED_H)
+        # Promoted to edini/ui/components/tool_panel.py (Stage 2, Task 1.4).
+        self._tool_panel = ToolPanel()
         root.addWidget(self._tool_panel)
 
         # ── Change Tree Panel (collapsible) ──
@@ -545,16 +371,8 @@ class AgentPanel(QtWidgets.QWidget):
         self._thinking_count = 0
 
         # Reset panels to collapsed state
-        self._clear_tool_cards()
-        self._clear_thinking()
-        self._tool_panel_expanded = False
-        self._thinking_panel_expanded = False
-        self._tool_scroll.setVisible(False)
-        self._thinking_view.setVisible(False)
-        self._tool_toggle.setText("▸ Tool Calls (0)")
-        self._thinking_toggle.setText("▸ Thinking (0)")
-        self._tool_panel.setFixedHeight(self._TOOL_PANEL_COLLAPSED_H)
-        self._thinking_panel.setFixedHeight(self._THINKING_COLLAPSED_H)
+        self._tool_panel.clear()
+        self._thinking_panel.reset()
 
         # Collapse change tree during conversation
         self.change_tree_widget.collapse()
@@ -577,50 +395,25 @@ class AgentPanel(QtWidgets.QWidget):
         self.submit_requested.emit(text, images if images else None)
 
     # ------------------------------------------------------------------
-    # Tool Call Panel (unchanged)
+    # Tool Call Panel — delegates to ToolPanel (Stage 2, Task 1.4)
     # ------------------------------------------------------------------
 
     def _toggle_tool_panel(self, event=None):
-        self._tool_panel_expanded = not self._tool_panel_expanded
-        self._tool_scroll.setVisible(self._tool_panel_expanded)
-        arrow = "▾" if self._tool_panel_expanded else "▸"
-        count = len(self._tool_cards)
-        self._tool_toggle.setText(f"{arrow} Tool Calls ({count})")
-        if self._tool_panel_expanded:
-            self._tool_panel.setFixedHeight(self._TOOL_PANEL_EXPANDED_H)
-        else:
-            self._tool_panel.setFixedHeight(self._TOOL_PANEL_COLLAPSED_H)
+        self._tool_panel.toggle()
 
     def _collapse_tool_panel(self):
         """Collapse tool panel if currently expanded."""
-        if self._tool_panel_expanded:
-            self._toggle_tool_panel()
+        self._tool_panel.collapse()
 
     def _add_tool_card_ui(self, tool_name: str, args: dict, tool_call_id: str):
-        card = _ToolCardWidget(tool_name, args, tool_call_id)
-        self._tool_layout.insertWidget(self._tool_layout.count() - 1, card)
-        self._tool_cards[tool_call_id] = card
-        self._tool_scroll.verticalScrollBar().setValue(
-            self._tool_scroll.verticalScrollBar().maximum())
-        count = len(self._tool_cards)
-        arrow = "▾" if self._tool_panel_expanded else "▸"
-        self._tool_toggle.setText(f"{arrow} Tool Calls ({count})")
-        if not self._tool_panel_expanded and count == 1:
-            self._toggle_tool_panel()
+        # NOTE: ToolPanel.add_card signature is (tool_name, tool_call_id, args).
+        self._tool_panel.add_card(tool_name, tool_call_id, args)
 
     def _update_tool_card_result(self, tool_call_id: str, result_text: str, success: bool = True):
-        card = self._tool_cards.get(tool_call_id)
-        if card:
-            card.set_result(result_text, success)
+        self._tool_panel.update_result(tool_call_id, result_text, success)
 
     def _clear_tool_cards(self):
-        for card in self._tool_cards.values():
-            self._tool_layout.removeWidget(card)
-            card.deleteLater()
-        self._tool_cards.clear()
-        self._tool_toggle.setText("▸ Tool Calls (0)")
-        if self._tool_panel_expanded:
-            self._tool_scroll.setVisible(True)
+        self._tool_panel.clear()
 
     # ------------------------------------------------------------------
     # Viewport screenshot
@@ -845,7 +638,7 @@ class AgentPanel(QtWidgets.QWidget):
         # Update live thinking panel
         if self._thinking_buf:
             self._update_live_thinking()
-            if not self._thinking_panel_expanded and not self._thinking_full:
+            if not self._thinking_panel.is_expanded() and not self._thinking_panel.has_content():
                 self._auto_expand_thinking()
 
         if len(self._current_text) >= self.STREAM_FLUSH_CHARS:
@@ -919,7 +712,7 @@ class AgentPanel(QtWidgets.QWidget):
             self._thinking_buf = parts[-1]
         # Update thinking panel view in real-time as thinking arrives
         self._update_live_thinking()
-        if not self._thinking_panel_expanded and not self._thinking_full:
+        if not self._thinking_panel.is_expanded() and not self._thinking_panel.has_content():
             self._auto_expand_thinking()
 
     def _flush_thinking_buf(self):
@@ -1058,66 +851,31 @@ class AgentPanel(QtWidgets.QWidget):
         self._streaming_full_text = ""
 
     # ------------------------------------------------------------------
-    # Thinking Panel (unchanged)
+    # Thinking Panel — delegates to ThinkingPanel (Stage 2, Task 1.4)
     # ------------------------------------------------------------------
 
     def _toggle_thinking_panel(self, event=None):
-        self._thinking_panel_expanded = not self._thinking_panel_expanded
-        self._thinking_view.setVisible(self._thinking_panel_expanded)
-        arrow = "▾" if self._thinking_panel_expanded else "▸"
-        paragraphs = self._thinking_full.count('\n\n') + 1 if self._thinking_full else 0
-        self._thinking_toggle.setText(f"{arrow} Thinking ({paragraphs} ¶)")
-        if self._thinking_panel_expanded:
-            self._thinking_panel.setFixedHeight(self._THINKING_EXPANDED_H)
-        else:
-            self._thinking_panel.setFixedHeight(self._THINKING_COLLAPSED_H)
+        self._thinking_panel.toggle()
 
     def _auto_expand_thinking(self):
-        if not self._thinking_panel_expanded:
-            self._toggle_thinking_panel()
+        self._thinking_panel.auto_expand()
 
     def _collapse_thinking_panel(self):
         """Collapse thinking panel if currently expanded."""
-        if self._thinking_panel_expanded:
-            self._toggle_thinking_panel()
+        self._thinking_panel.collapse()
 
     def _append_thinking_text(self, text: str):
-        if not self._thinking_full:
-            self._thinking_full = text
-        else:
-            self._thinking_full += "\n\n" + text
-        display = html.escape(self._thinking_full).replace("\n\n", "<br><br>").replace("\n", "<br>")
-        self._thinking_view.setHtml(
-            f'<div style="color:#8b8fa8;font-size:{fs(11)};line-height:1.5;">{display}</div>'
-        )
-        self._thinking_view.verticalScrollBar().setValue(
-            self._thinking_view.verticalScrollBar().maximum())
-        paragraphs = self._thinking_full.count('\n\n') + 1 if self._thinking_full else 0
-        arrow = "▾" if self._thinking_panel_expanded else "▸"
-        self._thinking_toggle.setText(f"{arrow} Thinking ({paragraphs} ¶)")
+        # Called externally by main_window (history rendering) and internally.
+        self._thinking_panel.append(text)
 
     def _update_live_thinking(self):
         if not self._thinking_buf:
             return
-        live = html.escape(self._thinking_buf).replace("\n", "<br>")
-        if self._thinking_full:
-            base = html.escape(self._thinking_full).replace("\n\n", "<br><br>").replace("\n", "<br>")
-            display = f'{base}<br><br>{live}'
-        else:
-            display = live
-        self._thinking_view.setHtml(
-            f'<div style="color:#8b8fa8;font-size:{fs(11)};line-height:1.5;">{display}'
-            f'<span style="color:#a78bfa;">▊</span></div>'
-        )
-        self._thinking_view.verticalScrollBar().setValue(
-            self._thinking_view.verticalScrollBar().maximum())
+        self._thinking_panel.render_live(self._thinking_buf)
 
     def _clear_thinking(self):
-        self._thinking_full = ""
-        self._thinking_view.clear()
-        self._thinking_toggle.setText("▸ Thinking (0)")
-        if self._thinking_panel_expanded:
-            self._thinking_view.setVisible(True)
+        # Clear content but preserve expand state (matches original).
+        self._thinking_panel.clear()
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1161,30 +919,9 @@ def _clean_thinking(text: str) -> str:
     return text
 
 
-def _format_args(args: dict) -> str:
-    if not args:
-        return ""
-    parts = []
-    for k, v in args.items():
-        parts.append(f"<b>{html.escape(k)}</b>: {html.escape(str(v))}")
-    return "  ·  ".join(parts)
-
-
-def _format_tool_result_short(result: str, success: bool) -> str:
-    if not result:
-        return ""
-    try:
-        import json
-        d = json.loads(result) if isinstance(result, str) else result
-        if isinstance(d, dict):
-            if d.get("success"):
-                out = d.get("path", d.get("output", d.get("name", "")))
-                return html.escape(str(out)[:80])
-            else:
-                return html.escape(d.get("error", "Unknown error")[:80])
-    except Exception:
-        pass
-    return html.escape(str(result)[:80])
+# _format_args + _format_tool_result_short moved to
+# edini/ui/components/tool_panel.py (used only by _ToolCardWidget).
+# Stage 2, Task 1.4.
 
 
 def _expand_hex(h: str) -> str:
