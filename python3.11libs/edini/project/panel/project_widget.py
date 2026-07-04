@@ -71,86 +71,10 @@ class _StreamBubble(QtWidgets.QFrame):
         self._label.setText(f'<div style="{_ai_bubble_style()}">{rendered}</div>')
 
 
-class _InputDialog(QtWidgets.QDialog):
-    """Popout text-input dialog with full IME (Chinese/CJK) support.
-
-    Why this exists: Houdini's Python Panel container intercepts keyboard
-    events BEFORE Qt's input-method pipeline (SideFX-acknowledged bug), so IME
-    composition (preedit) never reaches an embedded QPlainTextEdit — the
-    candidate window doesn't appear and the widget loses focus. This does NOT
-    affect Houdini's native parameter pane (different UI toolkit) or a real
-    top-level Qt window parented to hou.qt.mainWindow().
-
-    Fix from first principles: since a genuine top-level Qt window is the one
-    condition under which IME already works, move text entry into this QDialog
-    (parented to hou.qt.mainWindow). It's a real OS window, so the IME attaches
-    normally and Chinese input works perfectly.
-
-    Usage: the panel keeps a small inline box for quick English input; a
-    "input" button opens this dialog for CJK / longer messages. Enter or the
-    Send button returns the text to the panel via the submitted signal.
-    """
-
-    # Emitted with the typed text when the user sends (Enter / Send button).
-    submitted = QtCore.Signal(str)
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Edini Project — Input")
-        self.resize(520, 220)
-        self._build_ui()
-
-    def _build_ui(self) -> None:
-        lay = QtWidgets.QVBoxLayout(self)
-        lay.setContentsMargins(10, 10, 10, 10)
-        lay.setSpacing(8)
-
-        hint = QtWidgets.QLabel("在此输入消息(支持中文输入法)。Enter 发送,Shift+Enter 换行。")
-        hint.setStyleSheet(f"color:#8b8fa8;font-size:{fs(10)};")
-        hint.setWordWrap(True)
-        lay.addWidget(hint)
-
-        self.edit = QtWidgets.QPlainTextEdit()
-        self.edit.setAttribute(QtCore.Qt.WA_InputMethodEnabled, True)
-        self.edit.setFocusPolicy(QtCore.Qt.StrongFocus)
-        self.edit.setPlaceholderText("输入消息…")
-        self.edit.keyPressEvent = self._on_key  # Enter to send
-        lay.addWidget(self.edit, 1)
-
-        btn_row = QtWidgets.QHBoxLayout()
-        btn_row.addStretch(1)
-        cancel_btn = QtWidgets.QPushButton("取消")
-        cancel_btn.clicked.connect(self.reject)
-        btn_row.addWidget(cancel_btn)
-        send_btn = QtWidgets.QPushButton("发送")
-        send_btn.setDefault(True)
-        send_btn.clicked.connect(self._do_send)
-        btn_row.addWidget(send_btn)
-        lay.addLayout(btn_row)
-
-    def _on_key(self, event):
-        from PySide6 import QtCore as _qc
-        if event.key() in (_qc.Qt.Key_Return, _qc.Qt.Key_Enter) \
-           and not (event.modifiers() & (_qc.Qt.ShiftModifier | _qc.Qt.ControlModifier)):
-            self._do_send()
-            return
-        QtWidgets.QPlainTextEdit.keyPressEvent(self.edit, event)
-
-    def _do_send(self) -> None:
-        text = self.edit.toPlainText().strip()
-        if not text:
-            return
-        self.submitted.emit(text)
-        self.edit.clear()
-        self.accept()
-
-    def open_for_input(self) -> None:
-        """Show the dialog modally and clear it for fresh input."""
-        self.edit.clear()
-        self.show()
-        self.raise_()
-        self.activateWindow()
-        self.edit.setFocus()
+# _InputDialog (the IME / CJK popout) moved to edini.ui.components.input_bar
+# (Stage 2, Task 1.5) so ProjectPanelWidget and ProjectChatDialog import it from
+# one place. Re-exported here for backward compatibility.
+from edini.ui.components.input_bar import _InputDialog  # noqa: F401
 
 
 class ProjectPanelWidget(QtWidgets.QWidget):

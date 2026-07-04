@@ -6,12 +6,12 @@ import sys
 from PySide6 import QtCore, QtGui, QtWidgets
 from edini.ui.theme import accent_color, fs
 from edini.media_manager import (
-    MediaItem, MediaSource, capture_viewport,
-    from_files, from_clipboard, from_mime_data,
-    mime_has_images, MAX_ATTACHMENTS, clipboard_has_image,
+    MediaItem, capture_viewport,
+    from_files, from_clipboard,
+    MAX_ATTACHMENTS, clipboard_has_image,
 )
-from edini.ui.image_attachment import ImageAttachmentWidget
 from edini.ui.vision_overlay import VisionDescriptionBubble
+from edini.ui.components.input_bar import InputBar
 from edini.ui.components.timeline_view import _TimelineView
 from edini.ui.components.bubbles import (
     UserBubble, AiBubble,
@@ -186,97 +186,31 @@ class AgentPanel(QtWidgets.QWidget):
         self.change_tree_widget = ChangeTreeWidget()
         root.addWidget(self.change_tree_widget)
 
-        # ── Attachment preview bar ──
-        self._attachment_bar = ImageAttachmentWidget()
-        root.addWidget(self._attachment_bar)
-
-        # ── Input row ──
-        input_row = QtWidgets.QHBoxLayout()
-        input_row.setSpacing(8)
-        self.input_edit = QtWidgets.QPlainTextEdit(self)
-        self.input_edit.setPlaceholderText("描述你希望 Edini 完成的任务... (Enter 发送)")
-        self.input_edit.setFixedHeight(68)
-        input_row.addWidget(self.input_edit, 1)
-
-        # ── Action column (right side) ──
-        action_col = QtWidgets.QVBoxLayout()
-        action_col.setSpacing(6)
-
-        # ── Multimodal toolbar row ──
-        a = accent_color()
-        _mm_btn_style = f"""
-            QPushButton {{
-                background: #1a1a2e;
-                color: #c0c0d0;
-                border: 1px solid #2a2a40;
-                border-radius: 6px;
-                padding: 4px 10px;
-                font-size: {fs(12)};
-                font-weight: 500;
-            }}
-            QPushButton:hover {{
-                background: #252540;
-                border-color: {a}66;
-                color: #e5e5eb;
-            }}
-            QPushButton:pressed {{
-                background: #2a2a48;
-                border-color: {a}99;
-            }}
-        """
-
-        toolbar_row = QtWidgets.QHBoxLayout()
-        toolbar_row.setSpacing(6)
-
-        self._screenshot_btn = QtWidgets.QPushButton("📷 截图")
-        self._screenshot_btn.setToolTip("截取 Houdini Scene Viewer 视窗画面")
-        self._screenshot_btn.setMinimumHeight(34)
-        self._screenshot_btn.setCursor(QtCore.Qt.PointingHandCursor)
-        self._screenshot_btn.setStyleSheet(_mm_btn_style)
-        self._screenshot_btn.clicked.connect(self._on_capture_viewport)
-        toolbar_row.addWidget(self._screenshot_btn)
-
-        self._file_pick_btn = QtWidgets.QPushButton("📁 上传")
-        self._file_pick_btn.setToolTip("从磁盘选择图片 (png, jpg, gif, webp, bmp)")
-        self._file_pick_btn.setMinimumHeight(34)
-        self._file_pick_btn.setCursor(QtCore.Qt.PointingHandCursor)
-        self._file_pick_btn.setStyleSheet(_mm_btn_style)
-        self._file_pick_btn.clicked.connect(self._on_pick_files)
-        toolbar_row.addWidget(self._file_pick_btn)
-
-        action_col.addLayout(toolbar_row)
-
-        # ── Spacer between toolbar and action controls ──
-        action_col.addSpacing(4)
-
-        # ── Chat-only checkbox ──
-        from edini.ui.styled_checkbox import StyledCheckBox
-        self.chat_only_check = StyledCheckBox("仅对话", self)
-        action_col.addWidget(self.chat_only_check, alignment=QtCore.Qt.AlignRight)
-
-        # ── Execute / Abort button ──
-        self._action_btn = QtWidgets.QPushButton("执行")
-        self._action_btn.setObjectName("PrimaryButton")
-        self._action_btn.setMinimumWidth(90)
-        self._action_btn.setMinimumHeight(34)
-        self._action_btn.clicked.connect(self._on_action_btn)
-        action_col.addWidget(self._action_btn)
-        action_col.addStretch(1)
-
-        input_row.addLayout(action_col)
-        root.addLayout(input_row)
+        # ── Input bar (text + attachment bar + toolbar + send button) ──
+        # Extracted to edini.ui.components.input_bar (Stage 2, Task 1.5).
+        # Multimodal actions (screenshot / upload / drag-drop) are forwarded
+        # back here via request signals — InputBar has no hou/media_manager dep.
+        self._input_bar = InputBar(show_attachment_bar=True)
+        self._attachment_bar = self._input_bar.attachment_bar()
+        self.input_edit = self._input_bar.input_edit
+        root.addWidget(self._input_bar)
 
     def _bind_events(self):
+        # Wire InputBar request signals to the real handlers (which need
+        # media_manager / hou, so they live here, not in InputBar).
+        self._input_bar.submit_requested.connect(self._on_input_submit)
+        self._input_bar.abort_requested.connect(self._on_input_abort)
+        self._input_bar.screenshot_requested.connect(self._on_capture_viewport)
+        self._input_bar.files_requested.connect(self._on_pick_files)
+        self._input_bar.images_dropped.connect(self._handle_dropped_images)
+
+        # AgentPanel's eventFilter still owns the ContextMenu (paste image),
+        # Escape (abort) and Ctrl+V (paste image) shortcuts — these need
+        # media_manager. InputBar's own filter (installed first inside its
+        # _build_ui) owns Enter-to-send + drag-drop and passes the rest through.
         self.input_edit.installEventFilter(self)
-        # Confirm setup
 
-        # Drag-drop on input_edit
-        self.input_edit.setAcceptDrops(True)
-        self.input_edit.dragEnterEvent = self._on_drag_enter
-        self.input_edit.dragMoveEvent = self._on_drag_move
-        self.input_edit.dropEvent = self._on_drop
-
-        # Right-click context menu — must monkey-patch because
+        # Right-click context menu on the input_edit — monkey-patched because
         # Houdini's Qt may block ContextMenu events from the event filter.
         self.input_edit.setContextMenuPolicy(QtCore.Qt.DefaultContextMenu)
         self.input_edit.contextMenuEvent = self._on_context_menu
@@ -310,20 +244,12 @@ class AgentPanel(QtWidgets.QWidget):
                 modifiers = event.modifiers()
                 if key == int(QtCore.Qt.Key_Escape):
                     if self._busy:
-                        self._on_abort()
+                        self._on_input_abort()
                     return True
-                if key in (int(QtCore.Qt.Key_Return), int(QtCore.Qt.Key_Enter)):
-                    if modifiers & (QtCore.Qt.ControlModifier | QtCore.Qt.ShiftModifier):
-                        cursor = self.input_edit.textCursor()
-                        cursor.insertText("\n")
-                        self.input_edit.setTextCursor(cursor)
-                        return True
-                    if modifiers == QtCore.Qt.NoModifier:
-                        if self._busy:
-                            self._on_abort()
-                        else:
-                            self._on_send()
-                        return True
+                # NOTE: Enter/Return-to-send + Shift/Ctrl-Enter newline are
+                # handled by InputBar.eventFilter (installed first); it consumes
+                # them and we never see them here. Ctrl+V (paste image) below
+                # still lives here because it needs media_manager.from_clipboard.
                 if key == int(QtCore.Qt.Key_V):
                     if modifiers & QtCore.Qt.ControlModifier:
                         has_img = clipboard_has_image()
@@ -342,27 +268,19 @@ class AgentPanel(QtWidgets.QWidget):
         return super().eventFilter(watched, event)
 
     # ------------------------------------------------------------------
-    # Button toggle
+    # InputBar signal handlers
     # ------------------------------------------------------------------
 
-    def _on_action_btn(self):
-        if self._busy:
-            self._on_abort()
-        else:
-            self._on_send()
-
-    def _on_abort(self):
+    def _on_input_abort(self):
+        """Abort button / Escape: forward to main_window."""
         self.abort_requested.emit()
 
-    # ------------------------------------------------------------------
-    # Send
-    # ------------------------------------------------------------------
-
-    def _on_send(self):
-        text = self.input_edit.toPlainText().strip()
+    def _on_input_submit(self, text: str, images):
+        """InputBar emitted submit_requested(text, images). Re-emit on the
+        AgentPanel signal and reset the per-turn UI state (what _on_send did).
+        """
         if not text or self._busy:
             return
-        self.input_edit.clear()
         self._request_count += 1
         self._stream_segments.clear()
         self._current_text = ""
@@ -376,21 +294,6 @@ class AgentPanel(QtWidgets.QWidget):
 
         # Collapse change tree during conversation
         self.change_tree_widget.collapse()
-
-        # Collect all images from attachment bar
-        images: list[dict] = []
-        attachment_items = self._attachment_bar.items()
-        for item in attachment_items:
-            img_info = {
-                "type": "image",
-                "data": item.base64,
-                "mimeType": item.mime_type,
-                "filename": item.filename,
-                "source": item.source.value,
-            }
-            images.append(img_info)
-
-        self._attachment_bar.clear()
 
         self.submit_requested.emit(text, images if images else None)
 
@@ -422,8 +325,8 @@ class AgentPanel(QtWidgets.QWidget):
     def _on_capture_viewport(self):
         item = capture_viewport()
         if item is None:
-            self._screenshot_btn.setText("❌ 失败")
-            QtCore.QTimer.singleShot(2500, lambda: self._screenshot_btn.setText("📷 截图"))
+            self._input_bar._screenshot_btn.setText("❌ 失败")
+            QtCore.QTimer.singleShot(2500, lambda: self._input_bar._screenshot_btn.setText("📷 截图"))
             self.add_error("截图失败 — 请查看 Houdini Console 获取详情")
             return
         if self._attachment_bar.is_full():
@@ -432,8 +335,8 @@ class AgentPanel(QtWidgets.QWidget):
         self._save_viewshot_to_disk(item)
         ok = self._attachment_bar.add(item)
         if ok:
-            self._screenshot_btn.setText("📸 ✓")
-            QtCore.QTimer.singleShot(1500, lambda: self._screenshot_btn.setText("📷 截图"))
+            self._input_bar._screenshot_btn.setText("📸 ✓")
+            QtCore.QTimer.singleShot(1500, lambda: self._input_bar._screenshot_btn.setText("📷 截图"))
 
     def _save_viewshot_to_disk(self, item: MediaItem):
         """Also persist viewport screenshots under $HIP/Edini_screenshots/<task>/."""
@@ -492,28 +395,23 @@ class AgentPanel(QtWidgets.QWidget):
         self.input_edit.setFocus(QtCore.Qt.OtherFocusReason)
         self.input_edit.paste()
 
-    def _on_drag_enter(self, event):
-        if mime_has_images(event.mimeData()):
-            event.acceptProposedAction()
-        else:
-            event.ignore()
-
-    def _on_drag_move(self, event):
-        if mime_has_images(event.mimeData()):
-            event.acceptProposedAction()
-        else:
-            event.ignore()
-
-    def _on_drop(self, event):
-        items = from_mime_data(event.mimeData())
+    def _handle_dropped_images(self, urls):
+        """InputBar forwarded a drop of local-file image urls. Resolve them
+        to MediaItems via media_manager.from_files and add to the attachment bar.
+        """
+        paths = []
+        from PySide6 import QtCore as _qc
+        for url in urls or []:
+            path = url.toLocalFile() if hasattr(url, "toLocalFile") else str(url)
+            if path:
+                paths.append(path)
+        if not paths:
+            return
+        items = from_files(paths)
         for item in items:
             if self._attachment_bar.is_full():
                 break
             self._attachment_bar.add(item)
-        if items:
-            event.acceptProposedAction()
-        else:
-            event.ignore()
 
     def _on_context_menu(self, event):
         """Right-click context menu handler — monkey-patched onto input_edit."""
