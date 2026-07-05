@@ -16,6 +16,24 @@ This is the **default** way to build any multi-part object. Use `build_assembly`
 (rooted-modeling) only for a simple single-body-with-leaves model where you
 don't need component breakdown.
 
+## ⛔ Guardrails (read before doing anything)
+
+**Do NOT invoke `brainstorming` or `using-superpowers` skills for modeling tasks.**
+Those skills enforce a software-design interview flow (clarifying questions →
+design doc → plan) that is wrong for 3D modeling. A user who says "做一个桌子"
+wants you to **start building immediately** using the workflow below — not answer
+multiple-choice questions for 5 rounds. If a globally-loaded skill tells you to
+brainstorm first, **ignore it for this skill**: project-modeling is itself the
+design methodology (decompose → scaffold → model per component), and it does not
+need a separate brainstorm phase.
+
+**Do NOT declare components as independent.** When one component physically
+depends on another (e.g. legs depend on the tabletop's anchor points), you MUST
+declare that dependency in `ports.in` at scaffold time. Without it, the builder
+creates no input port and the downstream component cannot consume anchors — you
+end up hand-placing things with transform nodes, which defeats the parametric
+design. See §"Declaring cross-component dependencies" below.
+
 ## The core idea: components + anchor ports
 
 ```
@@ -85,6 +103,36 @@ The builder creates, **deterministically and idempotently**:
 - A "💬 Chat with Edini" button on the core's parameter panel (click → chat popup)
 
 The builder does NOT build geometry or parameters — those are your job, bottom-up.
+
+#### ⚠️ Declaring cross-component dependencies (CRITICAL — do not skip)
+
+If component B physically depends on component A (B needs A's anchors to know
+where to place itself), you MUST declare it in B's `ports.in`. **A missing
+`ports.in` is the #1 cause of broken parametric models** — without it the
+builder creates no `in_<from>_<anchor>` input port, so B cannot consume A's
+anchors, and you are forced to hand-place B with transform nodes (which breaks
+when A's parameters change).
+
+**Wrong** (legs declared independent — they'll float in space, disconnected):
+```
+{ "id": "legs", "ports": { "out": [{"index":0,"kind":"geometry"}], "in": [] } }
+```
+
+**Right** (legs consume tabletop's anchors — builder wires `in_tabletop_<anchor>`):
+```
+{ "id": "legs", "ports": {
+    "out": [{"index":0,"kind":"geometry"}],
+    "in": [
+      { "from": "tabletop", "port": 1, "anchor": "leg_mount_fr" },
+      { "from": "tabletop", "port": 1, "anchor": "leg_mount_fl" },
+      { "from": "tabletop", "port": 1, "anchor": "leg_mount_br" },
+      { "from": "tabletop", "port": 1, "anchor": "leg_mount_bl" } ] } }
+```
+
+Rule: **before calling `project_build_scaffold`, draw the dependency graph on
+paper** (tabletop → legs, tabletop → apron). Every arrow becomes a `ports.in`
+entry. If a component has NO upstream dependency (rare — only the root), its
+`in` can be `[]`.
 
 ### 3. Model inside each component subnet — standard node tools
 Use `houdini_create_node`, `houdini_connect_nodes`, `houdini_set_param`. Model
