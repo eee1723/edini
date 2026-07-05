@@ -72,6 +72,12 @@ class ProjectChatDialog(QtWidgets.QDialog):
         get_tool_executor()
         from edini.rpc_client import RpcClient
         self._rpc = RpcClient(parent=self)
+        # Inject scope env so the edini-context extension knows this Pi process
+        # is bound to a specific Project HDA and injects workspace-lock directives.
+        self._rpc.set_env_extra({
+            "EDINI_SCOPE_ID": "project_hda",
+            "EDINI_CORE_PATH": self._core_path,
+        })
         self._rpc.status_changed.connect(self._on_rpc_status)
         self._rpc.start()
         return self._rpc

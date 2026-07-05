@@ -187,7 +187,27 @@ class BaseChatDriver(QtCore.QObject):
         if not text or not text.strip():
             return
         self._shell.timeline.add_widget(UserBubble(text, images))
-        self._runtime.rpc.send_prompt(text, images=images)
+        # For HDA-scoped drivers, prefix each message with a context block so
+        # the agent sees its workspace boundary on every turn (belt-and-suspenders
+        # alongside the system-prompt lock from edini-context).
+        prompt_text = self._inject_context_prefix(text)
+        self._runtime.rpc.send_prompt(prompt_text, images=images)
+
+    def _inject_context_prefix(self, text: str) -> str:
+        """Prepend a [Current Houdini Context] block if this driver is HDA-scoped.
+
+        Subclasses with a core_path (ProjectChatDriver) get the block; the base
+        driver (main agent window) passes text through unchanged.
+        """
+        core_path = getattr(self, "_core_path", None)
+        if core_path:
+            return (
+                f"[Current Houdini Context]\n"
+                f"Workspace: Project HDA (LOCKED to {core_path} subtree)\n"
+                f"Core: {core_path}\n\n"
+                f"{text}"
+            )
+        return text
 
     # ── Hooks for subclasses (default no-op) ──
     def build_left_panel(self) -> QtWidgets.QWidget:

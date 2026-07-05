@@ -121,11 +121,39 @@ def test_status_updates_context_panel():
 
 
 def test_send_calls_rpc_send_prompt():
+    """Base driver (no core_path) sends text as-is — no context prefix."""
     drv, rpc, shell = _make_setup()
     called = []
     rpc.send_prompt = lambda t, images=None: called.append((t, images))
     drv.send("hi there")
     assert called == [("hi there", None)]
+
+
+def test_send_hda_driver_injects_context_prefix():
+    """HDA-scoped driver prefixes messages with [Current Houdini Context]."""
+    from edini.project.panel.chat_driver import ProjectChatDriver
+    rpc = _FakeRpc()
+    rt = ChatRuntime(rpc)
+    scope = ScopeConfig(scope_id="project_hda", window_title="T", accent_override="#f59e0b",
+                        header_badge="b", left_panel_kind="node_versions",
+                        show_change_tree=True, show_eval_button=False,
+                        show_attachment_bar=False, show_param_snapshot=True,
+                        scene_data_provider=lambda: {})
+    shell = ChatWindowShell(scope)
+    drv = ProjectChatDriver(rt, shell, core_path="/obj/geo1/project_core")
+    called = []
+    rpc.send_prompt = lambda t, images=None: called.append(t)
+    drv.send("做一个桌子")
+    assert len(called) == 1
+    assert "[Current Houdini Context]" in called[0]
+    assert "/obj/geo1/project_core" in called[0]
+    assert "做一个桌子" in called[0]
+    # The user bubble should show the ORIGINAL text (not the prefixed version)
+    from edini.ui.components.bubbles import UserBubble
+    bubbles = shell.timeline._container.findChildren(UserBubble)
+    assert len(bubbles) == 1
+    assert "做一个桌子" in bubbles[0]._label.text()
+    assert "[Current Houdini Context]" not in bubbles[0]._label.text()
 
 
 def test_send_creates_user_bubble():
