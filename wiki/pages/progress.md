@@ -1,6 +1,8 @@
 # 🚀 开发进度
 
-> 最后更新：2026-07-03 &nbsp;|&nbsp; **🟢 Project HDA 组件流水线成熟 — 锚点程序化 + 参数自底向上 + HDA 按钮弹窗**。Project HDA 已从"最小闭环"演进为**组件流水线建模范式**（subnet 组件 + 端口信息点协议 + 程序化锚点 + 自底向上参数管理）。三大 UX 改进：① **工作区感知**（project_create 复用选中 HDA）；② **参数自底向上**（subnet 建→promote 按分组提到 core 带 min/max，core 驱动 subnet）；③ **HDA 参数面板 💬 Chat 按钮 → 精简对话弹窗**（取代原生 Python Pane 主入口，工作区统一在 HDA）。锚点不再硬编码（复用 vex_strategies 测量，改参数 live 重算）。**真机铁证**：promote 分组+min/max+live；HDA button+PythonModule 注入；锚点 length 2→4 ±1→±2。详见 [交接](handoff.md) + [组件地基指南](project-component-foundation.md)。
+> 最后更新：2026-07-05 &nbsp;|&nbsp; **🟢 统一对话窗口架构完成 + 工具链全量修复**。主 Agent 窗口与 HDA 建模窗口重构为共享组件库 + 配置差异化架构。HDA 窗口从简陋 QDialog 升级为完整三面板（橙色 #f59e0b 差异化 + 版本列表 + 参数快照 + workspace lock）。agent_panel 1951→958 行。121 测试 + 2 个架构守卫。同步修复 15+ 个工具链 bug（Ramp 序列化 / set_params_batch 向量 / ports 逐字段报错 / `__edini_state` 复用检查 / brainstorm 双重注册 / design_params 断层）。详见 [统一对话窗口](unified-chat.md)。
+>
+> 上一轮（2026-07-03）：**🟢 Project HDA 组件流水线成熟 — 锚点程序化 + 参数自底向上 + HDA 按钮弹窗**。Project HDA 已从"最小闭环"演进为**组件流水线建模范式**（subnet 组件 + 端口信息点协议 + 程序化锚点 + 自底向上参数管理）。三大 UX 改进：① **工作区感知**（project_create 复用选中 HDA）；② **参数自底向上**（subnet 建→promote 按分组提到 core 带 min/max，core 驱动 subnet）；③ **HDA 参数面板 💬 Chat 按钮 → 精简对话弹窗**（取代原生 Python Pane 主入口，工作区统一在 HDA）。锚点不再硬编码（复用 vex_strategies 测量，改参数 live 重算）。**真机铁证**：promote 分组+min/max+live；HDA button+PythonModule 注入；锚点 length 2→4 ±1→±2。详见 [交接](handoff.md) + [组件地基指南](project-component-foundation.md)。
 >
 > 上一轮（rooted-modeling）：M2.6+M2.7 — 真机测试驱动的三大修复（leaf 参数全 live + 视觉自检 + shape 链细节），607 测试 + 26 真机 hython 铁证全绿。Project HDA 是在其上的**容器化 + 协作化升级**，不是取代——rooted 的 build_assembly/测量链是 Project HDA 将来"按需接入"的建模能力。
 
