@@ -464,40 +464,10 @@ class AgentPanel(QtWidgets.QWidget):
     # ------------------------------------------------------------------
 
     def set_busy(self, busy: bool):
+        # Delegate to InputBar — the action button now lives there (T1.5).
+        # InputBar.set_busy applies the full busy/idle styling verbatim.
         self._busy = busy
-        if busy:
-            self._action_btn.setText("中止")
-            self._action_btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: #dc2626;
-                    color: #f1f1f1;
-                    border: none;
-                    border-radius: 5px;
-                    padding: 6px 14px;
-                    font-size: {fs(12)};
-                    font-weight: 600;
-                    min-height: 24px;
-                }}
-                QPushButton:hover {{ background-color: #ef4444; }}
-                QPushButton:pressed {{ background-color: #b91c1c; }}
-            """)
-        else:
-            self._action_btn.setText("执行")
-            self._action_btn.setObjectName("PrimaryButton")
-            a = accent_color()
-            self._action_btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {a};
-                    color: #0a0a10;
-                    border: none;
-                    border-radius: 5px;
-                    padding: 6px 20px;
-                    font-size: {fs(12)};
-                    font-weight: 600;
-                }}
-                QPushButton:hover {{ background-color: {_lighter(a, 0.3)}; }}
-                QPushButton:pressed {{ background-color: {_darker(a, 0.15)}; }}
-            """)
+        self._input_bar.set_busy(busy)
 
     def set_session_id(self, sid: str):
         self._session_id = sid

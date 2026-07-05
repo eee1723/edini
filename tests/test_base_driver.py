@@ -59,10 +59,30 @@ def test_stream_chunk_then_finish_renders():
     assert "<b>bold</b>" in bubbles[0]._label.text()
 
 
-def test_thinking_chunk_appends_to_panel():
+def test_thinking_chunk_buffers_until_paragraph_break():
+    """Thinking deltas are word-level; they buffer until \\n\\n or turn end."""
     drv, rpc, shell = _make_setup()
-    rpc.thinking_delta.emit("reasoning here")
-    # ThinkingPanel.toggle_text() returns "▸ Thinking (N ¶)" — check the count.
+    rpc.thinking_delta.emit("reasoning ")
+    rpc.thinking_delta.emit("here")
+    # Still in buffer (no \n\n) — paragraph count stays 0, but live view shows text
+    assert "Thinking (0" in shell.thinking_panel.toggle_text()
+    assert shell.thinking_panel.has_content() is False  # _thinking_full still empty
+
+
+def test_thinking_paragraph_break_finalizes():
+    """A \\n\\n in the stream splits off a finalized paragraph."""
+    drv, rpc, shell = _make_setup()
+    rpc.thinking_delta.emit("first paragraph\n\nsecond")
+    # "first paragraph" is now a finalized paragraph
+    assert "Thinking (1" in shell.thinking_panel.toggle_text()
+
+
+def test_thinking_flushed_on_turn_done():
+    """Pending buffer is finalized into a paragraph when the turn ends."""
+    drv, rpc, shell = _make_setup()
+    rpc.thinking_delta.emit("some reasoning")
+    assert "Thinking (0" in shell.thinking_panel.toggle_text()  # buffered
+    rpc.agent_finished.emit()  # turn done → flush
     assert "Thinking (1" in shell.thinking_panel.toggle_text()
 
 
