@@ -77,14 +77,29 @@ class ProjectChatDialog(QtWidgets.QDialog):
         return self._rpc
 
     def _on_rpc_status(self, status: str):
+        # Always mirror the raw RPC status into the ContextPanel so the Pi
+        # Status card reflects reality (connecting/connected/disconnected/error).
+        self._shell.context_panel.set_pi_status(status)
         if status == "connected" and self._runtime is None:
             rpc = self._get_rpc()
             self._runtime = ChatRuntime(rpc)
             self._driver = ProjectChatDriver(
                 self._runtime, self._shell, self._core_path)
-            # Configure session + model (preserves old chat_dialog behavior)
-            if self._core_path:
-                rpc.send_set_session_name(self._core_path)
+            # Configure session + model.
+            # Session name uses the versioned convention (core_path::vN) so the
+            # version scanner can find this node's sessions. Start at v1 (or the
+            # next free version if prior sessions exist for this node).
+            from edini.ui.components.version_naming import (
+                make_version_session_name, next_version,
+            )
+            from edini.ui.version_scanner import scan_node_versions
+            try:
+                existing = scan_node_versions(self._core_path)
+                start_v = next_version([v["version"] for v in existing]) if existing else 1
+            except Exception:
+                start_v = 1
+            self._driver.set_current_version(start_v)
+            rpc.send_set_session_name(make_version_session_name(self._core_path, start_v))
             try:
                 from edini.config import read_pi_settings
                 s = read_pi_settings()

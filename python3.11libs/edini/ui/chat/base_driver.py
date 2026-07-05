@@ -4,6 +4,8 @@ Plain QObject (NOT a QWidget base class). Holds runtime + shell. Common chat
 behavior lives here; subclasses override hooks for scope-specific concerns
 (left panel, scene data, session switching).
 """
+import html
+
 from PySide6 import QtCore, QtWidgets
 from edini.ui.components.bubbles import AiBubble, UserBubble
 
@@ -39,9 +41,25 @@ class BaseChatDriver(QtCore.QObject):
         r.status_changed.connect(s.context_panel.set_pi_status)
         r.started.connect(self._on_started)
         r.failed.connect(self._on_failed)
+        # busy_changed is the authoritative idle signal — agent_finished emits
+        # BOTH completed AND busy_changed(False). Without this, a turn that
+        # finishes without an error never resets the input bar to idle, leaving
+        # the button stuck on "中止" and blocking multi-turn chat.
+        r.busy_changed.connect(self._on_busy_changed)
 
     def _bind_input(self):
         self._shell.input_bar.submit_requested.connect(self.send)
+        # Wire abort — without this the "中止" button emits abort_requested
+        # into the void and the user can't stop a running turn.
+        self._shell.input_bar.abort_requested.connect(self._on_abort)
+
+    def _on_busy_changed(self, busy: bool):
+        """Authoritative busy-state update from ChatRuntime."""
+        self._shell.input_bar.set_busy(busy)
+
+    def _on_abort(self):
+        """User clicked the Abort button — tell Pi to stop."""
+        self._runtime.rpc.send_abort()
 
     # ── Stream handling ──
     def _on_stream_chunk(self, chunk: str):
@@ -97,14 +115,28 @@ class BaseChatDriver(QtCore.QObject):
         self._shell.tool_panel.update_result(tool_call_id, result, True)
 
     # ── Lifecycle ──
+    # NOTE: busy state is owned by _on_busy_changed (driven by ChatRuntime's
+    # busy_changed signal, which fires on both start and finish). _on_started
+    # and _on_failed only do panel resets + error display, NOT set_busy — that
+    # would race with busy_changed.
     def _on_started(self, _payload=None):
         self._thinking_buf = ""
         self._shell.thinking_panel.reset()
         self._shell.tool_panel.clear()
-        self._shell.input_bar.set_busy(True)
 
     def _on_failed(self, msg: str):
-        self._shell.input_bar.set_busy(False)
+        # Show the error in the timeline so the user sees why the turn failed.
+        self._flush_thinking()
+        if self._current_ai is not None:
+            self._current_ai.finalize()
+            self._current_ai = None
+        banner = QtWidgets.QLabel(f"⚠️ {html.escape(msg)}")
+        banner.setWordWrap(True)
+        banner.setStyleSheet(
+            "QLabel { color:#f87171; background: rgba(239,68,68,0.08); "
+            "border-left: 3px solid #ef4444; border-radius: 4px; "
+            "padding: 8px 12px; margin: 4px 16px; }")
+        self._shell.timeline.add_widget(banner)
 
     # ── Send ──
     def send(self, text: str, images=None):

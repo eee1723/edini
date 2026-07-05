@@ -39,6 +39,17 @@ class ProjectChatDriver(BaseChatDriver):
         self._current_version: int | None = None
         self._init_version_list()
 
+    def set_current_version(self, version: int):
+        """Mark a version as the active one (called by the dialog on connect).
+
+        This does NOT switch the Pi session — it only updates the UI marker so
+        the version list reflects which session is live. Use _on_select_version
+        for an actual user-driven switch.
+        """
+        self._current_version = version
+        if getattr(self, "_version_list", None) is not None:
+            self._version_list.mark_current(version)
+
     def _init_version_list(self):
         """Scan for existing versions and wire the NodeVersionList into the shell."""
         from edini.ui.components.version_list import NodeVersionList

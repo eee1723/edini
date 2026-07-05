@@ -22,6 +22,7 @@ class _FakeRpc(QtCore.QObject):
     models_received = QtCore.Signal(object)
     session_switched = QtCore.Signal(str)
     def send_prompt(self, *a, **k): pass
+    def send_abort(self): pass
 
 
 def _make_setup():
@@ -138,3 +139,27 @@ def test_empty_send_does_nothing():
     rpc.send_prompt = lambda *a, **k: called.append(a)
     drv.send("   ")
     assert called == []
+
+
+def test_busy_changed_resets_input_bar_on_finish():
+    """Regression: agent_finished must reset the input bar to idle.
+
+    Without the busy_changed wiring, the button got stuck on '中止' after a
+    turn finished, blocking multi-turn chat.
+    """
+    drv, rpc, shell = _make_setup()
+    rpc.agent_started.emit()   # busy=True via busy_changed
+    assert shell.input_bar.is_busy() is True
+    rpc.agent_finished.emit()  # busy=False via busy_changed
+    assert shell.input_bar.is_busy() is False
+
+
+def test_abort_button_calls_send_abort():
+    """Regression: clicking '中止' must actually stop Pi (was a no-op)."""
+    drv, rpc, shell = _make_setup()
+    called = []
+    rpc.send_abort = lambda: called.append(True)
+    # Simulate the busy state then the abort click
+    rpc.agent_started.emit()
+    shell.input_bar.abort_requested.emit()
+    assert called == [True]
