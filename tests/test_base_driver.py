@@ -21,8 +21,12 @@ class _FakeRpc(QtCore.QObject):
     status_changed = QtCore.Signal(str)
     models_received = QtCore.Signal(object)
     session_switched = QtCore.Signal(str)
+    model_changed = QtCore.Signal(object)
+    extension_info = QtCore.Signal(str)
     def send_prompt(self, *a, **k): pass
     def send_abort(self): pass
+    def send_get_state(self): pass
+    def send_get_stats(self): pass
 
 
 def _make_setup():
@@ -163,3 +167,27 @@ def test_abort_button_calls_send_abort():
     rpc.agent_started.emit()
     shell.input_bar.abort_requested.emit()
     assert called == [True]
+
+
+def test_model_changed_updates_context_panel():
+    """Regression: model name must show in Pi Status card.
+
+    BaseChatDriver must connect rpc.model_changed → set_provider_model,
+    otherwise the Pi Status card shows '—' forever.
+    """
+    drv, rpc, shell = _make_setup()
+    rpc.model_changed.emit({"provider": "deepseek", "name": "deepseek-v4"})
+    assert "deepseek" in shell.context_panel.provider_model_label.text()
+
+
+def test_stats_requested_on_turn_start_and_end():
+    """Regression: token usage must update (driver requests send_get_stats)."""
+    drv, rpc, shell = _make_setup()
+    state_calls = []
+    stats_calls = []
+    rpc.send_get_state = lambda: state_calls.append(True)
+    rpc.send_get_stats = lambda: stats_calls.append(True)
+    rpc.agent_started.emit()   # should call send_get_state + start polling
+    assert len(state_calls) == 1
+    rpc.agent_finished.emit()  # should call send_get_stats (final fetch)
+    assert len(stats_calls) >= 1

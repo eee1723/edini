@@ -46,6 +46,14 @@ class BaseChatDriver(QtCore.QObject):
         # finishes without an error never resets the input bar to idle, leaving
         # the button stuck on "中止" and blocking multi-turn chat.
         r.busy_changed.connect(self._on_busy_changed)
+        # Model + tools display: Pi pushes model_change events and extension
+        # info; we forward them to the ContextPanel so the user sees which
+        # model is active and how many tools are loaded. (Mirrors main_window.)
+        rpc = r.rpc
+        if hasattr(rpc, "model_changed"):
+            rpc.model_changed.connect(self._on_model_changed)
+        if hasattr(rpc, "extension_info"):
+            rpc.extension_info.connect(s.context_panel.set_tools_info)
 
     def _bind_input(self):
         self._shell.input_bar.submit_requested.connect(self.send)
@@ -101,12 +109,6 @@ class BaseChatDriver(QtCore.QObject):
             self._shell.thinking_panel.append(self._thinking_buf)
         self._thinking_buf = ""
 
-    def _on_turn_done(self, _payload=None):
-        self._flush_thinking()
-        if self._current_ai is not None:
-            self._current_ai.finalize()
-            self._current_ai = None
-
     # ── Tool handling ──
     def _on_tool_started(self, tool_name: str, tool_call_id: str, args: dict):
         self._shell.tool_panel.add_card(tool_name, tool_call_id, args)
@@ -123,6 +125,23 @@ class BaseChatDriver(QtCore.QObject):
         self._thinking_buf = ""
         self._shell.thinking_panel.reset()
         self._shell.tool_panel.clear()
+        # Request fresh state + start stats polling so token usage updates
+        # during the turn. (Mirrors main_window _on_agent_started.)
+        rpc = self._runtime.rpc
+        if hasattr(rpc, "send_get_state"):
+            rpc.send_get_state()
+        self._start_stats_polling()
+
+    def _on_turn_done(self, _payload=None):
+        self._flush_thinking()
+        if self._current_ai is not None:
+            self._current_ai.finalize()
+            self._current_ai = None
+        # Stop stats polling and fetch final token counts for this turn.
+        self._stop_stats_polling()
+        rpc = self._runtime.rpc
+        if hasattr(rpc, "send_get_stats"):
+            rpc.send_get_stats()
 
     def _on_failed(self, msg: str):
         # Show the error in the timeline so the user sees why the turn failed.
@@ -130,6 +149,7 @@ class BaseChatDriver(QtCore.QObject):
         if self._current_ai is not None:
             self._current_ai.finalize()
             self._current_ai = None
+        self._stop_stats_polling()
         banner = QtWidgets.QLabel(f"⚠️ {html.escape(msg)}")
         banner.setWordWrap(True)
         banner.setStyleSheet(
@@ -137,6 +157,30 @@ class BaseChatDriver(QtCore.QObject):
             "border-left: 3px solid #ef4444; border-radius: 4px; "
             "padding: 8px 12px; margin: 4px 16px; }")
         self._shell.timeline.add_widget(banner)
+
+    # ── Model + tools display ──
+    def _on_model_changed(self, model: dict):
+        """Forward model change to the ContextPanel so the active model shows."""
+        name = model.get("name", model.get("id", model.get("modelId", "?")))
+        provider = model.get("provider", "?")
+        self._shell.context_panel.set_provider_model(provider, name)
+
+    # ── Stats polling (token usage during a turn) ──
+    def _start_stats_polling(self):
+        if not hasattr(self, "_stats_timer"):
+            self._stats_timer = QtCore.QTimer(self)
+            self._stats_timer.setInterval(3000)
+            self._stats_timer.timeout.connect(self._poll_stats)
+        self._stats_timer.start()
+
+    def _stop_stats_polling(self):
+        if hasattr(self, "_stats_timer"):
+            self._stats_timer.stop()
+
+    def _poll_stats(self):
+        rpc = self._runtime.rpc
+        if hasattr(rpc, "send_get_stats"):
+            rpc.send_get_stats()
 
     # ── Send ──
     def send(self, text: str, images=None):
