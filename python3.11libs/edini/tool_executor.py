@@ -149,12 +149,21 @@ def _project_create(name: str | None = None, goal: str | None = None, **_) -> di
     is selected.
     """
     try:
-        from edini.project.node import create_project_hda
+        from edini.project.node import create_project_hda, build_state_parm_template
         import hou
         # Workspace awareness: reuse a selected Project HDA if present.
         try:
             for node in hou.selectedNodes():
                 if node.type().name() == "edini::project":
+                    # Health check: ensure the node has the __edini_state parm.
+                    # Old or manually-installed HDAs may lack it; without it,
+                    # build_scaffold crashes much later (at save_declaration)
+                    # with a confusing error. Auto-install if missing.
+                    if node.parm("__edini_state") is None:
+                        try:
+                            node.addSpareParmTuple(build_state_parm_template())
+                        except Exception:
+                            pass
                     return {"success": True, "core_path": node.path(),
                             "shell_path": node.parent().path(),
                             "reused": True}

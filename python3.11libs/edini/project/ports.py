@@ -35,52 +35,63 @@ OUTPUT_1_NODE = "output_1"           # output node → forms subnet output 2
 _ANCHOR_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 
 
-def validate_component_ports(ports: dict) -> None:
-    """校验一个组件的 ports 结构。不合法则 raise ValueError。
+def validate_component_ports(ports: dict, component_id: str = "") -> list[str]:
+    """Validate a component's ports structure. Returns a list of error strings.
 
-    检查（spec §3.2 / §4.1）：
-      - out[0] 必须是 kind=geometry
-      - anchors 类型的 port，其 points[].name 必须存在且合法
-      - in[] 的每个连接必须有 from 字段
+    Collects ALL errors (does not raise on first) so the agent can fix every
+    field in one retry instead of discovering them one at a time.
+
+    Checks (spec §3.2 / §4.1):
+      - out[0] must be {index:0, kind:'geometry'}
+      - anchors ports: points[].name must exist and be legal
+      - in[] entries: must have 'from', 'anchor', 'port' fields
     """
+    errors: list[str] = []
+    prefix = f"component '{component_id}': " if component_id else ""
     out_ports = ports.get("out", [])
     in_ports = ports.get("in", [])
 
-    # out[0] 必须是 geometry。
+    # out[0] must be geometry.
     if out_ports:
         first = out_ports[0]
         if first.get("index") != GEOMETRY_PORT_INDEX or \
            first.get("kind") != PORT_KIND_GEOMETRY:
-            raise ValueError(
-                "ports.out[0] must be {index:0, kind:'geometry'} (main geometry)")
+            errors.append(
+                f"{prefix}ports.out[0] must be {{index:0, kind:'geometry'}} "
+                f"(main geometry), got: {first}")
 
     for op in out_ports:
         if op.get("kind") == PORT_KIND_ANCHORS:
             for pt in op.get("points", []):
                 name = pt.get("name")
                 if not name or not _ANCHOR_NAME_RE.match(name):
-                    raise ValueError(
-                        f"anchor point missing/illegal @name: {name!r}. "
+                    errors.append(
+                        f"{prefix}anchor point missing/illegal @name: {name!r}. "
                         f"Must match [A-Za-z][A-Za-z0-9_]*.")
 
     seen_in_anchors: set[str] = set()
     for ip in in_ports:
         if not ip.get("from"):
-            raise ValueError(
-                f"ports.in entry missing 'from' (source component id): {ip}")
-        # anchor 必填 + 合法名（= 内部命名节点 in_<from>_<anchor> 的键）。
+            errors.append(
+                f"{prefix}ports.in entry missing 'from' (source component id): {ip}")
         anchor = ip.get("anchor")
         if not anchor or not _ANCHOR_NAME_RE.match(anchor):
-            raise ValueError(
-                f"ports.in entry missing/illegal 'anchor': {anchor!r}. "
+            errors.append(
+                f"{prefix}ports.in entry missing/illegal 'anchor': {anchor!r}. "
                 f"Must match [A-Za-z][A-Za-z0-9_]* — it names the internal "
                 f"input node in_<from>_<anchor>.")
-        # 同组件内 anchor 撞名 → 节点名冲突（幂等重建会撞 duplicate node name）。
-        if anchor in seen_in_anchors:
-            raise ValueError(
-                f"duplicate ports.in[].anchor within one component: {anchor!r}. "
-                f"In-port anchors must be unique (they form node names).")
-        seen_in_anchors.add(anchor)
+        if "port" not in ip:
+            errors.append(
+                f"{prefix}ports.in entry missing 'port' (source output port index, "
+                f"usually 1 for anchors): {ip}")
+        if anchor:
+            if anchor in seen_in_anchors:
+                errors.append(
+                    f"{prefix}duplicate ports.in[].anchor within one component: "
+                    f"{anchor!r}. In-port anchors must be unique.")
+            seen_in_anchors.add(anchor)
+
+    return errors
 
 
 if __name__ == "__main__":
@@ -90,5 +101,6 @@ if __name__ == "__main__":
         {"index": 1, "kind": PORT_KIND_ANCHORS, "points": [
             {"name": "a", "role": "mount"}]}],
         "in": []}
-    validate_component_ports(_good)
+    errors = validate_component_ports(_good)
+    assert not errors, f"expected no errors, got: {errors}"
     print("ports.py smoke ok")

@@ -13,6 +13,29 @@ Start by understanding the current project context, then ask questions one at a 
 Do NOT invoke any implementation skill, write any code, scaffold any project, or take any implementation action until you have presented a design and the user has approved it. This applies to EVERY project regardless of perceived simplicity.
 </HARD-GATE>
 
+## Houdini Procedural Modeling — Fast-Path Exemption
+
+**If the task is 3D procedural modeling** (the user wants a physical object
+made of parts — a table, car, bicycle, machine, building — and you are running
+inside Houdini/Edini with the `project-modeling` skill available), the full
+brainstorming spec→plan flow is **not appropriate**. 3D modeling is iterative
+and visual, not a software design problem. In this case:
+
+1. **Ask at most 1-2 quick clarifying questions** (e.g. "what style?" or "what
+   size?"). Do NOT run through the full 5-10 question interview.
+2. **Present a brief component decomposition** (table = tabletop + legs + shelf)
+   and get a quick "继续/go ahead" from the user.
+3. **Delegate to the `project-modeling` skill immediately** — its decompose →
+   scaffold → model per component cycle IS the design methodology for modeling.
+4. **Do NOT write a spec doc** to `docs/superpowers/specs/` — a single 3D asset
+   does not need a written spec file. The component declaration in the Project
+   HDA is the design artifact.
+5. **Do NOT invoke `writing-plans`** — the modeling workflow is driven by tool
+   calls (project_create → project_build_scaffold → model), not a written plan.
+
+This fast-path applies ONLY to procedural modeling tasks. For software/code
+tasks, the full brainstorming flow still applies.
+
 ## Anti-Pattern: "This Is Too Simple To Need A Design"
 
 Every project goes through this process. A todo list, a single-function utility, a config change — all of them. "Simple" projects are where unexamined assumptions cause the most wasted work. The design can be short (a few sentences for truly simple projects), but you MUST present it and get approval.

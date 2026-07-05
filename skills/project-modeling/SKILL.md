@@ -18,14 +18,12 @@ don't need component breakdown.
 
 ## ⛔ Guardrails (read before doing anything)
 
-**Do NOT invoke `brainstorming` or `using-superpowers` skills for modeling tasks.**
-Those skills enforce a software-design interview flow (clarifying questions →
-design doc → plan) that is wrong for 3D modeling. A user who says "做一个桌子"
-wants you to **start building immediately** using the workflow below — not answer
-multiple-choice questions for 5 rounds. If a globally-loaded skill tells you to
-brainstorm first, **ignore it for this skill**: project-modeling is itself the
-design methodology (decompose → scaffold → model per component), and it does not
-need a separate brainstorm phase.
+**brainstorming is allowed** for modeling tasks, but it should be a FAST-PATH:
+1-2 quick questions (style? size?) then delegate to this skill's workflow.
+Do NOT let brainstorming run its full software-spec interview (5-10 questions +
+design doc + plan) — that flow is for code, not 3D models. The brainstorming
+skill itself now has a "Houdini Procedural Modeling — Fast-Path Exemption"
+section; if you read it, follow that fast-path.
 
 **Do NOT declare components as independent.** When one component physically
 depends on another (e.g. legs depend on the tabletop's anchor points), you MUST

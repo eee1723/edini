@@ -47,10 +47,33 @@ def build_project_scaffold(core_node: "hou.Node",
     decl = load_declaration(core_node)
     components = decl.get("components", [])
 
+    # Dry-run validation: collect ALL port errors before building anything,
+    # so the agent gets every field wrong in one shot instead of one-at-a-time.
+    all_errors: list[str] = []
+    seen_ids: set[str] = set()
+    for i, comp in enumerate(components):
+        cid = comp.get("id", f"<missing id at [{i}]>")
+        if not cid or cid in seen_ids:
+            all_errors.append(f"duplicate or missing component id: {cid!r}")
+        seen_ids.add(cid)
+        errs = validate_component_ports(comp.get("ports", {}), component_id=cid)
+        all_errors.extend(errs)
+    if all_errors:
+        return {
+            "success": False,
+            "error": f"Declaration validation failed — {len(all_errors)} error(s). "
+                     f"Fix ALL of them before retrying:",
+            "validation_errors": all_errors,
+            "schema_hint": (
+                "Each component needs: {id, purpose, ports:{out:[...], in:[...]}}. "
+                "out[0] must be {index:0, kind:'geometry'}. "
+                "Each ports.in entry needs: {from:<component_id>, port:<int>, anchor:<name>}. "
+                "Example: {from:'tabletop', port:1, anchor:'leg_mount_fr'}"
+            ),
+        }
+
     built, skipped = [], []
     for comp in components:
-        # 先校验 ports（shift-left：建之前先挡非法结构）。
-        validate_component_ports(comp.get("ports", {}))
         cid = comp["id"]
         subnet = _ensure_component_subnet(core_node, cid)
         _ensure_scaffold_nodes(subnet)
@@ -318,7 +341,10 @@ def add_anchors(core_node: "hou.Node", component_id: str,
         vex_spec = {k: v for k, v in spec.items() if k != "name"}
         try:
             snippet, parms = build_mount_vex(vex_spec)
-        except VexStrategyError as e:
+        except (VexStrategyError, ValueError) as e:
+            # Catch VexStrategyError (unknown measure) AND ValueError subclasses
+            # (MeasureError for bad axes/face format) so the agent gets a
+            # friendly "anchor 'xxx': ..." message instead of a raw traceback.
             return {"success": False,
                     "error": f"anchor {name!r}: {e}"}
         # Create/replace the anchor wrangle (named anchor_<name>).
