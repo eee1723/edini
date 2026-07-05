@@ -132,6 +132,42 @@ paper** (tabletop → legs, tabletop → apron). Every arrow becomes a `ports.in
 entry. If a component has NO upstream dependency (rare — only the root), its
 `in` can be `[]`.
 
+### 2b. Declare design params (RECOMMENDED — top-down, auto-created)
+
+Pass `design_params` to `project_build_scaffold` and they are **automatically
+created as spare parms on the core node**. This is the recommended path — you
+don't need `project_promote_params` or manual spare-parm creation.
+
+```
+project_build_scaffold(core_path="...", components=[...], design_params=[
+    {"name":"length",   "label":"桌面长度",  "default":1.2,  "min":0.4, "max":3.0},
+    {"name":"width",    "label":"桌面宽度",  "default":0.6,  "min":0.3, "max":1.5},
+    {"name":"height",   "label":"桌高",      "default":0.75, "min":0.3, "max":1.2},
+    {"name":"top_thick","label":"面板厚度",  "default":0.04, "min":0.01,"max":0.1},
+    {"name":"leg_thick","label":"腿粗",      "default":0.05, "min":0.02,"max":0.2}
+])
+# → spare parms length/width/height/top_thick/leg_thick auto-created on the core.
+# → return includes "design_params_created": 5
+```
+
+After scaffold, reference these from geometry nodes INSIDE component subnets
+using **ABSOLUTE paths** (relative `ch("../")` is unreliable across subnet nesting):
+
+```
+# Inside tabletop/body_box (a box SOP inside the tabletop subnet):
+houdini_set_params_batch(node_path=".../tabletop/body_box", params={
+    "sizex": "ch('/obj/.../project_core/length')",       # ABSOLUTE path
+    "sizey": "ch('/obj/.../project_core/top_thick')",
+    "sizez": "ch('/obj/.../project_core/width')",
+    "ty":    "ch('/obj/.../project_core/top_thick')*0.5"
+})
+```
+
+**⚠️ Use ABSOLUTE ch() paths** (e.g. `ch('/obj/geo1/project1/length')`), NOT
+relative (`ch('../../length')`). Relative paths across subnet nesting levels
+often produce "Bad parameter reference" warnings and zero geometry. The core
+path is in the `[Current Houdini Context]` block of every message — use it.
+
 ### 3. Model inside each component subnet — standard node tools
 Use `houdini_create_node`, `houdini_connect_nodes`, `houdini_set_param`. Model
 freely inside each subnet. **Parameters are a byproduct of modeling**: when you

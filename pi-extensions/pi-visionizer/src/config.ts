@@ -43,8 +43,8 @@ export function getEnvConfig(): VisionizerConfig | undefined {
  * models.json (not "aliyun"); index.ts also has a fallback that searches the
  * registry by modelId if this exact provider name isn't found. */
 export const DEFAULT_VISION_MODEL: VisionizerConfig = {
-  provider: "ali",
-  modelId: "qwen-vl-max",
+  provider: "zai-coding-cn",
+  modelId: "glm-5v-turbo",
 };
 
 export const DEFAULT_PROMPT = [

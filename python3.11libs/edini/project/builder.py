@@ -94,16 +94,26 @@ def build_project_scaffold(core_node: "hou.Node",
     # 新流程退回 sandbox）。幂等：重建只补缺失，不重复。
     _ensure_core_output(core_node, [c["id"] for c in components])
 
+    # Auto-create design params as spare parms on the core node.
+    # design_params in the declaration define the project's adjustable knobs
+    # (length, width, etc.). They MUST exist as real Houdini spare parms on the
+    # core node so that component subnets can reference them via ch("../../../<name>")
+    # or ch("/abs/path"). Without this, ch() references produce zero geometry.
+    design_params = decl.get("design_params", [])
+    params_created = _ensure_design_params(core_node, design_params)
+
     # 记日志（成功）。
     decl = load_declaration(core_node)
     append_log(decl, kind="scaffold",
-               summary=f"built {len(built)} component scaffold(s)",
-               payload={"built": built, "skipped": skipped},
+               summary=f"built {len(built)} component scaffold(s), {params_created} design param(s)",
+               payload={"built": built, "skipped": skipped,
+                        "design_params": params_created},
                result_ok=True)
     save_declaration(core_node, decl)
 
     return {"success": True, "components_built": built,
             "components_skipped": skipped,
+            "design_params_created": params_created,
             "project": core_node.path()}
 
 
@@ -218,6 +228,67 @@ def _ensure_core_output(core_node: "hou.Node", component_ids: list[str]) -> None
     out.setDisplayFlag(True)
     out.setRenderFlag(True)
     core_node.layoutChildren()
+
+
+def _ensure_design_params(core_node: "hou.Node", design_params: list[dict]) -> int:
+    """Create design params as spare parms on the core node. Idempotent.
+
+    design_params is the SINGLE SOURCE OF TRUTH for the project's adjustable
+    knobs (length, width, height, etc.). Each entry:
+        {"name","label","default","min","max","components":[ids that use it]}
+
+    These MUST exist as real Houdini spare parms on the core node so component
+    subnets can reference them via ch("/abs/path/to/core/<name>"). Without this,
+    ch() references evaluate to 0 and the geometry collapses to a point.
+
+    Creates a FloatParmTemplate per design param in a "Design Params" folder.
+    Skips parms that already exist (idempotent). Returns count of params
+    ensured (created or already-present).
+    """
+    if not design_params:
+        return 0
+    import hou
+    count = 0
+    for dp in design_params:
+        name = dp.get("name")
+        if not name:
+            continue
+        # Skip if parm already exists on core.
+        if core_node.parm(name) is not None:
+            count += 1
+            continue
+        # Create a float spare parm with default/min/max.
+        default = dp.get("default", 0.0)
+        try:
+            default = float(default)
+        except (TypeError, ValueError):
+            default = 0.0
+        tmpl = hou.FloatParmTemplate(
+            name=name,
+            label=dp.get("label", name),
+            num_components=1,
+            default=(default,),
+        )
+        mn = dp.get("min")
+        mx = dp.get("max")
+        if mn is not None:
+            try:
+                tmpl.setMin(float(mn))
+            except (TypeError, ValueError):
+                pass
+        if mx is not None:
+            try:
+                tmpl.setMax(float(mx))
+            except (TypeError, ValueError):
+                pass
+        try:
+            core_node.addSpareParmTuple(
+                tmpl, in_folder=("Design Params",),
+                create_missing_folders=True)
+            count += 1
+        except Exception:
+            pass
+    return count
 
 
 def promote_params(core_node: "hou.Node") -> dict:
