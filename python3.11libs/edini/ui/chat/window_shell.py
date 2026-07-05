@@ -10,6 +10,7 @@ from edini.ui.components.thinking_panel import ThinkingPanel
 from edini.ui.components.tool_panel import ToolPanel
 from edini.ui.components.input_bar import InputBar
 from edini.ui.components.change_tree import ChangeTreeWidget
+from edini.ui.components.param_snapshot import ParamSnapshotPanel
 from edini.ui.status.context_panel import ContextPanel
 
 
@@ -107,12 +108,7 @@ class ChatWindowShell(QtWidgets.QWidget):
             self._change_tree = None
 
         if self._scope.show_param_snapshot:
-            # ParamSnapshotPanel is built in T5.4; for now, placeholder
-            self._param_snapshot = QtWidgets.QLabel("🔧 Parameters (T5.4)")
-            self._param_snapshot.setStyleSheet(
-                f"color:#71717a;font-size:{fs(11)};padding:8px;"
-                f"background:#0e0e15;border:1px solid #2a2a3c;border-radius:6px;"
-            )
+            self._param_snapshot = ParamSnapshotPanel()
             lay.addWidget(self._param_snapshot)
         else:
             self._param_snapshot = None
@@ -141,3 +137,14 @@ class ChatWindowShell(QtWidgets.QWidget):
     def center_widget(self): return self._center
     @property
     def left_panel(self): return self._left_panel
+    @property
+    def param_snapshot(self): return self._param_snapshot
+
+    def replace_left(self, new_widget):
+        """Swap the left panel widget at runtime (e.g., placeholder → version list)."""
+        idx = self._splitter.indexOf(self._left_panel)
+        self._splitter.replaceWidget(idx, new_widget)
+        self._left_panel.setParent(None)
+        self._left_panel.deleteLater()
+        self._left_panel = new_widget
+        self._left_panel.setObjectName("LeftPanel")

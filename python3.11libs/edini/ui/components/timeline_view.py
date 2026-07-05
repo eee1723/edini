@@ -6,6 +6,32 @@ Drag-selecting text inside a bubble auto-scrolls when cursor nears edges.
 from PySide6 import QtCore, QtGui, QtWidgets
 
 
+class _AutoScrollFilter(QtCore.QObject):
+    """App-level event filter parented to its timeline.
+
+    Parenting to the timeline means Qt destroys this filter when the timeline
+    is destroyed, and a destroyed event filter is automatically detached from
+    the QApplication. This avoids stale-filter crashes (the previous design
+    installed the timeline itself as the filter on the singleton qapp, which
+    outlives every timeline and never removed it).
+    """
+
+    def __init__(self, timeline, parent=None):
+        super().__init__(parent)
+        self._timeline = timeline
+
+    def eventFilter(self, watched, event):
+        # During teardown the timeline (and this filter) may be partially
+        # destroyed; guard both the attribute lookup and C++ validity.
+        timeline = getattr(self, "_timeline", None)
+        if timeline is None:
+            return False
+        import shiboken6
+        if not shiboken6.isValid(timeline):
+            return False
+        return timeline._handle_app_event(watched, event)
+
+
 class _TimelineView(QtWidgets.QScrollArea):
     """Chat timeline using QScrollArea + widgets for reliable smart scrolling.
 
@@ -60,16 +86,20 @@ class _TimelineView(QtWidgets.QScrollArea):
         self._auto_scroll_timer.setInterval(self.AUTO_SCROLL_INTERVAL)
         self._auto_scroll_timer.timeout.connect(self._auto_scroll_tick)
         self._drag_source_label: QtWidgets.QLabel | None = None
+        # Install a CHILD filter object (not self) on the app. Parented to this
+        # timeline, so it is destroyed with us and auto-detached from qapp.
+        self._app_filter = _AutoScrollFilter(self, self)
         app = QtWidgets.QApplication.instance()
         if app is not None:
-            app.installEventFilter(self)
+            app.installEventFilter(self._app_filter)
 
     # ── Auto-scroll during text drag selection ──
 
-    def eventFilter(self, watched, event):
-        """Start the auto-scroll timer when the user mouse-presses on a
-        text-selectable label inside this timeline, stop it on release.
-        The timer ticks handle the actual scroll.
+    def _handle_app_event(self, watched, event):
+        """Handle an app-level event from the _AutoScrollFilter.
+
+        Starts the auto-scroll timer when the user mouse-presses on a
+        text-selectable label inside this timeline, stops on release.
         """
         if event is not None:
             et = event.type()
@@ -84,7 +114,7 @@ class _TimelineView(QtWidgets.QScrollArea):
                     event.button() == QtCore.Qt.LeftButton:
                 self._drag_source_label = None
                 self._auto_scroll_timer.stop()
-        return super().eventFilter(watched, event)
+        return False
 
     def _scroll_range_available(self) -> bool:
         sb = self.verticalScrollBar()
