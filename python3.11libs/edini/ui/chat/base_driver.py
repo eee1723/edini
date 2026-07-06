@@ -131,6 +131,7 @@ class BaseChatDriver(QtCore.QObject):
         if hasattr(rpc, "send_get_state"):
             rpc.send_get_state()
         self._start_stats_polling()
+        self._start_round_timer()
 
     def _on_turn_done(self, _payload=None):
         self._flush_thinking()
@@ -139,6 +140,7 @@ class BaseChatDriver(QtCore.QObject):
             self._current_ai = None
         # Stop stats polling and fetch final token counts for this turn.
         self._stop_stats_polling()
+        self._stop_round_timer()
         rpc = self._runtime.rpc
         if hasattr(rpc, "send_get_stats"):
             rpc.send_get_stats()
@@ -150,6 +152,7 @@ class BaseChatDriver(QtCore.QObject):
             self._current_ai.finalize()
             self._current_ai = None
         self._stop_stats_polling()
+        self._stop_round_timer()
         banner = QtWidgets.QLabel(f"⚠️ {html.escape(msg)}")
         banner.setWordWrap(True)
         banner.setStyleSheet(
@@ -181,6 +184,37 @@ class BaseChatDriver(QtCore.QObject):
         rpc = self._runtime.rpc
         if hasattr(rpc, "send_get_stats"):
             rpc.send_get_stats()
+
+    # ── Round timer (elapsed time per turn, mirrors main_window) ──
+    def _ensure_round_timer(self):
+        """Lazy-create the round-timer pair on first use.
+
+        QElapsedTimer measures wall-clock ms; QTimer ticks every 1s to refresh
+        the label. Matches the _stats_timer lazy-create pattern.
+        """
+        if not hasattr(self, "_round_elapsed"):
+            self._round_elapsed = QtCore.QElapsedTimer()
+            self._round_elapsed.start()  # mark valid; reset on each turn
+        if not hasattr(self, "_round_timer"):
+            self._round_timer = QtCore.QTimer(self)
+            self._round_timer.setInterval(1000)
+            self._round_timer.timeout.connect(self._on_round_tick)
+
+    def _on_round_tick(self):
+        """Push the current elapsed seconds into the Pi Status card."""
+        if self._round_elapsed.isValid():
+            self._shell.context_panel.set_round_time(
+                self._round_elapsed.elapsed() / 1000.0)
+
+    def _start_round_timer(self):
+        self._ensure_round_timer()
+        self._round_elapsed.start()  # reset to zero for this turn
+        self._round_timer.start()
+
+    def _stop_round_timer(self):
+        if hasattr(self, "_round_timer"):
+            self._round_timer.stop()
+            self._on_round_tick()  # final flush so the frozen time is accurate
 
     # ── Send ──
     def send(self, text: str, images=None):

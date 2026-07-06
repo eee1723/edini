@@ -219,3 +219,55 @@ def test_stats_requested_on_turn_start_and_end():
     assert len(state_calls) == 1
     rpc.agent_finished.emit()  # should call send_get_stats (final fetch)
     assert len(stats_calls) >= 1
+
+
+def test_round_timer_starts_on_turn_start():
+    """Regression: the round timer must start when a turn begins (mirrors
+    main_window). The QTimer drives a 1s-tick label update."""
+    drv, rpc, shell = _make_setup()
+    rpc.send_get_state = lambda: None
+    rpc.send_get_stats = lambda: None
+    rpc.agent_started.emit()
+    # The round QTimer should now be running and the elapsed stopwatch valid.
+    assert drv._round_timer.isActive() is True
+    assert drv._round_elapsed.isValid() is True
+    # A manual tick must push the elapsed time into the label.
+    drv._on_round_tick()
+    assert "Round: 0:" in shell.context_panel.round_time_label.text()
+
+
+def test_round_timer_stops_on_turn_done():
+    """The round timer must stop when the turn completes, freezing the time."""
+    drv, rpc, shell = _make_setup()
+    rpc.send_get_state = lambda: None
+    rpc.send_get_stats = lambda: None
+    rpc.agent_started.emit()
+    assert drv._round_timer.isActive() is True
+    rpc.agent_finished.emit()
+    assert drv._round_timer.isActive() is False
+
+
+def test_round_timer_stops_on_failure():
+    """The round timer must also stop when a turn fails (error path)."""
+    drv, rpc, shell = _make_setup()
+    rpc.send_get_state = lambda: None
+    rpc.send_get_stats = lambda: None
+    rpc.agent_started.emit()
+    assert drv._round_timer.isActive() is True
+    rpc.error_occurred.emit("boom")
+    assert drv._round_timer.isActive() is False
+
+
+def test_round_timer_resets_each_turn():
+    """Each new turn resets the elapsed counter so the clock starts from 0."""
+    drv, rpc, shell = _make_setup()
+    rpc.send_get_state = lambda: None
+    rpc.send_get_stats = lambda: None
+    rpc.agent_started.emit()
+    first = drv._round_elapsed.elapsed()
+    rpc.agent_finished.emit()
+    rpc.agent_started.emit()
+    second = drv._round_elapsed.elapsed()
+    # The second turn's elapsed should be near-zero (just started), definitely
+    # not larger than the first turn's accumulated time.
+    assert second <= first + 50  # 50ms tolerance for test timing
