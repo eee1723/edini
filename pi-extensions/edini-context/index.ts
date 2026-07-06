@@ -141,8 +141,8 @@ Before reporting completion, decide whether to capture:
 ## Visual Verification — disabled
 
 Visual verification (capture_review + describe_image) is currently OFF. Rely on
-NUMERIC evidence instead: houdini_inspect_geometry_health (errors/orphan checks),
-houdini_geometry_inventory (expected components + prim_count), and parameter
+NUMERIC evidence instead: inspect_health (errors/orphan checks),
+geometry_inventory (expected components + prim_count), and parameter
 spot-checks via houdini_get_param / houdini_inspect_geo. Do not call
 capture_review or describe_image — they are not available.
 `}
@@ -151,7 +151,7 @@ capture_review or describe_image — they are not available.
 **Procedural model (anything with parts)? Use the Project HDA component pipeline.**
 If the user wants a table, car, bicycle, keyboard, machine, building — anything
 made of parts that fit together — use the **project-modeling** skill: open a
-Project HDA (create_project_hda), declare components, build the scaffold
+Project HDA (project_create), declare components, build the scaffold
 (project_build_scaffold), then model freely inside each component subnet.
 Components collaborate via anchor point clouds (one outputs named anchors, the
 next consumes them to position itself). The whole model is self-contained in
@@ -167,7 +167,7 @@ node versions, missing connections) without bounding what you can create.
 
 | Task | Preferred approach |
 |---|---|
-| **Any multi-part model (table=top+legs, car=body+wheels, keyboard=tray+keys)** | **Project HDA component pipeline** (read the project-modeling skill): create_project_hda → declare components → project_build_scaffold → model in subnets → promote_params |
+| **Any multi-part model (table=top+legs, car=body+wheels, keyboard=tray+keys)** | **Project HDA component pipeline** (read the project-modeling skill): project_create → declare components → project_build_scaffold → model in subnets → promote_params |
 | Geometry that matches a recipe's intent (tube, copy, extrude...) | **recipe_list** → **recipe_read** → study the python_script → author your own network (adapt freely) |
 | Want a quick faithful copy of an existing recipe verbatim | **recipe_rebuild** (the optional deterministic-copy path) |
 | Single-piece generator / parametric surface | houdini_run_python_sandbox (single-SOP) |
@@ -176,12 +176,12 @@ node versions, missing connections) without bounding what you can create.
 
 ## Geometry verification workflow (after any build)
 
-1. houdini_inspect_geometry_health on the output node — MANDATORY first check.
+1. inspect_health on the output node — MANDATORY first check.
    Fix orphan points (Fuse), stray open curves (Blast), degenerate faces (Clean),
    non-manifold edges BEFORE anything else. These silently break downstream work.
-2. houdini_verify_orientation when the asset has parts with a defined axis
+2. verify_orientation when the asset has parts with a defined axis
    (optional construction_axis for deterministic axis derivation).
-3. houdini_geometry_inventory — confirm expected components exist with prim_count > 0.
+3. geometry_inventory — confirm expected components exist with prim_count > 0.
 ${vv ? `4. houdini_capture_review with views=['perspective','top','front','right'].
 5. describe_image on the captured file. NOTE: the vision model CANNOT assess
    orientation — do NOT act on any orientation claims it makes. Only act on
@@ -189,9 +189,9 @@ ${vv ? `4. houdini_capture_review with views=['perspective','top','front','right
 6. If the inventory marks a component SMALL, or vision returns
    VERDICT=closer_capture:<id>: run houdini_capture_component_detail to frame it.
 7. If defects found: fix the specific part, re-verify. Up to 3 rounds, then ask user.
-8. On accept: houdini_commit_sandbox to commit (runs health/orientation hard gates` : `4. Spot-check key geometry values via houdini_inspect_geo (point/prim counts,
+8. On accept: commit_sandbox to commit (runs health/orientation hard gates` : `4. Spot-check key geometry values via houdini_inspect_geo (point/prim counts,
    bounds, attributes) against your design intent. Visual capture/verify is off.
-5. On accept: houdini_commit_sandbox to commit (runs health/orientation hard gates`}
+5. On accept: commit_sandbox to commit (runs health/orientation hard gates`}
    and returns a verification_receipt). Reference the receipt's fields in your report.
 
 **For Project HDA models specifically:** build_project_scaffold returns the core

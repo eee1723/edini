@@ -140,11 +140,18 @@ _COMPONENT_ID_RE = _re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 def add_component(declaration: dict, component_id: str, purpose: str = "",
                   params: list | None = None,
                   ports_out: list | None = None,
-                  ports_in: list | None = None) -> dict:
+                  ports_in: list | None = None,
+                  axis: str | None = None) -> dict:
     """向声明追加一个组件。返回新组件 dict。
 
     组件 id 必须合法（= subnet 名规则）。ports_out/ports_in/params 为 None
     时置空列表。详见 spec §4.1。
+
+    Args:
+        axis: optional per-component orientation axis (Round-3 Fix D1), one of
+            "X"/"Y"/"Z"/"-X"/"-Y"/"-Z". None → scaffold uses the default (Y).
+            The scaffold bakes it as edini_world_axis so verify_orientation
+            reads the correct construction axis without agent node editing.
     """
     if not _COMPONENT_ID_RE.match(component_id or ""):
         raise ValueError(
@@ -162,6 +169,8 @@ def add_component(declaration: dict, component_id: str, purpose: str = "",
             "in": list(ports_in or []),
         },
     }
+    if axis is not None:
+        component["axis"] = axis
     declaration["components"].append(component)
     return component
 

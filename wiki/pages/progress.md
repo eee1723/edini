@@ -1,6 +1,8 @@
 # 🚀 开发进度
 
-> 最后更新：2026-07-05 &nbsp;|&nbsp; **🟢 统一对话窗口架构完成 + 工具链全量修复**。主 Agent 窗口与 HDA 建模窗口重构为共享组件库 + 配置差异化架构。HDA 窗口从简陋 QDialog 升级为完整三面板（橙色 #f59e0b 差异化 + 版本列表 + 参数快照 + workspace lock）。agent_panel 1951→958 行。121 测试 + 2 个架构守卫。同步修复 15+ 个工具链 bug（Ramp 序列化 / set_params_batch 向量 / ports 逐字段报错 / `__edini_state` 复用检查 / brainstorm 双重注册 / design_params 断层）。详见 [统一对话窗口](unified-chat.md)。
+> 最后更新：2026-07-06 &nbsp;|&nbsp; **🟢 会话日志驱动的平台契约强化（三轮 fix-observe-refix）**。分析三份真实 agent 建模会话日志（"做一个椅子"），逐轮从第一性原理定位问题并修复。核心：把建模契约从 SKILL.md 散文变成 **fail-fast 平台结构**（拒绝错误行为 + 开放正确通道）。三轮 11 个修复：addpoint 守卫 / 锚点路由净化（Blast + prim-strip）/ tag_component 拆分（agent-可编辑 + 内部锁死的 __edini_axis_bake）/ per-component `axis` 声明 / verify_orientation 的 construction_axis 真正生效 / 参数名建议 / sandbox 契约自文档 / canonical 工具名 / tube type 提示。净效果：会话1（120 调用/4 失败/2 沙箱）→ 会话3（**55 调用/1 失败/0 沙箱/0 锚点泄漏**）。848 测试 + 18 hython 铁证。详见 [组件地基指南](project-component-foundation.md) + 第四十一阶段卡片。
+>
+> 上一轮（2026-07-05）：**🟢 统一对话窗口架构完成 + 工具链全量修复**。主 Agent 窗口与 HDA 建模窗口重构为共享组件库 + 配置差异化架构。HDA 窗口从简陋 QDialog 升级为完整三面板（橙色 #f59e0b 差异化 + 版本列表 + 参数快照 + workspace lock）。agent_panel 1951→958 行。121 测试 + 2 个架构守卫。同步修复 15+ 个工具链 bug（Ramp 序列化 / set_params_batch 向量 / ports 逐字段报错 / `__edini_state` 复用检查 / brainstorm 双重注册 / design_params 断层）。详见 [统一对话窗口](unified-chat.md)。
 >
 > 上一轮（2026-07-03）：**🟢 Project HDA 组件流水线成熟 — 锚点程序化 + 参数自底向上 + HDA 按钮弹窗**。Project HDA 已从"最小闭环"演进为**组件流水线建模范式**（subnet 组件 + 端口信息点协议 + 程序化锚点 + 自底向上参数管理）。三大 UX 改进：① **工作区感知**（project_create 复用选中 HDA）；② **参数自底向上**（subnet 建→promote 按分组提到 core 带 min/max，core 驱动 subnet）；③ **HDA 参数面板 💬 Chat 按钮 → 精简对话弹窗**（取代原生 Python Pane 主入口，工作区统一在 HDA）。锚点不再硬编码（复用 vex_strategies 测量，改参数 live 重算）。**真机铁证**：promote 分组+min/max+live；HDA button+PythonModule 注入；锚点 length 2→4 ±1→±2。详见 [交接](handoff.md) + [组件地基指南](project-component-foundation.md)。
 >
@@ -209,6 +211,20 @@ recipe 教惯用法，资产管道教结构。
 </div>
 
 <div class="timeline">
+
+<div class="timeline-item timeline-done">
+  <div class="timeline-date">2026-07-06</div>
+  <div class="timeline-card">
+    <div class="timeline-card-header">
+      <span class="timeline-title">第四十一阶段：会话日志驱动的平台契约强化（三轮 fix-observe-refix）— 把 SKILL 散文变成 fail-fast 结构</span>
+      <span class="status-tag status-done">完成 · 848 测试 + 18 hython 铁证 · 三轮迭代</span>
+    </div>
+    <div class="timeline-summary"><strong>分析三份真实 agent 建模会话日志（同一任务"做一个椅子"），逐轮从第一性原理定位问题并修复。</strong>核心洞察：平台把建模契约写在了 SKILL.md 散文里，agent 不读/读了不照做 → 错误一路静默，靠肉眼巡检兜底。修法不是让 agent 更聪明，而是<strong>让平台把契约真正强制起来</strong>（shift from prose to fail-fast structure）。复用既有 <code>[VISUAL-VERIFY-GATE]</code> 三层模式（filter tool → swap guideline → refuse in handler）。<br><br><strong>会话1（120 调用/4 失败）→ Round 1 六修复</strong>：① <code>project_anchor_guard</code>——拒绝 Project HDA 组件内手写 <code>addpoint()</code>，指向 <code>project_add_anchors</code>（带 <code>// edini-bypass-anchor-guard</code> 逃生口）；② 锚点路由自动 <code>filter_&lt;from&gt;_&lt;anchor&gt;</code> Blast（按 <code>@name</code> 留点）+ 静态 <code>route_warnings</code>；③ scaffold 自动烘焙 <code>component_id</code> + <code>edini_world_axis</code>；④ 参数名 "Did you mean" 建议（<code>difflib</code> + manifest）；⑤ sandbox 契约自文档化错误（NameError/NoneType 附注入变量清单）；⑥ canonical 工具名清理 + Lop 类别提示（cylinder→tube）。<br><br><strong>会话2（128 调用）→ Round 2 三修复（Round 1 的边界）</strong>：① <strong>Fix A（过度矫正）</strong>——agent 覆盖 <code>tag_component</code> snippet 静默删了 axis。拆成两节点：<code>tag_component</code>（agent 可编辑，只 component_id）+ <code>__edini_axis_bake</code>（内部 <code>__</code> 前缀，锁死，每次 rebuild 重设）；guard 拒绝编辑 <code>__</code> 节点。② <strong>Fix B</strong>——Blast 漏 degenerate prims（72 个零顶点面）。加 <code>__edini_anchor_clean_*</code> detail wrangle 删所有 prims，端口保证纯点云。③ sandbox 引导：别在 sandbox 原型组件。<br><br><strong>会话3（55 调用/最干净）→ Round 3 三修复（Round 2 的过度矫正）</strong>：会话3 几乎完美（0 沙箱/0 锚点泄漏/读 SKILL/用声明式锚点），但 <strong>backrest 朝向失败</strong>暴露 Round 2 Fix A 把"设 per-component 轴"的正门也封死了。<strong>第一性原理</strong>：安全闸应"拒绝错误行为 + 开放正确通道"，Round 2 只做了前半。① <strong>D1</strong>——组件声明加可选 <code>axis</code> 字段（默认 Y），scaffold 据此烘焙正确向量（<code>resolve_axis_vector</code>）。agent 声明 <code>"axis":"Z"</code> + rebuild，axis 自动正确，永不碰内部节点。② <strong>D2</strong>——<code>verify_orientation</code> 的 <code>construction_axis</code> 参数之前被忽略（L87 陷阱），现在真的生效（per-check 覆盖 baked 值，<code>axis_source: override|baked</code>）。③ <strong>D3</strong>——tube <code>type=prim</code> access_hint（copytopoints 只复制锚点的坑）。<br><br><strong>三轮净效果</strong>：会话1（120 调用/4 失败/2 沙箱/0 声明式锚点）→ 会话3（<strong>55 调用/1 失败/0 沙箱/1 声明式锚点/0 锚点泄漏</strong>）。会话3 唯一剩余失败（backrest 轴 Y-vs-Z）已被 D1+D2 修复。<strong>测试</strong>：848 mock + 18 hython（新增 6 椅子回归 + 2 轴回归，含 <code>test_fixa_axis_survives_tag_component_override</code> / <code>test_fixb_anchor_port_is_prim_free</code> / <code>test_d1_backrest_axis_z_baked_and_passes</code>）。<strong>核心设计原则</strong>：对 LLM agent，<strong>不可绕过的结构 &gt; 拒绝 &gt; 默认值</strong>（默认值会被全量覆盖语义无声擦除）。详见 [组件地基指南](project-component-foundation.md)。</div>
+    <div class="timeline-tags">
+      <span>会话日志驱动</span><span>第一性原理</span><span>fail-fast</span><span>addpoint-guard</span><span>声明式锚点</span><span>锚点路由净化</span><span>__edini_axis_bake</span><span>内部节点锁</span><span>per-component轴</span><span>construction_axis生效</span><span>拒绝+开放通道</span><span>三轮迭代</span><span>848测试</span><span>18hython</span>
+    </div>
+  </div>
+</div>
 
 <div class="timeline-item timeline-done">
   <div class="timeline-date">2026-07-01 → 07-02</div>

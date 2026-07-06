@@ -47,6 +47,7 @@ from edini.recipe_library import (
 )
 from edini.assembly_builder import build_assembly as _build_assembly_network
 from edini.project.builder import build_project_scaffold, promote_params, add_anchors
+from edini.project.guards import lint_wrangle_snippet
 
 # NOTE: Two procedural pipelines are archived under _disabled_backup/:
 #   1. procedural-modeling/  — prompt-driven build_procedural_asset + G1-G3 gates.
@@ -265,6 +266,37 @@ def _project_add_anchors(core_path: str | None = None,
                 "traceback": traceback.format_exc()}
 
 
+# ── Guarded set_param wrappers (Fix 1) ──────────────────────────────────
+# Intercept `houdini_set_param` / `houdini_set_params_batch` when they target
+# a wrangle `snippet` inside a Project HDA component, and refuse hand-rolled
+# addpoint() — pointing the agent at project_add_anchors instead. Shifts the
+# "use declaritive anchors" rule from SKILL.md prose to a fail-fast gate.
+# See edini.project.guards for scope/escape-hatch details.
+def _guarded_set_param(**kw) -> dict[str, Any]:
+    node_path = kw.get("node_path")
+    param_name = kw.get("param_name")
+    value = kw.get("value")
+    if node_path and param_name == "snippet":
+        blocked = lint_wrangle_snippet(node_path, value)
+        if blocked is not None:
+            return blocked
+    return set_param(node_path, param_name, value)
+
+
+def _guarded_set_params_batch(**kw) -> dict[str, Any]:
+    node_path = kw.get("node_path")
+    params = kw.get("params") or {}
+    if node_path and isinstance(params.get("snippet"), str):
+        blocked = lint_wrangle_snippet(node_path, params["snippet"])
+        if blocked is not None:
+            # Mirror the batch shape so the agent's partial-result handling
+            # still works, but make refusal unambiguous via success:false.
+            blocked["set_count"] = 0
+            blocked["total_count"] = len(params)
+            return blocked
+    return set_params_batch(node_path, params)
+
+
 # Map tool names to handler functions
 TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     "houdini_get_scene_info": lambda **kw: get_scene_info(),
@@ -278,12 +310,8 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
         input_index=kw.get("input_index", 0),
         output_index=kw.get("output_index", 0),
     ),
-    "houdini_set_param": lambda **kw: set_param(
-        kw["node_path"], kw["param_name"], kw["value"],
-    ),
-    "houdini_set_params_batch": lambda **kw: set_params_batch(
-        kw["node_path"], kw["params"],
-    ),
+    "houdini_set_param": _guarded_set_param,
+    "houdini_set_params_batch": _guarded_set_params_batch,
     "houdini_get_param": lambda **kw: get_param(kw["node_path"], kw["param_name"]),
     "houdini_list_nodes": lambda **kw: list_nodes(
         parent_path=kw.get("parent_path", "/"),

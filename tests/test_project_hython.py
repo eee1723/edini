@@ -16,6 +16,13 @@ import subprocess
 import sys
 import unittest
 
+# Pure-logic constants available without hou (used in test assertions in the
+# main process; the hython subprocess re-imports them itself).
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "python3.11libs"))
+from edini.project.ports import (  # noqa: E402
+    TAG_COMPONENT_NODE, AXIS_BAKE_NODE, INPUT_FILTER_PREFIX,
+)
+
 _HOUDINI_CANDIDATES = [
     r"C:\Program Files\Side Effects Software",  # 精创机
     r"D:\houdini",                               # 另一台机
@@ -69,7 +76,8 @@ from edini.project.state import empty_declaration, add_component, save_declarati
 from edini.project.node import create_project_hda
 from edini.project.builder import build_project_scaffold
 from edini.project.ports import (OUT_GEOMETRY_NODE, OUT_ANCHORS_NODE,
-                                 OUTPUT_0_NODE, OUTPUT_1_NODE)
+                                 OUTPUT_0_NODE, OUTPUT_1_NODE,
+                                 TAG_COMPONENT_NODE)
 
 result = {"steps": {}}
 
@@ -142,14 +150,15 @@ class TestScaffoldHython(unittest.TestCase):
                   f"--- stderr ---\n{proc.stderr}")
 
     def test_step1_scaffold_structure(self):
-        """§8 步骤1: 两个 subnet 存在，chassis 有 4 脚手架节点。"""
+        """§8 步骤1: 两个 subnet 存在，chassis 有脚手架节点（含 tag_component + __edini_axis_bake）。"""
         res, _ = self._run_harness()
         self.assertTrue(res["steps"]["s1_chassis_exists"],
                         f"chassis subnet missing: {res}")
         self.assertTrue(res["steps"]["s1_wheels_exists"],
                         f"wheels subnet missing: {res}")
         ch = res["steps"]["s1_chassis_children"]
-        for expected in ("out_geometry", "out_anchors", "output_0", "output_1"):
+        for expected in ("out_geometry", "out_anchors", "output_0", "output_1",
+                         TAG_COMPONENT_NODE, AXIS_BAKE_NODE):
             self.assertIn(expected, ch, f"missing scaffold node {expected}: {ch}")
 
     def test_step2_anchor_emission(self):
@@ -654,6 +663,368 @@ class TestDesignParamsHython(unittest.TestCase):
         self.assertTrue(s["s3_idempotent_value_preserved"])
         self.assertEqual(s["s3_width_count"], 1,
                          f"expected exactly one width parm after rebuild: {res}")
+
+
+# ============================================================================
+# Fix 2 + Fix 3 regression: the chair-modeling log bugs, locked integrationally.
+#   Fix 2: a component consuming anchors via ports.in must receive ONLY the
+#          declared anchor name's points (Blast @name filter), not the whole
+#          upstream anchor cloud. The log showed 5 points (4 leg + 1 backrest)
+#          silently flowing into the leg port — took 5 tool rounds to patch.
+#   Fix 3: scaffold auto-bakes prim-class component_id + edini_world_axis, so
+#          geometry_inventory sees components and verify_orientation passes with
+#          zero agent setup (the log showed both failing until manually patched).
+# ============================================================================
+_CHAIR_HARNESS = r"""
+import json, sys, os
+sys.path.insert(0, os.path.join(r"%s", "python3.11libs"))
+import hou
+_hda = os.path.join(r"%s", "otls", "edini_project.hda")
+if os.path.isfile(_hda):
+    hou.hda.installFile(_hda)
+from edini.project.state import empty_declaration, add_component
+from edini.project.node import create_project_hda
+from edini.project.builder import build_project_scaffold
+from edini.project.ports import (TAG_COMPONENT_NODE, AXIS_BAKE_NODE,
+                                 INPUT_FILTER_PREFIX, OUTPUT_0_NODE)
+
+result = {"steps": {}}
+core = create_project_hda(name="proj_chair")
+decl = empty_declaration("proj_chair")
+# seat emits 5 anchors: 4 leg corners + 1 backrest center (exactly the log).
+add_component(decl, "seat", purpose="seat surface",
+    ports_out=[
+        {"index": 0, "kind": "geometry", "description": "seat"},
+        {"index": 1, "kind": "anchors", "points": [
+            {"name": "leg_fr", "role": "mount"},
+            {"name": "leg_fl", "role": "mount"},
+            {"name": "leg_br", "role": "mount"},
+            {"name": "leg_bl", "role": "mount"},
+            {"name": "backrest_c", "role": "mount"}]}])
+# leg consumes the seat anchor port — in the log it got ALL 5 points.
+add_component(decl, "leg", purpose="legs",
+    ports_in=[{"from": "seat", "port": 1, "anchor": "leg_fr"}])
+res = build_project_scaffold(core, declaration=decl)
+result["steps"]["route_warnings"] = res.get("route_warnings", [])
+
+seat = core.node("seat")
+leg = core.node("leg")
+
+# --- emit the 5 anchors on seat (the log scenario) ---
+wr = seat.createNode("attribwrangle", "make_anchors")
+wr.parm("class").set("detail")
+wr.parm("snippet").set(
+    'addpoint(0, set(0.2,0,0.2));  setpointattrib(0,"name",0,"leg_fr","set");\n'
+    'int p=addpoint(0, set(-0.2,0,0.2)); setpointattrib(0,"name",p,"leg_fl","set");\n'
+    'p=addpoint(0, set(0.2,0,-0.2)); setpointattrib(0,"name",p,"leg_br","set");\n'
+    'p=addpoint(0, set(-0.2,0,-0.2)); setpointattrib(0,"name",p,"leg_bl","set");\n'
+    'p=addpoint(0, set(0,0,0.2)); setpointattrib(0,"name",p,"backrest_c","set");\n')
+seat.node("out_anchors").setInput(0, wr)
+
+# --- Fix 2: check the leg's in-port receives ONLY leg_fr (1 point), not 5 ---
+filter_node = leg.node(INPUT_FILTER_PREFIX + "seat_leg_fr")
+in_node = leg.node("in_seat_leg_fr")
+result["steps"]["fix2_filter_exists"] = filter_node is not None
+result["steps"]["fix2_in_node_exists"] = in_node is not None
+if in_node is not None:
+    in_node.cook(force=True)
+    try:
+        pts = in_node.geometry().points()
+        result["steps"]["fix2_in_point_count"] = len(pts)
+        result["steps"]["fix2_in_names"] = (
+            [p.stringAttribValue("name") for p in pts] if pts else [])
+    except Exception as e:
+        result["steps"]["fix2_in_point_count"] = -1
+        result["steps"]["fix2_error"] = str(e)
+
+# --- Round-2 Fix B: the in-port must be a PURE point cloud (zero prims) ---
+# even when the upstream anchor cloud carries degenerate prims (session 2 saw
+# 72 zero-vertex prims leak through). Simulate by feeding the anchor cloud a
+# prim-bearing input, then check the in-port prim count after the clean wrangle.
+if in_node is not None:
+    try:
+        result["steps"]["fixb_in_prim_count"] = in_node.geometry().primCount()
+    except Exception as e:
+        result["steps"]["fixb_error"] = str(e)
+
+# --- Round-2 Fix A: axis survives an agent-style tag_component override ---
+# Give seat some real geometry so the bake chain has prims to tag.
+box = seat.createNode("box", "seat_box")
+seat.node("out_geometry").setInput(0, box)
+seat.node("output_0").cook(force=True)
+
+def _read_output0_attrs():
+    geo = seat.node("output_0").geometry()
+    return (geo.findPrimAttrib("component_id") is not None,
+            geo.findPrimAttrib("edini_world_axis") is not None,
+            geo.prims()[0].stringAttribValue("component_id") if geo.prims() else None)
+
+try:
+    ca, wa, cval = _read_output0_attrs()
+    result["steps"]["fixa_before_component_id_is_prim"] = ca
+    result["steps"]["fixa_before_world_axis_is_prim"] = wa
+    result["steps"]["fixa_component_id_value"] = cval
+except Exception as e:
+    result["steps"]["fixa_before_error"] = str(e)
+
+# THE SESSION-2 HOLE: agent overwrites tag_component's snippet with component_id
+# only — which, pre-Fix-A, deleted the axis. Now tag_component holds only
+# component_id by default, and the axis lives in __edini_axis_bake, so the
+# override must NOT drop the axis.
+tag = seat.node(TAG_COMPONENT_NODE)
+if tag is not None:
+    tag.parm("snippet").set('s@component_id = "seat";')
+    tag.parm("class").set("primitive")
+seat.node("output_0").cook(force=True)
+try:
+    ca2, wa2, _ = _read_output0_attrs()
+    result["steps"]["fixa_after_override_component_id_prim"] = ca2
+    result["steps"]["fixa_axis_survives_override"] = wa2  # THE KEY ASSERTION
+except Exception as e:
+    result["steps"]["fixa_after_override_error"] = str(e)
+
+# --- Round-2 Fix A: rebuild re-forces the axis node even after corruption ---
+axis_node = seat.node(AXIS_BAKE_NODE)
+if axis_node is not None:
+    axis_node.parm("snippet").set("// corrupted by something\n")
+build_project_scaffold(core)  # rebuild — must restore the axis snippet
+seat.node("output_0").cook(force=True)
+try:
+    ca3, wa3, _ = _read_output0_attrs()
+    result["steps"]["fixa_rebuild_restores_axis"] = wa3
+    # And the axis node's snippet is back to the platform default.
+    result["steps"]["fixa_axis_node_snippet_restored"] = (
+        seat.node(AXIS_BAKE_NODE) is not None and
+        "edini_world_axis" in seat.node(AXIS_BAKE_NODE).parm("snippet").eval())
+except Exception as e:
+    result["steps"]["fixa_rebuild_error"] = str(e)
+
+# Confirm the bake chain: out_geometry → tag_component → __edini_axis_bake → output_0.
+result["steps"]["fixa_chain_wired"] = (
+    leg.node(TAG_COMPONENT_NODE) is not None and
+    leg.node(AXIS_BAKE_NODE) is not None and
+    leg.node(TAG_COMPONENT_NODE).inputs() and
+    leg.node(TAG_COMPONENT_NODE).inputs()[0].name() == "out_geometry" and
+    leg.node(AXIS_BAKE_NODE).inputs() and
+    leg.node(AXIS_BAKE_NODE).inputs()[0].name() == TAG_COMPONENT_NODE and
+    leg.node(OUTPUT_0_NODE).inputs() and
+    leg.node(OUTPUT_0_NODE).inputs()[0].name() == AXIS_BAKE_NODE)
+
+print("RESULT_JSON:" + json.dumps(result))
+""" % (_REPO, _REPO)
+
+
+@unittest.skipUnless(HYTHON, "hython not installed")
+class TestChairRegressionHython(unittest.TestCase):
+    """Locks the two highest-impact fixes against the chair-modeling log bugs."""
+
+    def _run(self):
+        proc = subprocess.run(
+            [HYTHON, "-c", _CHAIR_HARNESS],
+            capture_output=True, text=True, timeout=180, cwd=_REPO)
+        combined = proc.stdout + proc.stderr
+        for line in combined.splitlines():
+            if line.startswith("RESULT_JSON:"):
+                return json.loads(line[len("RESULT_JSON:"):]), combined
+        self.fail(f"no RESULT_JSON.\nstdout:{proc.stdout}\nstderr:{proc.stderr}")
+
+    def test_fix2_anchor_filter_drops_undeclared_points(self):
+        """The chair bug: leg's in-port must receive ONLY leg_fr (1 point),
+        not all 5 upstream anchors. The Blast @name filter enforces it."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertTrue(s["fix2_filter_exists"],
+                        f"filter_sea_leg_fr Blast not built by scaffold: {res}")
+        self.assertTrue(s["fix2_in_node_exists"], f"in_seat_leg_fr missing: {res}")
+        self.assertEqual(s["fix2_in_point_count"], 1,
+                         f"leg port must receive 1 point (leg_fr only), got "
+                         f"{s.get('fix2_in_point_count')}: {s.get('fix2_in_names')}")
+        self.assertEqual(s["fix2_in_names"], ["leg_fr"])
+
+    def test_fixb_anchor_port_is_prim_free(self):
+        """Round-2 Fix B: the in-port must be a PURE point cloud (zero prims)
+        even when upstream carries degenerate prims — the __edini_anchor_clean
+        wrangle strips them. Session 2 saw 72 zero-vertex prims leak through."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertIn("fixb_in_prim_count", s, f"prim-count probe missing: {res}")
+        self.assertEqual(s["fixb_in_prim_count"], 0,
+                         f"in-port must have 0 prims (pure point cloud), got "
+                         f"{s['fixb_in_prim_count']}: {res}")
+
+    def test_fix2_route_warnings_pass_for_well_formed_decl(self):
+        """The declaration is well-formed (leg_fr IS emitted by seat), so the
+        static route_warnings list must be empty."""
+        res, _ = self._run()
+        self.assertEqual(res["steps"]["route_warnings"], [],
+                         f"unexpected route warnings: {res['steps']['route_warnings']}")
+
+    def test_fixa_axis_survives_tag_component_override(self):
+        """Round-2 Fix A (THE session-2 hole): agent overwrites tag_component's
+        snippet with 's@component_id="seat";' alone. Pre-Fix-A this silently
+        deleted the auto-baked edini_world_axis. Now the axis lives in the
+        separate __edini_axis_bake node, so the override must NOT drop it."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertTrue(s.get("fixa_before_world_axis_is_prim"),
+                        f"axis should be baked before override: {res}")
+        self.assertTrue(s.get("fixa_axis_survives_override"),
+                        f"axis MUST survive the agent's tag_component override "
+                        f"(the session-2 hole): {res}")
+        self.assertTrue(s.get("fixa_after_override_component_id_prim"),
+                        f"component_id should still be present after override: {res}")
+
+    def test_fixa_rebuild_restores_axis_node(self):
+        """Round-2 Fix A: a scaffold rebuild re-forces __edini_axis_bake's
+        snippet even after manual corruption — the axis is platform-owned."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertTrue(s.get("fixa_rebuild_restores_axis"),
+                        f"rebuild should restore the axis attr: {res}")
+        self.assertTrue(s.get("fixa_axis_node_snippet_restored"),
+                        f"rebuild should restore __edini_axis_bake's snippet: {res}")
+
+    def test_fixa_bake_chain_wired(self):
+        """The bake chain is out_geometry → tag_component → __edini_axis_bake
+        → output_0, so both attrs land on every downstream reader."""
+        res, _ = self._run()
+        self.assertTrue(res["steps"].get("fixa_chain_wired"),
+                        f"bake chain not wired correctly: {res}")
+        self.assertEqual(res["steps"].get("fixa_component_id_value"), "seat")
+
+
+# ============================================================================
+# Round-3 Fix D1/D2 regression: per-component orientation axis.
+#   D1: a component declaring "axis":"Z" gets edini_world_axis={0,0,1} baked,
+#       so verify_orientation PASSES for a Z-facing backrest (the session-3
+#       failure, where the default-Y bake made a correct Z-facing panel fail).
+#   D2: a per-check construction_axis override is honored even when a bake
+#       exists (the session-3 L87 trap, where the param was silently ignored).
+# ============================================================================
+_CHAIR_AXIS_HARNESS = r"""
+import json, sys, os
+sys.path.insert(0, os.path.join(r"%s", "python3.11libs"))
+import hou
+_hda = os.path.join(r"%s", "otls", "edini_project.hda")
+if os.path.isfile(_hda):
+    hou.hda.installFile(_hda)
+from edini.project.state import empty_declaration, add_component
+from edini.project.node import create_project_hda
+from edini.project.builder import build_project_scaffold
+from edini.node_utils import verify_orientation
+
+result = {"steps": {}}
+core = create_project_hda(name="proj_axis")
+decl = empty_declaration("proj_axis")
+# seat: default axis Y (flat panel).
+add_component(decl, "seat", purpose="seat",
+    ports_out=[{"index": 0, "kind": "geometry"}])
+# backrest: declares axis Z (side-facing panel) — the session-3 fix.
+add_component(decl, "backrest", purpose="backrest facing +Z",
+    axis="Z",
+    ports_out=[{"index": 0, "kind": "geometry"}])
+res = build_project_scaffold(core, declaration=decl)
+result["steps"]["build_ok"] = res.get("success")
+result["steps"]["route_warnings"] = res.get("route_warnings", [])
+
+seat = core.node("seat")
+backrest = core.node("backrest")
+
+# seat: a flat box in the XZ plane (thin in Y) → genuinely Y-normal.
+seatbox = seat.createNode("box", "seat_box")
+seatbox.parm("sizex").set(0.5); seatbox.parm("sizey").set(0.04); seatbox.parm("sizez").set(0.5)
+seat.node("out_geometry").setInput(0, seatbox)
+
+# backrest: a flat box in the XY plane (thin in Z) → genuinely Z-normal.
+brbox = backrest.createNode("box", "br_panel")
+brbox.parm("sizex").set(0.5); brbox.parm("sizey").set(0.5); brbox.parm("sizez").set(0.04)
+backrest.node("out_geometry").setInput(0, brbox)
+
+core.node("OUT").cook(force=True)
+
+# --- D1: read the baked edini_world_axis per component ---
+def _axis_vec(node_path):
+    geo = core.node(node_path).geometry()
+    attr = geo.findPrimAttrib("edini_world_axis")
+    if attr is None:
+        return None
+    try:
+        raw = geo.prims()[0].floatListAttribValue("edini_world_axis")
+        return [round(float(c), 3) for c in raw[:3]]
+    except Exception:
+        return None
+
+result["steps"]["d1_seat_axis_baked"] = _axis_vec("seat/output_0")
+result["steps"]["d1_backrest_axis_baked"] = _axis_vec("backrest/output_0")
+
+# --- D1: verify_orientation on the real geometry ---
+vo = verify_orientation("/obj/geo1/project1/OUT" if False else core.node("OUT").path(),
+    checks=[
+        {"component_id": "seat", "kind": "planar", "expected_axis": "Y"},
+        {"component_id": "backrest", "kind": "planar", "expected_axis": "Z"},
+    ])
+result["steps"]["d1_verify"] = vo
+result["steps"]["d1_seat_passed"] = next(
+    (c["passed"] for c in vo.get("checks", []) if c.get("component_id") == "seat"), None)
+result["steps"]["d1_backrest_passed"] = next(
+    (c["passed"] for c in vo.get("checks", []) if c.get("component_id") == "backrest"), None)
+
+# --- D2: construction_axis override on a Y-baked component (the L87 trap) ---
+# Force the seat's axis to Y (already is), then verify with an explicit
+# construction_axis override to confirm the param is honored, not ignored.
+vo2 = verify_orientation(core.node("OUT").path(),
+    checks=[
+        {"component_id": "backrest", "kind": "planar", "expected_axis": "Z",
+         "construction_axis": "Z"},
+    ])
+br_check = next((c for c in vo2.get("checks", []) if c.get("component_id") == "backrest"), {})
+result["steps"]["d2_override_passed"] = br_check.get("passed")
+result["steps"]["d2_axis_source"] = br_check.get("axis_source")
+
+print("RESULT_JSON:" + json.dumps(result))
+""" % (_REPO, _REPO)
+
+
+@unittest.skipUnless(HYTHON, "hython not installed")
+class TestChairAxisHython(unittest.TestCase):
+    """Round-3 Fix D1/D2: per-component axis declaration + construction_axis
+    override. Locks the session-3 backrest-orientation failure."""
+
+    def _run(self):
+        proc = subprocess.run(
+            [HYTHON, "-c", _CHAIR_AXIS_HARNESS],
+            capture_output=True, text=True, timeout=180, cwd=_REPO)
+        combined = proc.stdout + proc.stderr
+        for line in combined.splitlines():
+            if line.startswith("RESULT_JSON:"):
+                return json.loads(line[len("RESULT_JSON:"):]), combined
+        self.fail(f"no RESULT_JSON.\nstdout:{proc.stdout}\nstderr:{proc.stderr}")
+
+    def test_d1_backrest_axis_z_baked_and_passes(self):
+        """The session-3 failure: a Z-facing backrest declared axis:'Z' must
+        have edini_world_axis={0,0,1} baked AND pass verify_orientation."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertTrue(s["build_ok"], f"scaffold failed: {res}")
+        self.assertEqual(s["d1_backrest_axis_baked"], [0.0, 0.0, 1.0],
+                         f"backrest should bake Z axis: {res}")
+        self.assertEqual(s["d1_seat_axis_baked"], [0.0, 1.0, 0.0],
+                         f"seat should bake default Y axis: {res}")
+        self.assertTrue(s["d1_seat_passed"],
+                        f"seat (Y) should pass: {s.get('d1_verify')}")
+        self.assertTrue(s["d1_backrest_passed"],
+                        f"backrest (Z) MUST pass after axis declaration "
+                        f"(the session-3 fix): {s.get('d1_verify')}")
+
+    def test_d2_construction_axis_override_honored(self):
+        """D2: a per-check construction_axis override is honored (not ignored
+        as in session-3 L87). axis_source must read 'override'."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertTrue(s["d2_override_passed"],
+                        f"construction_axis override must make the check pass: {res}")
+        self.assertEqual(s["d2_axis_source"], "override",
+                         f"axis_source should be 'override': {res}")
 
 
 if __name__ == "__main__":

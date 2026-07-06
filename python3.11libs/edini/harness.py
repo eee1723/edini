@@ -1264,6 +1264,45 @@ def _resolve_output_node(sandbox_root, prefer_names=("OUT", "out")) -> Any:
     return best if best is not None else sandbox_root
 
 
+# ── Sandbox contract self-documentation (Fix 5) ──────────────────────────
+# When sandbox code fails with a NameError or 'NoneType has no attribute'
+# (the signature of using the wrong injected variable — e.g. `container` or
+# `sandbox_root` when the wrong mode is active), append a contract block that
+# names the variables each mode actually injects. Turns the chair-log's
+# 2-cycle trial-and-error (container → sandbox_root → give up) into 1.
+# Substring match (not isinstance) because exec() inside the sandbox surfaces
+# these as RuntimeError-wrapped messages; we match on the rendered string.
+_WRONG_VAR_SIGNATURES = (
+    "is not defined",                       # NameError: 'container' is not defined
+    "'NoneType' object has no attribute",   # sandbox_root was None (wrong mode)
+    "object has no attribute",              # broader attribute-miss class
+)
+
+
+def _sandbox_contract_hint(err_text: str, network_mode: bool) -> str:
+    """Return a contract-explaining suffix to append to a sandbox error, or ''.
+
+    Only appends when the error text looks like an injected-variable mistake
+    (NameError / attribute-on-None). Other errors (VEX syntax, cook failures)
+    pass through untouched so we don't clutter unrelated failures.
+    """
+    if not err_text:
+        return ""
+    if not any(sig in err_text for sig in _WRONG_VAR_SIGNATURES):
+        return ""
+    mode = "network" if network_mode else "single_sop"
+    return (
+        f"\n\n[sandbox contract] mode={mode}. Injected variables you may use:\n"
+        f"  network_mode=True : sandbox_root (geo container node), "
+        f"sandbox_root_path (str), hou, job_id, result (dict)\n"
+        f"  network_mode=False: this runs as a Python SOP cook — use "
+        f"node.geometry() (or the `geo`/`node` locals); do NOT call "
+        f"createNode() (it triggers Houdini's infinite-recursion guard).\n"
+        f"If you meant to build a multi-node network, re-call "
+        f"houdini_run_python_sandbox with network_mode=True."
+    )
+
+
 def run_python_sandbox(
     code: str,
     sandbox_name: str = "procedural",
@@ -1469,7 +1508,7 @@ def run_python_sandbox(
                 "sandbox_mode": "network",
                 "root_path": root_path,
                 "output_node": output_node_path,
-                "error": str(e),
+                "error": str(e) + _sandbox_contract_hint(str(e), network_mode=True),
                 "output": _safe_getvalue(stdout_capture),
                 "stderr": _safe_getvalue(stderr_capture),
                 "traceback": execution_traceback,
@@ -1592,7 +1631,7 @@ def run_python_sandbox(
             "sandbox_mode": "single_sop",
             "root_path": root_path,
             "output_node": output_node_path,
-            "error": str(e),
+            "error": str(e) + _sandbox_contract_hint(str(e), network_mode=False),
             "output": _safe_getvalue(stdout_capture),
             "stderr": _safe_getvalue(stderr_capture),
             "traceback": execution_traceback,

@@ -23,7 +23,9 @@ from edini.project.state import (
 )
 from edini.project.ports import (
     OUT_GEOMETRY_NODE, OUT_ANCHORS_NODE, OUTPUT_0_NODE, OUTPUT_1_NODE,
-    validate_component_ports,
+    TAG_COMPONENT_NODE, AXIS_BAKE_NODE, INPUT_FILTER_PREFIX, ANCHOR_CLEAN_PREFIX,
+    DEFAULT_COMPONENT_AXIS, resolve_axis_vector,
+    validate_component_ports, validate_route_contract,
 )
 from edini.vex_strategies import build_mount_vex, VexStrategyError
 
@@ -62,6 +64,14 @@ def build_project_scaffold(core_node: "hou.Node",
             # Prefix with the component id so multi-component declarations
             # pinpoint which component failed.
             all_errors.append(f"component '{cid}': {e}")
+        # Round-3 Fix D1: validate the optional per-component axis token here
+        # (it's a component-level field, sibling of ports). Bad token → the
+        # scaffold can't resolve it to a vector; surface it now, aggregated.
+        if "axis" in comp and comp["axis"] is not None:
+            try:
+                resolve_axis_vector(comp["axis"])
+            except ValueError as e:
+                all_errors.append(f"component '{cid}': {e}")
     if all_errors:
         return {
             "success": False,
@@ -79,8 +89,12 @@ def build_project_scaffold(core_node: "hou.Node",
     built, skipped = [], []
     for comp in components:
         cid = comp["id"]
+        # Round-3 Fix D1: read the optional per-component axis (default Y). The
+        # scaffold bakes it into __edini_axis_bake so verify_orientation sees
+        # the correct construction axis without any agent node editing.
+        axis = comp.get("axis", DEFAULT_COMPONENT_AXIS) or DEFAULT_COMPONENT_AXIS
         subnet = _ensure_component_subnet(core_node, cid)
-        _ensure_scaffold_nodes(subnet)
+        _ensure_scaffold_nodes(subnet, axis)
         built.append(cid) if cid not in skipped else None
 
     # 第二遍：跨组件输入连线。必须在所有 subnet 建好之后做——外部连线
@@ -116,9 +130,17 @@ def build_project_scaffold(core_node: "hou.Node",
                result_ok=True)
     save_declaration(core_node, decl)
 
+    # Fix 2: static cross-component anchor-routing check. Cheap (no cook),
+    # surfaces typo'd anchor names / missing upstreams BEFORE any geometry is
+    # built. Soft — build still succeeds; warnings tell the agent which wires
+    # won't carry the right points (the runtime Blast filter is the hard
+    # enforcement; this is the early signal).
+    route_warnings = validate_route_contract(decl)
+
     return {"success": True, "components_built": built,
             "components_skipped": skipped,
             "design_params_created": params_created,
+            "route_warnings": route_warnings,
             "project": core_node.path()}
 
 
@@ -134,36 +156,117 @@ def _ensure_component_subnet(parent: "hou.Node", component_id: str) -> "hou.Node
     return subnet
 
 
-def _ensure_scaffold_nodes(subnet: "hou.Node") -> None:
-    """确保 subnet 内有 4 个脚手架节点 + 2 条连线。幂等。
+def _ensure_scaffold_nodes(subnet: "hou.Node",
+                           axis: str = DEFAULT_COMPONENT_AXIS) -> None:
+    """确保 subnet 内有脚手架节点 + 连线。幂等。
 
-    out_geometry (null) → output_0 (output)   [subnet output 1 = 主几何]
-    out_anchors  (null) → output_1 (output)   [subnet output 2 = 锚点云]
+    [agent geometry…] → out_geometry (null) → tag_component → __edini_axis_bake → output_0 (output)
+      (agent connects here)   (component_id)    (edini_world_axis)        [subnet output 1 = 主几何]
+                         out_anchors  (null) → output_1 (output)   [subnet output 2 = 锚点云]
+
+    Round-2 Fix A: the orientation axis lives in a SEPARATE internal node
+    (__edini_axis_bake) from the agent-editable tag_component. This closes the
+    session-2 hole where the agent overwrote tag_component's snippet with
+    's@component_id="seat";' and silently deleted the auto-baked axis. Now:
+      - tag_component: AGENT-EDITABLE, holds ONLY component_id by default.
+        An overwrite can never drop the axis (it's in the next node).
+      - __edini_axis_bake: INTERNAL (__-prefixed), holds edini_world_axis.
+        Re-forced on every rebuild; the guard refuses agent edits to it.
+
+    The agent keeps connecting its last node into out_geometry (unchanged
+    contract). Both bake nodes sit between out_geometry and output_0 so every
+    downstream reader (core OUT, inventory, orientation) sees both attrs.
 
     已存在的节点跳过创建；连线每次确保（setInput 幂等）。
     """
     out_geo = _ensure_node(subnet, "null", OUT_GEOMETRY_NODE)
+    tag = _ensure_tag_component(subnet)
+    axis_node = _ensure_axis_bake(subnet, axis)
     out_anc = _ensure_node(subnet, "null", OUT_ANCHORS_NODE)
     output_0 = _ensure_node(subnet, "output", OUTPUT_0_NODE)
     output_1 = _ensure_node(subnet, "output", OUTPUT_1_NODE)
 
-    # 连线：null 的输出 → output 节点的输入 0。
-    output_0.setInput(0, out_geo)
+    # 连线：out_geometry → tag_component → __edini_axis_bake → output_0。
+    tag.setInput(0, out_geo)
+    axis_node.setInput(0, tag)
+    output_0.setInput(0, axis_node)
     output_1.setInput(0, out_anc)
 
     # 整理布局（真机观感，不影响逻辑）。
     subnet.layoutChildren()
 
 
+def _ensure_tag_component(subnet: "hou.Node") -> "hou.Node":
+    """Ensure the agent-editable tag_component exists + has component_id baked.
+
+    Holds ONLY component_id (prim-class, = subnet name). The orientation axis
+    is deliberately NOT here — it lives in __edini_axis_bake so an agent
+    overwriting this snippet can't drop it. Idempotent: re-applies component_id
+    on every rebuild so subnet renames propagate. Pure component_id only — the
+    agent is free to extend this snippet with per-component attribs.
+    """
+    tag = _ensure_node(subnet, "attribwrangle", TAG_COMPONENT_NODE)
+    cid = subnet.name()
+    snippet = (
+        f'// AGENT-EDITABLE. Default bakes component_id (prim-class).\n'
+        f'// The orientation axis is baked separately in __edini_axis_bake —\n'
+        f'// do NOT add edini_world_axis here (it would be ignored downstream).\n'
+        f's@component_id = "{cid}";\n'
+    )
+    try:
+        tag.parm("snippet").set(snippet)
+        tag.parm("class").set("primitive")
+    except Exception:
+        pass
+    return tag
+
+
+def _ensure_axis_bake(subnet: "hou.Node",
+                      axis: str = DEFAULT_COMPONENT_AXIS) -> "hou.Node":
+    """Ensure the INTERNAL __edini_axis_bake node exists + axis is baked.
+
+    Round-3 Fix D1: the axis now comes from the component declaration (default
+    Y), not a hardcoded {0,1,0}. Always re-forces the snippet on every call, so
+    changing the declared axis + rebuilding updates the baked edini_world_axis
+    deterministically — the agent never edits this node (and the guard refuses
+    such edits). This is the structural enforcement: the axis survives
+    tag_component overwrites because it's a different node the scaffold owns,
+    AND it's correct per-component because it's read from the declaration.
+    """
+    axis_node = _ensure_node(subnet, "attribwrangle", AXIS_BAKE_NODE)
+    # Resolve the declared axis token to a 3-float vector. Bad token would have
+    # been caught by the scaffold's validation pass; fall back to Y defensively.
+    try:
+        vx, vy, vz = resolve_axis_vector(axis)
+    except ValueError:
+        vx, vy, vz = 0.0, 1.0, 0.0
+    snippet = (
+        f'// INTERNAL scaffold node. Do not edit — re-forced on every rebuild.\n'
+        f'// Bakes the orientation axis (from the component declaration, default Y)\n'
+        f'// that verify_orientation / the commit gate read as a prim attribute.\n'
+        f'// To change it, set "axis" on the component and rebuild the scaffold.\n'
+        f'v@edini_world_axis = {{{vx}, {vy}, {vz}}};\n'
+    )
+    try:
+        axis_node.parm("snippet").set(snippet)
+        axis_node.parm("class").set("primitive")
+    except Exception:
+        pass
+    return axis_node
+
+
 def _ensure_input_scaffold(core_node: "hou.Node", comp: dict,
                            subnet: "hou.Node") -> None:
-    """为一个组件建/维护输入脚手架（外部连线 + 内部命名 null）。幂等。
+    """为一个组件建/维护输入脚手架（外部连线 + 内部命名 null + @name 过滤）。幂等。
 
-    对 comp 的 ports.in[] 的第 i 条：
+    对 comp 的 ports.in[] 的第 i 条 {from, port, anchor}：
       - 外部：downstream.setInput(i, upstream, from_port) — downstream 的第 i
         个输入连接器 ← upstream（in_entry["from"]）的第 from_port 个输出。
-      - 内部：建命名 null in_<from>_<anchor>，setInput(0, indirectInputs()[i])。
-        indirectInputs()[i] 对应外部第 i 个输入连接器。
+      - 内部：indirectInputs()[i] → filter_<from>_<anchor> (Blast) → in_<from>_<anchor> (null)。
+        Blast keeps ONLY points whose @name == anchor — so a downstream
+        copytopoints can never receive points meant for a sibling component
+        (the chair-log "5 points into the leg port" silent cross-talk). The
+        declared `anchor` field is now a REAL filter, not a naming hint.
 
     upstream 不存在则跳过该条（局部声明安全）。已存在的内部节点跳过创建，
     setInput 幂等——重跑只补缺失，不碰 LLM 接在 in_* 下游的连线。
@@ -187,11 +290,68 @@ def _ensure_input_scaffold(core_node: "hou.Node", comp: dict,
             continue
         # 外部：下游第 i 输入 ← 上游第 from_port 输出。
         subnet.setInput(i, upstream, from_port)
-        # 内部：命名 null ← indirectInputs()[i]。
+        indirect = indirect_inputs[i]
+
+        # ── @name filter (Fix 2) ──
+        # Blast: group=@name=<anchor>, grouptype=points, negate=1 (Delete
+        # Non-Selected → keep ONLY the declared anchor's points). Verified on
+        # real Houdini: the default grouptype ("guess") does NOT match a point
+        # group, and default negate=0 DELETES the match — so BOTH must be set
+        # explicitly or the filter does the opposite of what we want.
+        # Idempotent: re-ensure by name; re-set the filter parms each run
+        # (setInput/parm.set are idempotent). If the upstream anchor cloud has
+        # no @name attribute yet (e.g. the LLM hasn't emitted anchors), the
+        # Blast still cooks cleanly (matches nothing → 0 points) — far better
+        # than silently passing through unrelated points.
+        filter_name = f"{INPUT_FILTER_PREFIX}{from_id}_{anchor}"
+        blast = _ensure_node(subnet, "blast", filter_name)
+        try:
+            # @name=<anchor> selects the anchor's points. grouptype MUST be
+            # 'points' (anchor clouds are point groups); 'guess' mis-resolves.
+            blast.parm("group").set(f"@name={anchor}")
+            gp = blast.parm("grouptype")
+            if gp is not None:
+                gp.set("points")
+            # negate=1 = "Delete Non-Selected" → keep only the matching points.
+            neg = blast.parm("negate")
+            if neg is not None:
+                neg.set(1)
+        except Exception:
+            # If the Blast version's parms differ, the node still exists; the
+            # @name group is the load-bearing part. Don't abort the scaffold.
+            pass
+        blast.setInput(0, indirect)
+
+        # ── prim-strip purifier (Round-2 Fix B) ──
+        # The Blast keeps the right POINTS but does NOT guarantee the port is
+        # prim-free: if the upstream was mis-wired (e.g. seat geometry, not
+        # just an anchor point cloud), degenerate prims flow through. Session 2
+        # showed 72 zero-vertex prims reaching copytopoints' 2nd input, costing
+        # the agent ~40 steps to patch. This detail-class wrangle strips ALL
+        # prims so the in-port is a PURE point cloud regardless of upstream
+        # wiring — enforcing the port contract, not just the @name condition.
+        clean_name = f"{ANCHOR_CLEAN_PREFIX}{from_id}_{anchor}"
+        clean = _ensure_node(subnet, "attribwrangle", clean_name)
+        try:
+            # Remove every prim (and its vertices), keep all points. Reverse
+            # iteration is the safe idiom (indices shift on forward removal).
+            clean.parm("snippet").set(
+                "int n = nprimitives(0);\n"
+                "for (int i = n - 1; i >= 0; i--) {\n"
+                "    removeprim(0, i, 1);\n"
+                "}\n"
+            )
+            clean.parm("class").set("detail")
+        except Exception:
+            pass
+        clean.setInput(0, blast)
+
+        # 内部：命名 null ← purifier (not raw blast). The agent's copytopoints
+        # wires to this null and now sees ONLY the declared anchor's points,
+        # guaranteed prim-free.
         in_name = f"in_{from_id}_{anchor}"
         in_node = _ensure_node(subnet, "null", in_name)
-        indirect = indirect_inputs[i]
-        in_node.setInput(0, indirect)
+        in_node.setInput(0, clean)
 
 
 def _ensure_node(parent: "hou.Node", node_type: str,

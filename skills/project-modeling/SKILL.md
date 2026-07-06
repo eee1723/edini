@@ -100,6 +100,26 @@ The builder creates, **deterministically and idempotently**:
 - A core `OUT` (merge of all component geometry) with display flag
 - A "💬 Chat with Edini" button on the core's parameter panel (click → chat popup)
 
+#### Optional: per-component orientation `axis`
+A component may declare its construction orientation with `"axis"` (one of
+`"X"`, `"Y"`, `"Z"`, `"-X"`, `"-Y"`, `"-Z"`; default `"Y"`). The scaffold bakes
+it as `edini_world_axis` and `verify_orientation` reads it as ground truth — so
+declare the axis that matches how the geometry is **actually generated**, not
+what you wish it were. Common cases:
+- `"Y"` (default): anything flat-on-ground or standing up — seat, tabletop,
+  legs, wheels-on-ground.
+- `"Z"`: a side-facing panel — a **backrest** facing +Z, a side board.
+- `"X"`: a transverse part — an axle, a crossbar.
+
+```python
+{ "id": "backrest", "axis": "Z", "purpose": "靠背，朝 +Z 的侧立面板", "ports": {...} }
+```
+Get this wrong and `verify_orientation` will fail with a 90° axis mismatch even
+though the geometry looks right (PCA will flag the divergence). To change it
+later, update the declaration's `axis` and re-run `project_build_scaffold` — do
+NOT edit the internal `__edini_axis_bake` node (it's locked; the declaration is
+the source of truth).
+
 The builder does NOT build geometry or parameters — those are your job, bottom-up.
 
 #### ⚠️ Declaring cross-component dependencies (CRITICAL — do not skip)

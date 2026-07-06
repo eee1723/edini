@@ -24,11 +24,75 @@ class TestPortConstants(unittest.TestCase):
         from edini.project.ports import (
             OUT_GEOMETRY_NODE, OUT_ANCHORS_NODE,
             OUTPUT_0_NODE, OUTPUT_1_NODE,
+            TAG_COMPONENT_NODE, AXIS_BAKE_NODE, INPUT_FILTER_PREFIX,
+            ANCHOR_CLEAN_PREFIX,
         )
         self.assertEqual(OUT_GEOMETRY_NODE, "out_geometry")
         self.assertEqual(OUT_ANCHORS_NODE, "out_anchors")
         self.assertEqual(OUTPUT_0_NODE, "output_0")
         self.assertEqual(OUTPUT_1_NODE, "output_1")
+        # Fix 3 / Round-2 Fix A: tag_component is agent-editable (component_id),
+        # __edini_axis_bake is internal (orientation axis).
+        self.assertEqual(TAG_COMPONENT_NODE, "tag_component")
+        self.assertEqual(AXIS_BAKE_NODE, "__edini_axis_bake")
+        # Fix 2: scaffold inserts a per-in-port @name Blast filter.
+        self.assertEqual(INPUT_FILTER_PREFIX, "filter_")
+        # Round-2 Fix B: per-in-port prim-stripping wrangle (internal).
+        self.assertEqual(ANCHOR_CLEAN_PREFIX, "__edini_anchor_clean_")
+
+
+class TestResolveAxisVector(unittest.TestCase):
+    """Round-3 Fix D1: resolve_axis_vector maps axis tokens to 3-float vectors.
+    Pure logic — the scaffold bakes these into __edini_axis_bake and
+    verify_orientation reads them. A wrong mapping = silent wrong orientation."""
+
+    def test_all_six_tokens_resolve(self):
+        from edini.project.ports import resolve_axis_vector
+        self.assertEqual(resolve_axis_vector("X"), (1.0, 0.0, 0.0))
+        self.assertEqual(resolve_axis_vector("Y"), (0.0, 1.0, 0.0))
+        self.assertEqual(resolve_axis_vector("Z"), (0.0, 0.0, 1.0))
+        self.assertEqual(resolve_axis_vector("-X"), (-1.0, 0.0, 0.0))
+        self.assertEqual(resolve_axis_vector("-Y"), (0.0, -1.0, 0.0))
+        self.assertEqual(resolve_axis_vector("-Z"), (0.0, 0.0, -1.0))
+
+    def test_bad_token_raises(self):
+        """A typo'd axis must raise (not silently bake a wrong vector)."""
+        from edini.project.ports import resolve_axis_vector
+        for bad in ("y", "Up", "Z+", "", "XY", None):
+            with self.assertRaises((ValueError, TypeError),
+                                   msg=f"should reject {bad!r}"):
+                resolve_axis_vector(bad)  # type: ignore[arg-type]
+
+    def test_default_axis_constant(self):
+        from edini.project.ports import DEFAULT_COMPONENT_AXIS, AXIS_VECTORS
+        self.assertEqual(DEFAULT_COMPONENT_AXIS, "Y")
+        # Default must be a legal token.
+        self.assertIn(DEFAULT_COMPONENT_AXIS, AXIS_VECTORS)
+
+
+class TestInternalNodePredicate(unittest.TestCase):
+    """Round-2 Fix A: is_internal_scaffold_node marks __-prefixed nodes as
+    platform-owned (the agent must not edit them; the guard refuses snippet
+    edits on them). Pure logic — no hou."""
+
+    def test_double_underscore_prefix_is_internal(self):
+        from edini.project.ports import is_internal_scaffold_node
+        self.assertTrue(is_internal_scaffold_node("__edini_axis_bake"))
+        self.assertTrue(is_internal_scaffold_node("__edini_anchor_clean_seat_leg_fr"))
+        self.assertTrue(is_internal_scaffold_node("__anything"))
+
+    def test_single_or_no_underscore_is_not_internal(self):
+        from edini.project.ports import is_internal_scaffold_node
+        self.assertFalse(is_internal_scaffold_node("tag_component"))
+        self.assertFalse(is_internal_scaffold_node("out_geometry"))
+        self.assertFalse(is_internal_scaffold_node("_partial"))  # single _ not enough
+        self.assertFalse(is_internal_scaffold_node("filter_seat_leg_fr"))
+
+    def test_non_string_is_not_internal(self):
+        from edini.project.ports import is_internal_scaffold_node
+        self.assertFalse(is_internal_scaffold_node(None))
+        self.assertFalse(is_internal_scaffold_node(""))
+        self.assertFalse(is_internal_scaffold_node(123))
 
 
 class TestPortValidation(unittest.TestCase):
@@ -164,6 +228,87 @@ class TestPortSchemaContract(unittest.TestCase):
             self.fail("should have raised")
         except ValueError as e:
             self.assertIn("Expected ports shape", str(e))
+
+
+class TestRouteContract(unittest.TestCase):
+    """Tests for validate_route_contract (Fix 2): static cross-component
+    anchor-routing check. Pure logic — no hou, no cook. Catches typo'd anchor
+    names / missing upstreams at declaration time, before any geometry exists."""
+
+    def _decl(self, components):
+        return {"components": components}
+
+    def test_clean_declaration_yields_no_warnings(self):
+        """A well-routed declaration: every in[].anchor exists upstream."""
+        from edini.project.ports import validate_route_contract
+        decl = self._decl([
+            {"id": "tabletop",
+             "ports": {"out": [
+                 {"index": 0, "kind": "geometry"},
+                 {"index": 1, "kind": "anchors", "points": [
+                     {"name": "leg_mount_fr"}, {"name": "leg_mount_fl"}]}]}},
+            {"id": "legs",
+             "ports": {"out": [{"index": 0, "kind": "geometry"}],
+                       "in": [
+                           {"from": "tabletop", "port": 1, "anchor": "leg_mount_fr"},
+                           {"from": "tabletop", "port": 1, "anchor": "leg_mount_fl"}]}},
+        ])
+        self.assertEqual(validate_route_contract(decl), [])
+
+    def test_warns_on_anchor_not_emitted_upstream(self):
+        """The chair-log bug, made declarative: leg consumes 'leg_mount_fr' but
+        upstream only emits differently-named anchors. Static check flags it."""
+        from edini.project.ports import validate_route_contract
+        decl = self._decl([
+            {"id": "seat",
+             "ports": {"out": [
+                 {"index": 0, "kind": "geometry"},
+                 {"index": 1, "kind": "anchors", "points": [
+                     {"name": "leg_fr"}, {"name": "backrest_c"}]}]}},
+            {"id": "leg",
+             "ports": {"out": [{"index": 0, "kind": "geometry"}],
+                       "in": [{"from": "seat", "port": 1, "anchor": "leg_mount_fr"}]}},
+        ])
+        warnings = validate_route_contract(decl)
+        self.assertEqual(len(warnings), 1)
+        self.assertEqual(warnings[0]["component"], "leg")
+        self.assertEqual(warnings[0]["anchor"], "leg_mount_fr")
+        self.assertIn("leg_mount_fr", warnings[0]["reason"])
+
+    def test_warns_on_missing_upstream_component(self):
+        """in[].from names a component that isn't declared (typo / not-yet-built)."""
+        from edini.project.ports import validate_route_contract
+        decl = self._decl([
+            {"id": "leg",
+             "ports": {"out": [{"index": 0, "kind": "geometry"}],
+                       "in": [{"from": "tabletoop", "port": 1, "anchor": "x"}]}},
+        ])
+        warnings = validate_route_contract(decl)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("tabletoop", warnings[0]["reason"])
+
+    def test_empty_upstream_anchors_does_not_warn(self):
+        """If the upstream declares NO anchor names (anchors port with no
+        points yet), we can't check — don't false-positive. The runtime Blast
+        filter is the enforcement; this static check only flags KNOWN mismatches."""
+        from edini.project.ports import validate_route_contract
+        decl = self._decl([
+            {"id": "seat",
+             "ports": {"out": [
+                 {"index": 0, "kind": "geometry"},
+                 {"index": 1, "kind": "anchors", "points": []}]}},
+            {"id": "leg",
+             "ports": {"out": [{"index": 0, "kind": "geometry"}],
+                       "in": [{"from": "seat", "port": 1, "anchor": "leg_fr"}]}},
+        ])
+        self.assertEqual(validate_route_contract(decl), [])
+
+    def test_handles_malformed_declaration_gracefully(self):
+        """Non-dict components / missing ports must not crash the check."""
+        from edini.project.ports import validate_route_contract
+        decl = {"components": [None, {"id": "x"}, {"ports": {}}]}
+        # No exception, no warnings (nothing to check).
+        self.assertEqual(validate_route_contract(decl), [])
 
 
 if __name__ == "__main__":

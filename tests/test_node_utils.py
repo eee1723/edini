@@ -223,6 +223,46 @@ class TestSetGetParam(unittest.TestCase):
         self.assertFalse(r["success"])
         self.assertIn("not found", r["error"].lower())
 
+    # ── Fix 4: param-name "did you mean" suggestions ──────────────────────
+    def test_missing_param_suggests_gotcha_for_box_center(self):
+        """The chair-log failure: agent used box's 'center' (doesn't exist).
+        The error must now name the documented gotcha (use 't')."""
+        path = self._make_node()  # a box node
+        r = set_param(path, "center", [0, 0.03, 0])
+        self.assertFalse(r["success"])
+        msg = r["error"].lower()
+        self.assertIn("not found", msg)
+        self.assertIn("center", msg)
+        self.assertIn("'t'", msg)  # the documented fix
+
+    def test_missing_param_fuzzy_suggests_from_manifest(self):
+        """A near-miss parm name yields difflib suggestions from the manifest.
+        'siz' (typo of 'size') should suggest 'size'."""
+        path = self._make_node()
+        r = set_param(path, "siz", 1.0)
+        self.assertFalse(r["success"])
+        self.assertIn("did you mean", r["error"].lower())
+        self.assertIn("size", r["error"].lower())
+
+    def test_missing_param_points_to_query_parms(self):
+        """Every miss must point at the discovery tool, regardless of whether
+        a suggestion was found."""
+        path = self._make_node()
+        r = set_param(path, "totally_bogus_name", 1.0)
+        self.assertFalse(r["success"])
+        self.assertIn("query_parms", r["error"].lower())
+
+    def test_manifest_has_parm_index_aware(self):
+        """manifest_has_parm (Fix 4) accepts multiparm-instance channels
+        (<root><digits>) against a <root># template, and degrades to None
+        when the type is unknown."""
+        from edini.node_utils import manifest_has_parm
+        # box is in the manifest.
+        self.assertTrue(manifest_has_parm("box", "size") is True)
+        self.assertTrue(manifest_has_parm("box", "nope") is False)
+        # Unknown type → None (soft degrade).
+        self.assertIsNone(manifest_has_parm("nonexistent_type_xyz", "x"))
+
 
 # ===================================================================
 # TestListNodes

@@ -57,28 +57,31 @@ build_project_scaffold(core, declaration=decl)
 
 这是新范式的核心价值：组件通过端口信息点协作。
 
-先给 chassis 造锚点：
+> ⚠️ **重要更新（2026-07-06，平台契约强化）**：直接手写 `addpoint()` 在 Project HDA 组件内**会被 `project_anchor_guard` 拒绝**（防止硬编码坐标、引导用声明式锚点）。请用 `project_add_anchors`——锚点从几何 bbox 测量派生，改参数 live 重算。下面的旧写法（attribwrangle + addpoint）仅作原理示意；生产路径用工具。
+
+先给 chassis 造锚点（**声明式，测量几何而非硬编码**）：
 ```python
-import hou
-chassis = hou.node("/obj/project_bike/project_core/chassis")
-wr = chassis.createNode("attribwrangle", "make_anchors")
-wr.parm("snippet").set('''
-addpoint(0, set(2, 0, 1));
-setpointattrib(0, "name", 0, "wheel_mount_fr", "set");
-addpoint(0, set(-2, 0, 1));
-setpointattrib(0, "name", 1, "wheel_mount_rr", "set");
-''')
-wr.parm("class").set("detail")  # 必须 detail，addpoint 才执行
-chassis.node("out_anchors").setInput(0, wr)
-chassis.node("out_anchors").cook(force=True)
+from edini.project.builder import add_anchors
+core = hou.node("/obj/project_bike/project_core")
+# 给 chassis 一些几何（box）让锚点有东西可测
+chassis = core.node("chassis")
+box = chassis.createNode("box", "chassis_box")
+chassis.node("out_geometry").setInput(0, box)
+
+# 锚点 = bbox 角点测量（改 box size → 锚点自动重算，永不脱节）
+add_anchors(core, "chassis", [
+    {"measure": "bbox_corner", "axes": "+X-Y+Z", "name": "wheel_mount_fr"},
+    {"measure": "bbox_corner", "axes": "-X-Y+Z", "name": "wheel_mount_rr"},
+])
 ```
 
-现在 wheels 里的 `in_chassis_wheel_mount_fr` / `in_chassis_wheel_mount_rr` 应该已能拿到锚点（builder 预先连好了 indirectInputs）。验证：
+现在 wheels 里的 `in_chassis_wheel_mount_fr` / `in_chassis_wheel_mount_rr` 应该已能拿到锚点（builder 预先连好了 indirectInputs + `filter_chassis_wheel_mount_fr` Blast 过滤器 + `__edini_anchor_clean_*` prim 净化器）。验证：
 ```python
 wheels = hou.node("/obj/project_bike/project_core/wheels")
 in_fr = wheels.node("in_chassis_wheel_mount_fr")
 in_fr.cook(force=True)
-print("前轮锚点数:", len(in_fr.geometry().points()))  # 应为 1
+print("前轮锚点数:", len(in_fr.geometry().points()))      # 应为 1
+print("前轮锚点 prims:", in_fr.geometry().primCount())    # 应为 0（纯点云）
 ```
 
 模拟 LLM 用锚点建模（copytopoints 盖轮子）：
@@ -94,6 +97,7 @@ print("wheels 输出点数:", len(wheels.node("output_0").geometry().points()))
 ```
 
 **这证明了完整组件协作链：chassis 造锚点 → wheels 消费锚点定位 → 产出几何。**
+scaffold 现在在每个 in-port 上插了 `filter_*`（按 `@name` 留点）+ `__edini_anchor_clean_*`（删所有 prims），所以 copytopoints 的第二输入**永远是纯点云**，无论上游接线是否出错。
 
 ---
 
@@ -139,13 +143,56 @@ chassis 里的 `make_anchors`、`demo_box`、spare parm，wheels 里的 `wheel_s
 
 ---
 
+## 组件朝向轴（2026-07-06 平台契约强化）
+
+每个组件 subnet 内部有一条**烘焙链**（scaffold 自动建、agent 不应改）：
+
+```
+[agent geometry…] → out_geometry (null) → tag_component → __edini_axis_bake → output_0
+                      (agent 连这里)      (component_id)   (edini_world_axis)
+```
+
+- **`tag_component`**（agent 可编辑）：默认 `s@component_id = "<subnet name>";`。agent 可改（加自定义属性），但**只设 component_id**——改它不会影响朝向轴。
+- **`__edini_axis_bake`**（内部，`__` 前缀，锁死）：`v@edini_world_axis = {...};`。scaffold 每次重建都重设这个 snippet，`set_param` 对它的编辑会被 `internal_node_guard` 拒绝。**要改朝向轴，改声明里的 `axis` 字段，不是改这个节点。**
+
+### 声明 per-component 朝向轴
+
+`axis` 是组件声明的可选字段（默认 `"Y"`）。scaffold 据此烘焙 `edini_world_axis`，`verify_orientation` 读它作 ground truth：
+
+```python
+add_component(decl, "backrest", purpose="靠背，朝 +Z 的侧立面板",
+    axis="Z",  # ← 侧立面板声明 Z；默认 Y 适合座面/桌腿/平躺件
+    ports_out=[...])
+```
+
+常见选择：`"Y"`（默认，平躺/竖立件）、`"Z"`（侧立面：靠背、侧板）、`"X"`（横向件：车轴、横杆）。还有负向 `-X/-Y/-Z`。
+
+> **为什么不能直接编辑 `__edini_axis_bake`？** 历史教训：会话日志里 agent 把整个 snippet 覆盖成只设 component_id，静默删了朝向轴。平台因此把轴放进一个 agent 碰不到的节点 + 每次重建重设。改轴的唯一正道是改声明的 `axis` 字段再 rebuild。
+
+### verify_orientation 的 `construction_axis` 覆盖
+
+`verify_orientation` 的 check 里可传 `construction_axis`（X/Y/Z/-X/-Y/-Z）做**临时覆盖**（不改烘焙值，仅本次检查生效）。用于不想 rebuild 时快速验证假设：
+```python
+verify_orientation(node_path, checks=[
+    {"component_id": "backrest", "kind": "planar", "expected_axis": "Z",
+     "construction_axis": "Z"}  # ← 覆盖 baked Y，本次按 Z 检查
+])
+```
+返回的 check 里有 `axis_source: "override" | "baked"` 标明用了哪个来源。
+
+---
+
 ## 常见问题
 
 | 现象 | 原因 | 解决 |
 |---|---|---|
 | `ImportError: build_project_scaffold` | Houdini 加载的还是旧代码 | 确认分支/合并状态 + 重启 Houdini |
 | `create_project_hda` 报类型找不到 | `edini::project` HDA 没加载 | 确认 `otls/edini_project.hda` 存在 + `HOUDINI_OTLSCAN_PATH` 指向 `otls/` |
-| wrangle 加锚点后 0 个点 | `class` 默认 points 不是 detail | 必须 `wr.parm("class").set("detail")` |
+| **`blocked_by: project_anchor_guard`** | 在 Project HDA 组件里手写 `addpoint()` | 用 `project_add_anchors`（声明式测量锚点）。手写坐标已被平台拒绝 |
+| **`blocked_by: internal_node_guard`** | 编辑了 `__edini_axis_bake` 等 `__` 前缀内部节点 | 改声明里组件的 `axis` 字段再 rebuild；不要编辑内部节点 |
+| **`verify_orientation` 90° 失败但几何对** | baked `edini_world_axis` 默认 Y，但组件是 Z/X 朝向 | 在组件声明加 `"axis": "Z"`（或对应轴）rebuild；或 verify 时传 `construction_axis` 覆盖 |
+| **copytopoints 只复制锚点不复制几何** | tube 等 SOP 默认 `type=prim`（单基本体）| 设 `type=poly` 或 `type=mesh`（`query_parms` 的 access_hint 会提示）|
+| **in-port 收到退化面** | 上游误把真实几何接进锚点端口 | scaffold 已自动插 `__edini_anchor_clean_*` 删所有 prims；端口保证纯点云 |
 | box 拿不到 length 参数 | 用了 `ch("./length")` | 改 `ch("../length")`（box 是子节点，参数在父 chassis 上）|
 | promote 后参数面板没出现 | 没选中 core 节点 | 选中 `project_core`，按 `P`，找 `chassis` folder tab |
 

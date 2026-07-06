@@ -77,8 +77,9 @@ export const houdiniRunPythonSandbox = {
     "In network mode, use the injected `sandbox_root` variable (the geo container) or hou.node(sandbox_root_path) to create children, and end with a null/merge node named 'OUT' (or pass output_node_name). The harness auto-finds OUT, cooks it, and runs diagnostics on it.",
     "The sandbox result includes diagnostics and structural_checks (has_geometry, point_count, bounds_nonzero) — no need for separate inspect_geo or check_errors calls.",
     "Do not delete a failed sandbox before reviewing the diagnostics in the result.",
+    "For Project HDA component modeling, build DIRECTLY inside the component subnet (houdini_create_node / houdini_set_param / houdini_connect_nodes) — do NOT prototype components in the sandbox first. The sandbox is isolated (cannot reference the project core's design params reliably) and is for single-piece generators and isolated topology experiments only; prototyping a component here then rebuilding in-subnet wastes calls and invites parameter-name drift.",
     ...VERIFY_GUIDELINES,
-    "Before using unfamiliar node types in your code, look up their parameter names with houdini_node_parms(type) — do NOT guess or probe manually.",
+    "Before using unfamiliar node types in your code, look up their parameter names with query_parms(node_type) — do NOT guess or probe manually.",
     "EXECUTION-MODEL CONSTRAINTS (avoid the most common sandbox errors): " +
       "(1) Your code is wrapped in a function body, so do NOT use a top-level `return` statement — assign a result variable or use print() to surface info. " +
       "(2) ch()/hou.ch() RELATIVE paths (e.g. '../width') resolve relative to the SANDBOX container, NOT the live project node you're thinking of — so a sandbox cannot reference a Project HDA core's spare parms via '../width'. To reference an external node's parm, use an ABSOLUTE path: hou.ch('/obj/.../project_core/width'). " +

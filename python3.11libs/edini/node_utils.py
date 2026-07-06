@@ -79,7 +79,11 @@ def _create_with_namespace_fallback(parent, node_type: str, name: str | None):
     except hou.OperationFailed:
         pass
 
-    # Attempt 2: resolve via namespaceOrder across all categories
+    # Attempt 2: resolve via namespaceOrder across all categories.
+    # Lop is included (Fix 6): a bare 'cylinder' resolves in Lop, but creating
+    # a Lop node under a SOP parent still fails — so the Lop entry is mainly
+    # consulted by the _LOP_TO_SOP_HINTS branch below to produce a helpful
+    # error rather than a bare 'Invalid node type name'.
     if node is None:
         for cat in [
             hou.sopNodeTypeCategory(),
@@ -88,6 +92,7 @@ def _create_with_namespace_fallback(parent, node_type: str, name: str | None):
             hou.vopNodeTypeCategory(),
             hou.shopNodeTypeCategory(),
             hou.ropNodeTypeCategory(),
+            hou.lopNodeTypeCategory(),
         ]:
             nt = hou.nodeType(cat, node_type)
             if nt is not None:
@@ -101,13 +106,62 @@ def _create_with_namespace_fallback(parent, node_type: str, name: str | None):
             if node is not None:
                 break
 
-    # All attempts failed — let original exception propagate
+    # All attempts failed — diagnose a Lop-only-type mistake (Fix 6) before
+    # re-raising the bare 'Invalid node type name'. 'cylinder' is a Lop type
+    # with a SOP equivalent ('tube'); without this hint the chair-log agent
+    # had to search_nodes + query_parms to recover.
     if node is None:
+        hint = _lop_only_type_hint(parent, node_type)
+        if hint is not None:
+            raise hou.OperationFailed(hint)
         return parent.createNode(node_type, node_name=name if name else None)
 
     # Apply Tab-menu presets from matching shelf tool
     _apply_tool_presets(node)
     return node
+
+
+# ── Lop-only node-type diagnosis (Fix 6) ─────────────────────────────────
+# Some node type names exist only in the Lop (Solaris) category while a SOP
+# equivalent with a different name does the same job in SOP context. Map the
+# common ones so a failed create_node under a SOP parent returns a useful hint
+# instead of a bare 'Invalid node type name'.
+_LOP_TO_SOP_HINTS: dict[str, str] = {
+    "cylinder": "tube",   # 'cylinder' is Lop-only; 'tube' is the SOP primitive
+    "cube": "box",        # 'cube' is Lop-only; 'box' is the SOP primitive
+    "sphere": "sphere",   # exists in both, but listed for clarity
+    "cone": "tube",       # SOP has no cone primitive — tube with one rad=0
+}
+
+
+def _lop_only_type_hint(parent, node_type: str) -> str | None:
+    """If `node_type` resolves ONLY in Lop (not the parent's category), return
+    an OperationFailed-style message naming the SOP equivalent. Else None.
+
+    Only triggers when the type genuinely doesn't exist for the parent's
+    context — so a real Lop parent creating a Lop 'cylinder' is unaffected.
+    """
+    try:
+        bare = node_type.split("::")[0].lower()
+        sop_hint = _LOP_TO_SOP_HINTS.get(bare)
+        if sop_hint is None:
+            return None
+        # Confirm the type is actually absent from SOP (don't mis-hint if a SOP
+        # version exists under a namespace we didn't try).
+        sop_nt = hou.nodeType(hou.sopNodeTypeCategory(), node_type)
+        if sop_nt is not None:
+            return None  # a SOP version exists; the failure was something else
+        lop_nt = hou.nodeType(hou.lopNodeTypeCategory(), node_type)
+        if lop_nt is None:
+            return None  # not a Lop type either; no specific hint
+        return (
+            f"'{node_type}' is a Lop (Solaris) node and cannot be created under "
+            f"a SOP parent. In SOP context use '{sop_hint}' instead "
+            f"(e.g. houdini_create_node(node_type='{sop_hint}')). "
+            f"Use search_nodes('{node_type}') to confirm categories."
+        )
+    except Exception:
+        return None
 
 
 def _init_copytopoints_attribs(node) -> bool:
@@ -415,14 +469,15 @@ def _apply_one_param(node, param_name: str, value: Any) -> tuple[bool, Any, str 
 
     Returns (ok, applied_value, error). `applied_value` is the value actually
     set (may differ from the input for menu coercion, e.g. "0" → 0), so callers
-    can report what landed. On failure, error explains why.
+    can report what landed. On failure, error explains why — and now (Fix 4)
+    appends a "Did you mean" suggestion from the parm manifest + difflib.
     """
     # Vector parm (list/tuple, >1 component) → parmTuple (handles group names
     # like box "size"/"t" where node.parm("size") is None but parmTuple works).
     if isinstance(value, (list, tuple)) and len(value) > 1:
         pt = node.parmTuple(param_name)
         if pt is None:
-            return False, value, f"parameter tuple '{param_name}' not found"
+            return False, value, _not_found_msg(node, param_name, tuple=True)
         if any(_looks_like_expr(v) for v in value):
             for sub, v in zip(pt, value):
                 if _looks_like_expr(v):
@@ -440,7 +495,7 @@ def _apply_one_param(node, param_name: str, value: Any) -> tuple[bool, Any, str 
     if _looks_like_expr(value):
         parm = node.parm(param_name)
         if parm is None:
-            return False, value, f"parameter '{param_name}' not found"
+            return False, value, _not_found_msg(node, param_name)
         try:
             parm.setExpression(value, language=hou.exprLanguage.Hscript)
         except (AttributeError, TypeError):
@@ -450,11 +505,87 @@ def _apply_one_param(node, param_name: str, value: Any) -> tuple[bool, Any, str 
     # Plain scalar → .set() with menu-token coercion fallback.
     parm = node.parm(param_name)
     if parm is None:
-        return False, value, f"parameter '{param_name}' not found"
+        return False, value, _not_found_msg(node, param_name)
     ok, applied, err = _set_parm_value(parm, value)
     if not ok:
         return False, value, err
     return True, applied, None
+
+
+# ── Parameter-name suggestions (Fix 4) ───────────────────────────────────
+# A few node types have a documented common gotcha where the agent's memorized
+# name is wrong. Surface those explicitly first (deterministic, high-signal),
+# then fall back to manifest + difflib fuzzy match.
+_PARM_NAME_GOTCHAS: dict[str, dict[str, str]] = {
+    # node_type(lowercased, namespace-stripped) -> {wrong_name -> hint}
+    "box": {"center": "box has no 'center' parm — use 't' (translate). "
+                       "Set via set_param('t', [x,y,z]) or query_parms('box')."},
+}
+
+
+def _not_found_msg(node, param_name: str, *, tuple: bool = False) -> str:
+    """Build a 'parameter not found' error enriched with a suggestion.
+
+    Enrichment layers (each best-effort, degrades gracefully):
+      1. A documented gotcha for this node type (e.g. box.center → t).
+      2. difflib.get_close_matches against the manifest's valid parm names.
+      3. A pointer to the query_parms tool.
+    If nothing is available (no manifest), the bare 'not found' string is
+    returned — identical to pre-Fix-4 behaviour.
+    """
+    kind = "parameter tuple" if tuple else "parameter"
+    base = f"{kind} '{param_name}' not found"
+    node_type = _node_type_for_lookup(node)
+    extras: list[str] = []
+
+    # 1. Documented gotcha.
+    gotcha = _PARM_NAME_GOTCHAS.get(node_type, {}).get(param_name)
+    if gotcha:
+        extras.append(gotcha)
+
+    # 2. Manifest + difflib fuzzy suggestions.
+    suggestions = _suggest_parm_names(node_type, param_name)
+    if suggestions:
+        extras.append("Did you mean: " + ", ".join(suggestions) + "?")
+
+    # 3. Discovery pointer (always helpful on a miss).
+    extras.append(f"Use query_parms(node_type={node_type!r}) to list all parms.")
+
+    if extras:
+        return base + ". " + " ".join(extras)
+    return base
+
+
+def _node_type_for_lookup(node) -> str:
+    """Lowercased, namespace-stripped node type name for gotcha/manifest lookup.
+
+    'polybevel::3.0' → 'polybevel'. Robust to None / mock nodes.
+    """
+    try:
+        tname = node.type().name()
+    except Exception:
+        return ""
+    return tname.split("::")[0].lower()
+
+
+def _suggest_parm_names(node_type: str, wrong_name: str) -> list[str]:
+    """difflib.get_close_matches against the manifest's valid parm set.
+
+    Returns up to 3 close matches, or [] if the manifest/type is unavailable.
+    Degrades to [] when the manifest isn't loaded (offline/test envs) — callers
+    just get the bare not-found message, same as before.
+    """
+    if not node_type or not wrong_name:
+        return []
+    import difflib
+    try:
+        valid = manifest_parm_names(node_type)
+    except Exception:
+        valid = None
+    if not valid:
+        return []
+    matches = difflib.get_close_matches(wrong_name, sorted(valid), n=3, cutoff=0.5)
+    return matches
 
 
 def set_param(node_path: str, param_name: str, value: Any) -> dict[str, Any]:
@@ -1266,6 +1397,25 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# ── Type-specific gotcha hints (Round-3 Fix D3 + general) ────────────────
+# Some node types have a documented default that bites agents who don't read
+# it. tube defaults to type=prim (a single primitive), so copytopoints copies
+# only the anchor points, not the tube — session 3 produced 4-point "legs".
+# Map the common offenders so query_parms surfaces the gotcha proactively.
+_NODE_TYPE_GOTCHA_HINTS: dict[str, str] = {
+    "tube": ("tube defaults to type=prim (a single primitive). For copytopoints "
+             "instancing or any polygon workflow, set type=poly or type=mesh."),
+}
+
+
+def _type_specific_hints(node_type: str) -> list[str]:
+    """Per-node-type gotcha hints (default-value traps agents hit). Returns
+    hints whose key matches the bare (namespace-stripped, lowercased) type."""
+    bare = node_type.split("::")[0].lower()
+    hint = _NODE_TYPE_GOTCHA_HINTS.get(bare)
+    return [hint] if hint else []
+
+
 def _access_hints(parms: list[dict[str, Any]]) -> list[str]:
     """Build actionable access hints for a parm list, targeted at the exact
     mistakes agents repeatedly make (each hint below maps to a real failure
@@ -1351,7 +1501,7 @@ def node_parms(node_type: str, category: str = "Sop") -> dict[str, Any]:
                 "node_type": resolved,
                 "category": manifest.get("category", category),
                 "parms": parms,
-                "access_hints": _access_hints(parms),
+                "access_hints": _access_hints(parms) + _type_specific_hints(resolved),
                 "source": "manifest",
                 "houdini_version": manifest.get("houdini_version"),
             }
@@ -1367,7 +1517,8 @@ def node_parms(node_type: str, category: str = "Sop") -> dict[str, Any]:
     try:
         live = _node_parms_live(node_type, category)
         if live is not None:
-            live["access_hints"] = _access_hints(live.get("parms", []))
+            live["access_hints"] = (_access_hints(live.get("parms", []))
+                                    + _type_specific_hints(live.get("node_type", node_type)))
             return live
     except Exception:
         pass
@@ -1537,6 +1688,37 @@ def manifest_parm_names(node_type: str) -> set[str] | None:
         if comps:
             names.update(comps)
     return names
+
+
+def manifest_has_parm(node_type: str, param_name: str) -> bool | None:
+    """Index-aware membership test against the parm manifest.
+
+    Returns True/False if the manifest knows the type, or None to soft-degrade
+    when the manifest/type is unavailable (so callers can skip enforcement
+    rather than false-positive). Handles multiparm-instance channels: a name
+    matching ``<root><digits>`` for a ``<root>#`` template is accepted (covers
+    ``useapply1`` against the ``useapply#`` template, which the bare set from
+    ``manifest_parm_names`` only partially enumerates).
+
+    This is the helper the ``manifest_parm_names`` docstring referenced but
+    that was never defined — define it now (Fix 4 wires suggestion logic that
+    benefits from the index-aware path, and it closes a dangling reference).
+    """
+    names = manifest_parm_names(node_type)
+    if names is None:
+        return None
+    if param_name in names:
+        return True
+    # Multiparm-instance channel: <root># template + digits. Walk the templates
+    # and accept any name that is <root> + a non-negative int.
+    for tmpl in list(names):
+        if "#" in tmpl:
+            root = tmpl.replace("#", "")
+            if root and param_name.startswith(root):
+                tail = param_name[len(root):]
+                if tail.isdigit():
+                    return True
+    return False
 
 
 def _vector_to_list(value) -> list[float]:
@@ -3287,10 +3469,24 @@ def verify_orientation(
             # disagrees with the geometry it actually emitted (caught here as a
             # WARNING, not a failure — PCA is noisy, the construction axis is
             # the authority).
+            #
+            # Round-3 Fix D2: an explicit per-check `construction_axis` token
+            # (X/Y/Z/-X/-Y/-Z) OVERRIDES the baked attr for THIS check. This
+            # honors the tool's documented parameter (which the backend
+            # previously ignored when a bake existed — the session-3 L87 trap):
+            # it lets the agent verify against a hypothetical without rebuilding,
+            # and falls back to it when no bake is present either.
             world_axis_attr = geo.findPrimAttrib("edini_world_axis")
             has_world_axis = world_axis_attr is not None
             construction_vec: tuple[float, float, float] | None = None
-            if has_world_axis:
+            construction_source = None  # 'baked' | 'override' — for diagnostics
+            # 1) Explicit per-check override takes precedence.
+            override_axis = chk.get("construction_axis")
+            if override_axis is not None and override_axis in _AXIS_VECTORS:
+                construction_vec = _AXIS_VECTORS[override_axis]
+                construction_source = "override"
+            # 2) Otherwise read the baked prim attr (the scaffold's ground truth).
+            if construction_vec is None and has_world_axis:
                 try:
                     raw = comp_prims[0].floatListAttribValue("edini_world_axis") \
                         if hasattr(comp_prims[0], "floatListAttribValue") \
@@ -3308,6 +3504,7 @@ def verify_orientation(
                 if raw is not None:
                     construction_vec = (
                         float(raw[0]), float(raw[1]), float(raw[2]))
+                    construction_source = "baked"
 
             if construction_vec is not None:
                 # Deterministic construction path.
@@ -3326,6 +3523,7 @@ def verify_orientation(
                     "detected_axis": detected_axis,
                     "detected_vector": [round(c, 4) for c in detected_vec],
                     "world_axis_baked": [round(c, 4) for c in construction_vec],
+                    "axis_source": construction_source,  # 'override' | 'baked'
                     "angle_error_deg": round(angle_deg, 2),
                     "passed": passed_check,
                 })

@@ -3,7 +3,12 @@
 To run:   python tests/test_edini_context.py
 """
 
+import os
 import unittest
+
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_CONTEXT_TS = os.path.join(_REPO_ROOT, "pi-extensions", "edini-context", "index.ts")
+_HARNESS_TS = os.path.join(_REPO_ROOT, "pi-extensions", "edini-tools", "tools", "harness.ts")
 
 
 class TestContextInjection(unittest.TestCase):
@@ -185,6 +190,55 @@ class TestEndToEndWorkflow(unittest.TestCase):
         ]
         for case in error_cases:
             self.assertIn("not found", case["error"].lower())
+
+
+class TestCanonicalToolNames(unittest.TestCase):
+    """Fix 6 regression guard: the system prompt + tool guidelines MUST use
+    canonical tool names (the names in the agent's tool list), not the legacy
+    houdini_-prefixed aliases. The chair-modeling agent was told to call
+    'create_project_hda' / 'houdini_commit_sandbox' / 'houdini_node_parms' —
+    names that either don't exist or only resolve via silent alias dispatch.
+    These tests read the actual .ts source so the guard tracks the real file.
+    """
+
+    # Stale names that MUST NOT appear in prompt/guideline prose. (Some are
+    # valid dispatch aliases in tool_executor._TOOL_ALIASES, but the agent's
+    # tool list exposes only the canonical names — so prose must use those.)
+    _STALE = [
+        "create_project_hda",
+        "houdini_commit_sandbox",
+        "houdini_inspect_geometry_health",
+        "houdini_geometry_inventory",
+        "houdini_node_parms",
+        "houdini_verify_orientation",
+    ]
+
+    def _read(self, path):
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+
+    def test_system_prompt_uses_canonical_names(self):
+        """edini-context/index.ts must reference canonical tool names."""
+        src = self._read(_CONTEXT_TS)
+        for stale in self._STALE:
+            self.assertNotIn(stale, src,
+                             f"stale tool name {stale!r} in system prompt — "
+                             f"use the canonical name instead (see "
+                             f"tool_executor.TOOL_HANDLERS keys)")
+        # And the canonical names that the Build Path / verification workflow
+        # reference must actually be present (so the prose isn't accidentally
+        # stripped along with the stale names).
+        for canonical in ("project_create", "commit_sandbox",
+                          "inspect_health", "geometry_inventory",
+                          "project_build_scaffold"):
+            self.assertIn(canonical, src,
+                          f"canonical tool name {canonical!r} missing from prompt")
+
+    def test_harness_guidelines_use_query_parms(self):
+        """harness.ts must say query_parms, not houdini_node_parms."""
+        src = self._read(_HARNESS_TS)
+        self.assertNotIn("houdini_node_parms", src)
+        self.assertIn("query_parms", src)
 
 
 if __name__ == "__main__":
