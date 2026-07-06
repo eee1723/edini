@@ -72,6 +72,12 @@ class ProjectChatDialog(QtWidgets.QDialog):
         get_tool_executor()
         from edini.rpc_client import RpcClient
         self._rpc = RpcClient(parent=self)
+        # Scope Pi's cwd to the hip-file directory so conversation logs land
+        # under the project (in ~/.pi/agent/sessions/<hip-dir>/) instead of a
+        # shared/global location derived from Houdini's launch dir. Mirrors the
+        # main window (main_window._bootstrap → set_cwd).
+        from edini.config import get_pi_working_dir
+        self._rpc.set_cwd(get_pi_working_dir())
         # Inject scope env so the edini-context extension knows this Pi process
         # is bound to a specific Project HDA and injects workspace-lock directives.
         self._rpc.set_env_extra({
@@ -100,7 +106,11 @@ class ProjectChatDialog(QtWidgets.QDialog):
             )
             from edini.ui.version_scanner import scan_node_versions
             try:
-                existing = scan_node_versions(self._core_path)
+                # Pass the project cwd so the scanner looks in the project's
+                # session dir (matches where logs are now written). Falls back
+                # to scanning all dirs if the dir doesn't exist yet.
+                from edini.config import get_pi_working_dir
+                existing = scan_node_versions(self._core_path, cwd=get_pi_working_dir())
                 start_v = next_version([v["version"] for v in existing]) if existing else 1
             except Exception:
                 start_v = 1

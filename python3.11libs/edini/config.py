@@ -82,6 +82,30 @@ PI_EXTENSION_ENTRIES = (
 TOOL_EXECUTOR_HOST = "127.0.0.1"
 TOOL_EXECUTOR_PORT = 9876
 
+
+def get_pi_working_dir() -> str:
+    """Working directory for the Pi subprocess — scopes session logs per project.
+
+    Pi stores its conversation JSONL under ``~/.pi/agent/sessions/<cwd-derived>/``
+    (see pi_sessions._cwd_to_dirname), so the cwd we pass to the subprocess
+    determines WHERE logs land. Using the hip-file directory means each
+    Houdini project gets its own session directory, keeping procedural-modeling
+    logs next to the project instead of mixing in a shared/global location.
+
+    Returns the hip directory when available; falls back to the process cwd
+    for unsaved scenes (``hou.hipFile.path()`` returns ``""``) or non-Houdini
+    contexts (tests). ``hou`` is imported lazily so this module stays importable
+    without Houdini present.
+    """
+    try:
+        import hou  # noqa: F401  (lazy: only available inside Houdini)
+        hip = hou.hipFile.path()
+        if hip:
+            return os.path.dirname(hip) or hip
+    except Exception:
+        pass
+    return os.getcwd()
+
 # Panel dimensions
 PANEL_DEFAULT_WIDTH = 500
 PANEL_DEFAULT_HEIGHT = 600

@@ -56,9 +56,12 @@ class ProjectChatDriver(BaseChatDriver):
         from edini.ui.version_scanner import scan_node_versions
 
         self._version_list = NodeVersionList()
-        # Scan existing versions for this node (Pi sessions dir may not exist yet)
+        # Scan existing versions for this node (Pi sessions dir may not exist yet).
+        # Pass the project cwd so the scanner looks in the project's session dir
+        # (matches where logs are now written via set_cwd in the panels).
         try:
-            versions = scan_node_versions(self._core_path)
+            from edini.config import get_pi_working_dir
+            versions = scan_node_versions(self._core_path, cwd=get_pi_working_dir())
         except Exception:
             versions = []
         # Mark the highest version as current if any exist

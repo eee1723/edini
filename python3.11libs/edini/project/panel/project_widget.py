@@ -216,6 +216,11 @@ class ProjectPanelWidget(QtWidgets.QWidget):
         # (stdin/stdout JSON-RPC, no port) and wires the worker signals.
         from edini.rpc_client import RpcClient
         self._rpc = RpcClient(parent=self)
+        # Scope Pi's cwd to the hip-file directory so conversation logs land
+        # under the project (in ~/.pi/agent/sessions/<hip-dir>/) instead of a
+        # shared/global location. Mirrors the main window + chat_dialog.
+        from edini.config import get_pi_working_dir
+        self._rpc.set_cwd(get_pi_working_dir())
         self._rpc.text_delta.connect(self._on_stream_delta)
         self._rpc.agent_finished.connect(self._on_turn_done)
         # status_changed drives the bootstrap sequence: Pi reports "connecting"

@@ -31,16 +31,15 @@ except Exception:
 
 
 def _get_working_dir() -> str:
-    """Get the working directory for pi: HIP path in Houdini, CWD otherwise."""
-    if hou:
-        try:
-            hip = hou.hipFile.path()
-            if hip:
-                # Use HIP dir so pi sessions are scoped to the project
-                return os.path.dirname(hip) or hip
-        except Exception:
-            pass
-    return os.getcwd()
+    """Get the working directory for pi: HIP path in Houdini, CWD otherwise.
+
+    Thin alias over the shared ``config.get_pi_working_dir`` so session logs
+    are scoped per project (hip directory). Kept as a module-level function
+    for call-site compatibility; new callers should import the config helper
+    directly to avoid coupling to the main window.
+    """
+    from edini.config import get_pi_working_dir
+    return get_pi_working_dir()
 
 
 class EdiniMainWindow(QtWidgets.QMainWindow):
