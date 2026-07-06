@@ -1,6 +1,4 @@
 """BaseChatDriver binds ChatRuntime signals to ChatWindowShell components."""
-import sys
-sys.path.insert(0, "python3.11libs")
 from tests.qt_helpers import qapp, SignalSpy
 from PySide6 import QtCore
 from edini.ui.chat_runtime import ChatRuntime

@@ -4,8 +4,6 @@ Locks the contract so the Stage-1 bubble merge cannot silently change
 rendering. Tests the format functions directly (no QApplication needed
 for pure string functions).
 """
-import sys
-sys.path.insert(0, "python3.11libs")
 
 from edini.ui.components.markdown import _format_full, _format_lite
 

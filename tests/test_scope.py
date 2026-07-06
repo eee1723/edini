@@ -1,6 +1,4 @@
 """ScopeConfig — diff entry point for chat windows."""
-import sys
-sys.path.insert(0, "python3.11libs")
 from edini.ui.chat.scope import ScopeConfig
 
 

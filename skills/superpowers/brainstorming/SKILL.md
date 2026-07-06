@@ -26,7 +26,8 @@ and visual, not a software design problem. In this case:
 2. **Present a brief component decomposition** (table = tabletop + legs + shelf)
    and get a quick "继续/go ahead" from the user.
 3. **Delegate to the `project-modeling` skill immediately** — its decompose →
-   scaffold → model per component cycle IS the design methodology for modeling.
+   scaffold → measure anchors → model per component cycle IS the design
+   methodology for modeling.
 4. **Do NOT write a spec doc** to `docs/superpowers/specs/` — a single 3D asset
    does not need a written spec file. The component declaration in the Project
    HDA is the design artifact.

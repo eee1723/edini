@@ -1,6 +1,4 @@
 """SceneCard accepts a dict — no hou dependency."""
-import sys
-sys.path.insert(0, "python3.11libs")
 from tests.qt_helpers import qapp
 from edini.ui.status.scene_card import SceneCard
 

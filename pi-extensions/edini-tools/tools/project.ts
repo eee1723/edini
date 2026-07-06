@@ -59,14 +59,14 @@ export const projectTools = [
     name: "project_build_scaffold",
     label: "Build Project Scaffold",
     description:
-      "Build component scaffolds + design params INSIDE a Project HDA core node (edini::project SOP HDA). " +
-      "For each component in the declaration, creates an empty subnet with output ports " +
+      "Scaffold component subnets + design params INSIDE a Project HDA core node (edini::project SOP HDA). " +
+      "For each component in the declaration, scaffolds an empty subnet with output ports " +
       "(out_geometry/out_anchors nulls + output nodes forming subnet outputs). For each design_param, " +
       "creates a core-level spare parm (with default/min/max) — the core is the single source of truth; " +
       "component subnets reference these via ch('../<name>') after promote. Pass `components` + `design_params` " +
-      "to set them and build in one shot, or omit to rebuild the existing declaration. Geometry is left empty " +
-      "for subsequent modeling.",
-    promptSnippet: "Build component scaffolds + design params inside a Project HDA",
+      "to scaffold them in one shot, or omit to rebuild the existing declaration. Geometry is left empty " +
+      "for subsequent modeling (the scaffold never builds geometry).",
+    promptSnippet: "Scaffold component subnets + design params inside a Project HDA",
     promptGuidelines: [
       "Use project_build_scaffold after project_create, once the component decomposition + adjustable params are decided.",
       "The `core_path` is the edini::project SOP HDA instance path returned by project_create.",
@@ -115,10 +115,11 @@ export const projectTools = [
     name: "project_promote_params",
     label: "Promote Component Params",
     description:
-      "Lift all component subnets' spare parms to the Project HDA core's top-level interface, " +
+      "Promote all component subnets' spare parms to the Project HDA core's top-level interface, " +
       "so the whole model is adjustable from one place. Each promoted parm becomes " +
       "<component>_<parm> on the core, driving its subnet via a live ch() reference. " +
-      "Run this AFTER modeling inside the component subnets (so the parms you added exist).",
+      "Run this AFTER modeling inside the component subnets (so the parms you added exist). " +
+      "After promote, verify the LIVE guarantee: change a core parm, re-cook, confirm geometry updates.",
     promptSnippet: "Promote component params to the Project HDA core",
     promptGuidelines: [
       "Use project_promote_params AFTER modeling inside component subnets, to expose adjustable params at the top.",
@@ -138,13 +139,13 @@ export const projectTools = [
     name: "project_add_anchors",
     label: "Add Procedural Anchors",
     description:
-      "Procedurally generate anchor points from a component's geometry (LIVE — recompute when geometry changes). " +
-      "Each anchor is a measurement spec resolved into a VEX wrangle that reads the component's bbox on every cook. " +
-      "Use this INSTEAD of hardcoded addpoint coordinates, so that resizing the component (via a design param) " +
-      "automatically moves the anchors. Anchors are tagged with @name for downstream components to consume.",
+      "Procedurally generate anchor points by MEASURING a component's geometry (LIVE — recompute when geometry changes). " +
+      "Each anchor is a measurement spec resolved into a VEX wrangle that measures the component's bbox on every cook. " +
+      "Always measure — never hardcode addpoint coordinates (the platform guard refuses hardcoded addpoint with 'measure violation'). " +
+      "Resizing the component (via a design param) automatically moves the measured anchors. Anchors are tagged with @name for downstream components to consume.",
     promptSnippet: "Generate live anchor points from a component's geometry",
     promptGuidelines: [
-      "Use project_add_anchors to emit anchor points PROCEDURALLY from geometry — never hardcode addpoint coordinates.",
+      "Use project_add_anchors to MEASURE anchor points from geometry — always measure, never hardcode addpoint coordinates.",
       "Each anchor: {measure, name, ...measure-params}. measure ∈ bbox_corner/bbox_face_center/bbox_center/grid_on_face/...; name = the @name tag (anchor identity).",
       "bbox_corner needs 'axes' (6-char sign string like '+X-Y+Z'); bbox_face_center needs 'face' (like '-Y' for bottom).",
       "Anchors derive from the component's main geometry (out_geometry) by default, so they move when the geometry resizes.",

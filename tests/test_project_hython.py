@@ -140,7 +140,12 @@ class TestScaffoldHython(unittest.TestCase):
         proc = subprocess.run(
             [HYTHON, "-c", _HARNESS],
             capture_output=True, text=True, timeout=180,
-            cwd=_REPO)
+            cwd=_REPO,
+            # stdin=DEVNULL avoids a CPython 3.14 / Windows subprocess race:
+            # without it, the parent's stdin handle is made inheritable for the
+            # child, which intermittently throws OSError [WinError 6] inside
+            # _make_inheritable. This makes hython tests ~100% flaky otherwise.
+            stdin=subprocess.DEVNULL)
         combined = proc.stdout + proc.stderr
         # 找 RESULT_JSON 行。
         for line in combined.splitlines():
@@ -221,7 +226,8 @@ class TestPromoteHython(unittest.TestCase):
     def _run(self):
         proc = subprocess.run(
             [HYTHON, "-c", _PROMOTE_HARNESS],
-            capture_output=True, text=True, timeout=180, cwd=_REPO)
+            capture_output=True, text=True, timeout=180, cwd=_REPO,
+            stdin=subprocess.DEVNULL)  # avoid WinError 6 handle race — see _run_harness
         combined = proc.stdout + proc.stderr
         for line in combined.splitlines():
             if line.startswith("RESULT_JSON:"):
@@ -298,7 +304,8 @@ class TestFullChainHython(unittest.TestCase):
     def _run(self):
         proc = subprocess.run(
             [HYTHON, "-c", _FULL_HARNESS],
-            capture_output=True, text=True, timeout=180, cwd=_REPO)
+            capture_output=True, text=True, timeout=180, cwd=_REPO,
+            stdin=subprocess.DEVNULL)  # avoid WinError 6 handle race — see _run_harness
         combined = proc.stdout + proc.stderr
         for line in combined.splitlines():
             if line.startswith("RESULT_JSON:"):
@@ -389,7 +396,8 @@ class TestInputScaffoldHython(unittest.TestCase):
     def _run(self):
         proc = subprocess.run(
             [HYTHON, "-c", _INPUT_HARNESS],
-            capture_output=True, text=True, timeout=180, cwd=_REPO)
+            capture_output=True, text=True, timeout=180, cwd=_REPO,
+            stdin=subprocess.DEVNULL)  # avoid WinError 6 handle race — see _run_harness
         combined = proc.stdout + proc.stderr
         for line in combined.splitlines():
             if line.startswith("RESULT_JSON:"):
@@ -519,7 +527,8 @@ class TestAgentToolsHython(unittest.TestCase):
     def _run(self):
         proc = subprocess.run(
             [HYTHON, "-c", _AGENT_HARNESS],
-            capture_output=True, text=True, timeout=180, cwd=_REPO)
+            capture_output=True, text=True, timeout=180, cwd=_REPO,
+            stdin=subprocess.DEVNULL)  # avoid WinError 6 handle race — see _run_harness
         combined = proc.stdout + proc.stderr
         for line in combined.splitlines():
             if line.startswith("RESULT_JSON:"):
@@ -627,7 +636,8 @@ class TestDesignParamsHython(unittest.TestCase):
     def _run(self):
         proc = subprocess.run(
             [HYTHON, "-c", _DESIGN_PARAMS_HARNESS],
-            capture_output=True, text=True, timeout=180, cwd=_REPO)
+            capture_output=True, text=True, timeout=180, cwd=_REPO,
+            stdin=subprocess.DEVNULL)  # avoid WinError 6 handle race — see _run_harness
         combined = proc.stdout + proc.stderr
         for line in combined.splitlines():
             if line.startswith("RESULT_JSON:"):
@@ -821,7 +831,8 @@ class TestChairRegressionHython(unittest.TestCase):
     def _run(self):
         proc = subprocess.run(
             [HYTHON, "-c", _CHAIR_HARNESS],
-            capture_output=True, text=True, timeout=180, cwd=_REPO)
+            capture_output=True, text=True, timeout=180, cwd=_REPO,
+            stdin=subprocess.DEVNULL)  # avoid WinError 6 handle race — see _run_harness
         combined = proc.stdout + proc.stderr
         for line in combined.splitlines():
             if line.startswith("RESULT_JSON:"):
@@ -993,7 +1004,8 @@ class TestChairAxisHython(unittest.TestCase):
     def _run(self):
         proc = subprocess.run(
             [HYTHON, "-c", _CHAIR_AXIS_HARNESS],
-            capture_output=True, text=True, timeout=180, cwd=_REPO)
+            capture_output=True, text=True, timeout=180, cwd=_REPO,
+            stdin=subprocess.DEVNULL)  # avoid WinError 6 handle race — see _run_harness
         combined = proc.stdout + proc.stderr
         for line in combined.splitlines():
             if line.startswith("RESULT_JSON:"):

@@ -252,24 +252,19 @@ class TestVerifyOrientationFlow(unittest.TestCase):
     def setUp(self):
         # Install mock hou before importing node_utils
         self.prev_hou = sys.modules.get("hou")
-        self.prev_edini = {
-            n: m for n, m in sys.modules.items() if n.startswith("edini")
-        }
+        self._reloaded = "edini.node_utils"
         from tests.mock_hou import create_mock_hou, MockNode
         self.prev_hou_ref = MockNode._hou_ref
         self.mock_hou = create_mock_hou()
         sys.modules["hou"] = self.mock_hou
-        for mod_name in list(sys.modules):
-            if mod_name.startswith("edini"):
-                del sys.modules[mod_name]
+        from tests.conftest import reload_edini_modules
+        reload_edini_modules(self._reloaded)
         self.nu = importlib.import_module("edini.node_utils")
 
     def tearDown(self):
         from tests.mock_hou import MockNode
-        for mod_name in list(sys.modules):
-            if mod_name.startswith("edini"):
-                del sys.modules[mod_name]
-        sys.modules.update(self.prev_edini)
+        from tests.conftest import reload_edini_modules
+        reload_edini_modules(self._reloaded)
         if self.prev_hou is not None:
             sys.modules["hou"] = self.prev_hou
         else:
@@ -401,24 +396,19 @@ class TestVerifyOrientationConstructionPath(unittest.TestCase):
 
     def setUp(self):
         self.prev_hou = sys.modules.get("hou")
-        self.prev_edini = {
-            n: m for n, m in sys.modules.items() if n.startswith("edini")
-        }
+        self._reloaded = "edini.node_utils"
         from tests.mock_hou import create_mock_hou, MockNode
         self.prev_hou_ref = MockNode._hou_ref
         self.mock_hou = create_mock_hou()
         sys.modules["hou"] = self.mock_hou
-        for mod_name in list(sys.modules):
-            if mod_name.startswith("edini"):
-                del sys.modules[mod_name]
+        from tests.conftest import reload_edini_modules
+        reload_edini_modules(self._reloaded)
         self.nu = importlib.import_module("edini.node_utils")
 
     def tearDown(self):
         from tests.mock_hou import MockNode
-        for mod_name in list(sys.modules):
-            if mod_name.startswith("edini"):
-                del sys.modules[mod_name]
-        sys.modules.update(self.prev_edini)
+        from tests.conftest import reload_edini_modules
+        reload_edini_modules(self._reloaded)
         if self.prev_hou is not None:
             sys.modules["hou"] = self.prev_hou
         else:

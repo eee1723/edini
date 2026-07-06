@@ -5,8 +5,6 @@ AgentPanel._build_ui() in Stage 2, Task 1.4. The visible behavior
 (toggle, auto-expand, reset, paragraph counting, live cursor) must be
 IDENTICAL to the original inline implementation.
 """
-import sys
-sys.path.insert(0, "python3.11libs")
 from tests.qt_helpers import qapp
 from edini.ui.components.thinking_panel import ThinkingPanel
 from edini.ui.components.tool_panel import ToolPanel

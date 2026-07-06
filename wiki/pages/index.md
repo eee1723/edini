@@ -1,6 +1,6 @@
 # 📊 仪表盘
 
-> **当前阶段**：统一对话窗口架构完成 + 工具链全量修复（含会话日志驱动两轮修复：接口契约清晰化 + 参数认知自洽）&nbsp;|&nbsp; **状态**：主 Agent 窗口 + HDA 窗口共享组件库，HDA 窗口三面板升级（橙色 + 版本列表 + workspace lock），15+ 工具链 bug 修复&nbsp;|&nbsp; **最后更新**：2026-07-05
+> **当前阶段**：程序化建模 skill 从第一性原理重构 + 测试基建修复&nbsp;|&nbsp; **状态**：对照 mattpocock writing-great-skills 框架优化 project-modeling skill（3 leading words 全链路双层强化 + 对抗性 intro + 5 completion criterion + progressive disclosure 4 文件拆分）；同步修复两个潜伏测试基建 bug（模块全局清空污染 + hython WinError 6 flaky）&nbsp;|&nbsp; **最后更新**：2026-07-07
 
 ## 快速导航
 
@@ -37,13 +37,13 @@
 | 节点创建 | ✅ namespace 自动解析 · shelf tool 预设应用 · diff 过滤内部子节点 |
 | 按钮布局 | ✅ 📷 截图 + 📁 上传（文本标签按钮，minHeight 34px，hover/pressed 动效）· 仅对话右对齐 · 执行按钮 minWidth 90px · 6px/8px 间距优化 |
 | 剪贴板 | ✅ Ctrl+V 图片粘贴 · 右键粘贴图片到附件栏 · 右键粘贴文本（defer focus+paste）· 多模式探测（QImage→mimeData→URL→raw png/jpeg）· Houdini PySide6 枚举兼容（整数 mode 值）|
-| 测试 | ✅ 724 测试通过（mock_hou 脱机 + harness/recipe/orientation/health/ports/node_utils 单测 + 真实 hython project/component/design_params 决定性验证）|
+| 测试 | ✅ 901 测试通过（mock_hou 脱机 + harness/recipe/orientation/health/ports/node_utils/chat/UI 单测 + 真实 hython project/component/design_params/skill-workflow 决定性验证）|
 | 知识检索 | ✅ edini_search_knowledge 工具已实现 |
 | 知识→Skills | ⬜ Traces → Skills 自动提取（规划中） |
 | 评估系统 | ✅ 5 维度评分 · LogParser · SQLite · EvalDashboard · edini_get_eval_stats · LLM-as-Judge (deepseek-chat) |
 | Recipe Library | ✅ **schema v2** · 5 工具（list/read/capture/**capture_tree**/rebuild）· 递归树抓取（树路径 recipe_id 防撞名）· kind（network\|vex）· vex_snippets（wrangle 代码+runover 可搜）· tree_path 分类面包屑 · 自动忽略 output/stashed 节点 · 空 Notes 自动生成 · 真实 Houdini 闭环已验证（6 叶子分类树一次性抓取）· popnet 穿透 bug 已修 · 30+2 subtests 全绿 · **2026-06-26 manifest 精度大修**（向量真实分量名/multiparm/版本别名/中英检索/孤儿清理）|
 | 声明式资产管道 | ✅ **里程碑2 完整交付** · 2 backend（native_chain + python 值注入）· 3 placement（attach / instances / **from-to 两点连接**）· orient 旋转 · 真机生成桌子/椅子/**自行车**（4 管材 + 2 轮子，224 点）· 实战测试暴露并修复 3 真实缺陷 · [路线图](progress.html#下一步计划) |
-| **Project HDA**（新主线） | 🚧 **组件建模地基已交付（子系统 1），待 GUI 验证 → 子系统 2/3/4** · 范式重构：subnet 组件 + 端口信息点协议（`out[0]`=主几何 / `out[1..n]`=带属性锚点云）+ 输入脚手架（`in_<from>_<anchor>`）+ 组件流水线协作 + promote 参数提取 · 旧 rooted assembly 范式已移除 · 声明即知识图谱，drift = diff 意图 vs 实际网络（子系统 4）· builder=脚手架（确定性）/ 几何=LLM 自由活 · hython 决定性验证 6 测全过（subnet output 节点机制 + indirectInputs 输入 + spare parm 真实 API 三项真机发现）· [地基 spec](../docs/superpowers/specs/2026-07-02-project-component-foundation-design.md) · [地基计划](../docs/superpowers/plans/2026-07-02-project-component-foundation.md) · [GUI 验证指南](project-component-foundation.html) · 分支 `feat/project-component-foundation`（已合并 master）|
+| **Project HDA**（新主线） | 🚧 **组件建模地基已交付（子系统 1）+ skill 从第一性原理重构** · 范式：subnet 组件 + 端口锚点协议（`out[0]`=主几何 / `out[1..n]`=带属性锚点云）+ 输入脚手架（`in_<from>_<anchor>`）+ 组件流水线协作 + promote 参数提取 · **skill 优化**（2026-07-07）：对照 mattpocock writing-great-skills 框架重构——3 leading words（`measure`/`anchor`/`scaffold`）贯穿 prompt 层 + platform 层（guards.py + 工具 + 系统 prompt）双层强化；4 步工作流每步加 ✅ completion criterion；progressive disclosure 拆为 4 文件；hython 端到端验证 5 测（含 "measure 锚点是 LIVE 的"物理铁证）· [地基 spec](../docs/superpowers/specs/2026-07-02-project-component-foundation-design.md) · [GUI 验证指南](project-component-foundation.html) · [踩坑：测试污染 + WinError 6](pitfalls.html) · 分支 `master`|
 | Procedural Harness（已关闭） | ⚰️ **已备份到 `_disabled_backup/`**，部分高质量前身（exprs/component_registry）被资产管道复活复用。旧版：`houdini_run_python_sandbox` · 声明式 Recipe Builder（`houdini_build_procedural_asset`）· 构造轴 · commit/discard lifecycle · [手测清单](procedural-harness.html) |
 
 ## 技术栈

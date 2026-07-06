@@ -1,6 +1,4 @@
 """InputBar — message input + send button."""
-import sys
-sys.path.insert(0, "python3.11libs")
 from tests.qt_helpers import qapp, SignalSpy
 from edini.ui.components.input_bar import InputBar
 

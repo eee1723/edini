@@ -1,6 +1,4 @@
 """ChatWindowShell — 3-panel assembler driven by ScopeConfig."""
-import sys
-sys.path.insert(0, "python3.11libs")
 from tests.qt_helpers import qapp
 from edini.ui.chat.scope import ScopeConfig
 from edini.ui.chat.window_shell import ChatWindowShell

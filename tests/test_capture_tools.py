@@ -136,11 +136,9 @@ class TestCaptureReview(unittest.TestCase):
     def setUp(self):
         self.previous_hou = sys.modules.get("hou")
         self.previous_hou_ref = MockNode._hou_ref
-        self.previous_edini_modules = {
-            name: module
-            for name, module in sys.modules.items()
-            if name.startswith("edini")
-        }
+        # Snapshot only the module we will reload (node_utils), not all edini.*
+        # — sweeping UI/chat modules corrupts their class identity suite-wide.
+        self._reloaded = "edini.node_utils"
 
         runtime_path = os.path.abspath(
             os.path.join(os.path.dirname(__file__), "..", "python3.11libs")
@@ -153,16 +151,14 @@ class TestCaptureReview(unittest.TestCase):
         self.mock_hou.ui.set_scene_viewer(self.viewer)
         sys.modules["hou"] = self.mock_hou
 
-        for mod_name in list(sys.modules):
-            if mod_name.startswith("edini"):
-                del sys.modules[mod_name]
+        from tests.conftest import reload_edini_modules
+        reload_edini_modules(self._reloaded)
         self.node_utils = importlib.import_module("edini.node_utils")
 
     def tearDown(self):
-        for mod_name in list(sys.modules):
-            if mod_name.startswith("edini"):
-                del sys.modules[mod_name]
-        sys.modules.update(self.previous_edini_modules)
+        # Remove our reloaded module and let the next test re-import cleanly.
+        from tests.conftest import reload_edini_modules
+        reload_edini_modules(self._reloaded)
 
         if self.previous_hou is None:
             sys.modules.pop("hou", None)
@@ -369,11 +365,7 @@ class TestCaptureErrorGuidance(unittest.TestCase):
     def setUp(self):
         self.previous_hou = sys.modules.get("hou")
         self.previous_hou_ref = MockNode._hou_ref
-        self.previous_edini_modules = {
-            name: module
-            for name, module in sys.modules.items()
-            if name.startswith("edini")
-        }
+        self._reloaded = "edini.node_utils"
         runtime_path = os.path.abspath(
             os.path.join(os.path.dirname(__file__), "..", "python3.11libs")
         )
@@ -383,16 +375,13 @@ class TestCaptureErrorGuidance(unittest.TestCase):
         self.viewer = MockSceneViewer()
         self.mock_hou.ui.set_scene_viewer(self.viewer)
         sys.modules["hou"] = self.mock_hou
-        for mod_name in list(sys.modules):
-            if mod_name.startswith("edini"):
-                del sys.modules[mod_name]
+        from tests.conftest import reload_edini_modules
+        reload_edini_modules(self._reloaded)
         self.node_utils = importlib.import_module("edini.node_utils")
 
     def tearDown(self):
-        for mod_name in list(sys.modules):
-            if mod_name.startswith("edini"):
-                del sys.modules[mod_name]
-        sys.modules.update(self.previous_edini_modules)
+        from tests.conftest import reload_edini_modules
+        reload_edini_modules(self._reloaded)
         if self.previous_hou is None:
             sys.modules.pop("hou", None)
         else:

@@ -1,6 +1,4 @@
 """ProjectChatDriver — HDA scope uses orange accent + node-level config."""
-import sys
-sys.path.insert(0, "python3.11libs")
 from tests.qt_helpers import qapp
 from edini.project.panel.chat_driver import ProjectChatDriver, make_hda_scope
 

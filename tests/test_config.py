@@ -12,12 +12,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 # ── Import setup ──────────────────────────────────────────────────────
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "python3.11libs"))
-
-# Force reimport so we get a clean module
-for _mod in list(sys.modules):
-    if _mod.startswith("edini"):
-        del sys.modules[_mod]
+# python3.11libs is already on sys.path via conftest.py; no extra setup needed.
+# (config.py is pure Python with no hou dependency — no reload required.)
 
 import edini.config as cfg
 

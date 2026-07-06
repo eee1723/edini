@@ -1,6 +1,4 @@
 """NodeVersionList — left panel showing a node's session versions."""
-import sys
-sys.path.insert(0, "python3.11libs")
 from tests.qt_helpers import qapp, SignalSpy
 from edini.ui.components.version_list import NodeVersionList
 

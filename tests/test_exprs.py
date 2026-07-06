@@ -13,7 +13,6 @@ import math
 import sys
 import unittest
 
-sys.path.insert(0, "python3.11libs")
 
 from edini.exprs import ExprError, evaluate, evaluate_tuple, extract_refs
 

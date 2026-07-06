@@ -153,19 +153,19 @@ def lint_wrangle_snippet(node_path: str, snippet: Any) -> dict[str, Any] | None:
         return None
 
     # Refuse. Name the right tool + the rule, so the agent learns in one round.
+    # Vocabulary aligned with project-modeling SKILL.md leading words: "measure".
     return {
         "success": False,
         "blocked_by": "project_anchor_guard",
         "error": (
-            "Refused: hand-rolling anchor points with addpoint() inside a "
-            "Project HDA component. Anchors MUST be DERIVED FROM GEOMETRY so "
-            "they move when params change — never hardcoded coordinates. "
-            "Use project_add_anchors, which generates a LIVE VEX wrangle that "
-            "measures the component's bbox on every cook. (SKILL: \"Anchors "
-            "don't move when you resize the component → you hardcoded "
-            "addpoint(x,y,z) → use project_add_anchors. NEVER hardcode anchor "
-            "coordinates.\") If this addpoint is genuinely not an anchor "
-            "(rare), add `// edini-bypass-anchor-guard` to the snippet."
+            "Refused: measure violation — hardcoded addpoint() inside a "
+            "Project HDA component. ALWAYS measure anchors from geometry via "
+            "project_add_anchors so they move when params change; NEVER "
+            "hardcode coordinates. project_add_anchors generates a LIVE VEX "
+            "wrangle that measures the component's bbox on every cook. "
+            "(Guardrail 2: always measure — never hardcode.) If this addpoint "
+            "is genuinely not an anchor (rare), add "
+            "`// edini-bypass-anchor-guard` to the snippet."
         ),
         "suggested_tool": "project_add_anchors",
         "schema_hint": {

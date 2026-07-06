@@ -26,7 +26,6 @@ import pytest
 # Stub hou before importing edini.tool_executor (which imports harness → hou).
 if "hou" not in sys.modules:
     sys.modules["hou"] = types.ModuleType("hou")
-sys.path.insert(0, "python3.11libs")
 
 from edini.tool_executor import ToolExecutor, get_active_tool_port
 from edini.config import get_pi_env, TOOL_EXECUTOR_PORT

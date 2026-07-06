@@ -1,6 +1,4 @@
 """AiBubble streaming state machine — plain text during stream, markdown on finalize."""
-import sys
-sys.path.insert(0, "python3.11libs")
 from tests.qt_helpers import qapp
 from edini.ui.components.bubbles import AiBubble
 

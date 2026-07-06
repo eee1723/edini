@@ -1,6 +1,4 @@
 """Bubble widget behavior — verify extraction preserved behavior."""
-import sys
-sys.path.insert(0, "python3.11libs")
 from tests.qt_helpers import qapp
 from edini.ui.components.bubbles import UserBubble, AiBubble
 

@@ -1,6 +1,5 @@
 """Version scanner: list Pi sessions for a given core_path."""
 import sys, json, os, time
-sys.path.insert(0, "python3.11libs")
 from pathlib import Path
 
 

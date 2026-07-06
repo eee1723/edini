@@ -28,6 +28,40 @@ from mock_hou import create_mock_hou, MockNode  # noqa: E402
 from edini.assembly_builder import validate_assembly  # noqa: E402
 
 
+# ── Test isolation helper ────────────────────────────────────────────
+# These tests install a mock hou into sys.modules and must reload the modeling
+# modules so their module-level ``import hou`` binds to the mock instead of None.
+#
+# IMPORTANT: only flush the MODELING layer (assembly_builder + its deps). The
+# previous implementation flushed *all* ``edini.*`` modules, which destroyed
+# unrelated UI/chat modules and corrupted class identity for later tests
+# (issubclass failures in test_project_chat_driver — see wiki/pitfalls.md).
+_MODELING_MODULE_PREFIXES = (
+    "edini.assembly_builder",
+    "edini.exprs",
+    "edini.measure",
+    "edini.vex_strategies",
+    "edini.node_utils",
+)
+
+
+def _flush_modeling_modules():
+    """Remove cached modeling modules so they re-import against the mock hou.
+
+    Narrows the old ``_m.startswith("edini")`` sweep to just the modeling deps
+    that actually need a fresh hou binding. Leaves edini.ui.*, edini.project.*
+    etc. intact so their class identities stay stable across the whole suite.
+    """
+    for _m in list(sys.modules):
+        if _m == "edini" or (
+            _m.startswith("edini.")
+            and any(_m == p or _m.startswith(p + ".")
+                    for p in _MODELING_MODULE_PREFIXES)
+        ):
+            del sys.modules[_m]
+
+
+
 # ── Shared fixtures ─────────────────────────────────────────────────
 
 
@@ -195,9 +229,7 @@ class TestBuildAssemblyStructure(unittest.TestCase):
         cls._hou = create_mock_hou()
         sys.modules["hou"] = cls._hou
         MockNode._hou_ref = cls._hou
-        for _m in list(sys.modules):
-            if _m.startswith("edini"):
-                del sys.modules[_m]
+        _flush_modeling_modules()
         from edini import assembly_builder  # noqa: E402
         cls.build_assembly = staticmethod(assembly_builder.build_assembly)
 
@@ -205,9 +237,7 @@ class TestBuildAssemblyStructure(unittest.TestCase):
     def tearDownClass(cls):
         MockNode._hou_ref = cls._saved_ref
         sys.modules["hou"] = cls._saved_mod
-        for _m in list(sys.modules):
-            if _m.startswith("edini"):
-                del sys.modules[_m]
+        _flush_modeling_modules()
         super().tearDownClass()
 
     def _build(self, assembly):
@@ -500,9 +530,7 @@ class TestOriginNormalization(unittest.TestCase):
         cls._hou = create_mock_hou()
         sys.modules["hou"] = cls._hou
         MockNode._hou_ref = cls._hou
-        for _m in list(sys.modules):
-            if _m.startswith("edini"):
-                del sys.modules[_m]
+        _flush_modeling_modules()
         from edini import assembly_builder  # noqa: E402
         cls.build_assembly = staticmethod(assembly_builder.build_assembly)
 
@@ -510,9 +538,7 @@ class TestOriginNormalization(unittest.TestCase):
     def tearDownClass(cls):
         MockNode._hou_ref = cls._saved_ref
         sys.modules["hou"] = cls._saved_mod
-        for _m in list(sys.modules):
-            if _m.startswith("edini"):
-                del sys.modules[_m]
+        _flush_modeling_modules()
         super().tearDownClass()
 
     def _build(self, assembly):
@@ -595,9 +621,7 @@ class TestGroupedCTP(unittest.TestCase):
         cls._hou = create_mock_hou()
         sys.modules["hou"] = cls._hou
         MockNode._hou_ref = cls._hou
-        for _m in list(sys.modules):
-            if _m.startswith("edini"):
-                del sys.modules[_m]
+        _flush_modeling_modules()
         from edini import assembly_builder  # noqa: E402
         cls.build_assembly = staticmethod(assembly_builder.build_assembly)
 
@@ -605,9 +629,7 @@ class TestGroupedCTP(unittest.TestCase):
     def tearDownClass(cls):
         MockNode._hou_ref = cls._saved_ref
         sys.modules["hou"] = cls._saved_mod
-        for _m in list(sys.modules):
-            if _m.startswith("edini"):
-                del sys.modules[_m]
+        _flush_modeling_modules()
         super().tearDownClass()
 
     def _build(self, assembly):
@@ -661,9 +683,7 @@ class TestLeafParamsLive(unittest.TestCase):
         cls._hou = create_mock_hou()
         sys.modules["hou"] = cls._hou
         MockNode._hou_ref = cls._hou
-        for _m in list(sys.modules):
-            if _m.startswith("edini"):
-                del sys.modules[_m]
+        _flush_modeling_modules()
         from edini import assembly_builder  # noqa: E402
         cls.build_assembly = staticmethod(assembly_builder.build_assembly)
 
@@ -671,9 +691,7 @@ class TestLeafParamsLive(unittest.TestCase):
     def tearDownClass(cls):
         MockNode._hou_ref = cls._saved_ref
         sys.modules["hou"] = cls._saved_mod
-        for _m in list(sys.modules):
-            if _m.startswith("edini"):
-                del sys.modules[_m]
+        _flush_modeling_modules()
         super().tearDownClass()
 
     def _build(self, assembly):
@@ -771,9 +789,7 @@ class TestLeafShapeChain(unittest.TestCase):
         cls._hou = create_mock_hou()
         sys.modules["hou"] = cls._hou
         MockNode._hou_ref = cls._hou
-        for _m in list(sys.modules):
-            if _m.startswith("edini"):
-                del sys.modules[_m]
+        _flush_modeling_modules()
         from edini import assembly_builder  # noqa: E402
         cls.build_assembly = staticmethod(assembly_builder.build_assembly)
         cls.validate_assembly = staticmethod(assembly_builder.validate_assembly)
@@ -782,9 +798,7 @@ class TestLeafShapeChain(unittest.TestCase):
     def tearDownClass(cls):
         MockNode._hou_ref = cls._saved_ref
         sys.modules["hou"] = cls._saved_mod
-        for _m in list(sys.modules):
-            if _m.startswith("edini"):
-                del sys.modules[_m]
+        _flush_modeling_modules()
         super().tearDownClass()
 
     def _build(self, assembly):
@@ -1329,9 +1343,7 @@ class TestM1Builds(unittest.TestCase):
         cls._hou = create_mock_hou()
         sys.modules["hou"] = cls._hou
         MockNode._hou_ref = cls._hou
-        for _m in list(sys.modules):
-            if _m.startswith("edini"):
-                del sys.modules[_m]
+        _flush_modeling_modules()
         from edini import assembly_builder  # noqa: E402
         cls.build_assembly = staticmethod(assembly_builder.build_assembly)
 
@@ -1339,9 +1351,7 @@ class TestM1Builds(unittest.TestCase):
     def tearDownClass(cls):
         MockNode._hou_ref = cls._saved_ref
         sys.modules["hou"] = cls._saved_mod
-        for _m in list(sys.modules):
-            if _m.startswith("edini"):
-                del sys.modules[_m]
+        _flush_modeling_modules()
         super().tearDownClass()
 
     def test_keyboard_builds_live_structure(self):

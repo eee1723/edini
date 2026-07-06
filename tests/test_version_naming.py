@@ -1,6 +1,4 @@
 """Version name parse/format: core_path::vN."""
-import sys
-sys.path.insert(0, "python3.11libs")
 from edini.ui.components.version_naming import (
     make_version_session_name, parse_version_session_name, next_version
 )

@@ -1,6 +1,8 @@
 # 🚀 开发进度
 
-> 最后更新：2026-07-06 &nbsp;|&nbsp; **🟢 会话日志驱动的平台契约强化（三轮 fix-observe-refix）**。分析三份真实 agent 建模会话日志（"做一个椅子"），逐轮从第一性原理定位问题并修复。核心：把建模契约从 SKILL.md 散文变成 **fail-fast 平台结构**（拒绝错误行为 + 开放正确通道）。三轮 11 个修复：addpoint 守卫 / 锚点路由净化（Blast + prim-strip）/ tag_component 拆分（agent-可编辑 + 内部锁死的 __edini_axis_bake）/ per-component `axis` 声明 / verify_orientation 的 construction_axis 真正生效 / 参数名建议 / sandbox 契约自文档 / canonical 工具名 / tube type 提示。净效果：会话1（120 调用/4 失败/2 沙箱）→ 会话3（**55 调用/1 失败/0 沙箱/0 锚点泄漏**）。848 测试 + 18 hython 铁证。详见 [组件地基指南](project-component-foundation.md) + 第四十一阶段卡片。
+> 最后更新：2026-07-07 &nbsp;|&nbsp; **🟢 程序化建模 skill 从第一性原理重构 + 测试基建修复**。对照 mattpocock 的 `writing-great-skills` 框架，对 `project-modeling/SKILL.md` 做了系统性优化。核心：确立 3 个 leading words（`measure`/`anchor`/`scaffold`）贯穿 **prompt 层（skill）+ platform 层（guards.py 报错 + 工具 description + 系统 prompt）** 双层强化；新增对抗性 intro（"agent 默认会怎样搞砸"）；4 步工作流每步加 ✅ completion criterion（治 premature completion）；progressive disclosure 拆分为 4 文件（主文件 316→230 行 + MISTAKES/DISCIPLINE/PORT_PROTOCOL 子文件）。新增 `test_skill_workflow_hython.py`（5 测）用真机 hython 端到端验证每个 criterion 可检查——**最关键的是证明了 "measure 锚点是 LIVE 的"：改 length 参数→bbox 变→锚点 X 坐标真的跟着移动**。同步修复测试基建两个潜伏 bug（`startswith("edini")` 全局清空污染 chat 类身份 / Python 3.14 subprocess WinError 6 句柄竞争）。**901 测试全绿**。
+>
+> 上一轮（2026-07-06）：**🟢 会话日志驱动的平台契约强化（三轮 fix-observe-refix）**。分析三份真实 agent 建模会话日志（"做一个椅子"），逐轮从第一性原理定位问题并修复。核心：把建模契约从 SKILL.md 散文变成 **fail-fast 平台结构**（拒绝错误行为 + 开放正确通道）。三轮 11 个修复：addpoint 守卫 / 锚点路由净化（Blast + prim-strip）/ tag_component 拆分（agent-可编辑 + 内部锁死的 __edini_axis_bake）/ per-component `axis` 声明 / verify_orientation 的 construction_axis 真正生效 / 参数名建议 / sandbox 契约自文档 / canonical 工具名 / tube type 提示。净效果：会话1（120 调用/4 失败/2 沙箱）→ 会话3（**55 调用/1 失败/0 沙箱/0 锚点泄漏**）。848 测试 + 18 hython 铁证。详见 [组件地基指南](project-component-foundation.md) + 第四十一阶段卡片。
 >
 > 上一轮（2026-07-05）：**🟢 统一对话窗口架构完成 + 工具链全量修复**。主 Agent 窗口与 HDA 建模窗口重构为共享组件库 + 配置差异化架构。HDA 窗口从简陋 QDialog 升级为完整三面板（橙色 #f59e0b 差异化 + 版本列表 + 参数快照 + workspace lock）。agent_panel 1951→958 行。121 测试 + 2 个架构守卫。同步修复 15+ 个工具链 bug（Ramp 序列化 / set_params_batch 向量 / ports 逐字段报错 / `__edini_state` 复用检查 / brainstorm 双重注册 / design_params 断层）。详见 [统一对话窗口](unified-chat.md)。
 >
@@ -1036,3 +1038,71 @@ Recipe Library 已完成「参考样本」定位转向，Dashboard HDA 的捕获
 - **LLM 建模纪律 skill**：VEX 优先/禁纯 Python 单 SOP/native node 兜底（capability 验证后沉淀）
 
 **设计文档**：`docs/superpowers/specs/2026-07-02-project-component-foundation-design.md` + `docs/superpowers/plans/2026-07-02-project-component-foundation.md`。
+
+---
+
+## 2026-07-07 程序化建模 skill 第一性原理重构
+
+**动机**：对照 [mattpocock/skills - writing-great-skills](https://github.com/mattpocock/skills/blob/main/skills/productivity/writing-great-skills/SKILL.md) 框架审视我们的 `project-modeling/SKILL.md`。该框架的核心论点是 **"一个 skill 存在的根本理由是 wrangle determinism —— 对抗 LLM 在特定领域会犯的几类错误"**。我们的 skill 已经内化了这个对抗（Guardrails、guards.py 平台层），但从未在结构上把它表达清楚。
+
+### 7 个维度的诊断 → 优化
+
+| mattpocock 维度 | 旧 skill 问题 | 优化措施 |
+|---|---|---|
+| **第一性原理 / 开头** | 开头是描述性的（"A procedural model is built as a Project HDA…"），不是目的性的 | 新增"Why this skill exists"——列出 agent 默认会犯的 4 类错误（硬编码坐标/漏依赖/单SOP堆积/premature completion），让 guardrails 变成"对失败倾向的条件反射" |
+| **Leading Words** | 同一概念用多个 synonym（hardcode/hand-rolling/hand-rolled/DERIVED FROM GEOMETRY），破坏锚定 | 确立 3 个 leading words：`measure`/`anchor`/`scaffold`，贯穿 **skill + guards.py 报错 + 工具 description + 系统 prompt**（全链路双层强化——这是 mattpocock 纯 prompt 理论之外的、我们项目独有的机会） |
+| **Information Hierarchy** | 316 行全在一个文件（sprawl），agent 每次要在其中找当下需要的那段 | progressive disclosure 拆分为 4 文件：主文件（intro+guardrails+workflow+leading words）+ MISTAKES.md / DISCIPLINE.md / PORT_PROTOCOL.md（按需读取） |
+| **Completion Criterion** | 4 个 workflow step **一个都没有** done 标准 → premature completion 风险 | 每步加 ✅ Done when（checkable + demanding）。Step 3 最严格：要求每个组件 out 有几何 + 每个声明的 anchor 已发射 + verify_orientation 通过 |
+| **Description 精简** | 180 词，含 how-to 泄漏 + duplication（"DEFAULT path" 与正文"ONLY path"重复）| 精简到 ~50 词，只留 triggers + leading words |
+| **Duplication** | ports.in 规则在 4 处重复（Guardrails / ASCII 图 / workflow ⚠️ 框 / mistakes 表）| 收拢到 Guardrails 单一权威位置，其他用 leading word 指回 |
+| **No-Op 检查** | 未做 | DISCIPLINE.md 标注每条规则对抗的真实失败倾向 |
+
+### 改动范围（全链路）
+
+| 层 | 文件 | 改动 |
+|---|---|---|
+| Skill 主文件 | `skills/project-modeling/SKILL.md` | 重构（316→230 行）|
+| Skill 子文件（新增）| `MISTAKES.md` / `DISCIPLINE.md` / `PORT_PROTOCOL.md` | 从主文件拆出 |
+| 中文版 | `SKILL.zh.html` | 重生成同步新结构 |
+| 平台层 guard | `python3.11libs/edini/project/guards.py` | 报错用统一 `measure` leading word（保留 `_BYPASS_MARKER`/`_FORBIDDEN_TOKEN`/`"Refused:"` 不变）|
+| 工具描述 | `pi-extensions/edini-tools/tools/project.ts` | 4 个工具 description + promptGuidelines 统一 leading words |
+| 系统 prompt | `pi-extensions/edini-context/index.ts` | 路由文案补 leading words |
+| brainstorming | `skills/superpowers/brainstorming/SKILL.md` | fast-path 契约同步阶段名 |
+| **验证测试（新增）**| `tests/test_skill_workflow_hython.py` | 5 测，真机 hython 端到端验证每个 completion criterion |
+
+### hython 端到端验证（5/5 通过）
+
+新增的 `test_skill_workflow_hython.py` 用真机 hython 完整执行新 skill 的 4 步工作流，逐个检查 completion criterion：
+
+| Criterion | 实测 |
+|---|---|
+| Step 1: core_path 返回且有效 | ✅ |
+| Step 2: 每个组件有 subnet + 每个 ports.in 有 in_<from>_<anchor> + design_params 成为 core spare parm | ✅ |
+| Step 3a: out_geometry 有几何流入 | ✅ |
+| Step 3b: 每个声明的 anchor 已通过 measure 发射（@name 齐全）| ✅ |
+| **Step 3c: anchors 是 LIVE 的**——改 length 1.2→2.4，leg_fr 锚点 X 坐标真的跟着移动 | ✅ **核心铁证** |
+| Step 4: promote 创建 tabletop_thick core parm + subnet 用 ch("../tabletop_thick") 引用 + 改 core 值后 subnet eval 立即同步 | ✅ |
+
+**最有价值的是 Step 3c**：它把 "measure, don't hardcode" 这条 skill 规则变成了**可量化验证的物理事实**。如果有人手写 `addpoint`，这个测试会失败。
+
+### 同步修复的测试基建两个潜伏 bug
+
+这次 skill 优化过程中，因为装上 PySide6 让之前一直收集失败的 chat 测试终于能跑，暴露出两个一直潜伏的 bug（详见 [踩坑记录](pitfalls.md)）：
+
+1. **测试污染**：6 个测试文件用 `for _m: if _m.startswith("edini"): del sys.modules[_m]` 全局清空，破坏了 UI/chat 模块的类身份稳定性（重新执行产生新类对象，`isinstance`/`findChildren` 失败）。修复：`conftest.py` 加 `reload_edini_modules(*names)` helper，只清指定模块。
+2. **hython flaky**：Python 3.14 + Windows subprocess 的 WinError 6 句柄竞争（18 个 hython 测试随机失败）。修复：8 处 `subprocess.run` 加 `stdin=subprocess.DEVNULL`。
+
+### 全量回归
+
+**901 passed**（原 896 + 新 5 skill 工作流测试），连跑稳定。
+
+### 验证边界（诚实说明）
+
+**已验证**：新 skill 的每条规则、每个 completion criterion 都不是空话——它们在真机 hython 下可执行、可检查。旧 skill 没有任何 criterion，谈不上可验证。
+
+**待验证**（需 Pi 实测）：agent 读了新 skill 后，是否真的更少犯错、更少轮次完成建模。这个只能靠启动一个 Pi session 让它建模型来对比——不是 ZCode 能做的 A/B 测试。
+
+### 设计参考
+
+- [mattpocock/skills - writing-great-skills/SKILL.md](https://github.com/mattpocock/skills/blob/main/skills/productivity/writing-great-skills/SKILL.md) + [GLOSSARY.md](https://github.com/mattpocock/skills/blob/main/skills/productivity/writing-great-skills/GLOSSARY.md)
+- 核心论点：*"A skill exists to wrangle determinism out of a stochastic system."*

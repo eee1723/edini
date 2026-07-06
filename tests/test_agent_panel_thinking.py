@@ -12,8 +12,6 @@ appeared to "wipe" (BUG: content not retained).
 These tests lock the fix: plain concatenation (no separator) + paragraphs
 pinned into the ThinkingPanel via append().
 """
-import sys
-sys.path.insert(0, "python3.11libs")
 from tests.qt_helpers import qapp
 from edini.ui.agent_panel import AgentPanel
 

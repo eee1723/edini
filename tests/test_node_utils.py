@@ -9,17 +9,14 @@ import json
 import unittest
 
 from tests.mock_hou import create_mock_hou, MockParm, MockNode
+from tests.conftest import reload_edini_modules
 
 _mock_hou = create_mock_hou()
 sys.modules["hou"] = _mock_hou
 
-# Add python3.11libs to path so "edini.node_utils" resolves to the right copy
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "python3.11libs"))
-
-# Force reimport so we pick up the mock hou
-for _mod in list(sys.modules):
-    if _mod.startswith("edini"):
-        del sys.modules[_mod]
+# Reload node_utils so its module-level `import hou` binds to the mock above.
+# NOTE: only node_utils — sweeping all edini.* corrupts UI class identity.
+reload_edini_modules("edini.node_utils")
 
 from edini.node_utils import (
     get_scene_info, create_node, delete_node, connect_nodes,

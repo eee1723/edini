@@ -150,11 +150,12 @@ capture_review or describe_image — they are not available.
 
 **Procedural model (anything with parts)? Use the Project HDA component pipeline.**
 If the user wants a table, car, bicycle, keyboard, machine, building — anything
-made of parts that fit together — use the **project-modeling** skill: open a
-Project HDA (project_create), declare components, build the scaffold
-(project_build_scaffold), then model freely inside each component subnet.
-Components collaborate via anchor point clouds (one outputs named anchors, the
-next consumes them to position itself). The whole model is self-contained in
+made of parts that fit together — use the **project-modeling** skill: create a
+Project HDA (project_create), declare components + their anchor dependencies,
+scaffold the subnets (project_build_scaffold), then model freely inside each
+component subnet. Components collaborate via measured anchor points (one
+component measures anchors from its geometry, the next consumes them to position
+itself — never hardcoded coordinates). The whole model is self-contained in
 one HDA, long-term hand-editable, and every parameter stays LIVE. **This is the
 ONLY modeling path for multi-part objects** — there is no build_assembly tool
 anymore. Read the project-modeling skill before building.
@@ -167,7 +168,7 @@ node versions, missing connections) without bounding what you can create.
 
 | Task | Preferred approach |
 |---|---|
-| **Any multi-part model (table=top+legs, car=body+wheels, keyboard=tray+keys)** | **Project HDA component pipeline** (read the project-modeling skill): project_create → declare components → project_build_scaffold → model in subnets → promote_params |
+| **Any multi-part model (table=top+legs, car=body+wheels, keyboard=tray+keys)** | **Project HDA component pipeline** (read the project-modeling skill): project_create → declare components + anchors → project_build_scaffold → model in subnets (measure anchors) → promote_params |
 | Geometry that matches a recipe's intent (tube, copy, extrude...) | **recipe_list** → **recipe_read** → study the python_script → author your own network (adapt freely) |
 | Want a quick faithful copy of an existing recipe verbatim | **recipe_rebuild** (the optional deterministic-copy path) |
 | Single-piece generator / parametric surface | houdini_run_python_sandbox (single-SOP) |
@@ -196,10 +197,12 @@ ${vv ? `4. houdini_capture_review with views=['perspective','top','front','right
 
 **For Project HDA models specifically:** build_project_scaffold returns the core
 path; geometry lives inside component subnets (each has out_geometry → output_0).
-Feed the core's OUT to steps 1/3/4. After modeling + promote_params, VERIFY the
-live guarantee: set one of the promoted parms on the core to a new value, re-cook,
-and confirm the geometry updated (the two-layer ch() chain should propagate).
-Only consider the model done once the live tweak works.
+Feed the core's OUT to steps 1/3/4. Anchors must be MEASURED from geometry via
+project_add_anchors (never hardcoded — the platform guard refuses with 'measure
+violation'). After modeling + promote_params, VERIFY the live guarantee: set one
+of the promoted parms on the core to a new value, re-cook, and confirm the
+geometry updated (the two-layer ch() chain should propagate). Only consider the
+model done once the live tweak works.
 ${vv ? `
 
 --- BEGIN PROCEDURAL_VERIFY_PROMPT ---

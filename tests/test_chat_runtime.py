@@ -1,6 +1,4 @@
 """ChatRuntime signal-adapter baseline."""
-import sys
-sys.path.insert(0, "python3.11libs")
 
 from PySide6 import QtCore
 from tests.qt_helpers import qapp, SignalSpy
