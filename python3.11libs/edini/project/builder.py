@@ -47,10 +47,37 @@ def build_project_scaffold(core_node: "hou.Node",
     decl = load_declaration(core_node)
     components = decl.get("components", [])
 
+    # Dry-run validation: collect ALL port errors before building anything,
+    # so the agent gets every field wrong in one shot instead of one-at-a-time.
+    all_errors: list[str] = []
+    seen_ids: set[str] = set()
+    for i, comp in enumerate(components):
+        cid = comp.get("id", f"<missing id at [{i}]>")
+        if not cid or cid in seen_ids:
+            all_errors.append(f"duplicate or missing component id: {cid!r}")
+        seen_ids.add(cid)
+        try:
+            validate_component_ports(comp.get("ports", {}))
+        except ValueError as e:
+            # Prefix with the component id so multi-component declarations
+            # pinpoint which component failed.
+            all_errors.append(f"component '{cid}': {e}")
+    if all_errors:
+        return {
+            "success": False,
+            "error": f"Declaration validation failed — {len(all_errors)} error(s). "
+                     f"Fix ALL of them before retrying:",
+            "validation_errors": all_errors,
+            "schema_hint": (
+                "Each component needs: {id, purpose, ports:{out:[...], in:[...]}}. "
+                "out[0] must be {index:0, kind:'geometry'}. "
+                "Each ports.in entry needs: {from:<component_id>, port:<int>, anchor:<name>}. "
+                "Example: {from:'tabletop', port:1, anchor:'leg_mount_fr'}"
+            ),
+        }
+
     built, skipped = [], []
     for comp in components:
-        # 先校验 ports（shift-left：建之前先挡非法结构）。
-        validate_component_ports(comp.get("ports", {}))
         cid = comp["id"]
         subnet = _ensure_component_subnet(core_node, cid)
         _ensure_scaffold_nodes(subnet)
@@ -73,20 +100,25 @@ def build_project_scaffold(core_node: "hou.Node",
 
     # 第四遍：把 design_params 落成 core 的真实 spare parm（自顶向下参数源）。
     # 没有这步，子网里的 ch('../../width') 引用会归零——core 上根本没有 width。
-    # 文档（state.py add_design_param docstring）一直声称 build_scaffold 会创建
-    # 这些 parm，但此前从未实现，导致 live 参数链断裂。
-    _ensure_design_params(core_node, decl.get("design_params", []))
+    # design_params 声明定义了项目的可调旋钮（length/width 等），必须作为真实
+    # Houdini spare parm 存在于 core 节点上，子网才能通过 ch("../../../<name>")
+    # 或 ch("/abs/path") 引用。文档（state.py add_design_param docstring）一直
+    # 声称 build_scaffold 会创建这些 parm，但此前从未实现，导致 live 参数链断裂。
+    design_params = decl.get("design_params", [])
+    params_created = _ensure_design_params(core_node, design_params)
 
     # 记日志（成功）。
     decl = load_declaration(core_node)
     append_log(decl, kind="scaffold",
-               summary=f"built {len(built)} component scaffold(s)",
-               payload={"built": built, "skipped": skipped},
+               summary=f"built {len(built)} component scaffold(s), {params_created} design param(s)",
+               payload={"built": built, "skipped": skipped,
+                        "design_params": params_created},
                result_ok=True)
     save_declaration(core_node, decl)
 
     return {"success": True, "components_built": built,
             "components_skipped": skipped,
+            "design_params_created": params_created,
             "project": core_node.path()}
 
 
@@ -208,55 +240,68 @@ def _ensure_core_output(core_node: "hou.Node", component_ids: list[str]) -> None
     core_node.layoutChildren()
 
 
-def _ensure_design_params(core_node: "hou.Node",
-                          design_params: list[dict]) -> None:
-    """把 design_params 落成 core 的真实 spare Float parm（自顶向下参数源）。
+def _ensure_design_params(core_node: "hou.Node", design_params: list[dict]) -> int:
+    """把 design_params 落成 core 的真实 spare Float parm（自顶向下参数源）。幂等。
 
-    design_params 是 core-as-source 的参数定义（state.py §Design params）。文档
-    一直声称「build_scaffold 期间在 core 上创建」，但此前未实现 —— 导致子网里
-    ch('../../width') 引用的 parm 不存在，几何静默归零。本函数补上这一环。
+    design_params 是项目可调旋钮（length/width/height 等）的单一真相源。每个条目：
+        {"name","label","default","min","max","components":[使用它的组件 id]}
+    这些 MUST 作为真实 Houdini spare parm 存在于 core 节点上，子网才能通过
+    ch("/abs/path/to/core/<name>") 引用。没有这步，ch() 求值为 0，几何塌成点。
 
-    幂等：core 已有同名 parm 则跳过（不覆盖现有值/不重复创建）。每个 parm 放
-    "Design" folder。FloatParmTemplate 构造兼容多版本（assembly_builder 的同款
-    简洁签名），min/max 可选。
+    在 "Design Params" folder 下为每个 design param 创建 FloatParmTemplate。
+    已存在的 parm 跳过（幂等，不覆盖 agent/用户已调过的值）。返回已确保的 parm
+    计数（新建 + 已存在）。单个 parm 创建失败不中断整体（某些节点类型/build 不
+    支持 spare parm）。
     """
     if not design_params:
-        return
-    for spec in design_params:
-        if not isinstance(spec, dict):
+        return 0
+    count = 0
+    for dp in design_params:
+        if not isinstance(dp, dict):
             continue
-        name = spec.get("name")
+        name = dp.get("name")
         if not name:
             continue
         # 幂等：已存在则不动（保留 agent/用户可能已调过的值）。
         if core_node.parm(name) is not None:
+            count += 1
             continue
-        label = spec.get("label") or name
-        default = float(spec.get("default", 0.0))
-        vmin = spec.get("min")
-        vmax = spec.get("max")
+        # Create a float spare parm with default/min/max.
+        label = dp.get("label", name)
+        default = dp.get("default", 0.0)
+        try:
+            default = float(default)
+        except (TypeError, ValueError):
+            default = 0.0
+        mn = dp.get("min")
+        mx = dp.get("max")
         try:
             tmpl = hou.FloatParmTemplate(name, label, 1, (default,))
-            if vmin is not None:
-                tmpl.setMinValue(float(vmin))
-            if vmax is not None:
-                tmpl.setMaxValue(float(vmax))
-            core_node.addSpareParmTuple(tmpl, in_folder=("Design",),
-                                        create_missing_folders=True)
+            if mn is not None:
+                tmpl.setMinValue(float(mn))
+            if mx is not None:
+                tmpl.setMaxValue(float(mx))
+            core_node.addSpareParmTuple(
+                tmpl, in_folder=("Design Params",),
+                create_missing_folders=True)
+            count += 1
         except Exception:
             # Fallback: older FloatParmTemplate signature without default tuple,
             # then set the value explicitly after install.
             try:
                 tmpl = hou.FloatParmTemplate(name, label, 1)
-                core_node.addSpareParmTuple(tmpl, in_folder=("Design",),
-                                            create_missing_folders=True)
+                core_node.addSpareParmTuple(
+                    tmpl, in_folder=("Design Params",),
+                    create_missing_folders=True)
                 p = core_node.parm(name)
                 if p is not None:
                     p.set(default)
+                count += 1
             except Exception:
                 # Spare-parm creation can fail on some node types / builds;
                 # don't let one bad parm abort the whole scaffold build.
                 pass
+    return count
 
 
 def promote_params(core_node: "hou.Node") -> dict:
@@ -381,7 +426,10 @@ def add_anchors(core_node: "hou.Node", component_id: str,
         vex_spec = {k: v for k, v in spec.items() if k != "name"}
         try:
             snippet, parms = build_mount_vex(vex_spec)
-        except VexStrategyError as e:
+        except (VexStrategyError, ValueError) as e:
+            # Catch VexStrategyError (unknown measure) AND ValueError subclasses
+            # (MeasureError for bad axes/face format) so the agent gets a
+            # friendly "anchor 'xxx': ..." message instead of a raw traceback.
             return {"success": False,
                     "error": f"anchor {name!r}: {e}"}
         # Create/replace the anchor wrangle (named anchor_<name>).

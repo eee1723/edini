@@ -85,7 +85,7 @@ def validate_component_ports(ports: dict) -> None:
     in_ports = ports.get("in", [])
     errors: list[str] = []
 
-    # out[0] 必须是 geometry。
+    # out[0] must be geometry.
     if out_ports:
         first = out_ports[0]
         if not isinstance(first, dict) or \
@@ -147,5 +147,5 @@ if __name__ == "__main__":
         {"index": 1, "kind": PORT_KIND_ANCHORS, "points": [
             {"name": "a", "role": "mount"}]}],
         "in": []}
-    validate_component_ports(_good)
+    validate_component_ports(_good)  # raises on invalid; no-op on valid
     print("ports.py smoke ok")

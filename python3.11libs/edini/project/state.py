@@ -31,13 +31,33 @@ def empty_declaration(project_name: str, goal: str | None = None) -> dict:
     }
 
 
+def ensure_state_parm(node) -> None:
+    """Ensure the node has the __edini_state hidden parm. Auto-install if missing.
+
+    Old or manually-installed Project HDAs may lack this parm. Without it,
+    save_declaration crashes with a confusing RuntimeError much later in the
+    pipeline. This function is called by load_declaration (and project_create's
+    reuse path) to self-heal at the earliest opportunity.
+    """
+    if node.parm(STATE_PARM) is None:
+        try:
+            from edini.project.node import build_state_parm_template
+            node.addSpareParmTuple(build_state_parm_template())
+        except Exception:
+            pass  # Best-effort; save_declaration will give a clear error if still missing
+
+
 def load_declaration(node) -> dict:
     """Read the declaration JSON from the node's hidden parm.
 
     Returns a safe empty skeleton if the parm is absent, empty, or corrupt.
-    Never raises.
+    Never raises. Auto-installs the parm if missing (self-heal) so that a
+    subsequent save_declaration won't crash.
     """
     parm = node.parm(STATE_PARM)
+    if parm is None:
+        ensure_state_parm(node)
+        parm = node.parm(STATE_PARM)
     raw = parm.eval() if parm is not None else ""
     if not raw:
         return empty_declaration(None)

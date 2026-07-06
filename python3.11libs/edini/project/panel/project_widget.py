@@ -9,148 +9,22 @@ from PySide6 import QtCore, QtWidgets
 # NOTE: Houdini 21 ships PySide6 (matches the rest of edini.ui). The Qt API used
 # here is identical to PySide2's.
 
-from edini.ui.theme import apply_theme, accent_color, fs
+from edini.ui.theme import apply_theme
 
 
-class _StreamBubble(QtWidgets.QFrame):
-    """Lightweight AI reply bubble for the Project panel.
-
-    Why this exists instead of reusing edini.ui._AiBubble: _AiBubble.update_streaming
-    runs a FULL mistune markdown parse + Qt rich-text word-wrap relayout over the
-    ENTIRE accumulated text on every chunk (O(n^2) over the stream), which freezes
-    the panel's input box during long replies (Houdini's Python Panel shares one
-    main thread with everything).
-
-    This bubble renders stream chunks as PLAIN TEXT (QLabel.setText on plain text
-    skips HTML parsing and the expensive word-wrap relayout chain) — microsecond
-    cost per chunk. Only on finalize() does it run ONE mistune pass for the final
-    markdown rendering. Visual result is identical to _AiBubble after finalize
-    (same _ai_bubble_style); during streaming it's plain text in the same frame.
-
-    Spec §6.2 said "reuse mistune rendering" — this defers markdown to finalize,
-    final display still uses mistune. Annotated as a performance trade-off.
-    """
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        # Match _AiBubble's frame look (bg + rounded) via stylesheet, so the
-        # bubble is visually distinct even during plain-text streaming.
-        from edini.ui.agent_panel import _ai_bubble_bg
-        self.setStyleSheet(
-            f"background:{_ai_bubble_bg()};border-radius:8px;"
-        )
-        lay = QtWidgets.QVBoxLayout(self)
-        lay.setContentsMargins(14, 8, 14, 8)
-        self._label = QtWidgets.QLabel()
-        self._label.setWordWrap(True)
-        self._label.setTextFormat(QtCore.Qt.PlainText)  # CRITICAL: no HTML parse
-        self._label.setStyleSheet(
-            f"color:#e5e5eb;font-size:{fs(12)};line-height:1.45;background:transparent;"
-        )
-        lay.addWidget(self._label)
-        self._raw_text = ""
-
-    def append_chunk(self, chunk: str) -> None:
-        """Accumulate a stream chunk and show plain text. Cheap (no markdown)."""
-        self._raw_text += chunk
-        self._label.setText(self._raw_text)
-
-    def get_raw_text(self) -> str:
-        return self._raw_text
-
-    def finalize(self) -> None:
-        """One-time full markdown render at stream end. Switches to rich text."""
-        from edini.ui.agent_panel import _format_full, _ai_bubble_style
-        try:
-            rendered = _format_full(self._raw_text)
-        except Exception:
-            # Fallback: show the plain text as-is (escaped) if mistune fails.
-            import html
-            rendered = html.escape(self._raw_text).replace("\n", "<br>")
-        self._label.setTextFormat(QtCore.Qt.RichText)
-        self._label.setText(f'<div style="{_ai_bubble_style()}">{rendered}</div>')
+# _StreamBubble was a Project-panel-only O(1) streaming bubble kept separate from
+# AiBubble because AiBubble.update_streaming was O(n^2) (full mistune parse + Qt
+# rich-text word-wrap relayout on every chunk). Task 1.6 merged that optimization
+# into AiBubble itself (append_chunk is now O(1) plain text; finalize does the one
+# markdown render). _StreamBubble is now just an alias for AiBubble so existing
+# imports in chat_dialog.py keep working — there is exactly ONE bubble class.
+from edini.ui.components.bubbles import AiBubble as _StreamBubble  # noqa: F401,E402
 
 
-class _InputDialog(QtWidgets.QDialog):
-    """Popout text-input dialog with full IME (Chinese/CJK) support.
-
-    Why this exists: Houdini's Python Panel container intercepts keyboard
-    events BEFORE Qt's input-method pipeline (SideFX-acknowledged bug), so IME
-    composition (preedit) never reaches an embedded QPlainTextEdit — the
-    candidate window doesn't appear and the widget loses focus. This does NOT
-    affect Houdini's native parameter pane (different UI toolkit) or a real
-    top-level Qt window parented to hou.qt.mainWindow().
-
-    Fix from first principles: since a genuine top-level Qt window is the one
-    condition under which IME already works, move text entry into this QDialog
-    (parented to hou.qt.mainWindow). It's a real OS window, so the IME attaches
-    normally and Chinese input works perfectly.
-
-    Usage: the panel keeps a small inline box for quick English input; a
-    "input" button opens this dialog for CJK / longer messages. Enter or the
-    Send button returns the text to the panel via the submitted signal.
-    """
-
-    # Emitted with the typed text when the user sends (Enter / Send button).
-    submitted = QtCore.Signal(str)
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Edini Project — Input")
-        self.resize(520, 220)
-        self._build_ui()
-
-    def _build_ui(self) -> None:
-        lay = QtWidgets.QVBoxLayout(self)
-        lay.setContentsMargins(10, 10, 10, 10)
-        lay.setSpacing(8)
-
-        hint = QtWidgets.QLabel("在此输入消息(支持中文输入法)。Enter 发送,Shift+Enter 换行。")
-        hint.setStyleSheet(f"color:#8b8fa8;font-size:{fs(10)};")
-        hint.setWordWrap(True)
-        lay.addWidget(hint)
-
-        self.edit = QtWidgets.QPlainTextEdit()
-        self.edit.setAttribute(QtCore.Qt.WA_InputMethodEnabled, True)
-        self.edit.setFocusPolicy(QtCore.Qt.StrongFocus)
-        self.edit.setPlaceholderText("输入消息…")
-        self.edit.keyPressEvent = self._on_key  # Enter to send
-        lay.addWidget(self.edit, 1)
-
-        btn_row = QtWidgets.QHBoxLayout()
-        btn_row.addStretch(1)
-        cancel_btn = QtWidgets.QPushButton("取消")
-        cancel_btn.clicked.connect(self.reject)
-        btn_row.addWidget(cancel_btn)
-        send_btn = QtWidgets.QPushButton("发送")
-        send_btn.setDefault(True)
-        send_btn.clicked.connect(self._do_send)
-        btn_row.addWidget(send_btn)
-        lay.addLayout(btn_row)
-
-    def _on_key(self, event):
-        from PySide6 import QtCore as _qc
-        if event.key() in (_qc.Qt.Key_Return, _qc.Qt.Key_Enter) \
-           and not (event.modifiers() & (_qc.Qt.ShiftModifier | _qc.Qt.ControlModifier)):
-            self._do_send()
-            return
-        QtWidgets.QPlainTextEdit.keyPressEvent(self.edit, event)
-
-    def _do_send(self) -> None:
-        text = self.edit.toPlainText().strip()
-        if not text:
-            return
-        self.submitted.emit(text)
-        self.edit.clear()
-        self.accept()
-
-    def open_for_input(self) -> None:
-        """Show the dialog modally and clear it for fresh input."""
-        self.edit.clear()
-        self.show()
-        self.raise_()
-        self.activateWindow()
-        self.edit.setFocus()
+# _InputDialog (the IME / CJK popout) moved to edini.ui.components.input_bar
+# (Stage 2, Task 1.5) so ProjectPanelWidget and ProjectChatDialog import it from
+# one place. Re-exported here for backward compatibility.
+from edini.ui.components.input_bar import _InputDialog  # noqa: F401
 
 
 class ProjectPanelWidget(QtWidgets.QWidget):

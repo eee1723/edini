@@ -344,9 +344,21 @@ def _looks_like_expr(value: Any) -> bool:
 
     Used to route live channel-reference values (e.g. ch("../length")) to
     setExpression instead of .set() — a numeric parm can't .set() a string.
-    Mirrors assembly_builder._looks_like_expr.
+
+    IMPORTANT: must NOT match VEX/Python code snippets that happen to contain
+    ch() calls (e.g. ``float d = ch("distance");``). We exclude multi-line
+    strings (code blocks) and strings containing semicolons (statements), so
+    only single-line pure expressions like ``ch("../length")`` are treated as
+    expressions.
     """
-    return isinstance(value, str) and "ch(" in value
+    if not isinstance(value, str):
+        return False
+    if "ch(" not in value:
+        return False
+    # Multi-line strings or strings with semicolons are code, not expressions.
+    if "\n" in value or ";" in value:
+        return False
+    return True
 
 
 def _set_parm_value(parm, value) -> tuple[bool, Any, str | None]:
@@ -518,7 +530,7 @@ def get_param(node_path: str, param_name: str) -> dict[str, Any]:
         if parm is None:
             return {"success": False, "error": f"Parameter '{param_name}' not found on {node_path}"}
 
-        return {"success": True, "path": node_path, "param": param_name, "value": parm.eval()}
+        return {"success": True, "path": node_path, "param": param_name, "value": _json_safe(parm.eval())}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -860,10 +872,18 @@ def _extract_parm_spec(tmpl, multiparm_block: str | None = None) -> dict[str, An
 
 
 def _json_safe(value) -> Any:
-    """Coerce a Houdini value (vector/tuple/enum) into JSON-serializable form."""
-    # Vector3 / Vector2 / Vector4 — duck-typed by indexing.
+    """Coerce a Houdini value (vector/tuple/ramp/enum) into JSON-serializable form.
+
+    Handles hou.Ramp (detected by duck type: keys/values/basis/isColor) which
+    otherwise crashes json.dumps with 'Object of type Ramp is not JSON
+    serializable'. Mirrors recipe_library._json_safe's Ramp handling.
+    """
     if isinstance(value, (int, float, str, bool)) or value is None:
         return value
+    # hou.Ramp — serialize to a structured dict (duck-typed, no hou import needed).
+    if (hasattr(value, "keys") and hasattr(value, "values")
+            and hasattr(value, "basis") and hasattr(value, "isColor")):
+        return _ramp_to_safe_dict(value)
     if isinstance(value, (list, tuple)):
         try:
             return [_json_safe(v) for v in value]
@@ -882,6 +902,25 @@ def _json_safe(value) -> Any:
     except Exception:
         pass
     return str(value)
+
+
+def _ramp_to_safe_dict(ramp) -> dict:
+    """Serialize a hou.Ramp into a JSON-safe dict (keys, values, basis, is_color)."""
+    try:
+        keys = list(ramp.keys())
+        values = [_json_safe(v) for v in ramp.values()]
+        try:
+            basis = [int(b) for b in ramp.basis()]
+        except Exception:
+            basis = []
+        try:
+            is_color = bool(ramp.isColor())
+        except Exception:
+            is_color = False
+        return {"__type__": "ramp", "keys": keys, "values": values,
+                "basis": basis, "is_color": is_color}
+    except Exception:
+        return str(ramp)
 
 
 def _correct_vector_components(parms: list[dict[str, Any]], category, type_name: str) -> None:

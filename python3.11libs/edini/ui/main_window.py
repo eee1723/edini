@@ -183,16 +183,47 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self._rpc_client.session_switched.connect(self._on_pi_session_switched)
         self._rpc_client.messages_received.connect(self._on_pi_messages_received)
 
-        # Scene refresh timer
+        # Scene refresh timer — panel is hou-free, so we gather the dict here
+        # and feed it to the ContextPanel via set_scene_info.
         self._scene_timer = QtCore.QTimer(self)
         self._scene_timer.setInterval(1500)
-        self._scene_timer.timeout.connect(self.context_panel.refresh_scene_info)
+        self._scene_timer.timeout.connect(self._refresh_scene)
         self._scene_timer.start()
+
+        # In-card Refresh button requests a refresh; gather + push the dict.
+        self.context_panel.refresh_requested.connect(self._refresh_scene)
 
         # Stats polling timer (during agent execution)
         self._stats_poll_timer = QtCore.QTimer(self)
         self._stats_poll_timer.setInterval(3000)
         self._stats_poll_timer.timeout.connect(self._rpc_client.send_get_stats)
+
+    def _collect_global_scene(self) -> dict:
+        """Gather global scene info for the ContextPanel.
+
+        Replaces the old hou-coupled ``ContextPanel.refresh_scene_info``.
+        Returns the dict shape defined in spec §5.2:
+        ``{hip, path, selected, nodes}`` (HDA-specific fields left ``None``).
+        """
+        try:
+            hip = hou.hipFile.name() or "Untitled"
+            pwd = hou.pwd()
+            path = pwd.path() if pwd else None
+            sel = hou.selectedNodes()
+            selected = (
+                f"{sel[0].name()} ({sel[0].type().name()})" if sel else None
+            )
+            root = hou.node("/")
+            all_nodes = len(root.allSubChildren()) if root else 0
+            cur_children = len(pwd.children()) if pwd else 0
+            nodes = f"{cur_children} here / {all_nodes} total"
+            return {"hip": hip, "path": path, "selected": selected, "nodes": nodes}
+        except Exception:
+            return {"hip": None, "path": None, "selected": None, "nodes": None}
+
+    def _refresh_scene(self):
+        """Gather scene data and push it to the ContextPanel (hou-free panel)."""
+        self.context_panel.set_scene_info(self._collect_global_scene())
 
     def _bootstrap(self):
         # Startup banner (comment out prints for production)
@@ -207,7 +238,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
         self._tool_executor.start()
         self._rpc_client.start()
         self.history_panel.load_sessions()
-        self.context_panel.refresh_scene_info()
+        self._refresh_scene()
         self.context_panel.refresh_knowledge()
         pi_sett = read_pi_settings()
         self.context_panel.set_provider_model(
@@ -376,7 +407,7 @@ class EdiniMainWindow(QtWidgets.QMainWindow):
 
         self.agent_panel.set_busy(False)
 
-        self.context_panel.refresh_scene_info()
+        self._refresh_scene()
         self._rpc_client.send_get_stats()
         self._update_statusbar()
         self.status.showMessage("Ready")

@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>项目化建模 — 通过锚点端口协作的组件</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1f2328;
+    --muted: #57606a;
+    --border: #d0d7de;
+    --code-bg: #f6f8fa;
+    --code-fg: #1f2328;
+    --accent: #0969da;
+    --accent-soft: #ddf4ff;
+    --warn-bg: #fff8c5;
+    --warn-border: #d4a72c;
+    --danger-bg: #ffebe9;
+    --danger-border: #cf222e;
+    --success-bg: #dafbe1;
+    --success-border: #1a7f37;
+    --table-head-bg: #f6f8fa;
+    --table-stripe: #fbfcfd;
+    --inline-code-bg: #eff1f3;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                 "Hiragino Sans GB", "Microsoft YaHei", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--fg);
+    background: var(--bg);
+    line-height: 1.7;
+    font-size: 16px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .layout {
+    display: grid;
+    grid-template-columns: 260px 1fr;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  /* ---- Sidebar ---- */
+  nav.toc {
+    position: sticky;
+    top: 0;
+    align-self: start;
+    max-height: 100vh;
+    overflow-y: auto;
+    padding: 24px 16px;
+    border-right: 1px solid var(--border);
+    font-size: 14px;
+  }
+  nav.toc h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    margin: 0 0 12px;
+  }
+  nav.toc ol {
+    list-style: none;
+    padding-left: 0;
+    margin: 0;
+  }
+  nav.toc ol ol {
+    padding-left: 14px;
+    margin: 4px 0 12px;
+  }
+  nav.toc a {
+    color: var(--muted);
+    text-decoration: none;
+    display: block;
+    padding: 4px 8px;
+    border-radius: 6px;
+    transition: all 0.15s ease;
+  }
+  nav.toc a:hover {
+    color: var(--accent);
+    background: var(--accent-soft);
+  }
+  /* ---- Main content ---- */
+  main {
+    padding: 40px 48px 80px;
+    max-width: 880px;
+  }
+  header.title {
+    border-bottom: 2px solid var(--border);
+    padding-bottom: 20px;
+    margin-bottom: 32px;
+  }
+  header.title .badge {
+    display: inline-block;
+    background: var(--accent);
+    color: #fff;
+    font-size: 12px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    margin-bottom: 12px;
+    font-weight: 600;
+  }
+  header.title h1 {
+    margin: 0 0 8px;
+    font-size: 32px;
+    line-height: 1.25;
+  }
+  header.title .subtitle {
+    color: var(--muted);
+    font-size: 16px;
+    margin: 0;
+  }
+  h2 {
+    font-size: 24px;
+    margin: 48px 0 16px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  h3 {
+    font-size: 19px;
+    margin: 32px 0 12px;
+  }
+  h4 {
+    font-size: 16px;
+    margin: 20px 0 8px;
+  }
+  p { margin: 12px 0; }
+  ul, ol { padding-left: 26px; margin: 12px 0; }
+  li { margin: 6px 0; }
+  strong { font-weight: 650; }
+  a { color: var(--accent); }
+
+  /* ---- Code ---- */
+  code {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+                 "Liberation Mono", monospace;
+    font-size: 0.9em;
+    background: var(--inline-code-bg);
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: var(--code-fg);
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 18px;
+    overflow-x: auto;
+    margin: 16px 0;
+    line-height: 1.55;
+  }
+  pre code {
+    background: transparent;
+    padding: 0;
+    font-size: 13.5px;
+    color: var(--code-fg);
+  }
+  /* simple token coloring */
+  pre .com { color: #6e7781; font-style: italic; }
+  pre .kw  { color: #cf222e; }
+  pre .str { color: #0a3069; }
+  pre .num { color: #0550ae; }
+  pre .fn  { color: #8250df; }
+
+  /* ---- Callouts ---- */
+  .callout {
+    border-left: 4px solid;
+    padding: 12px 18px;
+    border-radius: 0 8px 8px 0;
+    margin: 18px 0;
+  }
+  .callout p:first-child { margin-top: 0; }
+  .callout p:last-child { margin-bottom: 0; }
+  .callout .callout-title {
+    font-weight: 700;
+    display: block;
+    margin-bottom: 6px;
+  }
+  .callout.warn    { background: var(--warn-bg);    border-color: var(--warn-border); }
+  .callout.danger  { background: var(--danger-bg);  border-color: var(--danger-border); }
+  .callout.success { background: var(--success-bg); border-color: var(--success-border); }
+  .callout.danger .callout-title { color: var(--danger-border); }
+  .callout.warn .callout-title   { color: #7d4e00; }
+  .callout.success .callout-title{ color: var(--success-border); }
+
+  /* ---- Tables ---- */
+  .table-wrap { overflow-x: auto; margin: 18px 0; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 14.5px;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 10px 14px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: var(--table-head-bg); font-weight: 650; }
+  tbody tr:nth-child(even) { background: var(--table-stripe); }
+  td code, th code { white-space: nowrap; }
+
+  /* ---- Diagram block ---- */
+  .diagram {
+    background: #0d1117;
+    color: #c9d1d9;
+    border-radius: 8px;
+    padding: 18px 20px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.55;
+    overflow-x: auto;
+    margin: 16px 0;
+  }
+  .diagram .c { color: #8b949e; }   /* comments */
+  .diagram .h { color: #7ee787; }   /* highlight */
+  .diagram .k { color: #ff7b72; }   /* keys     */
+
+  hr { border: none; border-top: 1px solid var(--border); margin: 36px 0; }
+
+  .pill {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    margin-right: 4px;
+  }
+  .pill.do   { background: var(--success-bg); color: var(--success-border); }
+  .pill.dont { background: var(--danger-bg);  color: var(--danger-border); }
+  .pill.todo { background: #fff8c5; color: #7d4e00; }
+
+  footer {
+    margin-top: 60px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: 1fr; }
+    nav.toc { position: static; border-right: none; border-bottom: 1px solid var(--border); }
+    main { padding: 24px; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+
+<nav class="toc">
+  <h2>目录</h2>
+  <ol>
+    <li><a href="#guardrails">⛔ 护栏须知</a></li>
+    <li><a href="#core-idea">核心思想</a></li>
+    <li><a href="#workflow">工作流程</a>
+      <ol>
+        <li><a href="#step1">1. 创建项目</a></li>
+        <li><a href="#step2">2. 声明组件 + 搭骨架</a></li>
+        <li><a href="#step2b">2b. 声明设计参数</a></li>
+        <li><a href="#step3">3. 在子网内建模</a></li>
+        <li><a href="#step4">4. 参数提升到核心</a></li>
+      </ol>
+    </li>
+    <li><a href="#live-refs">参数实时引用</a></li>
+    <li><a href="#when">何时使用</a></li>
+    <li><a href="#discipline">建模纪律</a></li>
+    <li><a href="#mistakes">常见错误</a></li>
+    <li><a href="#support">支持情况</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="title">
+  <span class="badge">技能 · project-modeling</span>
+  <h1>项目化建模 — 通过锚点端口协作的组件</h1>
+  <p class="subtitle">将多部件物体构建为一个 Project HDA:声明组件、搭骨架(各自带输出端口的空子网),然后在每个组件子网内自由建模。</p>
+</header>
+
+<p>程序化模型构建为 <strong>Project HDA</strong>:一个自包含的资产,其内部网络由一组<strong>组件子网</strong>构成。每个组件是一个子网,通过输出端口暴露自己的几何体和命名锚点。组件之间彼此协作:一个输出锚点,下一个消费锚点来确定自己该放在哪里。整个模型存在于一个 HDA 中,可手工编辑,且每个参数都保持实时联动。</p>
+
+<p>这是构建任何多部件物体的<strong>默认</strong>方式。仅当模型是简单的"单一主体 + 叶子节点"且不需要组件拆分时,才使用 <code>build_assembly</code>(rooted-modeling)。</p>
+
+<section id="guardrails">
+<h2>⛔ 护栏须知(动手前必读)</h2>
+
+<div class="callout warn">
+  <span class="callout-title">⚡ 头脑风暴应走快速通道</span>
+  <p>建模任务<strong>允许</strong>头脑风暴,但应作为<strong>快速通道</strong>:先问 1-2 个简短问题(风格?尺寸?),然后交给本技能的工作流。<strong>不要</strong>让头脑风暴跑完完整的"软件规格访谈"(5-10 个问题 + 设计文档 + 计划)—— 那个流程是为写代码准备的,不是为 3D 模型。头脑风暴技能本身现在带有一个"Houdini 程序化建模 — 快速通道豁免"小节;如果你读到它,请遵循该快速通道。</p>
+</div>
+
+<div class="callout danger">
+  <span class="callout-title">⛔ 不要把组件声明为独立的</span>
+  <p>当一个组件物理上依赖另一个组件(例如桌腿依赖桌面的锚点)时,你<strong>必须</strong>在搭骨架阶段的 <code>ports.in</code> 中声明该依赖。缺少它,构建器不会创建输入端口,下游组件就无法消费锚点 —— 你最后只能用 transform 节点手工摆放,这会毁掉参数化设计。详见下文<a href="#deps">"声明跨组件依赖"</a>。</p>
+</div>
+</section>
+
+<section id="core-idea">
+<h2>核心思想:组件 + 锚点端口</h2>
+
+<div class="diagram"><span class="c">Project HDA 核心(edini::project SOP HDA)</span>
+├─ <span class="h">tabletop/</span>   <span class="c">(子网,id="tabletop")</span>
+│   ├─ &lt;你的建模节点&gt;
+│   ├─ <span class="k">out_geometry</span>  → <span class="k">output_0</span>  <span class="c">[out[0] = 主几何体]</span>
+│   └─ <span class="k">out_anchors</span>   → <span class="k">output_1</span>  <span class="c">[out[1] = 锚点云]</span>
+│                                   <span class="c">点携带 @name,例如 "leg_mount_fr"</span>
+├─ <span class="h">legs/</span>       <span class="c">(子网,id="legs")</span>
+│   ├─ <span class="k">in_tabletop_leg_mount_fr</span>  <span class="c">(null,构建器自动创建 = 上游锚点)</span>
+│   ├─ &lt;你的建模:把桌腿放在锚点处&gt;
+│   └─ <span class="k">out_geometry</span>  → <span class="k">output_0</span>
+└─ <span class="h">OUT</span>          <span class="c">(核心输出:所有组件合并)</span></div>
+
+<ul>
+  <li><strong>out[0] 始终是组件的主几何体</strong>(它会合并到核心的 OUT)。</li>
+  <li><strong>out[1+] 是锚点云</strong>:点携带 <code>@P</code>(位置)、<code>@orient</code>(四元数)和 <code>@name</code>(锚点身份 —— 例如 <code>leg_mount_fr</code>)。这就是一个组件告诉另一个组件"把东西放在<strong>这里</strong>"的方式。</li>
+  <li>下游组件通过连接到上游子网的输出端口 1(<code>output_index=1</code>)来消费上游锚点。</li>
+</ul>
+</section>
+
+<section id="workflow">
+<h2>工作流程(确定性步骤)</h2>
+
+<p>智能体通过<strong>三个专用工具</strong>加上标准节点工具来驱动此流程。这是唯一的建模路径 —— 不再有 <code>build_assembly</code>。</p>
+
+<h3 id="step1">1. 创建项目 — <code>project_create</code></h3>
+<pre><code>project_create(name=<span class="str">"project_table"</span>, goal=<span class="str">"a small table"</span>)
+  → 返回 { core_path: <span class="str">"/obj/project_table/project_core"</span>, ... }</code></pre>
+<p>首先调用此工具。<strong>工作区感知</strong>:如果用户在网络编辑器中选中了一个 Project HDA 核心,<code>project_create</code> 会<strong>复用</strong>它(返回其路径,不新建)—— 因此"选中一个 Project HDA → 在其中工作"是自然的工作流。仅在没有选中相关对象时才新建。请记住返回的 <code>core_path</code>。</p>
+
+<h3 id="step2">2. 声明组件 + 搭骨架 — <code>project_build_scaffold</code></h3>
+<p>传入 <code>core_path</code> 和 <code>components</code>(拆分方案)。每个组件包含一个 <code>id</code>(= 子网名)、<code>purpose</code>(用途)和 <code>ports</code>(端口)。</p>
+
+<pre><code>project_build_scaffold(core_path=<span class="str">"/obj/project_table/project_core"</span>, components=[
+  { <span class="str">"id"</span>: <span class="str">"tabletop"</span>, <span class="str">"purpose"</span>: <span class="str">"桌面,输出四条腿的安装锚点"</span>,
+    <span class="str">"ports"</span>: { <span class="str">"out"</span>: [
+        { <span class="str">"index"</span>: 0, <span class="str">"kind"</span>: <span class="str">"geometry"</span>, <span class="str">"description"</span>: <span class="str">"桌面几何"</span> },
+        { <span class="str">"index"</span>: 1, <span class="str">"kind"</span>: <span class="str">"anchors"</span>, <span class="str">"points"</span>: [
+            { <span class="str">"name"</span>: <span class="str">"leg_mount_fr"</span>, <span class="str">"role"</span>: <span class="str">"mount"</span> },
+            { <span class="str">"name"</span>: <span class="str">"leg_mount_fl"</span>, <span class="str">"role"</span>: <span class="str">"mount"</span> },
+            { <span class="str">"name"</span>: <span class="str">"leg_mount_br"</span>, <span class="str">"role"</span>: <span class="str">"mount"</span> },
+            { <span class="str">"name"</span>: <span class="str">"leg_mount_bl"</span>, <span class="str">"role"</span>: <span class="str">"mount"</span> } ] } ] } },
+  { <span class="str">"id"</span>: <span class="str">"legs"</span>, <span class="str">"purpose"</span>: <span class="str">"四条桌腿,消费桌面锚点定位"</span>,
+    <span class="str">"ports"</span>: { <span class="str">"out"</span>: [ { <span class="str">"index"</span>: 0, <span class="str">"kind"</span>: <span class="str">"geometry"</span> } ],
+                <span class="str">"in"</span>: [
+                  { <span class="str">"from"</span>: <span class="str">"tabletop"</span>, <span class="str">"port"</span>: 1, <span class="str">"anchor"</span>: <span class="str">"leg_mount_fr"</span> },
+                  { <span class="str">"from"</span>: <span class="str">"tabletop"</span>, <span class="str">"port"</span>: 1, <span class="str">"anchor"</span>: <span class="str">"leg_mount_fl"</span> },
+                  { <span class="str">"from"</span>: <span class="str">"tabletop"</span>, <span class="str">"port"</span>: 1, <span class="str">"anchor"</span>: <span class="str">"leg_mount_br"</span> },
+                  { <span class="str">"from"</span>: <span class="str">"tabletop"</span>, <span class="str">"port"</span>: 1, <span class="str">"anchor"</span>: <span class="str">"leg_mount_bl"</span> } ] } }
+])</code></pre>
+
+<p>构建器会<strong>确定性地、幂等地</strong>创建:</p>
+<ul>
+  <li>每个组件一个子网(<code>tabletop/</code>、<code>legs/</code>)—— <strong>id = 子网名</strong></li>
+  <li>每个子网内部:<code>out_geometry</code> + <code>out_anchors</code>(null 节点)→ <code>output_0</code>/<code>output_1</code></li>
+  <li>对每个 <code>ports.in[]</code>:外部连线 + 内部 <code>in_&lt;from&gt;_&lt;anchor&gt;</code> null 节点</li>
+  <li>一个核心 <code>OUT</code>(合并所有组件几何体)并带显示标志</li>
+  <li>核心参数面板上有一个"💬 与 Edini 对话"按钮(点击 → 弹出聊天框)</li>
+</ul>
+
+<p>构建器<strong>不</strong>构建几何体或参数 —— 那是你的工作,自底向上完成。</p>
+
+<div id="deps" class="callout danger">
+  <span class="callout-title">⚠️ 声明跨组件依赖(关键 —— 不可跳过)</span>
+  <p>如果组件 B 物理上依赖组件 A(B 需要 A 的锚点来知道把自己放在哪),你<strong>必须</strong>在 B 的 <code>ports.in</code> 中声明。<strong>缺失 <code>ports.in</code> 是参数化模型损坏的头号原因</strong> —— 没有它,构建器就不会创建 <code>in_&lt;from&gt;_&lt;anchor&gt;</code> 输入端口,导致 B 无法消费 A 的锚点,你被迫用 transform 节点手工摆放 B(这在 A 的参数变化时会失效)。</p>
+
+  <h4><span class="pill dont">错误</span>把桌腿声明为独立 —— 它们会漂浮在空间中,断开连接</h4>
+<pre><code>{ <span class="str">"id"</span>: <span class="str">"legs"</span>, <span class="str">"ports"</span>: { <span class="str">"out"</span>: [{<span class="str">"index"</span>:0,<span class="str">"kind"</span>:<span class="str">"geometry"</span>}], <span class="str">"in"</span>: [] } }</code></pre>
+
+  <h4><span class="pill do">正确</span>桌腿消费桌面的锚点 —— 构建器会连线 <code>in_tabletop_&lt;anchor&gt;</code></h4>
+<pre><code>{ <span class="str">"id"</span>: <span class="str">"legs"</span>, <span class="str">"ports"</span>: {
+    <span class="str">"out"</span>: [{<span class="str">"index"</span>:0,<span class="str">"kind"</span>:<span class="str">"geometry"</span>}],
+    <span class="str">"in"</span>: [
+      { <span class="str">"from"</span>: <span class="str">"tabletop"</span>, <span class="str">"port"</span>: 1, <span class="str">"anchor"</span>: <span class="str">"leg_mount_fr"</span> },
+      { <span class="str">"from"</span>: <span class="str">"tabletop"</span>, <span class="str">"port"</span>: 1, <span class="str">"anchor"</span>: <span class="str">"leg_mount_fl"</span> },
+      { <span class="str">"from"</span>: <span class="str">"tabletop"</span>, <span class="str">"port"</span>: 1, <span class="str">"anchor"</span>: <span class="str">"leg_mount_br"</span> },
+      { <span class="str">"from"</span>: <span class="str">"tabletop"</span>, <span class="str">"port"</span>: 1, <span class="str">"anchor"</span>: <span class="str">"leg_mount_bl"</span> } ] } }</code></pre>
+
+  <p><strong>规则:在调用 <code>project_build_scaffold</code> 之前,先在纸上画出依赖图</strong>(桌面 → 桌腿,桌面 → 围板)。每条箭头都对应一个 <code>ports.in</code> 条目。如果某个组件<strong>没有</strong>上游依赖(很少见 —— 只有根节点如此),它的 <code>in</code> 可以是 <code>[]</code>。</p>
+</div>
+
+<h3 id="step2b">2b. 声明设计参数(推荐 —— 自顶向下,自动创建)</h3>
+<p>把 <code>design_params</code> 传给 <code>project_build_scaffold</code>,它们会<strong>自动作为备用参数(spare parms)创建在核心节点上</strong>。这是推荐路径 —— 你不需要 <code>project_promote_params</code>,也不需要手工创建备用参数。</p>
+
+<pre><code>project_build_scaffold(core_path=<span class="str">"..."</span>, components=[...], design_params=[
+    {<span class="str">"name"</span>:<span class="str">"length"</span>,   <span class="str">"label"</span>:<span class="str">"桌面长度"</span>,  <span class="str">"default"</span>:1.2,  <span class="str">"min"</span>:0.4, <span class="str">"max"</span>:3.0},
+    {<span class="str">"name"</span>:<span class="str">"width"</span>,    <span class="str">"label"</span>:<span class="str">"桌面宽度"</span>,  <span class="str">"default"</span>:0.6,  <span class="str">"min"</span>:0.3, <span class="str">"max"</span>:1.5},
+    {<span class="str">"name"</span>:<span class="str">"height"</span>,   <span class="str">"label"</span>:<span class="str">"桌高"</span>,      <span class="str">"default"</span>:0.75, <span class="str">"min"</span>:0.3, <span class="str">"max"</span>:1.2},
+    {<span class="str">"name"</span>:<span class="str">"top_thick"</span>,<span class="str">"label"</span>:<span class="str">"面板厚度"</span>,  <span class="str">"default"</span>:0.04, <span class="str">"min"</span>:0.01,<span class="str">"max"</span>:0.1},
+    {<span class="str">"name"</span>:<span class="str">"leg_thick"</span>,<span class="str">"label"</span>:<span class="str">"腿粗"</span>,      <span class="str">"default"</span>:0.05, <span class="str">"min"</span>:0.02,<span class="str">"max"</span>:0.2}
+])
+<span class="com"># → spare 参数 length/width/height/top_thick/leg_thick 自动创建在核心上。</span>
+<span class="com"># → 返回值包含 "design_params_created": 5</span></code></pre>
+
+<p>搭好骨架后,在组件子网<strong>内部</strong>的几何节点上引用这些参数,使用<strong>绝对路径</strong>(跨子网嵌套时相对 <code>ch("../")</code> 不可靠):</p>
+
+<pre><code><span class="com"># 在 tabletop/body_box(tabletop 子网内的一个 box SOP)内部:</span>
+houdini_set_params_batch(node_path=<span class="str">".../tabletop/body_box"</span>, params={
+    <span class="str">"sizex"</span>: <span class="str">"ch('/obj/.../project_core/length')"</span>,       <span class="com"># 绝对路径</span>
+    <span class="str">"sizey"</span>: <span class="str">"ch('/obj/.../project_core/top_thick')"</span>,
+    <span class="str">"sizez"</span>: <span class="str">"ch('/obj/.../project_core/width')"</span>,
+    <span class="str">"ty"</span>:    <span class="str">"ch('/obj/.../project_core/top_thick')*0.5"</span>
+})</code></pre>
+
+<div class="callout warn">
+  <span class="callout-title">⚠️ 使用绝对 ch() 路径</span>
+  <p>使用<strong>绝对</strong> <code>ch()</code> 路径(例如 <code>ch('/obj/geo1/project1/length')</code>),<strong>不要</strong>用相对路径(<code>ch('../../length')</code>)。跨子网嵌套层级的相对路径经常产生"Bad parameter reference"警告并得到零几何体。核心路径在每条消息的 <code>[Current Houdini Context]</code> 块中给出 —— 用它。</p>
+</div>
+
+<h3 id="step3">3. 在每个组件子网内建模 — 标准节点工具</h3>
+<p>使用 <code>houdini_create_node</code>、<code>houdini_connect_nodes</code>、<code>houdini_set_param</code>。在每个子网内自由建模。<strong>参数是建模的副产品</strong>:当你需要一个可调值时,在<strong>子网上</strong>添加备用参数(通过对子网节点调用 <code>houdini_set_param</code>,或用 <code>addSpareParmTuple</code>),然后用 <code>ch("../&lt;parm&gt;")</code> 在几何节点中引用它。</p>
+
+<h4>构建主几何体(例如桌面 box,带可调长度)</h4>
+<pre><code><span class="com"># 1. 在子网上添加备用参数(参数是建模的副产品)。</span>
+houdini_set_param(node_path=<span class="str">"&lt;tabletop 子网&gt;"</span>, <span class="str">"length"</span>, 2.0)  <span class="com"># 创建备用参数</span>
+<span class="com"># 2. 构建引用子网参数的几何体。</span>
+houdini_create_node(node_type=<span class="str">"box"</span>, parent_path=<span class="str">"&lt;tabletop 子网&gt;"</span>)
+houdini_set_param(node_path, <span class="str">"sizex"</span>, <span class="str">'ch("../length")'</span>)   <span class="com"># 实时引用子网参数</span>
+houdini_set_param(node_path, <span class="str">"sizey"</span>, 0.05)
+houdini_connect_nodes(from_path=box_path, to_path=<span class="str">"&lt;tabletop&gt;/out_geometry"</span>)</code></pre>
+
+<h4>程序化地发射锚点(不要硬编码!)— <code>project_add_anchors</code></h4>
+<pre><code><span class="com"># 锚点必须从几何体中派生(这样参数变化时它们会跟着移动),</span>
+<span class="com"># 绝不能硬编码 addpoint 坐标。project_add_anchors 生成一个实时</span>
+<span class="com"># VEX wrangle,在每次 cook 时测量组件的包围盒。</span>
+project_add_anchors(core_path=<span class="str">"&lt;core&gt;"</span>, component_id=<span class="str">"tabletop"</span>, anchors=[
+    { <span class="str">"measure"</span>: <span class="str">"bbox_corner"</span>, <span class="str">"axes"</span>: <span class="str">"+X-Y+Z"</span>, <span class="str">"name"</span>: <span class="str">"leg_mount_fr"</span> },
+    { <span class="str">"measure"</span>: <span class="str">"bbox_corner"</span>, <span class="str">"axes"</span>: <span class="str">"-X-Y+Z"</span>, <span class="str">"name"</span>: <span class="str">"leg_mount_fl"</span> },
+    { <span class="str">"measure"</span>: <span class="str">"bbox_corner"</span>, <span class="str">"axes"</span>: <span class="str">"+X-Y-Z"</span>, <span class="str">"name"</span>: <span class="str">"leg_mount_br"</span> },
+    { <span class="str">"measure"</span>: <span class="str">"bbox_corner"</span>, <span class="str">"axes"</span>: <span class="str">"-X-Y-Z"</span>, <span class="str">"name"</span>: <span class="str">"leg_mount_bl"</span> }
+])
+<span class="com"># 现在调整桌面尺寸(改核心 'length')→ 包围盒变化 → 锚点重新计算。</span></pre>
+<p>可用的测量方式:<code>bbox_corner</code>(需要 <code>axes</code> 如 <code>"+X-Y+Z"</code>)、<code>bbox_face_center</code>(需要 <code>face</code> 如 <code>"-Y"</code>)、<code>bbox_center</code>、<code>grid_on_face</code>(需要 <code>face</code>、<code>rows</code>、<code>cols</code>)、<code>point_on_edge</code>、<code>array</code>。每种都会发射带 <code>@name</code> 标签的点。</p>
+
+<h4>消费锚点(在下游组件中,例如桌腿)</h4>
+<pre><code><span class="com"># 构建器已经把 in_tabletop_leg_mount_fr 连到了上游锚点。</span>
+<span class="com"># 只要在它下游构建即可。</span>
+houdini_create_node(node_type=<span class="str">"tube"</span>, parent_path=<span class="str">"&lt;legs 子网&gt;"</span>)   <span class="com"># 一条桌腿</span>
+houdini_set_param(node_path, <span class="str">"rad"</span>, [0.04, 0.04])     <span class="com"># 向量参数</span>
+houdini_set_param(node_path, <span class="str">"height"</span>, <span class="str">'ch("../leg_height")'</span>)  <span class="com"># 实时表达式</span>
+houdini_create_node(node_type=<span class="str">"copytopoints"</span>, parent_path=<span class="str">"&lt;legs 子网&gt;"</span>)
+houdini_connect_nodes(from_path=tube_path, to_path=ctp_path, input_index=0)
+houdini_connect_nodes(from_path=<span class="str">"&lt;legs&gt;/in_tabletop_leg_mount_fr"</span>, to_path=ctp_path, input_index=1)
+houdini_connect_nodes(from_path=ctp_path, to_path=<span class="str">"&lt;legs&gt;/out_geometry"</span>)   <span class="com"># 主几何体输出</span></code></pre>
+
+<p>要直接获取上游组件的锚点端口(而非通过构建器的 in 节点),使用 <code>output_index</code>:</p>
+<pre><code>houdini_connect_nodes(from_path=<span class="str">"&lt;tabletop&gt;"</span>, to_path=<span class="str">"&lt;something&gt;"</span>, input_index=0, output_index=1)
+<span class="com"># output_index=1 = tabletop 的锚点云 (out[1]);0 = 它的主几何体</span></code></pre>
+
+<h3 id="step4">4. 把参数提升到核心(自底向上)— <code>project_promote_params</code></h3>
+<p>建模完成后(子网备用参数已存在并测试过),把它们提升到核心 HDA,这样整个模型就能从一个地方调节:</p>
+<pre><code>project_promote_params(core_path=<span class="str">"&lt;core&gt;"</span>)
+<span class="com"># 扫描每个子网的 spareParms() → 在核心上创建 &lt;component&gt;_&lt;parm&gt;</span>
+<span class="com"># (分组到 &lt;component&gt; 文件夹下,复制 min/max)→ 把子网参数重连为</span>
+<span class="com"># ch("../&lt;component&gt;_&lt;parm&gt;"),这样由核心驱动它。</span></code></pre>
+<p>自底向上:参数源自子网(你在那里建模 + 测试),然后被提升到核心以实现统一控制。核心成为调节入口;子网通过 ch() 引用跟随。</p>
+</section>
+
+<section id="live-refs">
+<h2>参数实时引用(自底向上,提升后由核心驱动)</h2>
+<p>参数起源于组件子网(建模时添加的备用参数)。执行 <code>project_promote_params</code> 后,每个参数被提升到核心,命名为 <code>&lt;component&gt;_&lt;parm&gt;</code>(分组、带 min/max),子网参数被重连为 <code>ch("../&lt;component&gt;_&lt;parm&gt;")</code> —— 于是<strong>核心</strong>驱动该值。</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>你所在的位置</th><th>引用什么</th><th>示例</th></tr></thead>
+<tbody>
+<tr><td>子网<strong>内部</strong>的几何节点</td><td>子网的参数</td><td><code>tabletop/</code> 中的 box 用 <code>ch("../length")</code></td></tr>
+<tr><td>用户(提升后)</td><td>核心的 <code>&lt;component&gt;_&lt;parm&gt;</code></td><td>用户设置 <code>tabletop_length</code> → 子网跟随 → 几何体 + 锚点更新</td></tr>
+</tbody>
+</table>
+</div>
+
+<p><code>houdini_set_param</code> 接受包含 <code>ch(...)</code> 的表达式字符串,并自动路由到 <code>setExpression</code> —— 因此实时参数能通过该工具正常工作。</p>
+</section>
+
+<section id="when">
+<h2>何时使用</h2>
+
+<div class="callout success">
+  <span class="callout-title">这是多部件程序化模型的唯一路径</span>
+  <p><code>build_assembly</code> 已不再作为工具存在 —— 不要尝试调用它。任何由可拼接部件组成的物体(桌子、汽车、自行车、键盘、机器、建筑)都作为 Project HDA 在此构建。</p>
+</div>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>情形</th><th>使用</th></tr></thead>
+<tbody>
+<tr>
+  <td><strong>任何多部件物体</strong>(桌子=桌面+桌腿,汽车=车身+轮子,键盘=托盘+按键)</td>
+  <td><strong>Project HDA</strong>(本技能):<code>project_create</code> → <code>project_build_scaffold</code> → 在子网内建模 → <code>project_promote_params</code></td>
+</tr>
+<tr>
+  <td>用户可能手工编辑的<strong>长期可编辑模型</strong></td>
+  <td><strong>Project HDA</strong></td>
+</tr>
+<tr>
+  <td>单一生成器 / 一次性 SOP(无组件)</td>
+  <td><code>houdini_run_python_sandbox</code></td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<p>即使是"简单"的桌子也是多部件物体(桌面 + 桌腿):把它拆解成组件并在此构建。组件拆分正是让模型可理解、可编辑(以及日后可检测漂移)的关键。</p>
+</section>
+
+<section id="discipline">
+<h2>建模纪律(方向 —— 已用真实案例精炼)</h2>
+<ul>
+  <li><strong>VEX 优先</strong>:大多数需求用一个 wrangle + 原生 SOP 即可。不要动辄求助于 Python SOP。</li>
+  <li><strong>不要把所有东西堆进单个 Python SOP</strong>:如果你用 Python,把它分散到多个 SOP 中,不要全堆进一个。</li>
+  <li><strong>VEX 难搞的地方用原生节点</strong>(sweep、fuse、boolean):用原生节点。</li>
+  <li><strong>测量,而非硬编码</strong>:位置来自上游锚点或测量值,绝不要手打坐标。这正是保持模型参数化的关键。</li>
+</ul>
+</section>
+
+<section id="mistakes">
+<h2>常见错误</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>错误</th><th>修复</th></tr></thead>
+<tbody>
+<tr>
+  <td><strong>调整组件尺寸时锚点不动</strong></td>
+  <td>你硬编码了 <code>addpoint(x,y,z)</code>。改用 <code>project_add_anchors</code>,让锚点从几何体测量并实时重算。<strong>绝不</strong>硬编码锚点坐标。</td>
+</tr>
+<tr>
+  <td>Box 读不到参数</td>
+  <td>在子网内部时,把参数加在<strong>子网上</strong>(对子网节点调用 <code>houdini_set_param</code>),然后用 <code>ch("../length")</code> 从几何体引用。</td>
+</tr>
+<tr>
+  <td><code>connect_nodes</code> 连不到锚点云</td>
+  <td>传入 <code>output_index=1</code>(默认 0 = 主几何体)</td>
+</tr>
+<tr>
+  <td>核心上的参数没有 min/max</td>
+  <td>在子网上加备用参数时<strong>带上</strong> min/max(FloatParmTemplate),提升时会把它们复制上去。</td>
+</tr>
+<tr>
+  <td><code>project_create</code> 新建了 HDA 而非用选中的那个</td>
+  <td><code>project_create</code> 会复用选中的 Project HDA 核心。要强制新建,先取消选中。</td>
+</tr>
+<tr>
+  <td>建好了几何体但核心 OUT 什么都没显示</td>
+  <td>你的几何体必须流入 <code>out_geometry</code> → <code>output_0</code> → 核心 OUT 的 merge。</td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<section id="support">
+<h2>本技能支持的内容(以及路线图)</h2>
+<ul>
+  <li><span class="pill do">✅</span>组件子网,带 2 个输出端口(几何体 + 锚点),幂等骨架</li>
+  <li><span class="pill do">✅</span>跨组件锚点消费(构建器连线 <code>in_&lt;from&gt;_&lt;anchor&gt;</code>)</li>
+  <li><span class="pill do">✅</span>两层实时参数(子网 <code>../</code> + 核心 <code>./</code> 经由提升)</li>
+  <li><span class="pill do">✅</span>工具:create_node / connect_nodes(带 output_index)/ set_param(向量 + 表达式)</li>
+  <li><span class="pill todo">🚧</span>漂移检测(手工编辑感知)— 未来</li>
+  <li><span class="pill todo">🚧</span>知识图谱描述生成 — 未来</li>
+</ul>
+</section>
+
+<footer>
+  <p>本文档由 <code>project-modeling/SKILL.md</code> 翻译生成 · 生成日期 2026-07-06</p>
+</footer>
+
+</main>
+</div>
+</body>
+</html>

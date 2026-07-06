@@ -27,7 +27,7 @@ def open_chat(**kwargs):
         import hou
         node = hou.pwd()
     from edini.project.panel.chat_dialog import open_chat_for_core
-    open_chat_for_core(node.path())
+    open_chat_for_core(node.path(), node.type().name())
 '''
 
 import os

@@ -2,41 +2,32 @@
 import html
 import os
 import re
-import subprocess
 import sys
 from PySide6 import QtCore, QtGui, QtWidgets
 from edini.ui.theme import accent_color, fs
 from edini.media_manager import (
-    MediaItem, MediaSource, capture_viewport,
-    from_files, from_clipboard, from_mime_data,
-    mime_has_images, MAX_ATTACHMENTS, clipboard_has_image,
+    MediaItem, capture_viewport,
+    from_files, from_clipboard,
+    MAX_ATTACHMENTS, clipboard_has_image,
 )
-from edini.ui.image_attachment import ImageAttachmentWidget
 from edini.ui.vision_overlay import VisionDescriptionBubble
+from edini.ui.components.input_bar import InputBar
+from edini.ui.components.timeline_view import _TimelineView
+from edini.ui.components.bubbles import (
+    UserBubble, AiBubble,
+    _UserBubble, _AiBubble,            # backward-compat aliases
+    _user_bubble_bg, _ai_bubble_bg,
+    _user_bubble_style, _ai_bubble_style,
+    _ClickableCard, _load_thumb_pixmap, _truncate_name, _open_image_file,
+)
+from edini.ui.components.thinking_panel import ThinkingPanel
+from edini.ui.components.tool_panel import ToolPanel, _ToolCardWidget
 from edini import screenshots
 
 
 # ═══════════════════════════════════════════════════════════════════════
 # Style helpers (unchanged)
 # ═══════════════════════════════════════════════════════════════════════
-
-def _user_bubble_bg() -> str:
-    return '#1a3a5c'
-
-def _ai_bubble_bg() -> str:
-    return '#1a1a24'
-
-def _user_bubble_style() -> str:
-    return (
-        f'color:#e5e5eb;font-size:{fs(12)};line-height:1.45;'
-        f'padding:8px 14px;background:{_user_bubble_bg()};border-radius:8px;'
-    )
-
-def _ai_bubble_style() -> str:
-    return (
-        f'color:#e5e5eb;font-size:{fs(12)};line-height:1.45;'
-        f'padding:8px 14px;background:{_ai_bubble_bg()};border-radius:8px;'
-    )
 
 def _thinking_collapsed_style() -> str:
     a = accent_color()
@@ -63,287 +54,16 @@ def _separator_style() -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Tool Card Widget (unchanged)
+# Tool Card Widget — relocated to edini/ui/components/tool_panel.py.
+# Re-imported above as _ToolCardWidget. Stage 2, Task 1.4.
 # ═══════════════════════════════════════════════════════════════════════
-
-class _ToolCardWidget(QtWidgets.QFrame):
-    """A single collapsible tool call card. Added/updated in real-time."""
-
-    def __init__(self, tool_name: str, args: dict, tool_call_id: str, parent=None):
-        super().__init__(parent)
-        self._tool_call_id = tool_call_id
-        self._expanded = False
-
-        self.setFrameShape(QtWidgets.QFrame.StyledPanel)
-        self.setStyleSheet(f"""
-            _ToolCardWidget {{
-                background: rgba(0,188,212,0.03);
-                border: 1px solid #181830;
-                border-radius: 4px;
-            }}
-            _ToolCardWidget:hover {{
-                background: rgba(0,188,212,0.06);
-                border-color: #253545;
-            }}
-        """)
-        self.setCursor(QtCore.Qt.PointingHandCursor)
-
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(8, 2, 8, 2)
-        layout.setSpacing(1)
-
-        # Header row: icon + name + status
-        header_row = QtWidgets.QHBoxLayout()
-        header_row.setSpacing(2)
-        self._arrow = QtWidgets.QLabel("▸")
-        self._arrow.setStyleSheet(f"color:#80cbc4;font-size:{fs(11)};border:none;")
-        self._arrow.setFixedWidth(16)
-        header_row.addWidget(self._arrow)
-
-        self._name_label = QtWidgets.QLabel(f"🔧 {html.escape(tool_name)}")
-        self._name_label.setStyleSheet(f"color:#80cbc4;font-size:{fs(11)};font-weight:600;border:none;")
-        header_row.addWidget(self._name_label, 1)
-
-        self._status_label = QtWidgets.QLabel("⏳")
-        self._status_label.setStyleSheet(f"color:#d97706;font-size:{fs(10)};border:none;")
-        self._status_label.setFixedWidth(30)
-        self._status_label.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-        header_row.addWidget(self._status_label)
-
-        layout.addLayout(header_row)
-
-        # Detail area (hidden by default)
-        self._detail = QtWidgets.QWidget()
-        detail_layout = QtWidgets.QVBoxLayout(self._detail)
-        detail_layout.setContentsMargins(20, 2, 0, 2)
-        detail_layout.setSpacing(2)
-
-        args_str = _format_args(args)
-        self._args_label = QtWidgets.QLabel(args_str)
-        self._args_label.setWordWrap(True)
-        self._args_label.setStyleSheet(f"color:#78909c;font-size:{fs(10)};font-family:monospace;border:none;")
-        detail_layout.addWidget(self._args_label)
-
-        self._result_label = QtWidgets.QLabel("")
-        self._result_label.setWordWrap(True)
-        self._result_label.setStyleSheet(f"color:#94a3b8;font-size:{fs(10)};border:none;")
-        self._result_label.setVisible(False)
-        detail_layout.addWidget(self._result_label)
-
-        self._detail.setVisible(False)
-        layout.addWidget(self._detail)
-
-    def mousePressEvent(self, event):
-        self._expanded = not self._expanded
-        self._arrow.setText("▾" if self._expanded else "▸")
-        self._detail.setVisible(self._expanded)
-        super().mousePressEvent(event)
-
-    def set_result(self, result_text: str, success: bool = True):
-        self._status_label.setText("✅" if success else "❌")
-        self._status_label.setStyleSheet(
-            f"color:{'#16a34a' if success else '#ef4444'};font-size:{fs(10)};border:none;"
-        )
-        self._result_label.setText(_format_tool_result_short(result_text, success))
-        self._result_label.setVisible(True)
-
-    def set_error(self, error_msg: str):
-        self._status_label.setText("❌")
-        self._status_label.setStyleSheet(f"color:#ef4444;font-size:{fs(10)};border:none;")
-        self._result_label.setText(f"Error: {html.escape(error_msg)}")
-        self._result_label.setVisible(True)
-
-    @property
-    def tool_call_id(self) -> str:
-        return self._tool_call_id
-
 
 # ═══════════════════════════════════════════════════════════════════════
 # Timeline — QScrollArea + widget-based
 # ═══════════════════════════════════════════════════════════════════════
 
-class _ClickableCard(QtWidgets.QFrame):
-    """A card that opens a file/image on click. Reliable mouse handling."""
-
-    def __init__(self, open_path: str, tooltip: str = "", parent=None):
-        super().__init__(parent)
-        self._open_path = open_path
-        self.setCursor(QtCore.Qt.PointingHandCursor)
-        if tooltip:
-            self.setToolTip(tooltip)
-
-    def mouseReleaseEvent(self, event):
-        if event.button() == QtCore.Qt.MouseButton.LeftButton:
-            _open_image_file(self._open_path)
-        super().mouseReleaseEvent(event)
-
-
-class _UserBubble(QtWidgets.QFrame):
-    """Right-aligned user message bubble — text + optional image references."""
-    def __init__(self, text: str, images: list[dict] | None = None, parent=None):
-        super().__init__(parent)
-        outer = QtWidgets.QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(2)
-
-        # Text bubble (right-aligned with 48px left margin)
-        text_frame = QtWidgets.QFrame()
-        text_layout = QtWidgets.QHBoxLayout(text_frame)
-        text_layout.setContentsMargins(48, 0, 0, 0)
-        text_layout.setSpacing(0)
-
-        self._label = QtWidgets.QLabel(html.escape(text))
-        self._label.setWordWrap(True)
-        self._label.setTextFormat(QtCore.Qt.RichText)
-        self._label.setTextInteractionFlags(
-            QtCore.Qt.TextSelectableByMouse
-        )
-        self._label.setStyleSheet(
-            f"QLabel {{ "
-            f"color:#e5e5eb; font-size:{fs(12)}; line-height:1.45; "
-            f"padding:8px 14px; background:{_user_bubble_bg()}; "
-            f"border-radius:10px; border:none; "
-            f"}}"
-        )
-        self._label.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
-        text_layout.addWidget(self._label)
-        outer.addWidget(text_frame)
-
-        # Image references (if any) — clickable chips below text
-        if images:
-            self._add_image_refs(outer, images)
-        else:
-            pass
-
-        self.setStyleSheet("QFrame { background: transparent; border: none; }")
-
-    def _add_image_refs(self, outer: QtWidgets.QVBoxLayout, images: list[dict]):
-        """Add clickable thumbnail previews below the text bubble."""
-        img_frame = QtWidgets.QFrame()
-        img_frame.setStyleSheet("QFrame { background: transparent; border: none; }")
-        img_layout = QtWidgets.QHBoxLayout(img_frame)
-        img_layout.setContentsMargins(54, 2, 8, 2)
-        img_layout.setSpacing(6)
-        img_layout.addStretch(1)
-
-        for img_meta in images:
-            filename = img_meta.get("filename", "image")
-            size_kb = img_meta.get("size_bytes", 0) / 1024
-            size_str = f"{size_kb:.0f}KB" if size_kb < 1024 else f"{size_kb/1024:.1f}MB"
-            cache_path = img_meta.get("cache_path", "")
-            b64_fallback = img_meta.get("_b64_pending", "")
-            open_path = cache_path if cache_path and os.path.isfile(cache_path) else b64_fallback
-
-            # Card container — QFrame for proper child widget rendering
-            card = _ClickableCard(open_path, f"点击查看原图 — {filename} ({size_str})")
-            card.setFixedSize(100, 90)
-            card.setStyleSheet(f"""
-                _ClickableCard {{
-                    background: #0e0e15;
-                    border: 1px solid #252540;
-                    border-radius: 4px;
-                }}
-                _ClickableCard:hover {{
-                    border-color: #4a4a6a;
-                    background: #14141e;
-                }}
-            """)
-
-            card_layout = QtWidgets.QVBoxLayout(card)
-            card_layout.setContentsMargins(2, 2, 2, 0)
-            card_layout.setSpacing(1)
-
-            # Thumbnail image — use QLabel with pixmap scaled to fill
-            thumb = QtWidgets.QLabel()
-            thumb.setFixedSize(96, 68)
-            thumb.setAlignment(QtCore.Qt.AlignCenter)
-            thumb.setScaledContents(False)
-            thumb.setStyleSheet(
-                "QLabel { background: #06060c; border-radius: 2px; border: none; }"
-            )
-            pixmap = _load_thumb_pixmap(open_path)
-            if pixmap and not pixmap.isNull():
-                scaled = pixmap.scaled(
-                    96, 68,
-                    QtCore.Qt.AspectRatioMode.IgnoreAspectRatio,
-                    QtCore.Qt.TransformationMode.SmoothTransformation,
-                )
-                thumb.setPixmap(scaled)
-            else:
-                thumb.setText("🖼️")
-            card_layout.addWidget(thumb)
-
-            # Filename label
-            name_label = QtWidgets.QLabel(_truncate_name(filename, 13))
-            name_label.setStyleSheet(
-                f"QLabel {{ color:#a1a1aa; font-size:{fs(9)}; border:none; background:transparent; }}"
-            )
-            name_label.setAlignment(QtCore.Qt.AlignCenter)
-            card_layout.addWidget(name_label)
-
-            img_layout.addWidget(card)
-
-        outer.addWidget(img_frame)
-
-
-class _AiBubble(QtWidgets.QFrame):
-    """Left-aligned AI message bubble — fills available width with right margin."""
-    def __init__(self, rich_html: str = "", parent=None):
-        super().__init__(parent)
-        layout = QtWidgets.QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 48, 0)  # 48px right margin (left-aligned look)
-        layout.setSpacing(0)
-
-        self._label = QtWidgets.QLabel()
-        self._label.setWordWrap(True)
-        self._label.setTextFormat(QtCore.Qt.RichText)
-        self._label.setOpenExternalLinks(False)
-        self._label.setTextInteractionFlags(
-            QtCore.Qt.TextSelectableByMouse
-        )
-        self._label.setStyleSheet(
-            f"QLabel {{ "
-            f"color:#e5e5eb; font-size:{fs(12)}; line-height:1.45; "
-            f"padding:8px 14px; background:{_ai_bubble_bg()}; "
-            f"border-radius:10px; border:none; "
-            f"}}"
-        )
-        self._label.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
-        layout.addWidget(self._label)
-
-        self._raw_text = ""
-        if rich_html:
-            wrapped = f'<div style="{_ai_bubble_style()}">{rich_html}</div>'
-            self._label.setText(wrapped)
-
-        self.setStyleSheet("QFrame { background: transparent; border: none; }")
-
-    def update_streaming(self, full_text: str):
-        """Update with full accumulated text during streaming. Uses light formatter."""
-        self._raw_text = full_text
-        rendered = _format_lite(full_text)
-        wrapped = f'<div style="{_ai_bubble_style()}">{rendered}</div>'
-        self._label.setText(wrapped)
-
-    def get_raw_text(self) -> str:
-        return self._raw_text
-
-    def finalize(self):
-        """Called when streaming is complete. Applies full Markdown formatting."""
-        rendered = _format_full(self._raw_text)
-        wrapped = f'<div style="{_ai_bubble_style()}">{rendered}</div>'
-        self._label.setText(wrapped)
-
-    def set_stored_content(self, content: str):
-        """Set content from a stored message. Applies full Markdown formatting."""
-        self._raw_text = content
-        rendered = _format_full(content)
-        wrapped = f'<div style="{_ai_bubble_style()}">{rendered}</div>'
-        self._label.setText(wrapped)
-
-    @staticmethod
-    def _on_link(url: str):
-        pass
+# _ClickableCard, _UserBubble, _AiBubble relocated to edini/ui/components/bubbles.py
+# (re-imported above). Local stubs removed in Stage 1, Task 1.3.
 
 
 class _Separator(QtWidgets.QFrame):
@@ -390,233 +110,6 @@ class _ErrorBanner(QtWidgets.QFrame):
         )
 
 
-class _TimelineView(QtWidgets.QScrollArea):
-    """Chat timeline using QScrollArea + widgets for reliable smart scrolling.
-
-    Key behavior:
-    - When pinned to bottom, new content auto-scrolls to keep the latest visible.
-    - When user scrolls up to read history, auto-scroll pauses.
-    - User can re-pin by scrolling all the way to the bottom.
-    - Drag-selecting text inside a bubble auto-scrolls the viewport when the
-      cursor approaches the top/bottom edge, so the selection can extend into
-      content that was originally off-screen.
-    """
-
-    PIN_THRESHOLD = 12  # px from bottom to consider "at bottom"
-    AUTO_SCROLL_MARGIN = 30  # px from viewport edge that triggers auto-scroll
-    AUTO_SCROLL_INTERVAL = 30  # ms between auto-scroll ticks
-    AUTO_SCROLL_MAX_SPEED = 18  # max px per tick when cursor is far past edge
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFrameShape(QtWidgets.QFrame.NoFrame)
-        self.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
-        self.setWidgetResizable(True)
-        self.setStyleSheet(
-            "QScrollArea { background-color: #0e0e18; border: none; }"
-        )
-
-        # Container widget holding all message widgets
-        self._container = QtWidgets.QWidget()
-        self._container.setObjectName("TimelineContainer")
-        self._container.setStyleSheet(
-            "QWidget#TimelineContainer { background: transparent; }"
-        )
-        self._layout = QtWidgets.QVBoxLayout(self._container)
-        self._layout.setContentsMargins(8, 8, 8, 8)
-        self._layout.setSpacing(2)
-        self._layout.setAlignment(QtCore.Qt.AlignTop)
-        # Bottom spacer keeps content at top when few messages
-        self._layout.addStretch(1)
-        self.setWidget(self._container)
-
-        # Smart scroll state
-        self._pinned_to_bottom = True
-        self._programmatic_scroll = False
-
-        # Track scroll changes
-        sb = self.verticalScrollBar()
-        sb.rangeChanged.connect(self._on_range_changed)
-        sb.valueChanged.connect(self._on_value_changed)
-
-        # Auto-scroll-during-text-selection
-        self._auto_scroll_timer = QtCore.QTimer(self)
-        self._auto_scroll_timer.setInterval(self.AUTO_SCROLL_INTERVAL)
-        self._auto_scroll_timer.timeout.connect(self._auto_scroll_tick)
-        self._drag_source_label: QtWidgets.QLabel | None = None
-        app = QtWidgets.QApplication.instance()
-        if app is not None:
-            app.installEventFilter(self)
-
-    # ── Auto-scroll during text drag selection ──
-
-    def eventFilter(self, watched, event):
-        """Start the auto-scroll timer when the user mouse-presses on a
-        text-selectable label inside this timeline, stop it on release.
-        The timer ticks handle the actual scroll.
-        """
-        if event is not None:
-            et = event.type()
-            if et == QtCore.QEvent.MouseButtonPress and \
-                    event.button() == QtCore.Qt.LeftButton:
-                if (isinstance(watched, QtWidgets.QLabel)
-                        and self._is_descendant(watched)
-                        and self._scroll_range_available()):
-                    self._drag_source_label = watched
-                    self._auto_scroll_timer.start()
-            elif et == QtCore.QEvent.MouseButtonRelease and \
-                    event.button() == QtCore.Qt.LeftButton:
-                self._drag_source_label = None
-                self._auto_scroll_timer.stop()
-        return super().eventFilter(watched, event)
-
-    def _scroll_range_available(self) -> bool:
-        sb = self.verticalScrollBar()
-        return sb.maximum() > sb.minimum()
-
-    def _auto_scroll_tick(self):
-        """Scroll toward the cursor when it is in the margin zone; then
-        synthesize a MouseMove on the label that received the press so its
-        text-selection logic extends into the newly visible content."""
-        if not (QtGui.QGuiApplication.mouseButtons()
-                & QtCore.Qt.LeftButton):
-            self._drag_source_label = None
-            self._auto_scroll_timer.stop()
-            return
-        sb = self.verticalScrollBar()
-        if sb.maximum() <= sb.minimum():
-            self._auto_scroll_timer.stop()
-            return
-
-        cursor_global = QtGui.QCursor.pos()
-        tl = self.viewport().mapToGlobal(QtCore.QPoint(0, 0))
-        local_y = cursor_global.y() - tl.y()
-        viewport_h = self.viewport().height()
-        margin = self.AUTO_SCROLL_MARGIN
-
-        old_value = sb.value()
-        new_value = old_value
-
-        if local_y < margin:
-            distance = margin - max(local_y, 0)
-            delta = max(1, min(self.AUTO_SCROLL_MAX_SPEED,
-                               int(distance * 0.4) + 1))
-            new_value = max(sb.minimum(), old_value - delta)
-        elif local_y > viewport_h - margin:
-            distance = min(local_y, viewport_h) - (viewport_h - margin)
-            delta = max(1, min(self.AUTO_SCROLL_MAX_SPEED,
-                               int(distance * 0.4) + 1))
-            new_value = min(sb.maximum(), old_value + delta)
-
-        if new_value == old_value:
-            return
-
-        self._programmatic_scroll = True
-        sb.setValue(new_value)
-        self._programmatic_scroll = False
-
-        # Tell the label that received the press that the cursor "moved"
-        # relative to its widget coords (which it did, because the widget
-        # scrolled under a stationary cursor). This makes the text selection
-        # extend into the content that just scrolled into view.
-        label = self._drag_source_label
-        if label is None:
-            return
-        try:
-            from shiboken6 import isValid
-            if not isValid(label):
-                self._drag_source_label = None
-                return
-        except ImportError:
-            pass
-        if not self._is_descendant(label):
-            return
-        local = label.mapFromGlobal(cursor_global)
-        evt = QtGui.QMouseEvent(
-            QtCore.QEvent.MouseMove,
-            QtCore.QPointF(local),
-            QtCore.QPointF(cursor_global),
-            QtCore.Qt.LeftButton,
-            QtCore.Qt.LeftButton,
-            QtCore.Qt.NoModifier,
-        )
-        QtWidgets.QApplication.postEvent(label, evt)
-
-    def _is_descendant(self, widget: QtWidgets.QWidget) -> bool:
-        p = widget
-        while p is not None:
-            if p is self:
-                return True
-            p = p.parentWidget()
-        return False
-
-    # ── Smart scroll ──
-
-    def _on_range_changed(self, _min: int, max_val: int):
-        """Content resized. If pinned, scroll to new bottom."""
-        if self._pinned_to_bottom:
-            self._programmatic_scroll = True
-            sb = self.verticalScrollBar()
-            sb.setValue(max_val)
-            self._programmatic_scroll = False
-
-    def _on_value_changed(self, value: int):
-        """Detect user scroll events to unpin or re-pin."""
-        if self._programmatic_scroll:
-            return
-        sb = self.verticalScrollBar()
-        at_bottom = value >= sb.maximum() - self.PIN_THRESHOLD
-        self._pinned_to_bottom = at_bottom
-
-    def _scroll_to_bottom(self):
-        """Force scroll to bottom and re-pin."""
-        sb = self.verticalScrollBar()
-        self._programmatic_scroll = True
-        sb.setValue(sb.maximum())
-        self._programmatic_scroll = False
-        self._pinned_to_bottom = True
-
-    # ── Public API ──
-
-    def add_widget(self, widget: QtWidgets.QWidget):
-        """Insert a message widget before the bottom spacer."""
-        idx = self._layout.count() - 1  # before the stretch
-        self._layout.insertWidget(idx, widget)
-        if self._pinned_to_bottom:
-            QtCore.QTimer.singleShot(0, self._scroll_to_bottom)
-
-    def clear_all(self):
-        """Remove all message widgets, keep spacer."""
-        while self._layout.count() > 1:
-            item = self._layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        self._pinned_to_bottom = True
-
-    def widget_count(self) -> int:
-        """Number of message widgets (excluding spacer)."""
-        return self._layout.count() - 1
-
-    def remove_last_widget(self):
-        """Remove the last message widget (for cancel_current_stream)."""
-        count = self._layout.count()
-        if count <= 1:
-            return
-        idx = count - 2  # last widget before stretch
-        item = self._layout.takeAt(idx)
-        if item.widget():
-            item.widget().deleteLater()
-
-    def ensure_pinned(self):
-        """Re-enable auto-scroll and scroll to bottom."""
-        self._pinned_to_bottom = True
-        self._scroll_to_bottom()
-
-    @property
-    def is_pinned(self) -> bool:
-        return self._pinned_to_bottom
-
-
 # ═══════════════════════════════════════════════════════════════════════
 # Type Toggle Badge (unchanged)
 # ═══════════════════════════════════════════════════════════════════════
@@ -650,14 +143,12 @@ class AgentPanel(QtWidgets.QWidget):
         # Thinking
         self._thinking_count = 0
         self._thinking_buf = ""
-        self._thinking_full = ""
         self._thinking_buf_timer = QtCore.QTimer(self)
         self._thinking_buf_timer.setSingleShot(True)
         self._thinking_buf_timer.setInterval(600)
         self._thinking_buf_timer.timeout.connect(self._flush_thinking_buf)
 
-        # Tool cards
-        self._tool_cards: dict[str, _ToolCardWidget] = {}
+        # Tool cards now owned by self._tool_panel (built in _build_ui).
 
         self._stream_flush_timer = QtCore.QTimer(self)
         self._stream_flush_timer.setSingleShot(True)
@@ -681,96 +172,13 @@ class AgentPanel(QtWidgets.QWidget):
         root.addWidget(self.timeline_view, 1)
 
         # ── Thinking Panel (collapsible, below timeline) ──
-        self._thinking_panel = QtWidgets.QFrame()
-        self._thinking_panel.setStyleSheet(f"""
-            QFrame {{
-                background: #0a0a12;
-                border-top: 1px solid #1c1c2a;
-            }}
-        """)
-        tp_layout = QtWidgets.QVBoxLayout(self._thinking_panel)
-        tp_layout.setContentsMargins(10, 3, 10, 4)
-        tp_layout.setSpacing(0)
-
-        think_header = QtWidgets.QHBoxLayout()
-        think_header.setContentsMargins(0, 0, 0, 0)
-        self._thinking_toggle = QtWidgets.QLabel("▸ Thinking (0)")
-        self._thinking_toggle.setCursor(QtCore.Qt.PointingHandCursor)
-        self._thinking_toggle.setStyleSheet(f"color:#4a4a5a;font-size:{fs(10)};border:none;padding:1px 0;")
-        self._thinking_toggle.mousePressEvent = self._toggle_thinking_panel
-        think_header.addWidget(self._thinking_toggle)
-        think_header.addStretch()
-        tp_layout.addLayout(think_header)
-
-        self._thinking_view = QtWidgets.QTextEdit()
-        self._thinking_view.setReadOnly(True)
-        self._thinking_view.setStyleSheet(
-            f"QTextEdit {{ background: transparent; color: #8b8fa8; font-size:{fs(11)}; border: none; }}"
-        )
-        self._thinking_view.setVisible(False)
-        tp_layout.addWidget(self._thinking_view)
-
-        self._thinking_panel_expanded = False
-        self._THINKING_COLLAPSED_H = 24
-        self._THINKING_EXPANDED_H = 200
-        self._thinking_panel.setFixedHeight(self._THINKING_COLLAPSED_H)
+        # Promoted to edini/ui/components/thinking_panel.py (Stage 2, Task 1.4).
+        self._thinking_panel = ThinkingPanel()
         root.addWidget(self._thinking_panel)
 
         # ── Tool Call Panel (collapsible, below timeline) ──
-        self._tool_panel = QtWidgets.QFrame()
-        self._tool_panel.setStyleSheet(f"""
-            QFrame {{
-                background: #0a0a12;
-                border-top: 1px solid #1c1c2a;
-                border-bottom: 1px solid #1c1c2a;
-            }}
-            _ToolCardWidget {{
-                background: rgba(0,188,212,0.04);
-                border: 1px solid #1a1a2e;
-                border-radius: 4px;
-                margin: 1px 0;
-            }}
-            _ToolCardWidget:hover {{
-                background: rgba(0,188,212,0.08);
-                border-color: #253545;
-            }}
-        """)
-        tool_panel_layout = QtWidgets.QVBoxLayout(self._tool_panel)
-        tool_panel_layout.setContentsMargins(10, 3, 10, 4)
-        tool_panel_layout.setSpacing(0)
-
-        tool_header = QtWidgets.QHBoxLayout()
-        tool_header.setContentsMargins(0, 0, 0, 0)
-        self._tool_toggle = QtWidgets.QLabel("▸ Tool Calls (0)")
-        self._tool_toggle.setCursor(QtCore.Qt.PointingHandCursor)
-        self._tool_toggle.setStyleSheet(f"color:#4a4a5a;font-size:{fs(10)};border:none;padding:1px 0;")
-        self._tool_toggle.mousePressEvent = self._toggle_tool_panel
-        tool_header.addWidget(self._tool_toggle)
-        tool_header.addStretch()
-        tool_panel_layout.addLayout(tool_header)
-
-        self._tool_scroll = QtWidgets.QScrollArea()
-        self._tool_scroll.setWidgetResizable(True)
-        self._tool_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
-        self._tool_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
-        self._tool_scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
-
-        self._tool_container = QtWidgets.QWidget()
-        self._tool_container.setStyleSheet("background: transparent;")
-        self._tool_layout = QtWidgets.QVBoxLayout(self._tool_container)
-        self._tool_layout.setAlignment(QtCore.Qt.AlignTop)
-        self._tool_layout.setSpacing(1)
-        self._tool_layout.setContentsMargins(0, 4, 0, 0)
-        self._tool_layout.addStretch()
-        self._tool_scroll.setWidget(self._tool_container)
-
-        self._tool_scroll.setVisible(False)
-        tool_panel_layout.addWidget(self._tool_scroll)
-
-        self._tool_panel_expanded = False
-        self._TOOL_PANEL_COLLAPSED_H = 24
-        self._TOOL_PANEL_EXPANDED_H = 200
-        self._tool_panel.setFixedHeight(self._TOOL_PANEL_COLLAPSED_H)
+        # Promoted to edini/ui/components/tool_panel.py (Stage 2, Task 1.4).
+        self._tool_panel = ToolPanel()
         root.addWidget(self._tool_panel)
 
         # ── Change Tree Panel (collapsible) ──
@@ -778,97 +186,31 @@ class AgentPanel(QtWidgets.QWidget):
         self.change_tree_widget = ChangeTreeWidget()
         root.addWidget(self.change_tree_widget)
 
-        # ── Attachment preview bar ──
-        self._attachment_bar = ImageAttachmentWidget()
-        root.addWidget(self._attachment_bar)
-
-        # ── Input row ──
-        input_row = QtWidgets.QHBoxLayout()
-        input_row.setSpacing(8)
-        self.input_edit = QtWidgets.QPlainTextEdit(self)
-        self.input_edit.setPlaceholderText("描述你希望 Edini 完成的任务... (Enter 发送)")
-        self.input_edit.setFixedHeight(68)
-        input_row.addWidget(self.input_edit, 1)
-
-        # ── Action column (right side) ──
-        action_col = QtWidgets.QVBoxLayout()
-        action_col.setSpacing(6)
-
-        # ── Multimodal toolbar row ──
-        a = accent_color()
-        _mm_btn_style = f"""
-            QPushButton {{
-                background: #1a1a2e;
-                color: #c0c0d0;
-                border: 1px solid #2a2a40;
-                border-radius: 6px;
-                padding: 4px 10px;
-                font-size: {fs(12)};
-                font-weight: 500;
-            }}
-            QPushButton:hover {{
-                background: #252540;
-                border-color: {a}66;
-                color: #e5e5eb;
-            }}
-            QPushButton:pressed {{
-                background: #2a2a48;
-                border-color: {a}99;
-            }}
-        """
-
-        toolbar_row = QtWidgets.QHBoxLayout()
-        toolbar_row.setSpacing(6)
-
-        self._screenshot_btn = QtWidgets.QPushButton("📷 截图")
-        self._screenshot_btn.setToolTip("截取 Houdini Scene Viewer 视窗画面")
-        self._screenshot_btn.setMinimumHeight(34)
-        self._screenshot_btn.setCursor(QtCore.Qt.PointingHandCursor)
-        self._screenshot_btn.setStyleSheet(_mm_btn_style)
-        self._screenshot_btn.clicked.connect(self._on_capture_viewport)
-        toolbar_row.addWidget(self._screenshot_btn)
-
-        self._file_pick_btn = QtWidgets.QPushButton("📁 上传")
-        self._file_pick_btn.setToolTip("从磁盘选择图片 (png, jpg, gif, webp, bmp)")
-        self._file_pick_btn.setMinimumHeight(34)
-        self._file_pick_btn.setCursor(QtCore.Qt.PointingHandCursor)
-        self._file_pick_btn.setStyleSheet(_mm_btn_style)
-        self._file_pick_btn.clicked.connect(self._on_pick_files)
-        toolbar_row.addWidget(self._file_pick_btn)
-
-        action_col.addLayout(toolbar_row)
-
-        # ── Spacer between toolbar and action controls ──
-        action_col.addSpacing(4)
-
-        # ── Chat-only checkbox ──
-        from edini.ui.styled_checkbox import StyledCheckBox
-        self.chat_only_check = StyledCheckBox("仅对话", self)
-        action_col.addWidget(self.chat_only_check, alignment=QtCore.Qt.AlignRight)
-
-        # ── Execute / Abort button ──
-        self._action_btn = QtWidgets.QPushButton("执行")
-        self._action_btn.setObjectName("PrimaryButton")
-        self._action_btn.setMinimumWidth(90)
-        self._action_btn.setMinimumHeight(34)
-        self._action_btn.clicked.connect(self._on_action_btn)
-        action_col.addWidget(self._action_btn)
-        action_col.addStretch(1)
-
-        input_row.addLayout(action_col)
-        root.addLayout(input_row)
+        # ── Input bar (text + attachment bar + toolbar + send button) ──
+        # Extracted to edini.ui.components.input_bar (Stage 2, Task 1.5).
+        # Multimodal actions (screenshot / upload / drag-drop) are forwarded
+        # back here via request signals — InputBar has no hou/media_manager dep.
+        self._input_bar = InputBar(show_attachment_bar=True)
+        self._attachment_bar = self._input_bar.attachment_bar()
+        self.input_edit = self._input_bar.input_edit
+        root.addWidget(self._input_bar)
 
     def _bind_events(self):
+        # Wire InputBar request signals to the real handlers (which need
+        # media_manager / hou, so they live here, not in InputBar).
+        self._input_bar.submit_requested.connect(self._on_input_submit)
+        self._input_bar.abort_requested.connect(self._on_input_abort)
+        self._input_bar.screenshot_requested.connect(self._on_capture_viewport)
+        self._input_bar.files_requested.connect(self._on_pick_files)
+        self._input_bar.images_dropped.connect(self._handle_dropped_images)
+
+        # AgentPanel's eventFilter still owns the ContextMenu (paste image),
+        # Escape (abort) and Ctrl+V (paste image) shortcuts — these need
+        # media_manager. InputBar's own filter (installed first inside its
+        # _build_ui) owns Enter-to-send + drag-drop and passes the rest through.
         self.input_edit.installEventFilter(self)
-        # Confirm setup
 
-        # Drag-drop on input_edit
-        self.input_edit.setAcceptDrops(True)
-        self.input_edit.dragEnterEvent = self._on_drag_enter
-        self.input_edit.dragMoveEvent = self._on_drag_move
-        self.input_edit.dropEvent = self._on_drop
-
-        # Right-click context menu — must monkey-patch because
+        # Right-click context menu on the input_edit — monkey-patched because
         # Houdini's Qt may block ContextMenu events from the event filter.
         self.input_edit.setContextMenuPolicy(QtCore.Qt.DefaultContextMenu)
         self.input_edit.contextMenuEvent = self._on_context_menu
@@ -902,20 +244,12 @@ class AgentPanel(QtWidgets.QWidget):
                 modifiers = event.modifiers()
                 if key == int(QtCore.Qt.Key_Escape):
                     if self._busy:
-                        self._on_abort()
+                        self._on_input_abort()
                     return True
-                if key in (int(QtCore.Qt.Key_Return), int(QtCore.Qt.Key_Enter)):
-                    if modifiers & (QtCore.Qt.ControlModifier | QtCore.Qt.ShiftModifier):
-                        cursor = self.input_edit.textCursor()
-                        cursor.insertText("\n")
-                        self.input_edit.setTextCursor(cursor)
-                        return True
-                    if modifiers == QtCore.Qt.NoModifier:
-                        if self._busy:
-                            self._on_abort()
-                        else:
-                            self._on_send()
-                        return True
+                # NOTE: Enter/Return-to-send + Shift/Ctrl-Enter newline are
+                # handled by InputBar.eventFilter (installed first); it consumes
+                # them and we never see them here. Ctrl+V (paste image) below
+                # still lives here because it needs media_manager.from_clipboard.
                 if key == int(QtCore.Qt.Key_V):
                     if modifiers & QtCore.Qt.ControlModifier:
                         has_img = clipboard_has_image()
@@ -934,27 +268,19 @@ class AgentPanel(QtWidgets.QWidget):
         return super().eventFilter(watched, event)
 
     # ------------------------------------------------------------------
-    # Button toggle
+    # InputBar signal handlers
     # ------------------------------------------------------------------
 
-    def _on_action_btn(self):
-        if self._busy:
-            self._on_abort()
-        else:
-            self._on_send()
-
-    def _on_abort(self):
+    def _on_input_abort(self):
+        """Abort button / Escape: forward to main_window."""
         self.abort_requested.emit()
 
-    # ------------------------------------------------------------------
-    # Send
-    # ------------------------------------------------------------------
-
-    def _on_send(self):
-        text = self.input_edit.toPlainText().strip()
+    def _on_input_submit(self, text: str, images):
+        """InputBar emitted submit_requested(text, images). Re-emit on the
+        AgentPanel signal and reset the per-turn UI state (what _on_send did).
+        """
         if not text or self._busy:
             return
-        self.input_edit.clear()
         self._request_count += 1
         self._stream_segments.clear()
         self._current_text = ""
@@ -963,82 +289,34 @@ class AgentPanel(QtWidgets.QWidget):
         self._thinking_count = 0
 
         # Reset panels to collapsed state
-        self._clear_tool_cards()
-        self._clear_thinking()
-        self._tool_panel_expanded = False
-        self._thinking_panel_expanded = False
-        self._tool_scroll.setVisible(False)
-        self._thinking_view.setVisible(False)
-        self._tool_toggle.setText("▸ Tool Calls (0)")
-        self._thinking_toggle.setText("▸ Thinking (0)")
-        self._tool_panel.setFixedHeight(self._TOOL_PANEL_COLLAPSED_H)
-        self._thinking_panel.setFixedHeight(self._THINKING_COLLAPSED_H)
+        self._tool_panel.clear()
+        self._thinking_panel.reset()
 
         # Collapse change tree during conversation
         self.change_tree_widget.collapse()
 
-        # Collect all images from attachment bar
-        images: list[dict] = []
-        attachment_items = self._attachment_bar.items()
-        for item in attachment_items:
-            img_info = {
-                "type": "image",
-                "data": item.base64,
-                "mimeType": item.mime_type,
-                "filename": item.filename,
-                "source": item.source.value,
-            }
-            images.append(img_info)
-
-        self._attachment_bar.clear()
-
         self.submit_requested.emit(text, images if images else None)
 
     # ------------------------------------------------------------------
-    # Tool Call Panel (unchanged)
+    # Tool Call Panel — delegates to ToolPanel (Stage 2, Task 1.4)
     # ------------------------------------------------------------------
 
     def _toggle_tool_panel(self, event=None):
-        self._tool_panel_expanded = not self._tool_panel_expanded
-        self._tool_scroll.setVisible(self._tool_panel_expanded)
-        arrow = "▾" if self._tool_panel_expanded else "▸"
-        count = len(self._tool_cards)
-        self._tool_toggle.setText(f"{arrow} Tool Calls ({count})")
-        if self._tool_panel_expanded:
-            self._tool_panel.setFixedHeight(self._TOOL_PANEL_EXPANDED_H)
-        else:
-            self._tool_panel.setFixedHeight(self._TOOL_PANEL_COLLAPSED_H)
+        self._tool_panel.toggle()
 
     def _collapse_tool_panel(self):
         """Collapse tool panel if currently expanded."""
-        if self._tool_panel_expanded:
-            self._toggle_tool_panel()
+        self._tool_panel.collapse()
 
     def _add_tool_card_ui(self, tool_name: str, args: dict, tool_call_id: str):
-        card = _ToolCardWidget(tool_name, args, tool_call_id)
-        self._tool_layout.insertWidget(self._tool_layout.count() - 1, card)
-        self._tool_cards[tool_call_id] = card
-        self._tool_scroll.verticalScrollBar().setValue(
-            self._tool_scroll.verticalScrollBar().maximum())
-        count = len(self._tool_cards)
-        arrow = "▾" if self._tool_panel_expanded else "▸"
-        self._tool_toggle.setText(f"{arrow} Tool Calls ({count})")
-        if not self._tool_panel_expanded and count == 1:
-            self._toggle_tool_panel()
+        # NOTE: ToolPanel.add_card signature is (tool_name, tool_call_id, args).
+        self._tool_panel.add_card(tool_name, tool_call_id, args)
 
     def _update_tool_card_result(self, tool_call_id: str, result_text: str, success: bool = True):
-        card = self._tool_cards.get(tool_call_id)
-        if card:
-            card.set_result(result_text, success)
+        self._tool_panel.update_result(tool_call_id, result_text, success)
 
     def _clear_tool_cards(self):
-        for card in self._tool_cards.values():
-            self._tool_layout.removeWidget(card)
-            card.deleteLater()
-        self._tool_cards.clear()
-        self._tool_toggle.setText("▸ Tool Calls (0)")
-        if self._tool_panel_expanded:
-            self._tool_scroll.setVisible(True)
+        self._tool_panel.clear()
 
     # ------------------------------------------------------------------
     # Viewport screenshot
@@ -1047,8 +325,8 @@ class AgentPanel(QtWidgets.QWidget):
     def _on_capture_viewport(self):
         item = capture_viewport()
         if item is None:
-            self._screenshot_btn.setText("❌ 失败")
-            QtCore.QTimer.singleShot(2500, lambda: self._screenshot_btn.setText("📷 截图"))
+            self._input_bar._screenshot_btn.setText("❌ 失败")
+            QtCore.QTimer.singleShot(2500, lambda: self._input_bar._screenshot_btn.setText("📷 截图"))
             self.add_error("截图失败 — 请查看 Houdini Console 获取详情")
             return
         if self._attachment_bar.is_full():
@@ -1057,8 +335,8 @@ class AgentPanel(QtWidgets.QWidget):
         self._save_viewshot_to_disk(item)
         ok = self._attachment_bar.add(item)
         if ok:
-            self._screenshot_btn.setText("📸 ✓")
-            QtCore.QTimer.singleShot(1500, lambda: self._screenshot_btn.setText("📷 截图"))
+            self._input_bar._screenshot_btn.setText("📸 ✓")
+            QtCore.QTimer.singleShot(1500, lambda: self._input_bar._screenshot_btn.setText("📷 截图"))
 
     def _save_viewshot_to_disk(self, item: MediaItem):
         """Also persist viewport screenshots under $HIP/Edini_screenshots/<task>/."""
@@ -1117,28 +395,23 @@ class AgentPanel(QtWidgets.QWidget):
         self.input_edit.setFocus(QtCore.Qt.OtherFocusReason)
         self.input_edit.paste()
 
-    def _on_drag_enter(self, event):
-        if mime_has_images(event.mimeData()):
-            event.acceptProposedAction()
-        else:
-            event.ignore()
-
-    def _on_drag_move(self, event):
-        if mime_has_images(event.mimeData()):
-            event.acceptProposedAction()
-        else:
-            event.ignore()
-
-    def _on_drop(self, event):
-        items = from_mime_data(event.mimeData())
+    def _handle_dropped_images(self, urls):
+        """InputBar forwarded a drop of local-file image urls. Resolve them
+        to MediaItems via media_manager.from_files and add to the attachment bar.
+        """
+        paths = []
+        from PySide6 import QtCore as _qc
+        for url in urls or []:
+            path = url.toLocalFile() if hasattr(url, "toLocalFile") else str(url)
+            if path:
+                paths.append(path)
+        if not paths:
+            return
+        items = from_files(paths)
         for item in items:
             if self._attachment_bar.is_full():
                 break
             self._attachment_bar.add(item)
-        if items:
-            event.acceptProposedAction()
-        else:
-            event.ignore()
 
     def _on_context_menu(self, event):
         """Right-click context menu handler — monkey-patched onto input_edit."""
@@ -1191,40 +464,10 @@ class AgentPanel(QtWidgets.QWidget):
     # ------------------------------------------------------------------
 
     def set_busy(self, busy: bool):
+        # Delegate to InputBar — the action button now lives there (T1.5).
+        # InputBar.set_busy applies the full busy/idle styling verbatim.
         self._busy = busy
-        if busy:
-            self._action_btn.setText("中止")
-            self._action_btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: #dc2626;
-                    color: #f1f1f1;
-                    border: none;
-                    border-radius: 5px;
-                    padding: 6px 14px;
-                    font-size: {fs(12)};
-                    font-weight: 600;
-                    min-height: 24px;
-                }}
-                QPushButton:hover {{ background-color: #ef4444; }}
-                QPushButton:pressed {{ background-color: #b91c1c; }}
-            """)
-        else:
-            self._action_btn.setText("执行")
-            self._action_btn.setObjectName("PrimaryButton")
-            a = accent_color()
-            self._action_btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {a};
-                    color: #0a0a10;
-                    border: none;
-                    border-radius: 5px;
-                    padding: 6px 20px;
-                    font-size: {fs(12)};
-                    font-weight: 600;
-                }}
-                QPushButton:hover {{ background-color: {_lighter(a, 0.3)}; }}
-                QPushButton:pressed {{ background-color: {_darker(a, 0.15)}; }}
-            """)
+        self._input_bar.set_busy(busy)
 
     def set_session_id(self, sid: str):
         self._session_id = sid
@@ -1263,7 +506,7 @@ class AgentPanel(QtWidgets.QWidget):
         # Update live thinking panel
         if self._thinking_buf:
             self._update_live_thinking()
-            if not self._thinking_panel_expanded and not self._thinking_full:
+            if not self._thinking_panel.is_expanded() and not self._thinking_panel.has_content():
                 self._auto_expand_thinking()
 
         if len(self._current_text) >= self.STREAM_FLUSH_CHARS:
@@ -1337,7 +580,7 @@ class AgentPanel(QtWidgets.QWidget):
             self._thinking_buf = parts[-1]
         # Update thinking panel view in real-time as thinking arrives
         self._update_live_thinking()
-        if not self._thinking_panel_expanded and not self._thinking_full:
+        if not self._thinking_panel.is_expanded() and not self._thinking_panel.has_content():
             self._auto_expand_thinking()
 
     def _flush_thinking_buf(self):
@@ -1476,66 +719,31 @@ class AgentPanel(QtWidgets.QWidget):
         self._streaming_full_text = ""
 
     # ------------------------------------------------------------------
-    # Thinking Panel (unchanged)
+    # Thinking Panel — delegates to ThinkingPanel (Stage 2, Task 1.4)
     # ------------------------------------------------------------------
 
     def _toggle_thinking_panel(self, event=None):
-        self._thinking_panel_expanded = not self._thinking_panel_expanded
-        self._thinking_view.setVisible(self._thinking_panel_expanded)
-        arrow = "▾" if self._thinking_panel_expanded else "▸"
-        paragraphs = self._thinking_full.count('\n\n') + 1 if self._thinking_full else 0
-        self._thinking_toggle.setText(f"{arrow} Thinking ({paragraphs} ¶)")
-        if self._thinking_panel_expanded:
-            self._thinking_panel.setFixedHeight(self._THINKING_EXPANDED_H)
-        else:
-            self._thinking_panel.setFixedHeight(self._THINKING_COLLAPSED_H)
+        self._thinking_panel.toggle()
 
     def _auto_expand_thinking(self):
-        if not self._thinking_panel_expanded:
-            self._toggle_thinking_panel()
+        self._thinking_panel.auto_expand()
 
     def _collapse_thinking_panel(self):
         """Collapse thinking panel if currently expanded."""
-        if self._thinking_panel_expanded:
-            self._toggle_thinking_panel()
+        self._thinking_panel.collapse()
 
     def _append_thinking_text(self, text: str):
-        if not self._thinking_full:
-            self._thinking_full = text
-        else:
-            self._thinking_full += "\n\n" + text
-        display = html.escape(self._thinking_full).replace("\n\n", "<br><br>").replace("\n", "<br>")
-        self._thinking_view.setHtml(
-            f'<div style="color:#8b8fa8;font-size:{fs(11)};line-height:1.5;">{display}</div>'
-        )
-        self._thinking_view.verticalScrollBar().setValue(
-            self._thinking_view.verticalScrollBar().maximum())
-        paragraphs = self._thinking_full.count('\n\n') + 1 if self._thinking_full else 0
-        arrow = "▾" if self._thinking_panel_expanded else "▸"
-        self._thinking_toggle.setText(f"{arrow} Thinking ({paragraphs} ¶)")
+        # Called externally by main_window (history rendering) and internally.
+        self._thinking_panel.append(text)
 
     def _update_live_thinking(self):
         if not self._thinking_buf:
             return
-        live = html.escape(self._thinking_buf).replace("\n", "<br>")
-        if self._thinking_full:
-            base = html.escape(self._thinking_full).replace("\n\n", "<br><br>").replace("\n", "<br>")
-            display = f'{base}<br><br>{live}'
-        else:
-            display = live
-        self._thinking_view.setHtml(
-            f'<div style="color:#8b8fa8;font-size:{fs(11)};line-height:1.5;">{display}'
-            f'<span style="color:#a78bfa;">▊</span></div>'
-        )
-        self._thinking_view.verticalScrollBar().setValue(
-            self._thinking_view.verticalScrollBar().maximum())
+        self._thinking_panel.render_live(self._thinking_buf)
 
     def _clear_thinking(self):
-        self._thinking_full = ""
-        self._thinking_view.clear()
-        self._thinking_toggle.setText("▸ Thinking (0)")
-        if self._thinking_panel_expanded:
-            self._thinking_view.setVisible(True)
+        # Clear content but preserve expand state (matches original).
+        self._thinking_panel.clear()
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1559,228 +767,18 @@ def _source_icon(source: str) -> str:
     return _SOURCE_ICON_MAP.get(source, "🖼️")
 
 
-def _truncate_name(name: str, max_len: int) -> str:
-    if len(name) <= max_len:
-        return name
-    return name[:max_len - 1] + "…"
-
-
-def _load_thumb_pixmap(path_or_b64: str) -> QtGui.QPixmap | None:
-    """Load a QPixmap from a file path or base64 string.
-
-    Returns None on any failure (safe to call in Houdini's PySide6).
-    """
-    if not path_or_b64:
-        return None
-    try:
-        pixmap = QtGui.QPixmap()
-        if os.path.isfile(path_or_b64):
-            pixmap.load(path_or_b64)
-        else:
-            import base64 as _b64
-            data = _b64.b64decode(path_or_b64)
-            pixmap.loadFromData(data)
-        if pixmap.isNull():
-            return None
-        return pixmap
-    except Exception:
-        return None
-
-
-def _open_image_file(path: str):
-    """Open an image file in the OS default viewer.
-
-    If path is not a valid file path, treats it as base64 data and
-    writes to a temp file first.
-    """
-    if not path:
-        return
-
-    actual_path = path
-    if not os.path.isfile(path):
-        # Try to decode as base64 (fallback before cache is written)
-        try:
-            import base64 as _b64
-            import tempfile
-            data = _b64.b64decode(path)
-            fd, tmp = tempfile.mkstemp(suffix=".jpg", prefix="edini_view_")
-            with os.fdopen(fd, "wb") as f:
-                f.write(data)
-            actual_path = tmp
-        except Exception:
-            return
-
-    try:
-        if sys.platform == "win32":
-            os.startfile(actual_path)
-        elif sys.platform == "darwin":
-            subprocess.Popen(["open", actual_path])
-        else:
-            subprocess.Popen(["xdg-open", actual_path])
-    except Exception:
-        pass
+# _truncate_name, _load_thumb_pixmap, _open_image_file relocated to
+# edini/ui/components/bubbles.py (re-imported above). Stage 1, Task 1.3.
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Formatting helpers (unchanged)
+# Markdown rendering now lives in edini.ui.components.markdown.
+# Re-exported here for backward compatibility during staged migration.
 # ═══════════════════════════════════════════════════════════════════════
 
-# ── Markdown renderer (mistune-based) ───────────────────────────────
-
-import mistune as _mistune
-from mistune import HTMLRenderer as _HTMLRenderer
-
-
-class _DarkRenderer(_HTMLRenderer):
-    """Custom HTML renderer that injects dark-theme inline styles."""
-
-    # ── Block elements ──
-
-    def heading(self, text, level, **attrs):
-        sizes = {1: 20, 2: 17, 3: 15, 4: 14, 5: 13, 6: 12}
-        margins = {1: '10px 0 4px 0', 2: '8px 0 3px 0', 3: '6px 0 2px 0',
-                   4: '5px 0 2px 0', 5: '4px 0 2px 0', 6: '4px 0 2px 0'}
-        sz = fs(sizes.get(level, 14))
-        mg = margins.get(level, '4px 0 2px 0')
-        return (
-            f'<h{level} style="font-size:{sz};font-weight:600;'
-            f'color:#e5e5eb;margin:{mg};line-height:1.3;">'
-            f'{text}</h{level}>\n'
-        )
-
-    def paragraph(self, text):
-        return f'<p style="margin:6px 0;line-height:1.45;">{text}</p>'
-
-    def block_code(self, code, info=None, **attrs):
-        esc = html.escape(code.rstrip('\n'))
-        lang_cls = f' class="language-{info}"' if info else ''
-        return (
-            '<pre style="background:#0e0e15;color:#d4d4d4;padding:8px;'
-            f'border-radius:4px;font-family:monospace;font-size:{fs(11)};'
-            f'overflow-x:auto;margin:4px 0;"><code{lang_cls}>'
-            f'{esc}</code></pre>\n'
-        )
-
-    def list(self, text, ordered, **attrs):
-        tag = 'ol' if ordered else 'ul'
-        return f'<{tag} style="padding-left:20px;margin:2px 0;">{text}</{tag}>\n'
-
-    def list_item(self, text, **attrs):
-        return f'<li style="margin:1px 0;line-height:1.45;">{text}</li>\n'
-
-    def table(self, text):
-        return (
-            f'<table style="border-collapse:collapse;margin:4px 0;'
-            f'font-size:{fs(11)};width:100%;">{text}</table>\n'
-        )
-
-    def table_head(self, text):
-        return f'<thead>{text}</thead>'
-
-    def table_body(self, text):
-        return f'<tbody>{text}</tbody>'
-
-    def table_row(self, text):
-        return f'<tr>{text}</tr>'
-
-    def table_cell(self, text, align=None, head=False):
-        tag = 'th' if head else 'td'
-        align_style = f'text-align:{align};' if align else 'text-align:left;'
-        return (
-            f'<{tag} style="padding:2px 8px;{align_style}'
-            f'border:1px solid #2a2a3c;">{text}</{tag}>'
-        )
-
-    def thematic_break(self):
-        return '<hr style="border:none;border-top:1px solid #2a2a3c;margin:6px 0;">\n'
-
-    def block_quote(self, text):
-        return (
-            '<blockquote style="border-left:3px solid #3a3a4c;'
-            f'margin:4px 0;padding:4px 12px;color:#a1a1aa;font-size:{fs(12)};">'
-            f'{text}</blockquote>\n'
-        )
-
-    # ── Inline elements ──
-
-    def codespan(self, text):
-        esc = html.escape(text)
-        return (
-            '<code style="background:#1a1a24;color:#67e8f9;padding:1px 4px;'
-            f'border-radius:3px;font-family:monospace;font-size:{fs(11)};">'
-            f'{esc}</code>'
-        )
-
-    def link(self, text, url, title=None):
-        return f'<a href="{url}" style="color:#60a5fa;text-decoration:none;">{text}</a>'
-
-    def image(self, text, url, title=None):
-        return (
-            f'<img src="{url}" alt="{text}" style="max-width:100%;'
-            f'border-radius:4px;margin:4px 0;"' +
-            (f' title="{title}"' if title else '') +
-            ' />'
-        )
-
-    def emphasis(self, text):
-        return f'<i>{text}</i>'
-
-    def strong(self, text):
-        return f'<b>{text}</b>'
-
-    def strikethrough(self, text):
-        return f'<del style="color:#71717a;">{text}</del>'
-
-    def linebreak(self):
-        return '<br>'
-
-    def softbreak(self):
-        return '<br>'
-
-    # Task list items (from task_lists plugin)
-    def task_list_item(self, text, checked=False):
-        inner = '\u2705 ' if checked else '\u2610 '
-        return f'<li style="margin:1px 0;line-height:1.45;">{inner}{text}</li>\n'
-
-
-# ── Singleton parser instance ──
-
-_md_parser = _mistune.create_markdown(
-    renderer=_DarkRenderer(),
-    escape=True,
-    hard_wrap=True,
-    plugins=['table', 'strikethrough', 'task_lists'],
+from edini.ui.components.markdown import (
+    _format_lite, _format_full, _DarkRenderer,
 )
-
-
-def _format_lite(text: str) -> str:
-    """Streaming formatter — identical output to _format_full.
-
-    Uses the same mistune parser so streaming and finalized display are
-    pixel-identical at every chunk boundary.
-    """
-    try:
-        return _format_full(text)
-    except Exception:
-        # If mistune fails, fall back to inline formatting
-        return _format_inline_fallback(text)
-
-
-def _format_full(text: str) -> str:
-    """Convert Markdown to rich HTML with dark-theme inline styles.
-
-    Full GFM support via mistune: headers, bold, italic, inline code,
-    code blocks, ordered/unordered lists, task lists, tables, links,
-    images, strikethrough, blockquotes, horizontal rules.
-    """
-    return _md_parser(text)
-
-def _format_inline_fallback(text: str) -> str:
-    """Fallback: lightweight inline formatter if mistune fails."""
-    import html as _html
-    out = _html.escape(text)
-    out = out.replace('\n', '<br>')
-    return out
 
 
 def _clean_thinking(text: str) -> str:
@@ -1789,30 +787,9 @@ def _clean_thinking(text: str) -> str:
     return text
 
 
-def _format_args(args: dict) -> str:
-    if not args:
-        return ""
-    parts = []
-    for k, v in args.items():
-        parts.append(f"<b>{html.escape(k)}</b>: {html.escape(str(v))}")
-    return "  ·  ".join(parts)
-
-
-def _format_tool_result_short(result: str, success: bool) -> str:
-    if not result:
-        return ""
-    try:
-        import json
-        d = json.loads(result) if isinstance(result, str) else result
-        if isinstance(d, dict):
-            if d.get("success"):
-                out = d.get("path", d.get("output", d.get("name", "")))
-                return html.escape(str(out)[:80])
-            else:
-                return html.escape(d.get("error", "Unknown error")[:80])
-    except Exception:
-        pass
-    return html.escape(str(result)[:80])
+# _format_args + _format_tool_result_short moved to
+# edini/ui/components/tool_panel.py (used only by _ToolCardWidget).
+# Stage 2, Task 1.4.
 
 
 def _expand_hex(h: str) -> str:

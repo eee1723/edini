@@ -213,6 +213,43 @@ ${PROCEDURAL_VERIFY_PROMPT}
     // Inject iron rules (enabled rules from knowledge store)
     const rulesText = buildRulesContext();
 
-    return { systemPrompt: event.systemPrompt + "\n\n" + imageDirective + houdiniContext + rulesText };
+    // ── Workspace scope: inject lock directive for Project HDA dialogs ──
+    // When EDINI_SCOPE_ID=project_hda, this Pi process was launched from a
+    // Project HDA chat window. The agent MUST stay inside EDINI_CORE_PATH's
+    // subtree — this is the fundamental difference from the main agent window.
+    const scopeId = process.env.EDINI_SCOPE_ID || "agent";
+    const corePath = process.env.EDINI_CORE_PATH || "";
+    let scopeDirective = "";
+    if (scopeId === "project_hda" && corePath) {
+      scopeDirective = `
+
+## ⚙️ WORKSPACE LOCK — Project HDA Mode (CRITICAL)
+
+You are operating in **Project HDA Mode**, bound to the node at **${corePath}**.
+
+**HARD RULE:** You may ONLY create, modify, or delete nodes INSIDE this HDA's
+subtree — that is, ${corePath} itself and any node whose path starts with
+\`${corePath}/\`. You are a procedural-modeling specialist focused solely on
+building geometry inside this one HDA's component subnets.
+
+**DO NOT:**
+- Create or modify nodes outside ${corePath} (e.g. under /obj directly)
+- Delete or rename the HDA node itself or any sibling node in /obj
+- Run houdini_run_python_sandbox against nodes outside ${corePath}
+- Change global scene settings, render nodes, or cameras outside the HDA
+
+**DO:**
+- Build geometry inside the component subnets of ${corePath}
+- Add anchors, promote parameters, wire component ports — all within ${corePath}
+- If the user's request requires operations OUTSIDE this HDA, **tell them**
+  (e.g. "This requires modifying a node outside the HDA — please use the main
+  Edini Agent window for that") — do NOT do it yourself.
+
+This lock exists because the HDA chat window is scoped to one modeling task.
+The main Edini Agent window (unlocked) is for general scene operations.
+`;
+    }
+
+    return { systemPrompt: event.systemPrompt + "\n\n" + imageDirective + houdiniContext + rulesText + scopeDirective };
   });
 }

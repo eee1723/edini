@@ -1,6 +1,6 @@
 # 📊 仪表盘
 
-> **当前阶段**：Project HDA 组件流水线 + 会话日志驱动两轮修复（接口契约清晰化 + 参数认知自洽，724 测试全过，视觉验证默认关闭待重设计）&nbsp;|&nbsp; **状态**：地基稳定，参数认知自洽 &nbsp;|&nbsp; **最后更新**：2026-07-03
+> **当前阶段**：统一对话窗口架构完成 + 工具链全量修复（含会话日志驱动两轮修复：接口契约清晰化 + 参数认知自洽）&nbsp;|&nbsp; **状态**：主 Agent 窗口 + HDA 窗口共享组件库，HDA 窗口三面板升级（橙色 + 版本列表 + workspace lock），15+ 工具链 bug 修复&nbsp;|&nbsp; **最后更新**：2026-07-05
 
 ## 快速导航
 
@@ -8,6 +8,7 @@
 |------|------|
 | [架构地图](architecture.html) | Edini 三层架构（Houdini ↔ JSON-RPC ↔ Pi Agent）及数据流 |
 | [开发进度](progress.html) | 进度看板 · 已完成工作 · 下一步任务 |
+| [统一对话窗口](unified-chat.html) | 主 Agent + HDA 窗口共享组件库架构（13 组件 + 5 装配层 + workspace lock） |
 | [工具清单](tools.html) | 27 个 Houdini 工具的完整目录 |
 | [Procedural Harness](procedural-harness.html) | 程序化建模沙盒、诊断、验证、提交流程与手测重点 |
 | [踩坑记录](pitfalls.html) | 开发中的踩坑记录，支持分类/优先级/状态筛选 |

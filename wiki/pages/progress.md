@@ -1,52 +1,10 @@
 # 🚀 开发进度
 
-> 最后更新：2026-07-03 &nbsp;|&nbsp; **🟢 会话日志驱动两轮修复：接口契约清晰化 + 参数认知自洽**。用真实 agent 会话日志（「做一个桌子」两次重放）从第一性原理定位摩擦源：第一轮消除「接口契约模糊」（视觉验证可逆开关、ports 整体契约、batch 向量/表达式、manifest 参数名、add_anchors 句柄、project_create 复用守卫）；第二轮消除「参数认知虚假」（query/create 版本同步、Ramp 序列化、design_params 落真实 spare parm、menu index→含义映射、sandbox 约束文档化）。**724 测试全过**（含真实 hython 验证 design_params → ch() live 链通）。视觉验证已**默认关闭**（settings.json 开关，待后续重新设计）。详见下方 [会话日志驱动修复](#2026-07-03-会话日志驱动两轮修复) + [踩坑记录](pitfalls.md)。
-
-## 2026-07-03 会话日志驱动两轮修复
-
-**方法论**：不是凭空猜 bug，而是用真实 agent 会话日志（用户跑「做一个桌子」的完整 JSONL）从第一性原理定位——agent 浪费的每一次工具调用、每一次报错逆向，都是系统的缺陷信号。
-
-### 第一轮：接口契约清晰化（07:22 会话 → 98 次调用分析）
-
-会话暴露的核心矛盾：**一个设计高度正交、参数驱动的系统，但工具接口把 schema/语义模糊化了**，逼 agent 靠「试探-报错-再试」逆向猜接口契约。
-
-| 修复 | 根因 | 文件 | 测试 |
-|------|------|------|------|
-| 视觉验证可逆开关 | capture/describe 制造误判噪声（俯视图挡桌腿等） | config.py + 4 个 TS + tool_executor | settings.json 开关默认 false |
-| ports 整体契约 | 验证逐字段 raise，agent 5 次试错 | ports.py（聚合错误 + expected_ports_schema） | test_project_ports +6 |
-| batch 向量/表达式 | batch 缺 set_param 的 parmTuple/setExpression 分支 | node_utils.py（提取 `_apply_one_param`） | test_node_utils +3 |
-| manifest 参数名覆盖 | enrich 守卫判 `num_components`（恒假），覆盖 rad1/rad2 | node_utils.py（守卫改判 `components`） | test_node_utils +4 |
-| add_anchors 句柄失效 | 跨 destroy 复用旧 hou.Node 句柄 | builder.py（destroy 后重解析） | — |
-| project_create 复用守卫 | 复用节点无 `__edini_state` spare parm | tool_executor.py（缺失则补装） | — |
-
-### 第二轮：参数认知自洽（08:54 会话 → 132 次调用分析）
-
-第一轮修复全部生效（视觉验证 0 次、ports 1 次成型、复用 1 次通过），但工具调用数反升——暴露了**更深一层的问题：agent 对节点的认知与现实不自洽**。一个 LLM 操作 Houdini 节点必须能自洽回答三个问题：**节点什么版本？节点有哪些参数？引用的参数真实存在吗？** 三条全断。
-
-| 修复 | 第一性原理 | 根因 → 修复 | 验证 |
-|------|-----------|-------------|------|
-| **query=create 版本同步** | 「节点什么版本？」query_parms 与 create_node 必须解析到同一版本 | bare 名短路 manifest 旧条目（polybevel→beveltype）vs create 建 ::3.0（offset）。修复：node_parms 用 `namespaceOrder()` 校正到 Houdini 实际默认版本 + 离线兜底优先最高版本 | test_node_utils +3（mock） |
-| **Ramp 序列化** | 「节点有哪些参数？」不能遇 ramp 整体崩 | `get_node_info` 的 `p.eval()` 返回 hou.Ramp 不可 JSON 化。新增 `_serialize_parm_value`：ramp→控制点数组 | test_node_utils +2（mock） |
-| **design_params 落 spare parm** | 「引用的参数存在吗？」ch('../../width') 必须有真实 width | build_scaffold 只存 JSON 不实例化（文档承诺未兑现）。新增 `_ensure_design_params`：design_params → core 真实 Float spare parm（幂等） | **test_project_hython +3（真机 ch()=1.2 铁证）** |
-| **menu index→含义** | 认知完整 | query_parms 只给数字不给含义（class1=0 是什么）。enrich 加 `menu_options`（0=detail,1=primitive...） | test_node_utils +2 |
-| **sandbox 约束文档化** | 认知完整 | sandbox 禁顶层 return / 相对路径相对容器，未文档化（agent 5 次踩坑）。工具描述补 3 条执行模型约束 | 纯文档 |
-
-**关键决策**：版本同步采用「以 create_node 为准」——query_parms 主动询问 Houdini 它会创建哪个版本，保证两者始终一致（而非让 create 去迁就 manifest 旧条目）。
-
-### 验证
-
-- **724 测试全过**（两轮共新增 ~20 测试：mock 版本解析/ramp/menu + 真机 hython design_params ch() live 链）
-- design_params 修复在**真实 Houdini 21 hython** 下验证：`ch('../../width')` = 1.2（非 0）、幂等不重复
-- 不破坏现有：tube `rad1/rad2`（第一轮）仍正确；裸名无版本化条目时仍返回裸名
-
-### 下一步
-
-- 视觉验证重新设计（已关闭，用户明确之后再做）
-- 技能自动加载失效根治（属 Pi agent 侧行为）
-- sandbox 执行模型根本性重设计（本次只补文档）
-- wiki/tools.md 等文档同步（本次 progress + pitfalls 已更新）
-
----
+> 最后更新：2026-07-05 &nbsp;|&nbsp; **🟢 统一对话窗口架构完成 + 工具链全量修复**。主 Agent 窗口与 HDA 建模窗口重构为共享组件库 + 配置差异化架构。HDA 窗口从简陋 QDialog 升级为完整三面板（橙色 #f59e0b 差异化 + 版本列表 + 参数快照 + workspace lock）。agent_panel 1951→958 行。121 测试 + 2 个架构守卫。同步修复 15+ 个工具链 bug（Ramp 序列化 / set_params_batch 向量 / ports 逐字段报错 / `__edini_state` 复用检查 / brainstorm 双重注册 / design_params 断层）。详见 [统一对话窗口](unified-chat.md)。
+>
+> 上一轮（2026-07-03）：**🟢 Project HDA 组件流水线成熟 — 锚点程序化 + 参数自底向上 + HDA 按钮弹窗**。Project HDA 已从"最小闭环"演进为**组件流水线建模范式**（subnet 组件 + 端口信息点协议 + 程序化锚点 + 自底向上参数管理）。三大 UX 改进：① **工作区感知**（project_create 复用选中 HDA）；② **参数自底向上**（subnet 建→promote 按分组提到 core 带 min/max，core 驱动 subnet）；③ **HDA 参数面板 💬 Chat 按钮 → 精简对话弹窗**（取代原生 Python Pane 主入口，工作区统一在 HDA）。锚点不再硬编码（复用 vex_strategies 测量，改参数 live 重算）。**真机铁证**：promote 分组+min/max+live；HDA button+PythonModule 注入；锚点 length 2→4 ±1→±2。详见 [交接](handoff.md) + [组件地基指南](project-component-foundation.md)。
+>
+> 上一轮（rooted-modeling）：M2.6+M2.7 — 真机测试驱动的三大修复（leaf 参数全 live + 视觉自检 + shape 链细节），607 测试 + 26 真机 hython 铁证全绿。Project HDA 是在其上的**容器化 + 协作化升级**，不是取代——rooted 的 build_assembly/测量链是 Project HDA 将来"按需接入"的建模能力。
 
 ## ⚠️ 重大架构转向（2026-06-29）：rooted-modeling 取代声明式资产管道
 

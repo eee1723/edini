@@ -46,10 +46,19 @@ class RpcClient(QObject):
         self._worker: _RpcWorker | None = None
         self._is_running = False
         self._cwd: str | None = None
+        self._env_extra: dict[str, str] = {}
 
     def set_cwd(self, cwd: str) -> None:
         """Set the working directory (must be called before start)."""
         self._cwd = cwd
+
+    def set_env_extra(self, extra: dict[str, str]) -> None:
+        """Set extra env vars for the Pi subprocess (must be called before start).
+
+        Used by the HDA dialog to inject EDINI_SCOPE_ID / EDINI_CORE_PATH so
+        the edini-context extension knows to inject workspace-lock directives.
+        """
+        self._env_extra = dict(extra)
 
     @property
     def is_running(self) -> bool:
@@ -62,7 +71,8 @@ class RpcClient(QObject):
 
         pi_cmd = get_pi_command()
         self._thread = QThread()
-        self._worker = _RpcWorker(pi_cmd, TOOL_EXECUTOR_PORT, self._cwd)
+        self._worker = _RpcWorker(
+            pi_cmd, TOOL_EXECUTOR_PORT, self._cwd, self._env_extra)
         self._worker.moveToThread(self._thread)
 
         self._worker.text_delta.connect(self.text_delta)
@@ -207,24 +217,28 @@ class _RpcWorker(QObject):
     model_changed = Signal(object)          # model dict from set_model / cycle_model
     thinking_changed = Signal(str)          # thinking level string
 
-    def __init__(self, pi_cmd: list[str], tool_port: int, cwd: str | None = None):
+    def __init__(self, pi_cmd: list[str], tool_port: int,
+                 cwd: str | None = None, env_extra: dict[str, str] | None = None):
         super().__init__()
         self._pi_cmd = pi_cmd
         self._tool_port = tool_port
         self._cwd = cwd
+        self._env_extra = env_extra or {}
         self._process: subprocess.Popen | None = None
         self._should_stop = False
 
     def run(self) -> None:
         """Start Pi subprocess and read stdout JSONL events."""
         try:
+            pi_env = get_pi_env()
+            pi_env.update(self._env_extra)
             popen_kwargs: dict[str, Any] = {
                 "stdin": subprocess.PIPE,
                 "stdout": subprocess.PIPE,
                 "stderr": subprocess.PIPE,
                 "text": True,
                 "bufsize": 1,
-                "env": get_pi_env(),
+                "env": pi_env,
                 "cwd": self._cwd,
             }
             # On Windows, suppress console window when spawning pi.cmd

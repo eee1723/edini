@@ -16,6 +16,22 @@ This is the **default** way to build any multi-part object. Use `build_assembly`
 (rooted-modeling) only for a simple single-body-with-leaves model where you
 don't need component breakdown.
 
+## ⛔ Guardrails (read before doing anything)
+
+**brainstorming is allowed** for modeling tasks, but it should be a FAST-PATH:
+1-2 quick questions (style? size?) then delegate to this skill's workflow.
+Do NOT let brainstorming run its full software-spec interview (5-10 questions +
+design doc + plan) — that flow is for code, not 3D models. The brainstorming
+skill itself now has a "Houdini Procedural Modeling — Fast-Path Exemption"
+section; if you read it, follow that fast-path.
+
+**Do NOT declare components as independent.** When one component physically
+depends on another (e.g. legs depend on the tabletop's anchor points), you MUST
+declare that dependency in `ports.in` at scaffold time. Without it, the builder
+creates no input port and the downstream component cannot consume anchors — you
+end up hand-placing things with transform nodes, which defeats the parametric
+design. See §"Declaring cross-component dependencies" below.
+
 ## The core idea: components + anchor ports
 
 ```
@@ -85,6 +101,72 @@ The builder creates, **deterministically and idempotently**:
 - A "💬 Chat with Edini" button on the core's parameter panel (click → chat popup)
 
 The builder does NOT build geometry or parameters — those are your job, bottom-up.
+
+#### ⚠️ Declaring cross-component dependencies (CRITICAL — do not skip)
+
+If component B physically depends on component A (B needs A's anchors to know
+where to place itself), you MUST declare it in B's `ports.in`. **A missing
+`ports.in` is the #1 cause of broken parametric models** — without it the
+builder creates no `in_<from>_<anchor>` input port, so B cannot consume A's
+anchors, and you are forced to hand-place B with transform nodes (which breaks
+when A's parameters change).
+
+**Wrong** (legs declared independent — they'll float in space, disconnected):
+```
+{ "id": "legs", "ports": { "out": [{"index":0,"kind":"geometry"}], "in": [] } }
+```
+
+**Right** (legs consume tabletop's anchors — builder wires `in_tabletop_<anchor>`):
+```
+{ "id": "legs", "ports": {
+    "out": [{"index":0,"kind":"geometry"}],
+    "in": [
+      { "from": "tabletop", "port": 1, "anchor": "leg_mount_fr" },
+      { "from": "tabletop", "port": 1, "anchor": "leg_mount_fl" },
+      { "from": "tabletop", "port": 1, "anchor": "leg_mount_br" },
+      { "from": "tabletop", "port": 1, "anchor": "leg_mount_bl" } ] } }
+```
+
+Rule: **before calling `project_build_scaffold`, draw the dependency graph on
+paper** (tabletop → legs, tabletop → apron). Every arrow becomes a `ports.in`
+entry. If a component has NO upstream dependency (rare — only the root), its
+`in` can be `[]`.
+
+### 2b. Declare design params (RECOMMENDED — top-down, auto-created)
+
+Pass `design_params` to `project_build_scaffold` and they are **automatically
+created as spare parms on the core node**. This is the recommended path — you
+don't need `project_promote_params` or manual spare-parm creation.
+
+```
+project_build_scaffold(core_path="...", components=[...], design_params=[
+    {"name":"length",   "label":"桌面长度",  "default":1.2,  "min":0.4, "max":3.0},
+    {"name":"width",    "label":"桌面宽度",  "default":0.6,  "min":0.3, "max":1.5},
+    {"name":"height",   "label":"桌高",      "default":0.75, "min":0.3, "max":1.2},
+    {"name":"top_thick","label":"面板厚度",  "default":0.04, "min":0.01,"max":0.1},
+    {"name":"leg_thick","label":"腿粗",      "default":0.05, "min":0.02,"max":0.2}
+])
+# → spare parms length/width/height/top_thick/leg_thick auto-created on the core.
+# → return includes "design_params_created": 5
+```
+
+After scaffold, reference these from geometry nodes INSIDE component subnets
+using **ABSOLUTE paths** (relative `ch("../")` is unreliable across subnet nesting):
+
+```
+# Inside tabletop/body_box (a box SOP inside the tabletop subnet):
+houdini_set_params_batch(node_path=".../tabletop/body_box", params={
+    "sizex": "ch('/obj/.../project_core/length')",       # ABSOLUTE path
+    "sizey": "ch('/obj/.../project_core/top_thick')",
+    "sizez": "ch('/obj/.../project_core/width')",
+    "ty":    "ch('/obj/.../project_core/top_thick')*0.5"
+})
+```
+
+**⚠️ Use ABSOLUTE ch() paths** (e.g. `ch('/obj/geo1/project1/length')`), NOT
+relative (`ch('../../length')`). Relative paths across subnet nesting levels
+often produce "Bad parameter reference" warnings and zero geometry. The core
+path is in the `[Current Houdini Context]` block of every message — use it.
 
 ### 3. Model inside each component subnet — standard node tools
 Use `houdini_create_node`, `houdini_connect_nodes`, `houdini_set_param`. Model

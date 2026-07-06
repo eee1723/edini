@@ -235,7 +235,10 @@ def migrate_legacy_settings() -> str | None:
 # Pi Subprocess
 # ═══════════════════════════════════════════════════════════════════════
 
-def get_pi_env() -> dict[str, str]:
+def get_pi_env(
+    scope_id: str | None = None,
+    core_path: str | None = None,
+) -> dict[str, str]:
     """Build environment dict for Pi subprocess.
 
     Pi reads ~/.pi/agent/auth.json itself on startup, so no API key
@@ -246,6 +249,12 @@ def get_pi_env() -> dict[str, str]:
     (a session entry set via /visionizer-model still takes priority).
     The API key is resolved by pi's model registry from models.json,
     so only provider + model id are needed here.
+
+    Scope identification (for the edini-context extension to inject
+    workspace-lock directives): when scope_id is "project_hda", sets
+    EDINI_SCOPE_ID + EDINI_CORE_PATH so the extension knows this Pi
+    process is bound to a specific Project HDA node and should constrain
+    its system prompt accordingly.
     """
     env = {
         **os.environ,
@@ -263,6 +272,11 @@ def get_pi_env() -> dict[str, str]:
     env["EDINI_VISUAL_VERIFICATION"] = (
         "true" if settings.get("visual_verification_enabled") else "false"
     )
+    # Scope identification for the edini-context extension.
+    if scope_id:
+        env["EDINI_SCOPE_ID"] = scope_id
+    if core_path:
+        env["EDINI_CORE_PATH"] = core_path
     return env
 
 
@@ -307,9 +321,14 @@ def _discover_skill_records() -> list[dict[str, Any]]:
             })
 
     # Subdirectories with SKILL.md -> named skills.
+    # Scan one level deep: skills/<name>/SKILL.md AND skills/<group>/<name>/SKILL.md
+    # (the latter supports grouping, e.g. skills/superpowers/brainstorming/SKILL.md).
     for d in sorted(EDINI_SKILLS_DIR.iterdir()):
+        if not d.is_dir():
+            continue
         skill_file = d / "SKILL.md"
-        if d.is_dir() and skill_file.is_file():
+        if skill_file.is_file():
+            # Direct child: skills/<name>/SKILL.md
             meta = _read_skill_frontmatter(skill_file)
             records.append({
                 "name": meta.get("name") or d.name,
@@ -319,6 +338,20 @@ def _discover_skill_records() -> list[dict[str, Any]]:
                 "exists": skill_file.is_file(),
                 "source": "project",
             })
+        else:
+            # Nested: skills/<group>/<name>/SKILL.md
+            for sub in sorted(d.iterdir()):
+                sub_skill = sub / "SKILL.md"
+                if sub.is_dir() and sub_skill.is_file():
+                    meta = _read_skill_frontmatter(sub_skill)
+                    records.append({
+                        "name": meta.get("name") or sub.name,
+                        "description": meta.get("description", ""),
+                        "path": str(sub),
+                        "entry": str(sub_skill),
+                        "exists": sub_skill.is_file(),
+                        "source": "project",
+                    })
 
     # Honor user-disabled skills (Settings → Pi Capabilities toggles). A
     # disabled name is dropped here so BOTH `get_pi_command` (no `--skill`) and
