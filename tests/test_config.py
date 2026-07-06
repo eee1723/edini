@@ -480,11 +480,18 @@ class TestGetPiEnv(unittest.TestCase):
     """Tests for get_pi_env()."""
 
     def test_includes_tool_port(self):
-        """Env dict includes EDINI_TOOL_PORT."""
+        """Env dict includes EDINI_TOOL_PORT — a positive integer string.
+
+        The port is now dynamically assigned (multi-instance isolation): it
+        may be the config default 9876 if free, or an OS-assigned ephemeral
+        port if another Houdini owns 9876. So we only assert it's a valid
+        positive port, not a specific value.
+        """
         with patch.object(cfg, "EDINI_SETTINGS_FILE", Path("/nonexistent/settings.json")):
             env = cfg.get_pi_env()
         self.assertIn("EDINI_TOOL_PORT", env)
-        self.assertEqual(env["EDINI_TOOL_PORT"], str(cfg.TOOL_EXECUTOR_PORT))
+        port = int(env["EDINI_TOOL_PORT"])
+        self.assertGreater(port, 0)
 
     def test_preserves_env(self):
         """Env dict includes existing environment variables."""

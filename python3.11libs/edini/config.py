@@ -258,8 +258,18 @@ def get_pi_env(
     """
     env = {
         **os.environ,
-        "EDINI_TOOL_PORT": str(TOOL_EXECUTOR_PORT),
     }
+    # Resolve the ACTUAL port this Houdini bound (may differ from the config
+    # default 9876 when another Houdini already owns 9876). This MUST be the
+    # real bound port so Pi tool calls route to THIS Houdini, not a sibling.
+    # Late import avoids a circular dependency (tool_executor imports config).
+    try:
+        from edini.tool_executor import get_active_tool_port
+        env["EDINI_TOOL_PORT"] = str(get_active_tool_port())
+    except Exception:
+        # Fallback to the config default if the executor isn't importable yet
+        # (e.g. very early boot). Pi will still POST to 9876 in that case.
+        env["EDINI_TOOL_PORT"] = str(TOOL_EXECUTOR_PORT)
     settings = _load_edini_settings()
     vision_provider = settings.get("vision_provider", "")
     vision_model = settings.get("vision_model_id", "")

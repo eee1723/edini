@@ -5,9 +5,12 @@ from Pi extensions via HTTP POST and dispatches to node_utils.
 """
 from __future__ import annotations
 
+import atexit
 import json
+import os
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from pathlib import Path
 from typing import Any, Callable
 
 from edini.node_utils import (
@@ -501,7 +504,9 @@ class _ToolHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/health":
-            self._send_json({"status": "ok"})
+            # Include PID + port so a client can verify it's talking to the
+            # intended Houdini instance (multi-instance diagnostics).
+            self._send_json({"status": "ok", "pid": os.getpid()})
         else:
             self._send_error(404, "Not found")
 
@@ -528,9 +533,10 @@ class _ToolHandler(BaseHTTPRequestHandler):
 class ToolExecutor:
     """Manages the tool executor HTTP server lifecycle."""
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 9876):
+    def __init__(self, host: str = "127.0.0.1", port: int = 0):
         self._host = host
-        self._port = port
+        self._requested_port = port
+        self._port: int = 0
         self._server: HTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -539,12 +545,46 @@ class ToolExecutor:
         return self._port
 
     def start(self) -> None:
-        """Start the HTTP server on a background daemon thread."""
+        """Start the HTTP server on a background daemon thread.
+
+        Multi-instance safe: binds port 0 (OS-assigned) if the requested port
+        is already taken, so two Houdini processes each get their own unique
+        server. The actual bound port is recorded in ``self._port`` and must be
+        propagated to Pi subprocesses via the ``EDINI_TOOL_PORT`` env var (see
+        ``get_active_tool_port`` / ``get_pi_env``).
+        """
         if self._server is not None:
             return
-        self._server = HTTPServer((self._host, self._port), _ToolHandler)
+        # Try the requested port first (default 9876 for single-instance
+        # backward compat). On Windows SO_REUSEADDR lets a second process
+        # "successfully" bind but the first process keeps receiving all
+        # connections — silent cross-process routing. So we probe with a
+        # throwaway socket instead of relying on HTTPServer bind to fail.
+        port = self._probe_free_port(self._requested_port)
+        self._server = HTTPServer((self._host, port), _ToolHandler)
+        self._port = self._server.server_address[1]
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
+        _write_port_file(self._port)
+
+    @staticmethod
+    def _probe_free_port(preferred: int) -> int:
+        """Return ``preferred`` if free, else an OS-assigned free port.
+
+        Uses a quick socket bind to test availability. Closing the probe socket
+        before HTTPServer binds is safe here because the server thread starts
+        immediately after and we are the only caller in this process.
+        """
+        import socket
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(("127.0.0.1", preferred))
+            return preferred
+        except OSError:
+            # Preferred port taken by another Houdini (or unrelated process).
+            # Let the OS pick a free port — HTTPServer with port 0 binds an
+            # ephemeral port and records it in server_address.
+            return 0
 
     def stop(self) -> None:
         """Shut down the HTTP server."""
@@ -554,22 +594,72 @@ class ToolExecutor:
         if self._thread is not None:
             self._thread.join(timeout=2)
             self._thread = None
+        _remove_port_file()
 
 
 # --- Process-level singleton: decoupled from any UI window -----------------
 #
-# The ToolExecutor is a global, stateless HTTP server (port 9876) that every
-# Pi subprocess calls back into via the EDINI_TOOL_PORT env var (see
-# config.get_pi_env). It carries no per-client state, so N Pi processes can
-# share one server. Previously its lifetime was bound to EdiniMainWindow
-# (constructed in __init__, stopped in closeEvent), which forced any other
-# RPC consumer (e.g. the Project HDA panel) to go through the main window.
-# This accessor makes it a process-level singleton: the first caller creates
-# + starts it, all callers share it, and it is never torn down by a single
-# window close (it lives until the Houdini process exits; its server thread
-# is a daemon, so it is reaped automatically).
+# The ToolExecutor is a global, stateless HTTP server that every Pi subprocess
+# calls back into via the EDINI_TOOL_PORT env var (see config.get_pi_env). It
+# carries no per-client state, so N Pi processes spawned by one Houdini share
+# one server. Previously its lifetime was bound to EdiniMainWindow (constructed
+# in __init__, stopped in closeEvent), which forced any other RPC consumer
+# (e.g. the Project HDA panel) to go through the main window. This accessor
+# makes it a process-level singleton: the first caller creates + starts it, all
+# callers share it, and it is never torn down by a single window close (it
+# lives until the Houdini process exits; its server thread is a daemon, so it
+# is reaped automatically).
+#
+# MULTI-INSTANCE: when two Houdini processes run, each binds its OWN unique
+# port (the preferred 9876 if free, else an OS-assigned ephemeral port — see
+# ToolExecutor._probe_free_port). The actual port is exposed via
+# ``get_active_tool_port`` and propagated to every Pi subprocess through
+# ``EDINI_TOOL_PORT`` (config.get_pi_env reads this accessor). A per-PID
+# discovery file under ~/.edini/ports/ aids debugging which Houdini owns
+# which port.
 
 _global_executor: ToolExecutor | None = None
+
+
+def _port_file_path() -> Path:
+    """Per-PID discovery file recording the port this Houdini bound.
+
+    Diagnostic only — lets `ls ~/.edini/ports/` show which Houdini (PID) is
+    serving which port. Not used for routing (the EDINI_TOOL_PORT env var is
+    the routing channel).
+    """
+    return Path.home() / ".edini" / "ports" / f"{os.getpid()}.json"
+
+
+def _write_port_file(port: int) -> None:
+    """Record the bound port + PID + host for diagnostics. Best-effort."""
+    try:
+        p = _port_file_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"pid": os.getpid(), "port": port,
+                                 "host": "127.0.0.1"}), encoding="utf-8")
+        atexit.register(_remove_port_file)
+    except OSError:
+        pass
+
+
+def _remove_port_file() -> None:
+    """Clean up the per-PID discovery file. Best-effort."""
+    try:
+        _port_file_path().unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def get_active_tool_port() -> int:
+    """Return the actual port this process's ToolExecutor bound, starting the
+    executor if needed. This is the single source of truth for the
+    ``EDINI_TOOL_PORT`` env var passed to Pi subprocesses — it MUST reflect the
+    real bound port, not the config default, so tool calls route to THIS
+    Houdini and not whichever sibling process grabbed port 9876 first.
+    """
+    exe = get_tool_executor()
+    return exe.port
 
 
 def get_tool_executor() -> ToolExecutor:

@@ -13,7 +13,7 @@ from typing import Any
 
 from PySide6.QtCore import QThread, Signal, QObject
 
-from edini.config import get_pi_command, get_pi_env, TOOL_EXECUTOR_PORT
+from edini.config import get_pi_command, get_pi_env
 
 
 class RpcClient(QObject):
@@ -70,9 +70,14 @@ class RpcClient(QObject):
             return
 
         pi_cmd = get_pi_command()
+        # Resolve the real bound port for THIS Houdini (may be an ephemeral
+        # port if another Houdini owns the default 9876). Ensures Pi tool
+        # calls route back to this process, not a sibling Houdini.
+        from edini.tool_executor import get_active_tool_port
+        tool_port = get_active_tool_port()
         self._thread = QThread()
         self._worker = _RpcWorker(
-            pi_cmd, TOOL_EXECUTOR_PORT, self._cwd, self._env_extra)
+            pi_cmd, tool_port, self._cwd, self._env_extra)
         self._worker.moveToThread(self._thread)
 
         self._worker.text_delta.connect(self.text_delta)
