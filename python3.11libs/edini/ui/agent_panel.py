@@ -565,18 +565,28 @@ class AgentPanel(QtWidgets.QWidget):
     # ── Thinking ──
 
     def add_thinking_step(self, step_num: int, text: str):
-        self._thinking_count += 1
+        # Pi streams thinking_delta token-by-token (Chinese per-char, English
+        # per sub-word), NOT word-by-word. So we must accumulate by plain
+        # concatenation — inserting a separator between chunks corrupts the
+        # text ("需"+"要"+"我" → "需 要 我"). Mirrors base_driver.
+        # _on_thinking_chunk exactly.
         clean = _clean_thinking(text)
-        if self._thinking_buf:
-            sep = "" if clean.startswith((" ", "\n", ",", ".", "!", "?", "，", "。", "、")) else " "
-            self._thinking_buf += sep + clean
-        else:
-            self._thinking_buf = clean
+        if not clean:
+            return
+        self._thinking_count += 1
+        self._thinking_buf += clean
+        # On a paragraph break, finalize completed paragraphs into BOTH the
+        # timeline segments AND the ThinkingPanel's own _thinking_full (via
+        # append()). Without the panel.append() call, render_live() only shows
+        # the in-progress tail — when the buffer flushes, the panel appears to
+        # "wipe" the accumulated reasoning. append() pins each paragraph so it
+        # stays visible.
         if '\n\n' in self._thinking_buf:
             parts = re.split(r'\n\n+', self._thinking_buf)
             for para in parts[:-1]:
                 if para.strip():
                     self._stream_segments.append({"type": "thinking", "content": para.strip()})
+                    self._thinking_panel.append(para.strip())
             self._thinking_buf = parts[-1]
         # Update thinking panel view in real-time as thinking arrives
         self._update_live_thinking()
