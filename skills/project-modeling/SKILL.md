@@ -154,8 +154,22 @@ the return includes `design_params_created` matching your count.
 ### 3. Model inside each subnet + `measure` anchors
 
 Use `houdini_create_node`, `houdini_connect_nodes`, `houdini_set_param`.
-Parameters are a byproduct of modeling: when you need an adjustable value, add
-a spare parm on the subnet, then reference it from geometry with `ch("../...")`.
+**Reference design params from geometry via ABSOLUTE `ch()` to the core**
+(`ch('/obj/.../project_core/length')`) — this is the only official
+parameterization path. Do NOT create subnet spare parms and do NOT use
+relative `ch("../...")` here; that is the bottom-up path Step 4 `promote`
+was designed for, and the two are mutually exclusive (see Step 4's note).
+The absolute path is the stable default; `project_repath_to_relative` (Step 4)
+can later convert a component to relative paths if you need to migrate it to
+another project.
+
+**VEX + native SOPs first; Python SOP only when geometry is genuinely
+algorithmic** (a tube graph, a spoked wheel, curved bars). When you DO write a
+Python SOP inside a component, **copy the skeleton in
+`COMPONENT_TEMPLATE.md`** — it encodes the five Python-SOP errors that recurred
+most across real sessions (bare `return`, attribute-before-write, input-vs-output
+geometry, `createPoint` signature, `ch` vs `hou.ch`). Do not write a Python SOP
+from a blank string; you will re-break one of those five.
 
 **Build the main geometry** (e.g. tabletop box referencing design params):
 ```
@@ -191,20 +205,53 @@ houdini_connect_nodes(from_path=ctp, to_path="<legs>/out_geometry")
 `project_add_anchors`; (c) `verify_orientation` passes (no axis mismatch). If
 any of these is unmet, the model is NOT done — keep going.
 
-### 4. `promote` params to the core — `project_promote_params`
+### 4. Verify parametricity — `verify_parametric` (the LIVE guarantee)
 
-After modeling, lift subnet spare parms to the core so the whole model is
-adjustable from one place:
+The historical `project_promote_params` lifted subnet spare parms to the core
+(a bottom-up path). **It is a no-op under the official design_params path
+(Step 2b + absolute `ch()`):** you never create subnet spare parms, so there is
+nothing to promote, and it returns `promoted: []`. That empty result is
+**correct, not a failure** — the design params already live on the core and
+geometry already references them directly. Do NOT call `promote` expecting it
+to "fix" parametricity; it has nothing to do in this workflow.
+
+The actual completion gate for parametricity is `verify_parametric` (Layer C2).
+It **proves** a design param reaches the geometry by perturbation:
+
 ```
-project_promote_params(core_path="<core>")
-# → each subnet spare parm becomes <component>_<parm> on the core (grouped),
-#   subnet rewired to ch("../<component>_<parm>") — core drives.
+verify_parametric(node_path="<core>/OUT", core_path="<core>",
+                  param="length", new_value=<a different value>,
+                  expected_axis="X")
+# → perturbs length, recooks, checks the geometry moved on X (>= 5% relative
+#   change), then RESTORES the original value. Non-destructive.
 ```
 
-**✅ Done when (the LIVE guarantee):** set one promoted parm on the core to a
-new value, re-cook, and confirm the geometry + anchors updated. If changing a
-core parm does not move the geometry, the two-layer `ch()` chain is broken —
-do not declare done.
+**✅ Done when (the LIVE guarantee):** `verify_parametric` returns
+`passed: true` for the design params components reference. If it returns
+`passed: false`, the param chain is broken (a broken `ch()` reference, the
+param wired to the wrong node) — do not declare done. `inspect_health`'s
+`overall_ok` is NOT enough — it only proves "not broken now", not "parametric".
+
+#### 4b. (Optional) Make a component migratable — `project_repath_to_relative`
+
+The absolute `ch('/obj/.../project_core/<p>')` references tie a component to its
+current project path. If you want to **reuse/migrate** a component subnet into
+another project (copy-paste), convert its absolute references to relative ones:
+
+```
+project_repath_to_relative(core_path="<core>", component_id="<id>")
+# → rewrites every ch('/obj/.../project_core/<p>') inside <id> to a relative
+#   reference (ch("../../<p>") — the exact depth is computed from the node's
+#   path to the core). The component now references its core by relative
+#   position, not absolute path — copy the subnet elsewhere and it still
+#   cooks (as long as a <project_core> node sits at the same relative depth,
+#   which the project HDA structure guarantees).
+```
+
+This is **optional and on-demand**. Leave components on absolute paths unless
+you specifically intend to migrate them — absolute paths are the stable default
+(relative `ch("../")` across subnet nesting has historically produced
+zero-geometry bugs; see `MISTAKES.md`).
 
 ## Deeper references (read on demand)
 
@@ -214,6 +261,7 @@ read the matching reference (relative to this file):
 | If you need... | Read |
 |---|---|
 | Port wiring details, `output_index`, `in_<from>_<anchor>` naming, the anchor bus diagram | `PORT_PROTOCOL.md` |
+| To write a Python SOP inside a component — the copy-paste skeleton + the 5 recurring errors | `COMPONENT_TEMPLATE.md` |
 | A tool error or wrong geometry — symptom → root cause → fix | `MISTAKES.md` |
 | Modeling methodology — VEX vs native node vs Python discipline | `DISCIPLINE.md` |
 

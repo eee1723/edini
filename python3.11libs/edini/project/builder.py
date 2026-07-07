@@ -137,10 +137,17 @@ def build_project_scaffold(core_node: "hou.Node",
     # enforcement; this is the early signal).
     route_warnings = validate_route_contract(decl)
 
+    # Read back the ACTUAL cross-component wiring state and report it as
+    # ground-truth. This is the cure for the "agent doesn't trust the
+    # scaffold and wastes 10 minutes reconnecting a correct wire" failure
+    # (session log 1, shelf incident). Empty list under mock_hou.
+    input_wires = _collect_input_wires(core_node, decl)
+
     return {"success": True, "components_built": built,
             "components_skipped": skipped,
             "design_params_created": params_created,
             "route_warnings": route_warnings,
+            "input_wires": input_wires,
             "project": core_node.path()}
 
 
@@ -361,6 +368,111 @@ def _ensure_node(parent: "hou.Node", node_type: str,
     if existing is not None:
         return existing
     return parent.createNode(node_type, node_name=node_name)
+
+
+def _collect_input_wires(core_node: "hou.Node", decl: dict) -> list[dict]:
+    """Read back the ACTUAL cross-component wiring state and report ground-truth.
+
+    For each ports.in entry {from, port, anchor} declared on a downstream
+    component, this reads the downstream subnet's real `inputConnections()`
+    and reports:
+      - whether an external wire exists at that input index,
+      - which upstream output port it's wired from (vs the declared `port`),
+      - whether the internal filter/clean/null three-piece chain exists.
+
+    This is the cure for the "agent doesn't trust the scaffold and wastes 10
+    minutes reconnecting a wire that was correct" failure (session log 1,
+    shelf incident). The scaffold's `_ensure_input_scaffold` already calls
+    `subnet.setInput(i, upstream, from_port)` correctly; this function merely
+    reflects that fact back so the agent can SEE it without probing.
+
+    Returns a list of wire descriptors (one per declared ports.in entry).
+    Degrades gracefully under mock_hou (no inputConnections()) — returns an
+    empty list rather than crashing, so mock-based tests are unaffected.
+    """
+    wires: list[dict] = []
+    for comp in decl.get("components", []):
+        cid = comp.get("id")
+        subnet = core_node.node(cid) if cid else None
+        if subnet is None:
+            continue
+        in_ports = comp.get("ports", {}).get("in", []) or []
+        # Read the real connection list ONCE per subnet. inputConnections()
+        # returns hou.NodeConnection objects with inputIndex()/outputNode()/
+        # outputIndex(). Real Houdini only; mock_hou lacks it.
+        try:
+            connections = subnet.inputConnections()
+        except Exception:
+            # mock_hou or an exotic node — can't read ground-truth. Bail out
+            # cleanly rather than fabricate a wrong answer.
+            return []
+        # Index connections by input_index for O(1) lookup.
+        conn_by_index: dict[int, "hou.NodeConnection"] = {}
+        for conn in connections:
+            try:
+                conn_by_index[int(conn.inputIndex())] = conn
+            except Exception:
+                continue
+        for i, in_entry in enumerate(in_ports):
+            from_id = in_entry.get("from")
+            declared_port = in_entry.get("port")
+            anchor = in_entry.get("anchor")
+            wire = {
+                "component": cid,
+                "input_index": i,
+                "from": from_id,
+                "declared_port": declared_port,
+                "anchor": anchor,
+                # Defaults — refined below if the connection exists.
+                "wired": False,
+                "actual_output_index": None,
+                "actual_upstream": None,
+                "port_matches": None,
+                "carries": None,
+                "internal_chain_ready": False,
+            }
+            # The authoritative upstream node for input i. NOTE: do NOT use
+            # conn.outputNode() — despite its name, on a subnet connection it
+            # returns the DOWNSTREAM node (the subnet itself), not the source.
+            # subnet.input(i) returns the actual upstream node directly.
+            upstream_node = None
+            try:
+                upstream_node = subnet.input(i)
+            except Exception:
+                upstream_node = None
+            conn = conn_by_index.get(i)
+            if upstream_node is not None and conn is not None:
+                wire["wired"] = True
+                try:
+                    wire["actual_upstream"] = upstream_node.path()
+                except Exception:
+                    pass
+                try:
+                    wire["actual_output_index"] = int(conn.outputIndex())
+                except Exception:
+                    pass
+                # Does the real wire match the declaration? This is the single
+                # most useful field for the agent: if True, don't touch it.
+                if (wire["actual_output_index"] == declared_port
+                        and from_id is not None):
+                    # Confirm the upstream IS the declared component (by name),
+                    # not a sibling that happened to land on the port.
+                    if upstream_node.name() == from_id:
+                        wire["port_matches"] = True
+                        wire["carries"] = ("anchors" if declared_port >= 1
+                                           else "geometry")
+                # Internal three-piece chain: filter / clean / in null.
+                chain_ok = True
+                for prefix in (INPUT_FILTER_PREFIX, ANCHOR_CLEAN_PREFIX):
+                    nm = f"{prefix}{from_id}_{anchor}"
+                    if subnet.node(nm) is None:
+                        chain_ok = False
+                        break
+                if subnet.node(f"in_{from_id}_{anchor}") is None:
+                    chain_ok = False
+                wire["internal_chain_ready"] = chain_ok
+            wires.append(wire)
+    return wires
 
 
 from edini.project.state import (
@@ -614,14 +726,25 @@ def add_anchors(core_node: "hou.Node", component_id: str,
         # Install the measurement parms (cx/cy/cz etc.) as concrete values.
         # These are NOT default attribwrangle parms — they must be added as
         # spare parms (the VEX reads them via chi("cx") etc.).
-        for pname, pval in parms.items():
+        #
+        # Type-aware: a STRING value (e.g. by_name's marker) gets a
+        # StringParmTemplate and is set as a string; everything else is an int
+        # (the historical case — cx/cy/cz/rows/cols/face_axis). A leading "_"
+        # in the key is stripped (matches the array strategy's _origin/_step0
+        # convention used by the legacy rooted pipeline).
+        for raw_pname, pval in parms.items():
+            pname = raw_pname.lstrip("_")
+            is_string = isinstance(pval, str)
             p = wr.parm(pname)
             if p is None:
-                tmpl = hou.IntParmTemplate(pname, pname, 1)
+                if is_string:
+                    tmpl = hou.StringParmTemplate(pname, pname, 1)
+                else:
+                    tmpl = hou.IntParmTemplate(pname, pname, 1)
                 wr.addSpareParmTuple(tmpl)
                 p = wr.parm(pname)
             if p is not None:
-                p.set(int(pval))
+                p.set(pval if is_string else int(pval))
         anchor_wrangles.append(wr)
         built.append(name)
 

@@ -199,6 +199,63 @@ export const verifyOrientationTool = {
   },
 };
 
+export const verifyParametricTool = {
+  name: "verify_parametric",
+  label: "Verify Parametric (Perturbation Test)",
+  description:
+    "Prove a design param actually drives the geometry — the LIVE guarantee. " +
+    "Perturbs a core design param, recooks, checks the geometry changed on the " +
+    "expected axis, then RESTORES the original value. This is the 'is it really done?' " +
+    "gate that inspect_health's overall_ok cannot provide (overall_ok only proves " +
+    "'not broken now', not 'parametric'). Use it before declaring a model complete.",
+  promptSnippet: "Prove a design param drives the geometry (LIVE test)",
+  promptGuidelines: [
+    "The completion gate for parametricity: inspect_health's overall_ok does NOT prove the model is parametric — only that it isn't broken right now. verify_parametric proves a param actually reaches the geometry.",
+    "MUST be called before declaring a multi-component model 'done' — at minimum, verify each design_param that components reference. A model that doesn't respond to its params is not done.",
+    "Perturbs the param to new_value, force-recooks, checks a bbox axis changed by >= min_relative_change (default 5%), then RESTORES the original value. Non-destructive.",
+    "Pass expected_axis (X/Y/Z) when you know which axis a param should move (e.g. 'length' should move X, 'height' should move Y) — the tool then requires THAT axis to change.",
+    "Returns passed:false with a diagnostic 'reason' when: geometry vanishes, cook errors appear, or no axis changes (a broken ch() chain). Treat passed:false as 'not done — the param doesn't reach the geometry'.",
+  ],
+  parameters: Type.Object({
+    node_path: Type.String({
+      description: "Full path of the SOP node whose geometry proves parametricity (usually the project OUT node)",
+    }),
+    core_path: Type.String({
+      description: "Full path of the edini::project HDA core carrying the design param",
+    }),
+    param: Type.String({
+      description: "Design param name on the core (e.g. 'length', 'height')",
+    }),
+    new_value: Type.Number({
+      description: "The perturbation value — must DIFFER meaningfully from the current value",
+    }),
+    expected_axis: Type.Optional(
+      Type.Union(
+        [Type.Literal("X"), Type.Literal("Y"), Type.Literal("Z")],
+        { description: "If given, this axis MUST change (e.g. 'length'->'X'). Omit to accept a change on any axis." }
+      )
+    ),
+    min_relative_change: Type.Optional(
+      Type.Number({
+        description: "Minimum |Δsize|/|size| for an axis to count as changed. Default 0.05 (5%).",
+      })
+    ),
+  }),
+  async execute(
+    _toolCallId: string,
+    params: {
+      node_path: string;
+      core_path: string;
+      param: string;
+      new_value: number;
+      expected_axis?: "X" | "Y" | "Z";
+      min_relative_change?: number;
+    }
+  ) {
+    return forwardTool("verify_parametric", params);
+  },
+};
+
 export const commitSandboxTool = {
   name: "commit_sandbox",
   label: "Commit Houdini Sandbox",
@@ -423,6 +480,7 @@ export const harnessTools = [
   houdiniRunPythonSandbox,
   houdiniVerifyAsset,
   verifyOrientationTool,
+  verifyParametricTool,
   commitSandboxTool,
   discardSandboxTool,
   // captureReviewTool is gated by EDINI_VISUAL_VERIFICATION (registered only

@@ -208,6 +208,55 @@ for (int i = 0; i < nx; i++) {
 """.strip()
 
 
+# by_name: pick a SEMANTIC marker point that the root component's generator
+# already emitted at a REAL geometric location (not a bbox derivation).
+#
+# This is the cure for the "bbox_face_center on a merged mesh ≠ real dropout"
+# failure (session log 2, road bike frame). A root generator (e.g. the frame's
+# Python SOP) emits a point tagged @name="head_tube_top" at the ACTUAL head-tube
+# top coordinate; the downstream anchor uses measure:"by_name" + marker:"head_tube_top"
+# to pick THAT exact point. Change frame_scale → the generator re-cooks → the
+# marker moves with the real geometry → the anchor follows. Truly parametric,
+# unlike bbox_face_center which tracks the merged-mesh hull.
+#
+# Unlike the bbox strategies, this does NOT begin with _VEX_CLEAR. It must
+# PRESERVE the named input point's position. So it captures the matched point's
+# P (+ orient, if the generator supplied one) in a single scan, drops ALL input
+# points, then re-emits ONLY the marker. __newpts is declared so the orient
+# fragment and the builder's @name tag still apply to the re-emitted point.
+_VEX_BY_NAME = r"""
+int __n = npoints(geoself());
+string __marker = chs("marker");
+vector __pos = {0, 0, 0};
+vector4 __ori = {0, 0, 0, 1};   // identity quaternion default
+int __has_ori = 0;
+int __found = 0;
+for (int __i = 0; __i < __n; __i++) {
+    string __nm = pointattrib(geoself(), "name", __i, 0);
+    if (__nm == __marker && !__found) {
+        __pos = pointattrib(geoself(), "P", __i, 0);
+        // Preserve a generator-supplied orient if present (identity otherwise).
+        int __nh = hasattrib(geoself(), "point", "orient");
+        if (__nh) {
+            __ori = pointattrib(geoself(), "orient", __i, 0);
+            __has_ori = 1;
+        }
+        __found = 1;
+    }
+}
+// Clear all input points, then re-emit ONLY the matched marker.
+for (int __i = __n - 1; __i >= 0; __i--) { removepoint(geoself(), __i); }
+int __newpts[];
+if (__found) {
+    int __pt = addpoint(geoself(), __pos);
+    if (__has_ori) {
+        setpointattrib(geoself(), "orient", __pt, __ori, "set");
+    }
+    append(__newpts, __pt);
+}
+""".strip()
+
+
 # cells: an explicit unit-grid layout where each cell has its OWN size, and
 # every size + position is DERIVED live from the root's actual geometry.
 #
@@ -853,6 +902,23 @@ def _resolve_array(spec: dict) -> dict[str, Any]:
     return parms
 
 
+def _resolve_by_name(spec: dict) -> dict[str, Any]:
+    # by_name picks a marker point the root generator emitted at a real
+    # geometric location. The only selector is the marker's @name string.
+    # Unlike bbox strategies, marker is a STRING spare parm (chs), not int.
+    marker = spec.get("marker")
+    if not marker or not isinstance(marker, str):
+        raise VexStrategyError(
+            "by_name measure requires a 'marker' string (the @name of the "
+            "point the root generator emitted). Example: "
+            '{"measure":"by_name","marker":"head_tube_top","name":"head_tube"}')
+    if not marker.replace("_", "").isalnum():
+        raise VexStrategyError(
+            f"by_name marker {marker!r} must be a legal @name token "
+            f"(letters/digits/underscores)")
+    return {"_marker": marker}
+
+
 # The static-strategy registry. build_mount_vex dispatches through this.
 _STATIC_STRATEGIES: dict[str, StaticTemplateStrategy] = {
     "bbox_corner":      StaticTemplateStrategy(_VEX_BBOX_CORNER, _resolve_bbox_corner),
@@ -861,6 +927,10 @@ _STATIC_STRATEGIES: dict[str, StaticTemplateStrategy] = {
     "point_on_edge":    StaticTemplateStrategy(_VEX_POINT_ON_EDGE, _resolve_point_on_edge),
     "grid_on_face":     StaticTemplateStrategy(_VEX_GRID_ON_FACE, _resolve_grid_on_face),
     "array":            StaticTemplateStrategy(_VEX_ARRAY, _resolve_array),
+    # by_name: unlike the bbox strategies, this preserves a marker point the
+    # root generator emitted at a REAL geometric location — truly parametric
+    # against the actual shape, not the bbox hull. See _VEX_BY_NAME docstring.
+    "by_name":          StaticTemplateStrategy(_VEX_BY_NAME, _resolve_by_name),
 }
 
 

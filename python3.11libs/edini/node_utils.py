@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import json
+import re
 import traceback
 
 try:
@@ -3760,3 +3761,312 @@ def verify_orientation(
             "success": False,
             "error": f"{e}\n{traceback.format_exc()}",
         }
+
+
+def verify_parametric(
+    node_path: str,
+    core_path: str,
+    param: str,
+    new_value: float,
+    expected_axis: str | None = None,
+    min_relative_change: float = 0.05,
+) -> dict[str, Any]:
+    """Prove a design param actually drives the geometry (the LIVE guarantee).
+
+    This is the cure for the "declare done prematurely" failure (session log 2,
+    the road bike): the agent declared the model complete after `inspect_health`
+    returned `overall_ok`, but never verified that changing a param actually
+    moved the geometry. `overall_ok` only proves "not broken right now"; it does
+    NOT prove "parametric". This tool proves parametric by PERTURBATION:
+
+      1. Read the target node's current geometry (bbox size + point/prim count).
+      2. Set the core's design param to ``new_value``.
+      3. Force-recook the target node.
+      4. Read the perturbed geometry.
+      5. Assert: geometry non-empty, no new cook errors, and at least one bbox
+         axis changed by >= ``min_relative_change`` (the param propagated to the
+         geometry). If ``expected_axis`` is given (X/Y/Z), THAT axis MUST change.
+      6. ALWAYS restore the param to its original value (never mutate the user's
+         scene as a side effect of a check).
+
+    Args:
+        node_path: the node whose geometry proves parametricity (usually the
+            project's OUT node).
+        core_path: the edini::project HDA core carrying the design param.
+        param: design param name on the core (e.g. "length").
+        new_value: the perturbation value (should be meaningfully different from
+            the current value; a sanity check rejects no-op perturbations).
+        expected_axis: optional "X"/"Y"/"Z" — if given, this axis MUST change.
+        min_relative_change: minimum |Δsize|/|size| for an axis to count as
+            "changed" (default 5%, guards against float noise).
+
+    Returns:
+        {success, passed, param, original_value, new_value, restored,
+         before:{sizes,points,prims}, after:{...}, axis_changes:{X,Y,Z},
+         reason}
+    """
+    try:
+        node = hou.node(node_path)
+        if node is None:
+            return {"success": False, "error": f"Node not found: {node_path}"}
+        core = hou.node(core_path)
+        if core is None:
+            return {"success": False, "error": f"Core not found: {core_path}"}
+        parm = core.parm(param)
+        if parm is None:
+            return {"success": False,
+                    "error": f"Param {param!r} not found on {core_path}"}
+
+        def _snapshot():
+            """Read bbox sizes (X/Y/Z), point count, prim count of `node`."""
+            g = node.geometry()
+            if g is None:
+                return None
+            bb = g.boundingBox()
+            mn = _vector_to_list(bb.minvec())
+            mx = _vector_to_list(bb.maxvec())
+            return {
+                "sizes": [mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2]],
+                "points": len(g.points()),
+                "prims": len(g.prims()),
+            }
+
+        original_value = parm.eval()
+        # Reject a no-op perturbation — it would always "pass" vacuously and
+        # teach the agent the wrong lesson.
+        try:
+            if abs(float(new_value) - float(original_value)) < 1e-9:
+                return {"success": False,
+                        "error": (f"new_value {new_value} equals the current "
+                                  f"value {original_value}; pick a perturbation "
+                                  f"that actually differs to prove parametricity")}
+        except (TypeError, ValueError):
+            return {"success": False,
+                    "error": f"new_value must be numeric, got {new_value!r}"}
+
+        before = _snapshot()
+        if before is None:
+            return {"success": False,
+                    "error": f"No geometry on {node_path} before perturbation"}
+
+        # ── Perturb + recook ──
+        parm.set(new_value)
+        node.cook(force=True)
+
+        after = _snapshot()
+        # Capture errors AFTER the recook (this catches broken ch() chains that
+        # silently produce zero geometry — the session-log "promote returns 0 /
+        # nothing moves" failure).
+        errors = list(node.errors() or [])
+
+        # ALWAYS restore, even if assertions below would early-return.
+        parm.set(original_value)
+        node.cook(force=True)
+
+        if after is None:
+            return {"success": True, "passed": False,
+                    "param": param, "original_value": original_value,
+                    "new_value": new_value, "restored": True,
+                    "before": before, "after": None,
+                    "reason": f"geometry vanished after perturbing {param}"}
+        if errors:
+            return {"success": True, "passed": False,
+                    "param": param, "original_value": original_value,
+                    "new_value": new_value, "restored": True,
+                    "before": before, "after": after,
+                    "errors": errors,
+                    "reason": f"cook errors after perturbing {param}: {errors}"}
+        if after["points"] == 0:
+            return {"success": True, "passed": False,
+                    "param": param, "original_value": original_value,
+                    "new_value": new_value, "restored": True,
+                    "before": before, "after": after,
+                    "reason": f"zero points after perturbing {param}"}
+
+        # ── Per-axis relative change ──
+        axis_labels = ["X", "Y", "Z"]
+        axis_changes: dict[str, float] = {}
+        any_changed = False
+        for i, lbl in enumerate(axis_labels):
+            b = before["sizes"][i] or 1e-9   # guard divide-by-zero
+            a = after["sizes"][i]
+            rel = abs(a - b) / abs(b)
+            axis_changes[lbl] = rel
+            if rel >= min_relative_change:
+                any_changed = True
+
+        if not any_changed:
+            return {"success": True, "passed": False,
+                    "param": param, "original_value": original_value,
+                    "new_value": new_value, "restored": True,
+                    "before": before, "after": after,
+                    "axis_changes": axis_changes,
+                    "reason": (f"no bbox axis changed by >= {min_relative_change} "
+                               f"when {param} {original_value}->{new_value}; "
+                               f"the param likely does not reach the geometry "
+                               f"(broken ch() chain?)")}
+
+        # If an expected axis was named, it specifically must have changed.
+        if expected_axis:
+            ea = expected_axis.upper()
+            if ea not in axis_labels:
+                return {"success": False,
+                        "error": f"expected_axis must be X/Y/Z, got {expected_axis!r}"}
+            if axis_changes[ea] < min_relative_change:
+                return {"success": True, "passed": False,
+                        "param": param, "original_value": original_value,
+                        "new_value": new_value, "restored": True,
+                        "before": before, "after": after,
+                        "axis_changes": axis_changes,
+                        "reason": (f"expected axis {ea} did NOT change "
+                                   f"({axis_changes[ea]:.4f} < {min_relative_change}) "
+                                   f"when {param} changed; the param propagated "
+                                   f"but not on the expected axis")}
+
+        return {"success": True, "passed": True,
+                "param": param, "original_value": original_value,
+                "new_value": new_value, "restored": True,
+                "before": before, "after": after,
+                "axis_changes": axis_changes,
+                "reason": (f"PASS: {param} {original_value}->{new_value} moved "
+                           f"the geometry"
+                           + (f" on axis {expected_axis.upper()}" if expected_axis else "")
+                           + f"; axis_changes={axis_changes}")}
+    except Exception as e:
+        return {"success": False,
+                "error": f"{e}\n{traceback.format_exc()}"}
+
+
+# Regex matching ch('...') / hou.ch('...') calls inside an expression string.
+# Captures the function name (group 1) and the quoted path argument (group 2).
+# Handles single OR double quotes. Used by repath_to_relative.
+_CH_CALL_RE = re.compile(r'(hou\.)?ch\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
+
+
+def _relative_path_to_core(node_path: str, core_path: str) -> str | None:
+    """Compute the relative ch() path from `node_path` up to `core_path`.
+
+    Returns e.g. "../../" such that ch("../../<parm>") on `node_path` resolves
+    to `core_path`'s parm. Returns None if `node_path` is not a descendant of
+    `core_path` (cannot form a relative reference).
+
+    Pure path-segment arithmetic — no hou needed, fully unit-testable.
+    """
+    node_parts = node_path.strip("/").split("/")
+    core_parts = core_path.strip("/").split("/")
+    # node must be strictly deeper than core and share core as a prefix.
+    if len(node_parts) <= len(core_parts):
+        return None
+    if node_parts[:len(core_parts)] != core_parts:
+        return None
+    depth = len(node_parts) - len(core_parts)
+    return "../" * depth
+
+
+def repath_to_relative(core_path: str, component_id: str) -> dict[str, Any]:
+    """Rewrite a component's absolute core ch() references to relative ones.
+
+    This is the cure for the "absolute path → component not migratable" problem
+    (Finding 4). Under the design_params path, geometry references core parms via
+    absolute ``ch('/obj/.../project_core/<p>')``. That ties the component to its
+    current project path — copy the subnet to another project and every ch()
+    breaks. This tool rewrites those absolute references to relative ones
+    (``ch("../../<p>")``, depth computed per-node), so the component references
+    its core by POSITION rather than path. A migrated component then cooks
+    anywhere a ``<project_core>`` node sits at the same relative depth (which the
+    project HDA structure guarantees).
+
+    Scope: ONE component subnet (on-demand, not whole-project). Rewrites every
+    ``ch('.../project_core/<p>')`` and ``hou.ch('.../project_core/<p>')`` inside
+    the component's subtree to ``ch('<relative>/<p>')``. Non-ch() expressions
+    and references to other nodes are left untouched.
+
+    Args:
+        core_path: the edini::project HDA core path.
+        component_id: the component subnet name (direct child of core).
+
+    Returns:
+        {success, component, rewritten:[{node, parm, before, after}], count,
+         skipped, dry_run}
+    """
+    try:
+        core = hou.node(core_path)
+        if core is None:
+            return {"success": False, "error": f"Core not found: {core_path}"}
+        subnet = core.node(component_id)
+        if subnet is None:
+            return {"success": False,
+                    "error": f"Component {component_id!r} not found under {core_path}"}
+
+        core_path_norm = core_path.rstrip("/")
+        rewritten: list[dict] = []
+        skipped = 0
+
+        # allSubChildren includes the subnet itself; iterate the subtree.
+        nodes = list(subnet.allSubChildren()) + [subnet]
+        for node in nodes:
+            rel = _relative_path_to_core(node.path(), core_path_norm)
+            if rel is None:
+                continue   # node not a descendant of core (shouldn't happen)
+            for parm in node.parms():
+                try:
+                    expr = parm.expression()
+                except Exception:
+                    expr = None
+                if not expr:
+                    continue
+                # Does this expression reference the core via an absolute path?
+                if core_path_norm not in expr:
+                    continue
+                new_expr = _CH_CALL_RE.sub(
+                    _make_replacer(core_path_norm, rel), expr)
+                if new_expr != expr:
+                    rewritten.append({
+                        "node": node.path(),
+                        "parm": parm.name(),
+                        "before": expr,
+                        "after": new_expr,
+                    })
+                    try:
+                        parm.setExpression(new_expr)
+                    except Exception as e:
+                        # Don't abort the whole repath on one parm failure —
+                        # record and continue (the agent can see partial result).
+                        rewritten[-1]["set_error"] = str(e)
+                else:
+                    skipped += 1
+
+        return {"success": True,
+                "component": subnet.path(),
+                "core": core_path_norm,
+                "rewritten": rewritten,
+                "count": len(rewritten),
+                "skipped_no_change": skipped}
+    except Exception as e:
+        return {"success": False,
+                "error": f"{e}\n{traceback.format_exc()}"}
+
+
+def _make_replacer(core_path: str, rel: str):
+    """Build a regex sub callback that rewrites ch('/abs/core/path/<p>') and
+    hou.ch('/abs/core/path/<p>') to ch('<rel><p>') / hou.ch('<rel><p>').
+
+    Only rewrites references whose path equals core_path or core_path + a parm
+    tail (core_path/parm). Leaves other absolute references alone.
+    """
+    def repl(m: re.Match) -> str:
+        fn = m.group(1) or ""    # "hou." or ""
+        path = m.group(2)
+        # Match exactly core_path or core_path/<parm>.
+        if path == core_path:
+            return f'{fn}ch("{rel[:-1] if rel != "../" else rel}")'
+        if path.startswith(core_path + "/"):
+            parm_tail = path[len(core_path) + 1:]
+            # guard against deeper paths (core/something/else) — only one level.
+            if "/" in parm_tail:
+                return m.group(0)
+            return f'{fn}ch("{rel}{parm_tail}")'
+        return m.group(0)
+    return repl
+
+

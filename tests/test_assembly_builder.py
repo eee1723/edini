@@ -1107,8 +1107,12 @@ class TestCellsLayout(unittest.TestCase):
 
     def test_strategy_class_hierarchy_exists(self):
         """The three-layer architecture: VexStrategy → StaticTemplateStrategy /
-        TabularFillStrategy → CellsStrategy. All 7 measure kinds dispatch
-        through the strategy registry (no raw if/elif chain in build_mount_vex)."""
+        TabularFillStrategy → CellsStrategy. All measure kinds dispatch
+        through the strategy registry (no raw if/elif chain in build_mount_vex).
+
+        Static kinds: bbox_corner / bbox_face_center / bbox_center /
+        point_on_edge / grid_on_face / array / by_name (Layer C1: semantic
+        marker point, picks a real geometric location instead of a bbox hull)."""
         from edini.vex_strategies import (VexStrategy, StaticTemplateStrategy,
                                           TabularFillStrategy, CellsStrategy)
         # Static kinds are StaticTemplateStrategy instances.
@@ -1118,7 +1122,7 @@ class TestCellsLayout(unittest.TestCase):
         # CellsStrategy is a TabularFillStrategy (and thus a VexStrategy).
         self.assertTrue(issubclass(CellsStrategy, TabularFillStrategy))
         self.assertTrue(issubclass(TabularFillStrategy, VexStrategy))
-        self.assertEqual(len(_STATIC_STRATEGIES), 6)   # the 6 static kinds
+        self.assertEqual(len(_STATIC_STRATEGIES), 7)   # the 7 static kinds
 
     def test_cells_2d_byte_identical_after_axes_refactor(self):
         """After generalizing _build_vex to axes[], the 2D cells path must keep

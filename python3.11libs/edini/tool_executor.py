@@ -22,6 +22,8 @@ from edini.node_utils import (
     get_selection, check_errors, set_display_flag,
     verify_orientation, inspect_geometry_health, geometry_inventory,
     node_parms,
+    verify_parametric,
+    repath_to_relative,
 )
 from edini import screenshots
 from edini.config import _load_edini_settings
@@ -370,6 +372,18 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     "verify_orientation": lambda **kw: verify_orientation(
         kw["node_path"],
         kw.get("checks", []),
+    ),
+    "verify_parametric": lambda **kw: verify_parametric(
+        kw["node_path"],
+        kw["core_path"],
+        kw["param"],
+        kw["new_value"],
+        expected_axis=kw.get("expected_axis"),
+        min_relative_change=kw.get("min_relative_change", 0.05),
+    ),
+    "project_repath_to_relative": lambda **kw: repath_to_relative(
+        kw["core_path"],
+        kw["component_id"],
     ),
     "inspect_health": lambda **kw: inspect_geometry_health(
         kw["node_path"],

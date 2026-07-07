@@ -100,16 +100,17 @@ export const projectTools = [
     name: "project_promote_params",
     label: "Promote Component Params",
     description:
-      "Promote all component subnets' spare parms to the Project HDA core's top-level interface, " +
-      "so the whole model is adjustable from one place. Each promoted parm becomes " +
-      "<component>_<parm> on the core, driving its subnet via a live ch() reference. " +
-      "Run this AFTER modeling inside the component subnets (so the parms you added exist). " +
-      "After promote, verify the LIVE guarantee: change a core parm, re-cook, confirm geometry updates.",
-    promptSnippet: "Promote component params to the Project HDA core",
+      "Promote all component subnets' spare parms to the Project HDA core's top-level interface. " +
+      "LEGACY/bottom-up path: under the official design_params path (Step 2b), geometry references core parms " +
+      "directly via absolute ch(), so you never create subnet spare parms and this returns promoted:[] (correct, " +
+      "not a failure). Only relevant if you took the bottom-up path of building subnet spare parms. The LIVE " +
+      "guarantee is now checked by verify_parametric, not promote.",
+    promptSnippet: "Promote subnet spare parms to core (legacy bottom-up path)",
     promptGuidelines: [
-      "Use project_promote_params AFTER modeling inside component subnets, to expose adjustable params at the top.",
+      "Under the design_params path (Step 2b), this returns promoted:[] — that is CORRECT, not a failure. The design params already live on the core and geometry already references them.",
+      "Do NOT call promote expecting it to fix parametricity. Use verify_parametric to prove a param reaches the geometry.",
+      "Only relevant if you built subnet spare parms (the legacy bottom-up path Step 3 no longer teaches).",
       "Requires core_path (the edini::project SOP HDA instance).",
-      "Each component subnet's spare parms become <component>_<parm> on the core, with live ch() refs.",
     ],
     parameters: Type.Object({
       core_path: Type.String({
@@ -118,6 +119,35 @@ export const projectTools = [
     }),
     async execute(_id: string, params: { core_path: string }) {
       return forwardTool("project_promote_params", params);
+    },
+  },
+  {
+    name: "project_repath_to_relative",
+    label: "Repath Component ch() to Relative",
+    description:
+      "Rewrite ONE component's absolute ch('/obj/.../project_core/<p>') references to relative " +
+      "(ch('../../<p>'), depth computed per-node), so the component references its core by POSITION " +
+      "not absolute path. Call this BEFORE copy-pasting a component subnet into another project — the " +
+      "migrated component then cooks anywhere a <project_core> node sits at the same relative depth. " +
+      "Optional/on-demand: leave components on absolute paths (the stable default) unless you intend to migrate them.",
+    promptSnippet: "Make a component migratable (absolute ch → relative)",
+    promptGuidelines: [
+      "Use project_repath_to_relative ONLY when you intend to copy/migrate a component subnet to another project. Absolute paths are the stable default otherwise.",
+      "Rewrites every ch('.../project_core/<p>') and hou.ch('.../project_core/<p>') inside the component subtree to relative ch('../../<p>') (depth computed per-node).",
+      "Non-ch() expressions and references to other nodes are left untouched.",
+      "Scope is ONE component (component_id), not the whole project — minimal blast radius.",
+      "After repath, verify with verify_parametric that the geometry still responds to the core params (it should — only the path notation changed, not the link).",
+    ],
+    parameters: Type.Object({
+      core_path: Type.String({
+        description: "Path to the edini::project SOP HDA instance.",
+      }),
+      component_id: Type.String({
+        description: "The component subnet name (direct child of core) to repath.",
+      }),
+    }),
+    async execute(_id: string, params: { core_path: string; component_id: string }) {
+      return forwardTool("project_repath_to_relative", params);
     },
   },
   {

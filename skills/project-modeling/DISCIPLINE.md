@@ -34,6 +34,22 @@ hou.node(".../do_everything").parm("python").set("""
 **The fix:** decompose into native nodes connected in sequence. If a step
 truly needs Python, isolate it to one small SOP with one responsibility.
 
+**When you do write a Python SOP, copy `COMPONENT_TEMPLATE.md`'s skeleton.**
+It encodes the five Python-SOP errors that recurred most across real
+modeling sessions (bare `return` SyntaxError, attribute-before-write,
+input-vs-output geometry, `createPoint` signature, `ch` vs `hou.ch`). Writing
+a Python SOP from a blank string re-breaks one of those five nearly every
+time.
+
+**`houdini_run_python_sandbox` is NOT a component generator.** A sandbox runs
+in an isolated geo container with **no inputs** — a sandbox Python SOP cannot
+see any component's anchor points. Use the sandbox only to sketch a
+self-contained generator with hardcoded test data and verify the algorithm
+cooks clean; then **discard the sandbox and rebuild inside the component
+subnet**, wired to `in_<from>_<anchor>`. Never try to make a sandbox consume a
+component's anchors (sessions wasted 3 sandbox iterations discovering this
+for the shelf).
+
 ### 3. Native nodes where VEX is hard
 
 Some operations have purpose-built native nodes that are more robust than a

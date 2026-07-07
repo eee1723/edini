@@ -1039,5 +1039,624 @@ class TestChairAxisHython(unittest.TestCase):
                          f"axis_source should be 'override': {res}")
 
 
+# =============================================================================
+# Layer A: scaffold returns input_wires ground-truth
+#
+# Session log 1 (the table build) showed the agent spending ~10 minutes
+# "fixing" the shelf's wiring — reconnecting filter nodes, dropping to a
+# sandbox setInput, deleting the whole filter chain — because it didn't
+# TRUST that the scaffold had wired shelf's inputs to legs' anchor port
+# correctly. The scaffold WAS correct (builder.py setInput(i,upstream,from_port)
+# uses the declared port). The fix is to report that fact back so the agent
+# can see the wire is good without probing. These tests prove the reported
+# ground-truth matches the actual Houdini connection state.
+# =============================================================================
+
+_INPUT_WIRES_HARNESS = r"""
+import json, sys, os
+sys.path.insert(0, os.path.join(r"%s", "python3.11libs"))
+import hou
+_hda = os.path.join(r"%s", "otls", "edini_project.hda")
+if os.path.isfile(_hda):
+    hou.hda.installFile(_hda)
+from edini.project.state import empty_declaration, add_component
+from edini.project.node import create_project_hda
+from edini.project.builder import build_project_scaffold
+
+result = {"steps": {}}
+
+# ── Scenario 1: the table's shelf — declared port:1 (anchors) ──
+# Mirrors session log 1 exactly: tabletop→legs→shelf, shelf consumes legs'
+# anchor cloud (port 1). The agent should see the wire is good.
+core = create_project_hda(name="proj_wires")
+decl = empty_declaration("proj_wires")
+add_component(decl, "tabletop", purpose="桌面",
+    ports_out=[
+        {"index": 0, "kind": "geometry"},
+        {"index": 1, "kind": "anchors", "points": [
+            {"name": "leg_mount", "role": "mount"}]}])
+add_component(decl, "legs", purpose="腿",
+    ports_in=[{"from": "tabletop", "port": 1, "anchor": "leg_mount"}],
+    ports_out=[
+        {"index": 0, "kind": "geometry"},
+        {"index": 1, "kind": "anchors", "points": [
+            {"name": "shelf_mount", "role": "mount"}]}])
+add_component(decl, "shelf", purpose="搁板",
+    ports_in=[{"from": "legs", "port": 1, "anchor": "shelf_mount"}])
+res = build_project_scaffold(core, declaration=decl)
+wires = res.get("input_wires", [])
+result["steps"]["s1_input_wires_present"] = isinstance(wires, list) and len(wires) > 0
+
+# Three declared ports.in entries → three wire descriptors.
+result["steps"]["s1_wire_count"] = len(wires)
+
+# The shelf→legs wire is the critical one (the one the agent distrusted).
+shelf_wires = [w for w in wires if w["component"] == "shelf"]
+result["steps"]["s1_shelf_wire_count"] = len(shelf_wires)
+if shelf_wires:
+    sw = shelf_wires[0]
+    result["steps"]["s1_shelf_wired"] = sw.get("wired")
+    result["steps"]["s1_shelf_port_matches"] = sw.get("port_matches")
+    result["steps"]["s1_shelf_carries"] = sw.get("carries")
+    result["steps"]["s1_shelf_actual_output_index"] = sw.get("actual_output_index")
+    result["steps"]["s1_shelf_actual_upstream"] = sw.get("actual_upstream")
+    result["steps"]["s1_shelf_chain_ready"] = sw.get("internal_chain_ready")
+
+# The legs→tabletop wire should also report correctly.
+legs_wires = [w for w in wires if w["component"] == "legs"]
+if legs_wires:
+    lw = legs_wires[0]
+    result["steps"]["s1_legs_wired"] = lw.get("wired")
+    result["steps"]["s1_legs_port_matches"] = lw.get("port_matches")
+    result["steps"]["s1_legs_carries"] = lw.get("carries")
+
+# ── Scenario 2: declared port:0 (geometry) — different carries label ──
+# A control: if a component declares port:0, carries should say "geometry",
+# proving the label distinguishes the two cases (not hardcoded to "anchors").
+core2 = create_project_hda(name="proj_wires2")
+decl2 = empty_declaration("proj_wires2")
+add_component(decl2, "base", purpose="基座",
+    ports_out=[{"index": 0, "kind": "geometry"}])
+add_component(decl2, "top", purpose="顶",
+    ports_in=[{"from": "base", "port": 0, "anchor": "noref"}])
+res2 = build_project_scaffold(core2, declaration=decl2)
+wires2 = res2.get("input_wires", [])
+top_wires = [w for w in wires2 if w["component"] == "top"]
+if top_wires:
+    tw = top_wires[0]
+    result["steps"]["s2_top_wired"] = tw.get("wired")
+    result["steps"]["s2_top_port_matches"] = tw.get("port_matches")
+    result["steps"]["s2_top_carries"] = tw.get("carries")
+
+print("RESULT_JSON:" + json.dumps(result))
+""" % (_REPO, _REPO)
+
+
+@unittest.skipUnless(HYTHON, "hython not installed")
+class TestInputWiresGroundTruthHython(unittest.TestCase):
+    """Layer A: build_project_scaffold returns input_wires that reflect the
+    ACTUAL Houdini connection state, so the agent needn't probe/reconnect."""
+
+    def _run(self):
+        proc = subprocess.run(
+            [HYTHON, "-c", _INPUT_WIRES_HARNESS],
+            capture_output=True, text=True, timeout=180, cwd=_REPO,
+            stdin=subprocess.DEVNULL)
+        combined = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 0,
+                         f"hython failed (rc={proc.returncode}):\n{combined[-2000:]}")
+        idx = combined.rfind("RESULT_JSON:")
+        self.assertGreater(idx, -1, f"no RESULT_JSON in output:\n{combined[-2000:]}")
+        return json.loads(combined[idx + len("RESULT_JSON:"):]), combined
+
+    def test_s1_shelf_wire_reports_ready(self):
+        """The shelf→legs anchor wire (port:1) reports wired+port_matches+
+        carries:'anchors'+chain_ready — the exact ground-truth the agent in
+        session log 1 was missing."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertTrue(s["s1_input_wires_present"], f"no input_wires: {res}")
+        self.assertEqual(s["s1_wire_count"], 2,
+                         f"expected 2 wires (legs+shelf), got {s['s1_wire_count']}")
+        self.assertEqual(s["s1_shelf_wire_count"], 1)
+        self.assertTrue(s["s1_shelf_wired"], "shelf input should be wired")
+        self.assertTrue(s["s1_shelf_port_matches"],
+                        "shelf wire should match declared port:1 — this is the "
+                        "core guarantee the agent distrusted in session log 1")
+        self.assertEqual(s["s1_shelf_carries"], "anchors")
+        self.assertEqual(s["s1_shelf_actual_output_index"], 1)
+        self.assertTrue(s["s1_shelf_actual_upstream"], "actual_upstream path should be set")
+        self.assertTrue(s["s1_shelf_chain_ready"],
+                        "internal filter/clean/null chain should be complete")
+
+    def test_s1_legs_wire_reports_ready(self):
+        """The legs→tabletop wire (also port:1) reports correctly too."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertTrue(s["s1_legs_wired"])
+        self.assertTrue(s["s1_legs_port_matches"])
+        self.assertEqual(s["s1_legs_carries"], "anchors")
+
+    def test_s2_geometry_port_carries_label_differs(self):
+        """A declared port:0 reports carries:'geometry' (not 'anchors') —
+        proving the label distinguishes the two cases rather than being
+        hardcoded."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertTrue(s["s2_top_wired"])
+        self.assertTrue(s["s2_top_port_matches"])
+        self.assertEqual(s["s2_top_carries"], "geometry")
+
+
+# =============================================================================
+# Layer C1: by_name anchors — measure a SEMANTIC marker, not the bbox hull
+#
+# Session log 2 (the road bike) placed the frame's four anchors via
+# bbox_face_center. Because the frame is a single merged mesh, bbox face
+# centers ≠ the real dropout/head-tube/bottom-bracket positions — so changing
+# frame_scale moved the wheels to the bbox hull, not the real geometry. The
+# fix: the root generator emits NAMED marker points at real geometric
+# locations, and downstream anchors use measure:"by_name" + marker:<name> to
+# pick THOSE exact points. This is truly parametric against the actual shape.
+# =============================================================================
+
+_BY_NAME_HARNESS = r"""
+import json, sys, os
+sys.path.insert(0, os.path.join(r"%s", "python3.11libs"))
+import hou
+_hda = os.path.join(r"%s", "otls", "edini_project.hda")
+if os.path.isfile(_hda):
+    hou.hda.installFile(_hda)
+from edini.project.state import empty_declaration, add_component, add_design_param
+from edini.project.node import create_project_hda
+from edini.project.builder import build_project_scaffold, add_anchors
+
+result = {"steps": {}}
+
+# A 'base' component: a box of height H, PLUS a named marker point placed at
+# the box's REAL top-face center (y = H). This mirrors a root generator (e.g.
+# a bike frame's Python SOP) that emits semantic marker points at true
+# geometric locations. We use a VEX wrangle (not Python) to build it so the
+# test is deterministic and readable.
+core = create_project_hda(name="proj_byname")
+decl = empty_declaration("proj_byname")
+add_design_param(decl, "height", default=1.0, min=0.1, max=5.0, label="高度")
+add_component(decl, "base", purpose="基座",
+    ports_out=[
+        {"index": 0, "kind": "geometry"},
+        {"index": 1, "kind": "anchors", "points": [
+            {"name": "top_mount", "role": "mount"}]}])
+build_project_scaffold(core, declaration=decl)
+
+base = core.node("base")
+# Build the box + a named marker at the REAL top (y=H), then merge both into
+# out_geometry. The marker carries @name="top_marker" so by_name can find it.
+box = base.createNode("box", "base_box")
+box.parm("sizex").set(1.0)
+box.parm("sizey").setExpression("ch('/obj/proj_byname/project_core/height')")
+box.parm("sizez").set(1.0)
+box.parm("ty").setExpression("ch('/obj/proj_byname/project_core/height') * 0.5")
+# Marker wrangle: emit ONE point at y=H (the real top), tagged @name=top_marker.
+mk = base.createNode("attribwrangle", "mk_marker")
+mk.parm("class").set("detail")
+mk.parm("snippet").set(
+    'float H = ch("/obj/proj_byname/project_core/height");\n'
+    'int p = addpoint(geoself(), set(0, H, 0));\n'
+    'setpointattrib(geoself(), "name", p, "top_marker", "set");\n')
+mrg = base.createNode("merge", "merge_base")
+mrg.setInput(0, box)
+mrg.setInput(1, mk)
+base.node("out_geometry").setInput(0, mrg)
+
+# The CRITICAL anchor: measure by_name, picking the top_marker point. This is
+# the real-top position, NOT the bbox center (which would be y=H/2).
+add_anchors(core, "base", [
+    {"measure": "by_name", "marker": "top_marker", "name": "top_mount"}])
+
+# Cook the anchor output and read the measured position.
+out_anc = base.node("out_anchors")
+out_anc.cook(force=True)
+pts = out_anc.geometry().points()
+result["steps"]["c1_anchor_point_count"] = len(pts)
+if pts:
+    p = pts[0].position()
+    result["steps"]["c1_anchor_y_at_H1"] = p.y()
+    result["steps"]["c1_anchor_name"] = pts[0].stringAttribValue("name")
+
+# ── THE LIVE TEST: change height 1.0 → 2.0, recook, anchor must move to y=2.0 ──
+core.parm("height").set(2.0)
+out_anc.cook(force=True)
+pts2 = out_anc.geometry().points()
+if pts2:
+    result["steps"]["c1_anchor_y_at_H2"] = pts2[0].position().y()
+
+# ── CONTROL: a bbox_center anchor would sit at y=H/2 (=1.0 at H=2), proving ──
+# ── by_name is NOT just rediscovering the bbox. Build a sibling anchor.    ──
+add_anchors(core, "base", [
+    {"measure": "bbox_center", "name": "bbox_ctl"}])
+out_anc.cook(force=True)
+# out_anchors now merges top_mount (by_name) + bbox_ctl (bbox_center).
+# Find bbox_ctl by name.
+for pt in out_anc.geometry().points():
+    if pt.stringAttribValue("name") == "bbox_ctl":
+        result["steps"]["c1_bbox_ctl_y_at_H2"] = pt.position().y()
+
+print("RESULT_JSON:" + json.dumps(result))
+""" % (_REPO, _REPO)
+
+
+@unittest.skipUnless(HYTHON, "hython not installed")
+class TestByNameAnchorHython(unittest.TestCase):
+    """Layer C1: by_name anchors track the REAL geometry, not the bbox hull."""
+
+    def _run(self):
+        proc = subprocess.run(
+            [HYTHON, "-c", _BY_NAME_HARNESS],
+            capture_output=True, text=True, timeout=180, cwd=_REPO,
+            stdin=subprocess.DEVNULL)
+        combined = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 0,
+                         f"hython failed (rc={proc.returncode}):\n{combined[-2000:]}")
+        idx = combined.rfind("RESULT_JSON:")
+        self.assertGreater(idx, -1, f"no RESULT_JSON:\n{combined[-2000:]}")
+        return json.loads(combined[idx + len("RESULT_JSON:"):]), combined
+
+    def test_by_name_picks_real_marker_position(self):
+        """At H=1.0, the by_name anchor sits at y=1.0 (the real top marker),
+        NOT at y=0.5 (the bbox center). This is the core distinction."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertEqual(s["c1_anchor_point_count"], 1,
+                         f"by_name should emit exactly one anchor point: {res}")
+        self.assertAlmostEqual(s["c1_anchor_y_at_H1"], 1.0, places=4,
+                               msg=f"anchor should be at the real top (y=1.0), "
+                               f"not the bbox center (y=0.5): {res}")
+        self.assertEqual(s["c1_anchor_name"], "top_mount")
+
+    def test_by_name_is_live_with_geometry(self):
+        """Changing height 1.0 → 2.0 moves the marker (and thus the by_name
+        anchor) to y=2.0. The anchor tracks the REAL geometry, live."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertAlmostEqual(s["c1_anchor_y_at_H2"], 2.0, places=4,
+                               msg=f"by_name anchor must follow the marker to "
+                               f"y=2.0 when height doubles: {res}")
+
+    def test_by_name_differs_from_bbox_center(self):
+        """CONTROL: at H=2.0, the bbox_center anchor sits at y=1.0 (=H/2),
+        while the by_name anchor sits at y=2.0 (=H). This proves by_name is
+        NOT rediscovering the bbox — it tracks the true geometric location
+        the generator emitted. This is exactly the failure mode the bike's
+        frame anchors had (bbox face center ≠ real dropout)."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertIn("c1_bbox_ctl_y_at_H2", s,
+                       f"bbox_ctl control anchor missing: {res}")
+        self.assertAlmostEqual(s["c1_bbox_ctl_y_at_H2"], 1.0, places=4,
+                               msg=f"bbox_center should be at y=1.0 (=H/2) at H=2: {res}")
+        self.assertAlmostEqual(s["c1_anchor_y_at_H2"], 2.0, places=4,
+                               msg=f"by_name should be at y=2.0 (=H): {res}")
+        # The decisive assertion: by_name (2.0) != bbox_center (1.0).
+        self.assertNotAlmostEqual(s["c1_anchor_y_at_H2"], s["c1_bbox_ctl_y_at_H2"],
+                                  places=3,
+                                  msg="by_name must differ from bbox_center — "
+                                      "this is the whole point of Layer C1")
+
+
+# =============================================================================
+# Layer C2: verify_parametric — the LIVE guarantee gate
+#
+# Session log 2 (the road bike) declared the model complete after inspect_health
+# returned overall_ok, but never verified a param actually moved the geometry.
+# overall_ok only means "not broken now", not "parametric". verify_parametric
+# proves parametricity by perturbation: change a param, recook, assert the
+# geometry changed on the expected axis, restore. This is the "is it really
+# done?" gate.
+# =============================================================================
+
+_VERIFY_PARAMETRIC_HARNESS = r"""
+import json, sys, os
+sys.path.insert(0, os.path.join(r"%s", "python3.11libs"))
+import hou
+_hda = os.path.join(r"%s", "otls", "edini_project.hda")
+if os.path.isfile(_hda):
+    hou.hda.installFile(_hda)
+from edini.project.state import empty_declaration, add_component, add_design_param
+from edini.project.node import create_project_hda
+from edini.project.builder import build_project_scaffold
+from edini.node_utils import verify_parametric
+
+result = {"steps": {}}
+
+# ── PASS scenario: a box whose sizex ch()-references the core's 'length' ──
+core = create_project_hda(name="proj_vp")
+decl = empty_declaration("proj_vp")
+add_design_param(decl, "length", default=1.0, min=0.1, max=5.0, label="长度")
+add_component(decl, "box_comp", purpose="一个盒子")
+build_project_scaffold(core, declaration=decl)
+
+comp = core.node("box_comp")
+box = comp.createNode("box", "b1")
+box.parm("sizex").setExpression(
+    "ch('/obj/proj_vp/project_core/length')")   # LIVE link
+comp.node("out_geometry").setInput(0, box)
+
+# verify_parametric on the project OUT. length 1.0 -> 2.0 must move X.
+out_node = core.node("OUT")
+res_pass = verify_parametric(
+    node_path=out_node.path(),
+    core_path=core.path(),
+    param="length",
+    new_value=2.0,
+    expected_axis="X",
+    min_relative_change=0.05,
+)
+result["steps"]["pass_passed"] = res_pass.get("passed")
+result["steps"]["pass_restored"] = res_pass.get("restored")
+result["steps"]["pass_reason"] = res_pass.get("reason")
+# Confirm the param was RESTORED to the original 1.0 (non-destructive check).
+result["steps"]["pass_param_value_after"] = core.parm("length").eval()
+
+# ── FAIL scenario: a box whose sizex references a BROKEN path ──
+# Simulates the session-log "promote returns 0 / broken ch() chain" failure:
+# the param exists but the geometry doesn't respond to it.
+core2 = create_project_hda(name="proj_vp2")
+decl2 = empty_declaration("proj_vp2")
+add_design_param(decl2, "length", default=1.0, min=0.1, max=5.0, label="长度")
+add_component(decl2, "box_comp", purpose="一个盒子")
+build_project_scaffold(core2, declaration=decl2)
+comp2 = core2.node("box_comp")
+box2 = comp2.createNode("box", "b2")
+# sizex set to a literal (NOT referencing length) — the param is dead.
+box2.parm("sizex").set(1.0)
+comp2.node("out_geometry").setInput(0, box2)
+res_fail = verify_parametric(
+    node_path=core2.node("OUT").path(),
+    core_path=core2.path(),
+    param="length",
+    new_value=3.0,
+    expected_axis="X",
+    min_relative_change=0.05,
+)
+result["steps"]["fail_passed"] = res_fail.get("passed")
+result["steps"]["fail_reason"] = res_fail.get("reason")
+result["steps"]["fail_restored"] = res_fail.get("restored")
+
+# ── No-op perturbation guard: equal new_value is rejected ──
+res_noop = verify_parametric(
+    node_path=core.node("OUT").path(),
+    core_path=core.path(),
+    param="length",
+    new_value=1.0,   # equals the default — must be rejected
+    )
+result["steps"]["noop_success_false"] = (res_noop.get("success") is False)
+result["steps"]["noop_error_mentions_equals"] = (
+    "equals" in (res_noop.get("error") or ""))
+
+print("RESULT_JSON:" + json.dumps(result))
+""" % (_REPO, _REPO)
+
+
+@unittest.skipUnless(HYTHON, "hython not installed")
+class TestVerifyParametricHython(unittest.TestCase):
+    """Layer C2: verify_parametric is the LIVE-guarantee completion gate."""
+
+    def _run(self):
+        proc = subprocess.run(
+            [HYTHON, "-c", _VERIFY_PARAMETRIC_HARNESS],
+            capture_output=True, text=True, timeout=180, cwd=_REPO,
+            stdin=subprocess.DEVNULL)
+        combined = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 0,
+                         f"hython failed (rc={proc.returncode}):\n{combined[-2000:]}")
+        idx = combined.rfind("RESULT_JSON:")
+        self.assertGreater(idx, -1, f"no RESULT_JSON:\n{combined[-2000:]}")
+        return json.loads(combined[idx + len("RESULT_JSON:"):]), combined
+
+    def test_live_param_passes(self):
+        """A box whose sizex ch()-references 'length' PASSES when length is
+        perturbed 1.0 -> 2.0 with expected_axis X. The geometry moved on X."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertTrue(s["pass_passed"],
+                        f"a live-linked param should PASS verify_parametric: {res}")
+        self.assertIn("PASS", s["pass_reason"])
+
+    def test_param_restored_after_check(self):
+        """verify_parametric is NON-DESTRUCTIVE: after the check, the param is
+        back at its original value (1.0), not left at the perturbation (2.0)."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertTrue(s["pass_restored"],
+                        "restored flag must be True")
+        self.assertAlmostEqual(s["pass_param_value_after"], 1.0, places=4,
+                               msg="param must be restored to original 1.0")
+
+    def test_dead_param_fails_with_diagnostic(self):
+        """A box whose sizex does NOT reference 'length' FAILS, with a reason
+        explaining the param didn't reach the geometry. This is exactly the
+        session-log 'broken ch() chain / promote returns 0' failure caught."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertFalse(s["fail_passed"],
+                         f"a dead param must FAIL verify_parametric: {res}")
+        # The reason must point at the root cause (no axis changed / didn't
+        # reach the geometry), so the agent knows the param chain is broken.
+        reason = s["fail_reason"] or ""
+        self.assertTrue(
+            "axis" in reason.lower() or "reach" in reason.lower()
+            or "did not change" in reason.lower(),
+            f"fail reason should diagnose the broken chain: {reason!r}")
+
+    def test_noop_perturbation_rejected(self):
+        """A new_value equal to the current value is rejected — it would pass
+        vacuously and teach the wrong lesson."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertTrue(s["noop_success_false"])
+        self.assertTrue(s["noop_error_mentions_equals"])
+
+
+# =============================================================================
+# Finding 4: repath_to_relative — make a component migratable
+#
+# The design_params path uses absolute ch('/obj/.../project_core/<p>'), which
+# ties a component to its current project path. project_repath_to_relative
+# rewrites those to relative ch('../../<p>') (depth-computed) so a component
+# can be copy-pasted into another project. This is the cure for Finding 4's
+# "component not migratable" half (the other half — promote returns 0 — is
+# resolved by documenting it as correct under the design_params path).
+# =============================================================================
+
+_REPATH_HARNESS = r"""
+import json, sys, os
+sys.path.insert(0, os.path.join(r"%s", "python3.11libs"))
+import hou
+_hda = os.path.join(r"%s", "otls", "edini_project.hda")
+if os.path.isfile(_hda):
+    hou.hda.installFile(_hda)
+from edini.project.state import empty_declaration, add_component, add_design_param
+from edini.project.node import create_project_hda
+from edini.project.builder import build_project_scaffold
+from edini.node_utils import repath_to_relative
+
+result = {"steps": {}}
+
+# Build a project with one component referencing the core's 'length' via
+# ABSOLUTE ch() (the design_params path). A box whose sizex + sizey both
+# reference length.
+core = create_project_hda(name="proj_rp")
+decl = empty_declaration("proj_rp")
+add_design_param(decl, "length", default=1.5, min=0.1, max=5.0, label="长度")
+add_component(decl, "box_comp", purpose="b")
+build_project_scaffold(core, declaration=decl)
+comp = core.node("box_comp")
+box = comp.createNode("box", "b1")
+box.parm("sizex").setExpression(
+    "ch('/obj/proj_rp/project_core/length')")            # absolute
+box.parm("sizey").setExpression(
+    "ch('/obj/proj_rp/project_core/length') * 0.5")      # absolute, in expr
+comp.node("out_geometry").setInput(0, box)
+comp.node("out_geometry").cook(force=True)
+
+# Snapshot the geometry BEFORE repath (bbox sizes).
+before_bbox = comp.node("output_0").geometry().boundingBox()
+result["steps"]["before_sizex"] = before_bbox.sizevec().x()
+result["steps"]["before_sizey"] = before_bbox.sizevec().y()
+# Record the expressions for inspection.
+result["steps"]["before_sizex_expr"] = box.parm("sizex").expression()
+result["steps"]["before_sizey_expr"] = box.parm("sizey").expression()
+
+# ── Repath ──
+res = repath_to_relative(core_path=core.path(), component_id="box_comp")
+result["steps"]["repath_count"] = res.get("count")
+result["steps"]["repath_success"] = res.get("success")
+rewritten = res.get("rewritten", [])
+# Find the sizex rewrite to confirm the target expression form.
+sx_rewrites = [r for r in rewritten if r["parm"] == "sizex"]
+if sx_rewrites:
+    result["steps"]["after_sizex_expr"] = sx_rewrites[0]["after"]
+
+# ── Behavior unchanged: geometry still cooks to the SAME bbox ──
+comp.node("out_geometry").cook(force=True)
+after_bbox = comp.node("output_0").geometry().boundingBox()
+result["steps"]["after_sizex"] = after_bbox.sizevec().x()
+result["steps"]["after_sizey"] = after_bbox.sizevec().y()
+
+# ── LIVE: changing length still moves the geometry after repath ──
+core.parm("length").set(3.0)
+comp.node("out_geometry").cook(force=True)
+live_bbox = comp.node("output_0").geometry().boundingBox()
+result["steps"]["live_sizex_at_len3"] = live_bbox.sizevec().x()
+core.parm("length").set(1.5)   # restore
+
+# ── MIGRATION TEST: copy the component into a DIFFERENT project ──
+# A migrated component on absolute paths would break (path '/obj/proj_rp/...'
+# no longer exists). On relative paths it should still cook.
+core2 = create_project_hda(name="proj_rp2")
+decl2 = empty_declaration("proj_rp2")
+add_design_param(decl2, "length", default=2.0, min=0.1, max=5.0, label="长度")
+build_project_scaffold(core2, declaration=decl2)
+# Copy the (already-repathed) box_comp from proj_rp into proj_rp2.
+comp2 = hou.copyNodesTo([comp], core2)[0]
+comp2.moveToGoodPosition()
+# length lives on core2 (the design param), not on comp2. proj_rp2's default is 2.0.
+comp2.node("out_geometry").cook(force=True)
+try:
+    migrated_bbox = comp2.node("output_0").geometry().boundingBox()
+    result["steps"]["migrated_cook_ok"] = True
+    result["steps"]["migrated_sizex"] = migrated_bbox.sizevec().x()
+    # proj_rp2's length default is 2.0 → sizex should be 2.0 (not 0).
+except Exception as e:
+    result["steps"]["migrated_cook_ok"] = False
+    result["steps"]["migrated_error"] = str(e)
+
+print("RESULT_JSON:" + json.dumps(result))
+""" % (_REPO, _REPO)
+
+
+@unittest.skipUnless(HYTHON, "hython not installed")
+class TestRepathToRelativeHython(unittest.TestCase):
+    """Finding 4: repath_to_relative makes a component migratable without
+    changing its behavior."""
+
+    def _run(self):
+        proc = subprocess.run(
+            [HYTHON, "-c", _REPATH_HARNESS],
+            capture_output=True, text=True, timeout=180, cwd=_REPO,
+            stdin=subprocess.DEVNULL)
+        combined = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 0,
+                         f"hython failed (rc={proc.returncode}):\n{combined[-2000:]}")
+        idx = combined.rfind("RESULT_JSON:")
+        self.assertGreater(idx, -1, f"no RESULT_JSON:\n{combined[-2000:]}")
+        return json.loads(combined[idx + len("RESULT_JSON:"):]), combined
+
+    def test_repath_rewrites_absolute_to_relative(self):
+        """repath finds the absolute ch() references and rewrites them. At
+        least the sizex one should become a relative ch('../../length')."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertTrue(s["repath_success"])
+        self.assertGreaterEqual(s["repath_count"], 2,
+                                f"expected >=2 rewrites (sizex+sizey): {res}")
+        after = s["after_sizex_expr"]
+        self.assertIsNotNone(after, f"sizex not rewritten: {res}")
+        self.assertNotIn("/obj/proj_rp", after,
+                         f"absolute path should be gone: {after}")
+        self.assertIn("../", after,
+                      f"should be a relative reference now: {after}")
+
+    def test_behavior_unchanged_after_repath(self):
+        """The geometry cooks to the SAME bbox before and after repath — only
+        the path notation changed, not the link. length=1.5 → sizex=1.5 both."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertAlmostEqual(s["before_sizex"], s["after_sizex"], places=4,
+                               msg="sizex must not change across repath")
+        self.assertAlmostEqual(s["before_sizey"], s["after_sizey"], places=4,
+                               msg="sizey must not change across repath")
+
+    def test_live_after_repath(self):
+        """After repath, changing length STILL moves the geometry (the link is
+        live, just relative now). length 1.5→3.0 should double sizex."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertAlmostEqual(s["live_sizex_at_len3"], 3.0, places=4,
+                               msg="after repath, length 1.5→3 must move sizex to 3.0")
+
+    def test_migrated_component_cooks(self):
+        """THE point of repath: copy the component into another project and it
+        still cooks (relative paths resolve to the new core). On absolute paths
+        it would break (stale /obj/proj_rp/... reference)."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertTrue(s.get("migrated_cook_ok"),
+                        f"migrated component must cook: {res}")
+        # proj_rp2 length default 2.0 → migrated box sizex should be 2.0.
+        self.assertAlmostEqual(s["migrated_sizex"], 2.0, places=4,
+                               msg="migrated component should read the new core's length=2.0")
+
+
 if __name__ == "__main__":
     unittest.main()
