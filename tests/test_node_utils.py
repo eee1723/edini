@@ -105,6 +105,70 @@ class TestCreateNode(unittest.TestCase):
         self.assertEqual(r["type"], "grid")
         _register_created_node(r)
 
+    # ── parms inventory (Fix: agent learns real parm names at create time) ──
+    # The chair-modeling log showed the agent guessing a line SOP's length parm
+    # as `length` (5 wasted rounds) before discovering it's `dist`. create_node
+    # now returns the node's real parms so the agent never has to guess.
+
+    def test_parms_field_present(self):
+        """Every successful create_node returns a `parms` inventory."""
+        r = create_node("box", name="p_box")
+        self.assertTrue(r["success"])
+        self.assertIn("parms", r)
+        inv = r["parms"]
+        self.assertIn("list", inv)
+        self.assertIn("truncated", inv)
+        self.assertIsInstance(inv["list"], list)
+
+    def test_parms_expose_real_parm_names(self):
+        """box exposes sizex/sizey/sizez — the addressable channel names, not a
+        guessed `size` or `length`. This is the core fix: the agent learns the
+        real parm name at create time and never has to guess (the chair log
+        showed it guessing `length` for a line SOP, which is actually `dist`).
+
+        Each entry has at least name + a type field. (Under the mock, parm
+        templates aren't exposed via hou.Parm.template(), so type may read as
+        'unknown'; in real Houdini the concrete type — Float/Menu/... — is
+        populated. The name is what eliminates name-guessing either way.)
+        """
+        r = create_node("box", name="p_box2")
+        self.assertTrue(r["success"])
+        names = {p["name"] for p in r["parms"]["list"]}
+        self.assertEqual(names, {"sizex", "sizey", "sizez"})
+        for p in r["parms"]["list"]:
+            self.assertIn("type", p)  # type key always present (may be 'unknown' in mock)
+
+    def test_parms_include_menu_tokens(self):
+        """Menu parms surface their valid tokens so the agent doesn't guess a
+        menu value. (Token/type population depends on parm template access;
+        the mock degrades name-only, but the name 'type' itself — the normal
+        SOP's primitive-type menu — is asserted here.)"""
+        r = create_node("normal", name="p_normal")
+        self.assertTrue(r["success"])
+        names = {p["name"] for p in r["parms"]["list"]}
+        # 'type' is the normal SOP's primitive-type MENU parm; 'cuspangle' is
+        # its cusp angle. Knowing these names at create time is the win.
+        self.assertIn("type", names)
+        self.assertIn("cuspangle", names)
+
+    def test_parms_degrade_gracefully_when_no_ptg(self):
+        """A node type with no parm template group still creates successfully;
+        the inventory is an empty list with a note (never fails the create)."""
+        r = create_node("sphere", name="p_sphere")
+        self.assertTrue(r["success"])
+        inv = r["parms"]
+        self.assertEqual(inv["list"], [])
+        self.assertIn("note", inv)
+
+    def test_create_never_blocked_by_inventory(self):
+        """Even if the node type is exotic, create succeeds and the inventory
+        is present (possibly empty). The create path is independent of it."""
+        # 'null' has no ptg in the mock — must still create fine.
+        r = create_node("null", name="p_null")
+        self.assertTrue(r["success"])
+        self.assertIn("parms", r)
+        _register_created_node(r)
+
 
 # ===================================================================
 # TestDeleteNode

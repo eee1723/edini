@@ -2,9 +2,7 @@
 // Procedural harness tool definitions.
 
 import { Type } from "typebox";
-
-const TOOL_PORT = parseInt(process.env.EDINI_TOOL_PORT || "9876", 10);
-const TOOL_URL = `http://127.0.0.1:${TOOL_PORT}/execute`;
+import { forwardTool } from "./_shared";
 
 // Visual verification gate — when off, the agent is told to rely on numeric
 // evidence (health/inventory) instead of capture_review + describe_image.
@@ -18,19 +16,6 @@ const VERIFY_GUIDELINES = VISUAL_VERIFY_ON
   : [
       "Visual verification (capture_review + describe_image) is disabled. Before committing, confirm success via numeric evidence: the sandbox result's diagnostics/structural_checks, houdini_inspect_geometry_health, and houdini_geometry_inventory. Do NOT call capture_review or describe_image.",
     ];
-
-async function forwardTool(toolName: string, params: Record<string, unknown>) {
-  const response = await fetch(TOOL_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tool: toolName, params }),
-  });
-  const result = await response.json();
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-    details: result,
-  };
-}
 
 export const houdiniCollectDiagnostics = {
   name: "houdini_collect_diagnostics",

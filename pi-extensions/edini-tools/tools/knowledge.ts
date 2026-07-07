@@ -2,22 +2,7 @@
 // Knowledge search tool — lets the agent query the accumulated knowledge base.
 
 import { Type } from "typebox";
-
-const TOOL_PORT = parseInt(process.env.EDINI_TOOL_PORT || "9876", 10);
-const TOOL_URL = `http://127.0.0.1:${TOOL_PORT}/execute`;
-
-async function forwardTool(toolName: string, params: Record<string, unknown>) {
-  const response = await fetch(TOOL_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tool: toolName, params }),
-  });
-  const result = await response.json();
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-    details: result,
-  };
-}
+import { forwardTool } from "./_shared";
 
 export const ediniSearchKnowledge = {
   name: "edini_search_knowledge",

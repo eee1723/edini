@@ -47,6 +47,14 @@ def create_node(
 
     Automatically resolves the preferred namespace (e.g. 'copytopoints'
     → 'copytopoints::2.0') to match Tab-menu creation behavior.
+
+    The return value carries a compact ``parms`` inventory of the freshly
+    created node — the agent learns each real parm name (e.g. a line SOP's
+    ``dist``, not the guessed ``length``) at creation time, with no extra
+    ``query_parms`` round-trip. The inventory is read from the live node's
+    own ``parmTemplateGroup()``, so it reflects the actual instantiated
+    version (no manifest drift). It is best-effort: any failure to read it
+    degrades to an empty list rather than failing the create.
     """
     try:
         parent = hou.node(parent_path)
@@ -59,6 +67,7 @@ def create_node(
             "path": node.path(),
             "name": node.name(),
             "type": node.type().name(),
+            "parms": _node_parm_inventory(node),
         }
     except hou.OperationFailed as e:
         return {"success": False, "error": f"Failed to create node '{node_type}': {e}"}
@@ -1206,6 +1215,132 @@ def _flatten_parm_templates(group) -> list[dict[str, Any]]:
         entries = []
     walk(entries)
     return specs
+
+
+# Cap on how many parm entries the create_node inventory surfaces. Past this we
+# truncate and report the total, so a heavyweight node's full parm sheet can't
+# bloat the create response. Most primitive/modifier SOPs the agent creates in a
+# modeling loop have well under this many user-facing parms.
+_CREATE_NODE_PARM_CAP = 60
+
+
+def _node_parm_inventory(node) -> dict[str, Any]:
+    """Build a compact, agent-facing inventory of a freshly created node's
+    parameters.
+
+    Reads the node's own ``parmTemplateGroup()`` (the actual instantiated
+    version — no manifest drift) and flattens it into a small list. Each entry
+    keeps only what the agent needs to address the parm next: its name, type,
+    and — for multi-component vectors — the real per-component channel names
+    (``rad`` → ``radx``/``rady``), which is exactly the gap that caused the
+    chair-log agent to guess ``length`` instead of ``dist``.
+
+    This is strictly best-effort: any failure reading templates degrades to an
+    empty ``parms`` list with a ``note`` rather than failing ``create_node``.
+    A create call must never be blocked by the inventory step.
+
+    Two resolution paths, tried in order:
+      1. The node TYPE's ``parmTemplateGroup()`` — canonical, complete, carries
+         type + menu + component names. Works in real Houdini.
+      2. The node instance's already-materialized ``parms()`` — each parm knows
+         at least its own name (and, in real Houdini, its template). This is
+         the fallback for environments where the type-level group isn't exposed
+         (e.g. the unit-test mock, which populates node._parms at create time
+         but leaves the type's group empty).
+    The fallback yields name-only entries when a parm's template isn't
+    available — still enough to stop the agent guessing parm names.
+    """
+    # Path 1: type-level parm template group (richest).
+    full: list[dict[str, Any]] = []
+    group = None
+    try:
+        ntype = node.type()
+        if ntype is not None:
+            group = ntype.parmTemplateGroup()
+    except Exception:
+        group = None
+    if group is not None:
+        try:
+            full = _flatten_parm_templates(group)
+        except Exception:  # noqa: BLE001 — inventory must never break create
+            full = []
+
+    # Path 2: instance parms (fallback). Used when the type group is empty or
+    # wasn't readable. Each parm contributes its name; its template (if
+    # available) adds type + menu + component info. We build raw specs in the
+    # SAME shape path 1 produces (component_names / menu_items), so the shared
+    # compact loop below handles both paths uniformly.
+    if not full:
+        try:
+            live_parms = node.parms()
+        except Exception:  # noqa: BLE001
+            live_parms = []
+        for p in live_parms:
+            try:
+                nm = p.name()
+            except Exception:
+                continue
+            if not nm:
+                continue
+            spec: dict[str, Any] = {"name": nm, "type": "unknown"}
+            # Real hou.Parm exposes .template(); the mock's MockParm does not —
+            # degrade to name-only there (still prevents name-guessing).
+            try:
+                tmpl = p.template()
+                if tmpl is not None:
+                    ttype = _attr_or_call(tmpl, "type")
+                    tname = _attr_or_call(ttype, "name") if ttype is not None else None
+                    if tname:
+                        spec["type"] = tname
+                    ncomp = _attr_or_call(tmpl, "numComponents") or 1
+                    try:
+                        ncomp = int(ncomp)
+                    except Exception:
+                        ncomp = 1
+                    if ncomp > 1:
+                        spec["component_names"] = [nm + s for s in ("x", "y", "z", "w")[:ncomp]]
+                    items = _attr_or_call(tmpl, "menuItems")
+                    if items:
+                        spec["menu_items"] = [str(i) for i in items]
+            except Exception:
+                pass
+            full.append(spec)
+
+    if not full:
+        return {"list": [], "truncated": False, "note": "no readable parms"}
+
+    compact: list[dict[str, Any]] = []
+    for spec in full:
+        name = spec.get("name")
+        if not name:
+            continue
+        # Always include the primary name + type. Type guides how to set the
+        # parm (e.g. Menu needs a token, Float takes a number or expression).
+        entry: dict[str, Any] = {"name": name, "type": spec.get("type", "unknown")}
+        # Multi-component parms: surface the addressable channel names. This is
+        # the single most valuable field — without it, agents address the group
+        # name ('rad') which returns None and cascades into wasted rounds.
+        comps = spec.get("component_names")
+        if comps:
+            entry["components"] = comps
+        # Menu tokens: a Menu parm's value must be one of these, and guessing a
+        # token (e.g. 'x' vs 'X') is a common failure — include them when few.
+        menu = spec.get("menu_items")
+        if menu and len(menu) <= 12:
+            entry["menu"] = menu
+        compact.append(entry)
+
+    total = len(compact)
+    if total > _CREATE_NODE_PARM_CAP:
+        truncated = compact[:_CREATE_NODE_PARM_CAP]
+        return {
+            "list": truncated,
+            "truncated": True,
+            "total": total,
+            "note": f"showing first {_CREATE_NODE_PARM_CAP} of {total}; "
+                    f"use query_parms(node_type=...) for the full list",
+        }
+    return {"list": compact, "truncated": False, "total": total}
 
 
 def _node_type_namespace(type_name: str) -> str | None:

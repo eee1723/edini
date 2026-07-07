@@ -3,22 +3,7 @@
 // These are proxy tools — execution is forwarded to Houdini via HTTP.
 
 import { Type } from "typebox";
-
-const TOOL_PORT = parseInt(process.env.EDINI_TOOL_PORT || "9876", 10);
-const TOOL_URL = `http://127.0.0.1:${TOOL_PORT}/execute`;
-
-async function forwardTool(toolName: string, params: Record<string, unknown>) {
-  const response = await fetch(TOOL_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tool: toolName, params }),
-  });
-  const result = await response.json();
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-    details: result,
-  };
-}
+import { forwardTool } from "./_shared";
 
 export const houdiniGetSceneInfo = {
   name: "houdini_get_scene_info",
@@ -39,8 +24,17 @@ export const houdiniCreateNode = {
   name: "houdini_create_node",
   label: "Create Houdini Node",
   description:
-    "Create a new node in the Houdini scene. Specify node type, optional name, and optional parent path (default /obj).",
+    "Create a new node in the Houdini scene. Specify node type, optional name, and optional parent path (default /obj). " +
+    "The return value includes a `parms` inventory of the freshly created node — the REAL parameter names for this " +
+    "exact node type/version (e.g. a line SOP exposes `dist`, not `length`; a circle exposes `radx`/`rady`, not `rad`). " +
+    "Read this inventory from the create response and address parms by those names — do NOT guess parm names from " +
+    "memory (they drift across Houdini versions). This removes the need for a separate query_parms call after creation.",
   promptSnippet: "Create a Houdini node by type, optional name, and parent path",
+  promptGuidelines: [
+    "After creating a node, read its `parms.list` from the response to learn the real parm names before calling houdini_set_param — never guess parm names, they vary across node types and Houdini versions (e.g. line's length parm is `dist`).",
+    "Multi-component vector parms show their real channel names under `components` (e.g. a size parm is addressable as `sizex`/`sizey`/`sizez`, NOT the group name `size`). Menu parms list valid `menu` tokens.",
+    "If `parms.truncated` is true, the node has more parms than shown — use query_parms(node_type=...) for the full list.",
+  ],
   parameters: Type.Object({
     node_type: Type.String({ description: "Node type name, e.g. 'geo', 'null', 'file'" }),
     name: Type.Optional(Type.String({ description: "Optional node name" })),
