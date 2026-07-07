@@ -3850,18 +3850,28 @@ def verify_parametric(
                     "error": f"No geometry on {node_path} before perturbation"}
 
         # ── Perturb + recook ──
-        parm.set(new_value)
-        node.cook(force=True)
-
-        after = _snapshot()
-        # Capture errors AFTER the recook (this catches broken ch() chains that
-        # silently produce zero geometry — the session-log "promote returns 0 /
-        # nothing moves" failure).
-        errors = list(node.errors() or [])
-
-        # ALWAYS restore, even if assertions below would early-return.
-        parm.set(original_value)
-        node.cook(force=True)
+        # The restore is GUARANTEED via try/finally: if cook/_snapshot/errors
+        # raise, the finally still puts the param back. Without this, a cook
+        # error mid-verification (the exact failure this tool exists to detect)
+        # would silently mutate the user's scene — violating the docstring's
+        # "ALWAYS restore" contract. (session-logs-analysis C2 audit.)
+        # `_restored` is set ONLY when the finally has actually run, so the
+        # outer except can report the param's true state to the agent.
+        after = None
+        errors: list[str] = []
+        _restored = False
+        try:
+            parm.set(new_value)
+            node.cook(force=True)
+            after = _snapshot()
+            # Capture errors AFTER the recook (this catches broken ch() chains
+            # that silently produce zero geometry — the session-log "promote
+            # returns 0 / nothing moves" failure).
+            errors = list(node.errors() or [])
+        finally:
+            parm.set(original_value)
+            node.cook(force=True)
+            _restored = True
 
         if after is None:
             return {"success": True, "passed": False,
@@ -3933,7 +3943,13 @@ def verify_parametric(
                            + (f" on axis {expected_axis.upper()}" if expected_axis else "")
                            + f"; axis_changes={axis_changes}")}
     except Exception as e:
+        # If the exception happened after perturbation, the inner finally has
+        # already restored the param (_restored=True). If it happened before
+        # (e.g. parm.eval / node lookup), no perturbation occurred. Either way,
+        # report the param's true state so the agent knows the scene is clean.
+        restored = locals().get("_restored", False)
         return {"success": False,
+                "restored": restored,
                 "error": f"{e}\n{traceback.format_exc()}"}
 
 
@@ -4036,11 +4052,18 @@ def repath_to_relative(core_path: str, component_id: str) -> dict[str, Any]:
                 else:
                     skipped += 1
 
+        # `count` counts ONLY successful rewrites. A failed setExpression
+        # (recorded with `set_error` on the rewritten entry) does NOT count —
+        # previously len(rewritten) over-reported, telling the agent "N refs
+        # migrated" when some had silently failed. (session-logs-analysis audit.)
+        failed = [r for r in rewritten if "set_error" in r]
         return {"success": True,
                 "component": subnet.path(),
                 "core": core_path_norm,
                 "rewritten": rewritten,
-                "count": len(rewritten),
+                "count": len(rewritten) - len(failed),
+                "failed": [{"node": r["node"], "parm": r["parm"],
+                            "error": r["set_error"]} for r in failed],
                 "skipped_no_change": skipped}
     except Exception as e:
         return {"success": False,

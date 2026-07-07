@@ -1658,5 +1658,339 @@ class TestRepathToRelativeHython(unittest.TestCase):
                                msg="migrated component should read the new core's length=2.0")
 
 
+# =============================================================================
+# HARDENING: edge-case coverage for the findings-1..5 fixes.
+#
+# These tests exist because the session-logs-analysis audit found that the
+# C1/C2/Finding-4 fixes had happy-path-only hython coverage. The critical
+# failure paths — verify_parametric restore-on-exception, by_name zero-match,
+# repath hou.ch() form + near-name collisions, internal_chain disconnected —
+# were entirely untested. Each maps to a real bug or latent fragility the audit
+# flagged. (See wiki/pitfalls.md "session-logs-analysis audit".)
+# =============================================================================
+
+_HARDENING_HARNESS = r"""
+import json, sys, os
+sys.path.insert(0, os.path.join(r"%s", "python3.11libs"))
+import hou
+_hda = os.path.join(r"%s", "otls", "edini_project.hda")
+if os.path.isfile(_hda):
+    hou.hda.installFile(_hda)
+from edini.project.state import empty_declaration, add_component, add_design_param
+from edini.project.node import create_project_hda
+from edini.project.builder import build_project_scaffold, add_anchors
+from edini.node_utils import verify_parametric, repath_to_relative
+
+result = {"steps": {}}
+
+
+def _safe(fn, key_prefix, **kw):
+    '''Run fn() capturing return OR exception into result['steps'][key_prefix*].'''
+    try:
+        return fn()
+    except Exception as e:
+        result["steps"][key_prefix + "_error"] = str(e)
+        return None
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# (1) verify_parametric RESTORES the param even when the perturbed cook RAISES.
+# This is the audit's #1 correctness gap: the original code had no try/finally
+# around perturb→recook→snapshot→errors, so a cook error mid-verification left
+# the user's scene mutated at new_value — the exact opposite of the tool's
+# "ALWAYS restore" contract.
+# ──────────────────────────────────────────────────────────────────────────
+def _scenario_err():
+    core_e = create_project_hda(name="proj_err")
+    decl_e = empty_declaration("proj_err")
+    add_design_param(decl_e, "length", default=1.0, min=0.1, max=5.0, label="长度")
+    add_component(decl_e, "boom_comp", purpose="raises on perturb")
+    build_project_scaffold(core_e, declaration=decl_e)
+    comp_e = core_e.node("boom_comp")
+    # A box that LIVE-references length (cooks fine at any value) PLUS a
+    # wrangle that RAISES via VEX error() specifically when length ≈ 2.0.
+    box_e = comp_e.createNode("box", "ok_box")
+    box_e.parm("sizex").setExpression(
+        "ch('/obj/proj_err/project_core/length')")
+    boom = comp_e.createNode("attribwrangle", "boom")
+    boom.parm("class").set("detail")
+    boom.parm("snippet").set(
+        'float __v = ch("/obj/proj_err/project_core/length");\n'
+        'if (abs(__v - 2.0) < 0.05) {\n'
+        '    error("intentional cook error at length=2.0\\n");\n'
+        '}\n')
+    mrg_e = comp_e.createNode("merge", "mrg")
+    mrg_e.setInput(0, box_e)
+    mrg_e.setInput(1, boom)
+    comp_e.node("out_geometry").setInput(0, mrg_e)
+    # Cook at length=1.0 first — must succeed (no error triggered yet).
+    try:
+        comp_e.node("out_geometry").cook(force=True)
+        result["steps"]["err_setup_ok"] = True
+    except Exception as e:
+        result["steps"]["err_setup_ok"] = False
+        result["steps"]["err_setup_error"] = str(e)
+    result["steps"]["err_original"] = core_e.parm("length").eval()
+    res_err = verify_parametric(
+        node_path=core_e.node("OUT").path(),
+        core_path=core_e.path(),
+        param="length",
+        new_value=2.0,
+        expected_axis="X",
+        min_relative_change=0.05,
+    )
+    result["steps"]["err_success"] = res_err.get("success")
+    result["steps"]["err_restored_field"] = res_err.get("restored")
+    # THE decisive assertion source: read the LIVE parm value after the call.
+    result["steps"]["err_param_value_after"] = core_e.parm("length").eval()
+
+_safe(_scenario_err, "err_top")
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# (2) by_name anchor emits a cook ERROR when the marker is not found (typo),
+# instead of silently producing zero points. The audit found the original VEX
+# had no else branch on !__found — a typo'd marker yielded 0 anchors with no
+# diagnostic, indistinguishable from "upstream empty".
+# ──────────────────────────────────────────────────────────────────────────
+def _scenario_noname():
+    core_n = create_project_hda(name="proj_noname")
+    decl_n = empty_declaration("proj_noname")
+    add_component(decl_n, "base", purpose="emits NO named marker",
+        ports_out=[
+            {"index": 0, "kind": "geometry"},
+            {"index": 1, "kind": "anchors", "points": [
+                {"name": "ghost_mount", "role": "mount"}]}])
+    build_project_scaffold(core_n, declaration=decl_n)
+    base_n = core_n.node("base")
+    # A box geometry with NO @name attribute on any point.
+    box_n = base_n.createNode("box", "plain_box")
+    base_n.node("out_geometry").setInput(0, box_n)
+    # Ask for a marker that was never emitted — should error, not stay silent.
+    add_anchors(core_n, "base", [
+        {"measure": "by_name", "marker": "does_not_exist", "name": "ghost_mount"}])
+    wr = base_n.node("anchor_ghost_mount")
+    errs = []
+    pts_after = -1
+    if wr is not None:
+        # VEX error() raises hou.OperationFailed from cook() — that IS the
+        # signal we want (hard failure, not silent 0-point success).
+        try:
+            wr.cook(force=True)
+        except Exception as cook_exc:
+            errs.append(str(cook_exc))
+        try:
+            errs = errs + list(wr.errors() or [])
+        except Exception as e:
+            errs.append(f"<errors() read failed: {e}>")
+        try:
+            pts_after = len(base_n.node("out_anchors").geometry().points())
+        except Exception:
+            pts_after = -2
+    joined = " | ".join(errs)
+    result["steps"]["noname_error_count"] = len(errs)
+    result["steps"]["noname_error_mentions_marker"] = ("does_not_exist" in joined)
+    result["steps"]["noname_anchor_points"] = pts_after
+
+_safe(_scenario_noname, "noname_top")
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# (3a) repath rewrites the hou.ch('...') form (the hython happy-path test only
+# exercised bare ch()).
+# (3b) repath does NOT touch a near-collision reference: a parm pointing at
+# project_core_BACKUP (whose path merely CONTAINS the core path string) must
+# stay absolute. Correctness hinges on the `if '/' in parm_tail` guard.
+# ──────────────────────────────────────────────────────────────────────────
+def _scenario_houch():
+    core_h = create_project_hda(name="proj_hc")
+    decl_h = empty_declaration("proj_hc")
+    add_design_param(decl_h, "length", default=1.5, min=0.1, max=5.0, label="长度")
+    add_component(decl_h, "box_comp", purpose="b")
+    build_project_scaffold(core_h, declaration=decl_h)
+    comp_h = core_h.node("box_comp")
+    box_h = comp_h.createNode("box", "bh")
+    # hou.ch form (not bare ch).
+    box_h.parm("sizex").setExpression(
+        "hou.ch('/obj/proj_hc/project_core/length')")
+    # Near-collision: path CONTAINS the core path string. Must stay absolute.
+    # sizey will evaluate to 0 (project_core_backup doesn't exist) but that's
+    # fine — we only inspect the EXPRESSION, not the cook result, here.
+    box_h.parm("sizey").setExpression(
+        "ch('/obj/proj_hc/project_core_backup/length') * 0.5")
+    comp_h.node("out_geometry").setInput(0, box_h)
+    res_h = repath_to_relative(core_path=core_h.path(), component_id="box_comp")
+    sx_after = box_h.parm("sizex").expression()
+    sy_after = box_h.parm("sizey").expression()
+    result["steps"]["hc_count"] = res_h.get("count")
+    result["steps"]["hc_sizex_after"] = sx_after
+    result["steps"]["hc_sizex_rewritten"] = (
+        "/obj/proj_hc/project_core/" not in (sx_after or ""))
+    result["steps"]["hc_sizey_after"] = sy_after
+    result["steps"]["hc_sizey_untouched"] = (
+        "/obj/proj_hc/project_core_backup/length" in (sy_after or ""))
+
+_safe(_scenario_houch, "hc_top")
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# (4) internal_chain_ready: if the internal filter→clean→in_null chain is
+# DISCONNECTED (nodes exist but no setInput between them), the audit expects
+# input_wires[].internal_chain_ready == False. The current builder only checks
+# node EXISTENCE, so this records the CURRENT (deficient) behavior and is
+# marked @expectedFailure below.
+# ──────────────────────────────────────────────────────────────────────────
+def _scenario_chain():
+    from edini.project.ports import INPUT_FILTER_PREFIX, ANCHOR_CLEAN_PREFIX
+    from edini.project.builder import _collect_input_wires
+    core_c = create_project_hda(name="proj_chain")
+    decl_c = empty_declaration("proj_chain")
+    add_component(decl_c, "up", purpose="upstream",
+        ports_out=[
+            {"index": 0, "kind": "geometry"},
+            {"index": 1, "kind": "anchors", "points": [
+                {"name": "m", "role": "mount"}]}])
+    add_component(decl_c, "dn", purpose="downstream",
+        ports_in=[{"from": "up", "port": 1, "anchor": "m"}])
+    build_project_scaffold(core_c, declaration=decl_c)
+    dn = core_c.node("dn")
+    filt = dn.node(f"{INPUT_FILTER_PREFIX}up_m")
+    # Deliberately disconnect the filter's input — it still EXISTS but carries
+    # no data. This is the false-positive case: node present, chain broken.
+    if filt is not None:
+        try:
+            filt.setInput(0, None)
+        except Exception as e:
+            result["steps"]["chain_break_error"] = str(e)
+    wires = _collect_input_wires(core_c, decl_c)
+    dn_wire = next((w for w in wires if w.get("component") == "dn"), {})
+    result["steps"]["chain_nodes_exist"] = (
+        dn.node(f"{INPUT_FILTER_PREFIX}up_m") is not None)
+    result["steps"]["chain_internal_ready_reported"] = dn_wire.get(
+        "internal_chain_ready")
+
+_safe(_scenario_chain, "chain_top")
+
+print("RESULT_JSON:" + json.dumps(result))
+""" % (_REPO, _REPO)
+
+
+@unittest.skipUnless(HYTHON, "hython not installed")
+class TestHardeningEdgeCasesHython(unittest.TestCase):
+    """Edge-case coverage the session-logs-analysis audit found missing for
+    the findings-1..5 fixes. Each test maps to a flagged bug or latent
+    fragility."""
+
+    def _run(self):
+        proc = subprocess.run(
+            [HYTHON, "-c", _HARDENING_HARNESS],
+            capture_output=True, text=True, timeout=240, cwd=_REPO,
+            stdin=subprocess.DEVNULL)
+        combined = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 0,
+                         f"hython failed (rc={proc.returncode}):\n{combined[-2000:]}")
+        idx = combined.rfind("RESULT_JSON:")
+        self.assertGreater(idx, -1, f"no RESULT_JSON:\n{combined[-2000:]}")
+        return json.loads(combined[idx + len("RESULT_JSON:"):]), combined
+
+    # ── (1) verify_parametric restore-on-exception ──
+
+    def test_verify_parametric_restores_on_cook_error(self):
+        """THE audit #1 bug: when the perturbed cook raises, the param MUST
+        still be restored. The live parm value after the call must equal the
+        original (1.0), NOT new_value (2.0). This is the tool's core safety
+        contract — without the try/finally fix, a cook error silently mutated
+        the user's scene."""
+        res, _ = self._run()
+        s = res["steps"]
+        # Guard against a silent setup failure masquerading as a pass.
+        self.assertNotIn("err_top_error", s,
+                         f"scenario raised before reaching verify_parametric: "
+                         f"{s.get('err_top_error')}")
+        self.assertTrue(s.get("err_setup_ok"),
+                        f"length=1.0 setup must cook clean first: {res}")
+        self.assertEqual(s["err_original"], 1.0)
+        # The call may report success:False (the cook errored) — that's fine.
+        # What matters is the param was RESTORED.
+        self.assertEqual(s["err_param_value_after"], 1.0,
+                         f"param must be restored to 1.0 after a cook error, "
+                         f"got {s['err_param_value_after']} (scene mutated!). "
+                         f"full result: {res}")
+        # And the restored field should be truthy (finally ran).
+        self.assertTrue(s.get("err_restored_field"),
+                        f"restored field should be truthy after the finally ran")
+
+    # ── (2) by_name zero-match emits an error ──
+
+    def test_by_name_zero_match_emits_error(self):
+        """A typo'd marker name must surface as a cook error (via VEX error()),
+        not silently produce zero points. The agent needs to tell 'marker not
+        found' from 'upstream geometry empty'."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertNotIn("noname_top_error", s,
+                         f"scenario raised before the by_name cook: "
+                         f"{s.get('noname_top_error')}")
+        self.assertGreaterEqual(s["noname_error_count"], 1,
+                                f"expected a cook error for the missing marker, "
+                                f"got {s['noname_error_count']} errors: {res}")
+        self.assertTrue(s["noname_error_mentions_marker"],
+                        f"the error must name the missing marker "
+                        f"'does_not_exist': {res}")
+
+    # ── (3a) repath handles hou.ch() form ──
+
+    def test_repath_rewrites_hou_ch_form(self):
+        """The hython happy-path only tested bare ch(). hou.ch('...') is a
+        distinct form the regex must also rewrite."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertTrue(s["hc_sizex_rewritten"],
+                        f"hou.ch(absolute) must be rewritten to relative; "
+                        f"got {s['hc_sizex_after']!r}: {res}")
+        self.assertIn("hou.ch(", s["hc_sizex_after"],
+                      f"the hou. prefix must be preserved: {res}")
+
+    # ── (3b) repath leaves near-collision references untouched ──
+
+    def test_repath_leaves_near_collision_untouched(self):
+        """A reference to project_core_BACKUP (path contains the core path
+        string) must NOT be rewritten — correctness hinges on the parm_tail
+        guard. This is the audit's #1 latent-fragility case."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertTrue(s["hc_sizey_untouched"],
+                        f"the near-collision reference must stay absolute: "
+                        f"got {s['hc_sizey_after']!r}: {res}")
+        # And count should reflect that only sizex was rewritten (1), not sizey.
+        self.assertEqual(s["hc_count"], 1,
+                         f"only sizex should be rewritten (sizey is a "
+                         f"near-collision); count={s['hc_count']}: {res}")
+
+    # ── (4) internal_chain_ready false-positive (KNOWN deficiency) ──
+
+    @unittest.expectedFailure
+    def test_internal_chain_disconnected_reports_not_ready(self):
+        """KNOWN DEFICIENCY (audit, builder.py:464-473): _collect_input_wires
+        checks only that the chain NODES EXIST, not that they are wired
+        together. A disconnected-but-present chain falsely reports
+        internal_chain_ready=True. This test asserts the IDEAL behavior
+        (disconnected → not ready) and is marked expectedFailure until
+        builder.py is hardened to check real setInput wiring. When that
+        happens, this test will XPASS and the decorator should be removed.
+
+        Why we keep it: it documents the gap and guards against the fix
+        landing without removing the decorator (XPASS fails the suite)."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertTrue(s["chain_nodes_exist"],
+                        "precondition: the chain nodes must exist for this test "
+                        f"to mean anything: {res}")
+        # IDEAL: a disconnected chain reports internal_chain_ready=False.
+        self.assertFalse(s["chain_internal_ready_reported"],
+                         f"disconnected chain should report not-ready; "
+                         f"reported={s['chain_internal_ready_reported']}: {res}")
+
+
 if __name__ == "__main__":
     unittest.main()

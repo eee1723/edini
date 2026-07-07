@@ -253,6 +253,13 @@ if (__found) {
         setpointattrib(geoself(), "orient", __pt, __ori, "set");
     }
     append(__newpts, __pt);
+} else {
+    // FAIL FAST: a zero-match is almost always a typo'd marker or a generator
+    // that forgot to emit @name=<marker>. Emitting zero points silently would
+    // leave the agent unable to tell "marker not found" from "upstream empty"
+    // (session-logs-analysis finding 3 audit). error() makes this surface via
+    // node.errors(), which inspect_health / verify_parametric already read.
+    error(sprintf("by_name anchor: marker '%s' not found in upstream geometry (typo? generator did not emit @name=%s?)\n", __marker, __marker));
 }
 """.strip()
 
