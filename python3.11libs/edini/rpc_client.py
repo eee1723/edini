@@ -246,9 +246,22 @@ class _RpcWorker(QObject):
                 "env": pi_env,
                 "cwd": self._cwd,
             }
-            # On Windows, suppress console window when spawning pi.cmd
+            # On Windows, suppress console window when spawning pi.cmd, AND put
+            # Pi in its own process group. CREATE_NEW_PROCESS_GROUP is essential:
+            # without it, Pi shares Houdini's console session, so any console
+            # control event generated inside Houdini (e.g. a Ctrl-C-like signal
+            # from internal operations) cascades to Pi and kills it with
+            # STATUS_CONTROL_C_EXIT (0xC000013A, exit code 3221225786) — the
+            # Pi process dies ~2s after launch with no stderr, surfacing to the
+            # user as a baffling "disconnected". A separate process group makes
+            # Pi immune to those parent-side control events. Termination in
+            # stop() uses TerminateProcess (via .terminate()/.kill()), which is
+            # unconditional and still works across process groups.
             if sys.platform == "win32":
-                popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+                popen_kwargs["creationflags"] = (
+                    subprocess.CREATE_NO_WINDOW
+                    | subprocess.CREATE_NEW_PROCESS_GROUP
+                )
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                 startupinfo.wShowWindow = subprocess.SW_HIDE
@@ -286,6 +299,27 @@ class _RpcWorker(QObject):
                     continue
 
                 self._dispatch_event(event)
+
+            # ── Process-exit detection ──
+            # If we reach here, the stdout loop ended. Two cases:
+            #   • self._should_stop is True → stop() initiated this (the caller
+            #     already emitted "disconnected"); stay quiet.
+            #   • self._should_stop is False → Pi exited on its own (crash, EOF
+            #     on stdin, fatal runtime error). WITHOUT this branch the UI
+            #     would silently freeze on a stale "connected" status while the
+            #     process is gone and sends never land. Surface it as an error
+            #     carrying Pi's exit code so the user/agent sees the real cause.
+            if not self._should_stop and self._process is not None:
+                rc = self._process.returncode
+                # rc is None if somehow still running (shouldn't happen here);
+                # 0 means a clean self-exit (e.g. stdin closed), nonzero a crash.
+                detail = f" (exit code {rc})" if rc is not None else ""
+                self.error_occurred.emit(
+                    f"Pi process exited unexpectedly{detail}. "
+                    f"If this repeats, check the Houdini Python Console for "
+                    f"[pi:stderr] lines showing the Pi-side error."
+                )
+                self.status_changed.emit("disconnected")
 
         except FileNotFoundError:
             self.error_occurred.emit(
