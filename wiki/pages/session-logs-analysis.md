@@ -182,10 +182,23 @@ skill 四诫第 4 条："Declare done prematurely."
 
 ---
 
-## 后续路线图（✅ A/B/C 已全部实施 — 2026-07-07）
+## 后续路线图（✅ A/B/C 已全部实施 — 2026-07-07 · ✅ 回归硬化 — 2026-07-07）
 
 每层都标了**改哪个文件 / 为什么 / 配什么 hython 铁证**。三层均已落地，详见
 [progress.md](progress.html) 的"最后更新"卡片。
+
+> **🔧 回归硬化（2026-07-07，合并 master）**：对 A/B/C/发现4 的修复（commit `1093eb4`）
+> 做了行号级回归就绪审计，发现并修硬 **2 个违背自身安全契约的真 bug**：
+> ① `verify_parametric` 的 perturb→recook→snapshot 段无 `try/finally`，perturb 后 cook
+> 抛异常会**静默把参数留在 `new_value` 污染用户场景**（违背 docstring 的 "ALWAYS restore"）——
+> 已加 `try/finally` 保障还原（反向验证：禁用 finally 后参数留 2.0 场景被污染，测试正确转红）；
+> ② `by_name` 的 marker 名拼错曾**静默产 0 点无诊断**（`__found=0` 无 else 分支）——
+> 已加 VEX `error()` 硬报错，让 `inspect_health`/`verify_parametric` 自然拾取。
+> 另修正 `repath_to_relative` 的 `count` 把失败 `setExpression` 也计入的误报。
+> 补全审计点名的缺测边界：`_make_replacer` 全覆盖（`hou.ch` 形式 / 近名碰撞 / 多层 parm_tail）
+> + 4 测真机 hython（restore-on-error / 零匹配报错 / repath hou.ch / 近名碰撞不动）。
+> 1 测 `expectedFailure` 诚实记录 Layer A 的 `internal_chain_ready` 只查节点存在不查接线的
+> 脆弱点（待下轮）。**946 测试全绿 + 1 xfailed**，零回归。
 
 ### 🅰 Layer A —— 平台层：scaffold 回报真实接线状态 ✅ 已实施
 

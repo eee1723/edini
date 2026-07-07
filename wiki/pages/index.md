@@ -1,6 +1,6 @@
 # 📊 仪表盘
 
-> **当前阶段**：发现 4 收尾 — promote 矛盾文档对齐 + repath_to_relative 组件可迁移工具（8 条 hython 铁证，五缺陷全治完）&nbsp;|&nbsp; **状态**：选方案 D（不破坏 A/B/C）。文档对齐（绝对 ch 为唯一官方路径，promote 在 design_params 路径下 no-op 正常，LIVE 硬门由 verify_parametric 接管）+ 新增 project_repath_to_relative 单组件绝对ch→相对ch（深度计算）让组件可迁移。8 条 hython 铁证含"复制组件到另一 project 仍 cook"。933 测试全绿&nbsp;|&nbsp; **最后更新**：2026-07-07
+> **当前阶段**：会话日志诊断修复的回归硬化 — 2 个真 bug（verify_parametric 异常不还原参数 / by_name 零匹配静默）+ 补全缺测边界（13 新测试，含反向验证铁证）&nbsp;|&nbsp; **状态**：对 commit 1093eb4（发现 1-5 修复）做行号级审计，修硬违背各自安全契约的缺口。verify_parametric restore 加 try/finally（反向验证：禁用后参数留 2.0 场景被污染，测试转红）；by_name 零匹配加 VEX error() 硬报错（不再静默产 0 点）；repath count 误报修正。9 测纯逻辑（_make_replacer 全覆盖含 hou.ch/近名碰撞）+ 4 测真机 hython + 1 测 expectedFailure（internal_chain 脆弱点待下轮）。946 测试全绿 + 1 xfailed。已合并 master&nbsp;|&nbsp; **最后更新**：2026-07-07
 
 ## 快速导航
 
@@ -38,7 +38,7 @@
 | 节点创建 | ✅ namespace 自动解析 · shelf tool 预设应用 · diff 过滤内部子节点 |
 | 按钮布局 | ✅ 📷 截图 + 📁 上传（文本标签按钮，minHeight 34px，hover/pressed 动效）· 仅对话右对齐 · 执行按钮 minWidth 90px · 6px/8px 间距优化 |
 | 剪贴板 | ✅ Ctrl+V 图片粘贴 · 右键粘贴图片到附件栏 · 右键粘贴文本（defer focus+paste）· 多模式探测（QImage→mimeData→URL→raw png/jpeg）· Houdini PySide6 枚举兼容（整数 mode 值）|
-| 测试 | ✅ 901 测试通过（mock_hou 脱机 + harness/recipe/orientation/health/ports/node_utils/chat/UI 单测 + 真实 hython project/component/design_params/skill-workflow 决定性验证）|
+| 测试 | ✅ 946 测试通过 + 1 xfailed（mock_hou 脱机 + harness/recipe/orientation/health/ports/node_utils/chat/UI 单测 + 真实 hython project/component/design_params/skill-workflow/vex_strategies 决定性验证 + hardening 边界测试）|
 | 知识检索 | ✅ edini_search_knowledge 工具已实现 |
 | 知识→Skills | ⬜ Traces → Skills 自动提取（规划中） |
 | 评估系统 | ✅ 5 维度评分 · LogParser · SQLite · EvalDashboard · edini_get_eval_stats · LLM-as-Judge (deepseek-chat) |
