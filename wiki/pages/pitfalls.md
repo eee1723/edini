@@ -405,3 +405,71 @@ for _m in list(sys.modules):
 **解决**：所有 `subprocess.run` 调用显式加 `stdin=subprocess.DEVNULL`——消除父 stdin 句柄继承这个竞争源。修复后 hython 测试连跑 5 次 100% 全绿。
 
 **注意**：这是 CPython 在 Windows 的已知类问题（多个 issue 描述 subprocess 句柄竞争），3.14 仍未根治。任何在 Windows + Python 3.14 下用 `subprocess.run(capture_output=True)` 跑外部进程的代码都应加 `stdin=DEVNULL`。
+
+### HDA 对话框 disconnected：缺进程组隔离，Pi 被控制台事件击杀
+
+- **分类**: JSON-RPC / Windows 子进程
+- **优先级**: 高
+- **状态**: 已修复 (2026-07-07，第四十二阶段)
+
+**症状**：Project HDA 对话框打开后，Pi Status 从 Connecting 一闪到 Connected，然后约 2 秒后掉到 Disconnected，反复如此。Pi 能成功启动并加载扩展（"Edini tools loaded"），但很快死亡，且 **stderr 完全为空**——不像 Pi 自己报错，倒像被外部力量杀掉。
+
+**根因**：`rpc_client.py` 启动 Pi 子进程时用了 `CREATE_NO_WINDOW`（隐藏控制台窗口），但**没有 `CREATE_NEW_PROCESS_GROUP`**。后果：Pi 共享 Houdini 的控制台会话（console session）。Houdini 内部产生的任何控制台控制事件（Ctrl-C 类信号，很多内部操作会触发）会**级联到共享同一会话的 Pi 子进程**，以 `STATUS_CONTROL_C_EXIT`（`0xC000013A`，十进制 exit code **3221225786**）终止它。
+
+关键诊断信号：
+- exit code = `3221225786`（`0xC000013A`）= 控制信号终止，**不是** Pi 自己 exit(1) 之类的主动退出
+- **无 stderr**（不是 Pi 报错，是被外部信号杀的）
+- 启动后 ~2s 死亡（取决于 Houdini 何时产生第一个控制事件）
+- 扩展能正常加载（emit "connected"），死亡发生在加载完成之后
+
+**诊断方法**：新建的 `diagnose_rpc.py` 模拟 RpcClient 启动流程，捕获 Pi 的 stdout/stderr/exit code，精确识别 `0xC000013A` 控制事件击杀。stdout 读取放后台线程（避免 `readline()` 在 Pi 安静等待 stdin 时永久阻塞——脚本自身的坑）。
+
+**解决**：启动 Pi 时 `creationflags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP`。`CREATE_NEW_PROCESS_GROUP` 让 Pi 进入独立进程组，免受父侧（Houdini）控制台事件波及。`stop()` 用 `TerminateProcess`（`.terminate()`/`.kill()`）终止，是强制终止不依赖控制台事件，对新进程组依然有效。
+
+顺带修复一个相关的设计缺陷：`_RpcWorker.run()` 主循环在 Pi 进程退出后原先**不 emit 任何状态**，UI 会永远卡在虚假的 "connected"（进程已死但 UI 不知道）。现在 Pi 非主动停止退出时 emit `disconnected` + 带 exit code 的错误信息，用户能看到真实原因。
+
+**教训**：
+1. **Windows 子进程隔离不只是隐藏窗口**。`CREATE_NO_WINDOW` 只管"看不看见"，`CREATE_NEW_PROCESS_GROUP` 才管"接不接收父进程的控制信号"。GUI 进程（Houdini/Electron 等）派生长驻子进程时，两者都要——否则父进程的任何控制台事件（哪怕不是真 Ctrl-C）都会波及子进程。详见 [Node.js child_process docs](https://nodejs.org/api/child_process.html) 的 detached 说明。
+2. **exit code 是死因的直接证据**。`0xC000013A` 精确指向"控制信号终止"，而非"Pi 崩溃"。排查子进程死亡，先看 exit code 的十六进制——它能区分"自杀/他杀/意外"。
+3. **子进程死亡要反馈到 UI**。RPC worker 的读取循环在进程退出后必须 emit 状态，否则 UI 卡在假连接，用户发消息无响应却以为还连着。
+
+### forwardTool 无错误处理：网络抖动抛成裸 "fetch failed"
+
+- **分类**: TypeScript / 工具层
+- **优先级**: 高
+- **状态**: 已修复 (2026-07-07，第四十二阶段)
+
+**症状**：建模会话日志里，3 次 `houdini_connect_nodes` 调用返回 `[houdini_connect_nodes] fetch failed`（裸字符串，无结构化信息）。agent 无法判断是该重试、改参数、还是 Houdini 挂了，只能放弃或乱试。
+
+**根因**：9 个工具文件（scene/query/script/harness/recipe/rooted/project/knowledge/eval）各自复制粘贴了一份完全相同的 `forwardTool`，**完全无 try/catch**：
+
+```typescript
+async function forwardTool(toolName, params) {
+  const response = await fetch(TOOL_URL, {...});  // ← 网络抖动直接抛
+  const result = await response.json();
+  return { content: [...], details: result };
+}
+```
+
+Node 的 fetch 在 socket 级失败（ECONNRESET/ECONNREFUSED/超时）时 reject 一个 TypeError，message 通常是 "fetch failed"——对 agent 毫无信息量。复制粘贴 9 份意味着修一处要改 9 处。
+
+**解决**：抽出唯一共享的 `pi-extensions/edini-tools/tools/_shared.ts`，提供带完整错误处理的 `forwardTool`：try/catch + 瞬时错误（网络/5xx/429）重试 2 次（退避 150ms）+ 30s 超时（AbortController）+ 结构化错误体 `{success:false, error, hint, transient, retryable}`。agent 看到的是"这是瞬时错误，重试即可"的明确指引，而非裸字符串。9 个工具文件删掉本地副本，统一 import 共享版本。
+
+**教训**：
+1. **代理转发层必须有错误处理**。代理（proxy）工具的价值是"把远程调用的复杂性封装成干净的本地接口"——裸抛远程错误违背了这个价值。至少要：捕获 → 分类（瞬时 vs 永久）→ 结构化 → 带恢复指引。
+2. **复制粘贴是技术债的温床**。9 份相同的 forwardTool 意味着同样的 bug 要修 9 次，且极易漏改。一旦发现第二份相同的实现，就该立刻抽共享模块。
+
+### create_node 不返回参数名，agent 被迫猜（length vs dist）
+
+- **分类**: 工具层 / agent 效率
+- **优先级**: 高
+- **状态**: 已修复 (2026-07-07，第四十二阶段)
+
+**症状**：建模日志里，模型给 line SOP 写 `houdini_set_param(leg_template, "length", ...)`，失败（"parameter 'length' not found"）→ query_parms 才发现真名是 `dist` → 修复。这一个参数名来回浪费 5 轮调用。根因：`houdini_create_node` 只返回 path/name/type，agent 只能凭记忆猜参数名，而 Houdini 参数名跨版本会变（失效）。
+
+**根因**：工具设计缺陷——创建节点后不暴露该节点的参数清单。agent 不得不额外调一次 `query_parms`（读 manifest），而 manifest 还可能和实际创建的版本漂移（polybevel 的 beveltype vs offset 问题是前车之鉴，见上一个 pitfall）。
+
+**解决**：`create_node` 返回值增加 `parms` 字段，含该节点的真实参数清单（`{name, type, components?, menu?}`）。新增 `_node_parm_inventory(node)` 辅助函数，双路径：优先 `node.type().parmTemplateGroup()`（真实 hou，完整含 type/menu/components，从刚创建的实际节点读，无版本漂移），回退 `node.parms()`（已物化参数，覆盖 mock/特殊节点）。60 项截断保护，完全 best-effort，任何失败降级为空 list + note，绝不阻塞 create。更新 `houdini_create_node` 工具描述告知 agent 用 `parms.list`。
+
+**教训**：**工具的返回值要带着 agent 下一步需要的信息**。创建节点后，agent 立即要做的就是设参数——那就该在创建的返回值里给出参数名，省掉一个来回。`query_parms` 是"创建前的查询"，`create_node` 的返回值是"创建后的实证"，两者互补，但后者更准（反映实际实例化的版本）。
+
