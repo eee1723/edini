@@ -1,6 +1,6 @@
 # 📊 仪表盘
 
-> **当前阶段**：程序化建模 skill 从第一性原理重构 + 测试基建修复&nbsp;|&nbsp; **状态**：对照 mattpocock writing-great-skills 框架优化 project-modeling skill（3 leading words 全链路双层强化 + 对抗性 intro + 5 completion criterion + progressive disclosure 4 文件拆分）；同步修复两个潜伏测试基建 bug（模块全局清空污染 + hython WinError 6 flaky）&nbsp;|&nbsp; **最后更新**：2026-07-07
+> **当前阶段**：发现 4 收尾 — promote 矛盾文档对齐 + repath_to_relative 组件可迁移工具（8 条 hython 铁证，五缺陷全治完）&nbsp;|&nbsp; **状态**：选方案 D（不破坏 A/B/C）。文档对齐（绝对 ch 为唯一官方路径，promote 在 design_params 路径下 no-op 正常，LIVE 硬门由 verify_parametric 接管）+ 新增 project_repath_to_relative 单组件绝对ch→相对ch（深度计算）让组件可迁移。8 条 hython 铁证含"复制组件到另一 project 仍 cook"。933 测试全绿&nbsp;|&nbsp; **最后更新**：2026-07-07
 
 ## 快速导航
 
@@ -17,6 +17,7 @@
 | [Agent交接](handoff.html) | 给新 Agent 和开发者的快速上下文 |
 | [评估系统](evaluation.html) | 智能体评估系统的设计理念与迭代记录 |
 | [知识→Skills演化](skills-evolution.html) | Hivemind 式持续学习：Traces → Knowledge → Pi Skills 闭环设计 |
+| [会话日志第一性原理诊断](session-logs-analysis.html) | 桌子+公路车双建模日志诊断（含 output_index 误判修正）+ A/B/C 改进路线图 |
 
 ## 当前阶段
 

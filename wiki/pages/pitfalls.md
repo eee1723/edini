@@ -473,3 +473,48 @@ Node 的 fetch 在 socket 级失败（ECONNRESET/ECONNREFUSED/超时）时 rejec
 
 **教训**：**工具的返回值要带着 agent 下一步需要的信息**。创建节点后，agent 立即要做的就是设参数——那就该在创建的返回值里给出参数名，省掉一个来回。`query_parms` 是"创建前的查询"，`create_node` 的返回值是"创建后的实证"，两者互补，但后者更准（反映实际实例化的版本）。
 
+### 误判 "platform bug" 前先读源码（output_index 误判事件）
+
+- **分类**: 诊断方法 / 方法论
+- **优先级**: 高
+- **状态**: 教训 (2026-07-07，双建模会话日志诊断)
+
+**症状**：分析桌子建模日志时，第一版诊断断言"**scaffold 默认 `output_index=0` 接错**，shelf 的 4 个输入被连到 legs 的几何体输出而非锚点云"。基于这个误判，最初的改进方向指向"修 scaffold 的 output_index 逻辑"。
+
+**根因**：诊断没有落到代码行号。读 `python3.11libs/edini/project/builder.py` 的 `_ensure_input_scaffold` 后**证伪**：
+
+```python
+# builder.py:282-292
+from_port = in_entry.get("port")     # 来自声明的 ports.in[].port
+...
+subnet.setInput(i, upstream, from_port)   # 用的是声明的 port，不是默认 0
+```
+
+日志里 shelf 的 scaffold 声明 `"port": 1` 是**正确的**，scaffold 也确实按 `from_port=1` 接了。**scaffold 没有 output_index bug。** 真实根因是模型侧：不信任已正确接好的脚手架 → 对子网内部 filter 节点重连失败 → 退到 sandbox setInput 断链 → 自己删 filter 链退回 Object Merge 硬编码（10 分钟挣扎，全程是模型行为，非平台 bug）。
+
+**解决**：诊断必须以代码行号为锚。详见 [会话日志第一性原理诊断](session-logs-analysis.md) 的"关键修正"一节。
+
+**教训（立为规矩）**：**凡断言"平台 X 行为错误"，必须先 grep 到对应源码行号佐证，否则一律先归为"模型行为/文档缺口"排除。** 第一性原理分析若不落到代码，会把"模型行为"误判成"平台 bug"，导致整层改进方向错位——这次的误判差点让改进方向去动一个本来正确的 `setInput` 调用。**诊断的下一个问题永远是"这个行为在源码哪一行？"**
+
+### 程序化建模的五个真实失败模式（双日志实证）
+
+- **分类**: project-modeling / 诊断
+- **优先级**: 高
+- **状态**: 已诊断 / 待修复 (2026-07-07，A/B/C 路线图待实施)
+
+**症状**：分析桌子（3 组件）+ 公路车（7 组件）两份真实建模会话日志，归纳出五个系统性缺陷。不是偶发，是结构性反复。
+
+**五个缺陷（各一句话，详见 [诊断深度页](session-logs-analysis.md)）**：
+
+1. **接线错觉**（违背"依赖显式声明"）—— scaffold 接对了，但模型不信任 + 重连机制不安全 → 自己破坏契约退回硬编码。根因是 scaffold 不回报接线 ground-truth。**→ Layer A 改进**。
+2. **Python SOP 知识缺口系统性复发**（违背"单元可读可改"）—— `return` outside function ×6+、`addAttrib` 须先于 `setAttribValue` ×2、`createPoint` 签名错、`ch` vs `hou.ch`、`node.geometry()` 是输出非输入。skill 把组件生成器写法完全交给即兴发挥。**→ Layer B 改进**。
+3. **锚点测量全是 bbox 派生 → 参数化只是表象**（违背"坐标可参数化"）—— bike 的 frame 四锚点全用 `bbox_face_center`，frame 是单一合并网格，bbox 面中心 ≠ 真实 dropout/头管/五通。改 `frame_scale` 轮子不跟真实 dropout 走。`vex_strategies.py` 无 `by_name`/named-marker 策略。**→ Layer C1 改进**。
+4. **promote_params 返回 0 是 workflow 设计矛盾**（违背"完成有判据"）—— promote 只提升 subnet spare parm，但 SKILL 教模型用绝对 ch() 直引 core，从不建 subnet spare parm → promote 永远 0 → 死重量。副作用：绝对路径让组件不可迁移。**→ 待规划**。
+5. **bike 跳过参数联动验证**（违反 skill 自己的 premature-done 诫令）—— 桌子验证了 length 1.2→1.5，bike 零扰动验证就声明完成。`overall_ok` 不证明参数化成立。现有工具无扰动测试。**→ Layer C2 改进**。
+
+**根因**：这五个缺陷的共同源头是"**程序化建模的核心契约（live 参数化 + 组件协作 + 完成判据）在 prompt 层和 platform 层都还不够硬**"。skill 已有四诫，但对应的平台层执行（scaffold 回报 / Python SOP 模板 / named-marker 锚点 / 扰动验证门）尚未到位。
+
+**解决（A/B/C 路线图，本轮未实施）**：A=scaffold 回报接线 ground-truth（杠杆最高）；B=Python SOP 组件模板（纯 prompt）；C=named-marker 锚点 + `verify_parametric` 扰动验证门（最治本）。每层配 hython 真机铁证。详见 [诊断深度页](session-logs-analysis.md) 的"后续路线图"一节。
+
+**教训**：**模型越复杂，脆性越大**。下一阶段重心不该是"做更复杂的模型"，而是把这五个底层契约修硬——否则公路车这种 7 组件 DAG 会比桌子的 3 组件链更脆。
+

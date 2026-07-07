@@ -9,7 +9,7 @@
   "wiki": {
     "version": "2.0",
     "created": "2026-06-03",
-    "last_updated": "2026-07-07-tool-layer-disconnected-fix"
+    "last_updated": "2026-07-07-finding4-repath"
   },
   "features": {
     "search": true,
@@ -36,6 +36,7 @@
     {"id": "unified-chat", "title": "统一对话窗口", "icon": "💬", "order": 9},
     {"id": "handoff", "title": "Agent交接", "icon": "🤖", "order": 10},
     {"id": "evaluation", "title": "评估系统", "icon": "📐", "order": 11},
-    {"id": "skills-evolution", "title": "知识→Skills演化", "icon": "🧠", "order": 12}
+    {"id": "skills-evolution", "title": "知识→Skills演化", "icon": "🧠", "order": 12},
+    {"id": "session-logs-analysis", "title": "会话日志第一性原理诊断", "icon": "🔬", "order": 13}
   ]
 }
