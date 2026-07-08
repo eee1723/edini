@@ -153,6 +153,17 @@ the return includes `design_params_created` matching your count.
 
 ### 3. Model inside each subnet + `measure` anchors
 
+**Prefer `project_emit_component` (archetype) over raw nodes** when the component
+matches one of:
+- **`box_panel`** — a parametric box (tabletop / seat / panel): `size=[x,y,z]`.
+- **`copy_array`** — stamp a leaf onto consumed anchors (legs / spokes / keys).
+- **`tube_graph`** — connected tubes between named anchors (frame / fork / bars).
+
+Each archetype builds + wires the chain for you (idempotent, design-param-aware,
+zero Python-SOP error surface). Fall back to raw `houdini_create_node` /
+`houdini_connect_nodes` / `houdini_set_param` only when NO archetype fits
+(then follow `COMPONENT_TEMPLATE.md`'s Python SOP skeleton).
+
 Use `houdini_create_node`, `houdini_connect_nodes`, `houdini_set_param`.
 **Reference design params from geometry via ABSOLUTE `ch()` to the core**
 (`ch('/obj/.../project_core/length')`) — this is the only official
