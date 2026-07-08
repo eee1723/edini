@@ -1005,9 +1005,11 @@ def emit_component(core_node: "hou.Node", component_id: str,
         return _archetype_box_panel(core_node, subnet, params)
     if archetype == "copy_array":
         return _archetype_copy_array(core_node, subnet, params)
+    if archetype == "tube_graph":
+        return _archetype_tube_graph(core_node, subnet, params)
     return {"success": False,
             "error": f"unknown archetype {archetype!r}; supported: box_panel, "
-                     f"copy_array (tube_graph / extrude_profile land incrementally)"}
+                     f"copy_array, tube_graph (extrude_profile lands incrementally)"}
 
 
 def _archetype_box_panel(core_node: "hou.Node", subnet: "hou.Node",
@@ -1127,5 +1129,104 @@ def _archetype_copy_array(core_node: "hou.Node", subnet: "hou.Node",
             "component": subnet.name(),
             "nodes": ["array_leaf", "array_cloud" if len(in_nulls) > 1 else None,
                       "array_ctp"],
+            "anchor_inputs": [n.name() for n in in_nulls],
+            "project": core_path}
+
+
+def _build_tube_graph_vex(tubes: list[dict]) -> str:
+    """Generate a detail-wrangle body that builds polyline edges between named
+    anchor points (a tube graph). Uses VEX (not a Python SOP) so there is ZERO
+    Python-SOP error surface (no bare-return / addAttrib-order / createPoint /
+    ch-vs-hou.ch pitfalls) — the whole reason tube_graph exists.
+
+    Each tube ``{a, b}`` becomes a block that finds the two ``@name`` points and
+    connects them with a polyline prim. The segment names are baked into the VEX
+    (the agent passes them at build; they are not free params).
+    """
+    lines = [
+        "// tube_graph: build polyline edges between named anchor points.",
+        "int __findpt(string nm) {",
+        "    for (int i = 0; i < npoints(geoself()); i++) {",
+        '        if (pointattrib(geoself(), "name", i, 0) == nm) return i;',
+        "    }",
+        "    return -1;",
+        "}",
+    ]
+    for seg in tubes:
+        a = seg.get("a")
+        b = seg.get("b")
+        if not a or not b:
+            continue
+        lines.append("{")
+        lines.append(f'    int ia = __findpt("{a}"); int ib = __findpt("{b}");')
+        lines.append("    if (ia >= 0 && ib >= 0) {")
+        lines.append('        int pr = addprim(geoself(), "polyline");')
+        lines.append("        addvertex(geoself(), pr, ia);")
+        lines.append("        addvertex(geoself(), pr, ib);")
+        lines.append("    }")
+        lines.append("}")
+    return "\n".join(lines)
+
+
+def _archetype_tube_graph(core_node: "hou.Node", subnet: "hou.Node",
+                          params: dict) -> dict:
+    """Build a tube graph (a frame / fork / handlebar): polyline edges between
+    THIS component's consumed anchor points, then PolyWire for thickness.
+
+    The classic "connected tubes" component (a bike frame: head_tube →
+    seat_tube → bottom_bracket). Declare ports.in consuming an upstream's named
+    markers, then this archetype connects them per the ``tubes`` spec.
+
+    Uses VEX (not a Python SOP) to build the edges — zero Python-SOP error
+    surface (the #1 step-3 failure mode this archetype exists to eliminate).
+
+    params:
+      - tubes: ``[{a: <anchor_name>, b: <anchor_name>}, ...]`` — the graph edges.
+        Each edge becomes a polyline between the two named anchor points.
+      - radius: a number or design_param name (→ ch() ref) for the PolyWire
+        tube thickness.
+    """
+    core_path = core_node.path()
+    out_geo = subnet.node(OUT_GEOMETRY_NODE)
+    if out_geo is None:
+        return {"success": False,
+                "error": f"out_geometry not found in {subnet.name()} (scaffold first)"}
+    tubes = params.get("tubes")
+    if not isinstance(tubes, list) or not tubes:
+        return {"success": False,
+                "error": "tube_graph needs 'tubes': [{a:<name>, b:<name>}, ...]"}
+
+    in_nulls = [n for n in subnet.children()
+                if n.name().startswith("in_") and n.type().name() == "null"]
+    if not in_nulls:
+        return {"success": False,
+                "error": f"tube_graph on {subnet.name()!r} found no consumed "
+                         f"anchors (in_<from>_<anchor> nulls). Declare ports.in "
+                         f"consuming the upstream's named markers."}
+    if len(in_nulls) == 1:
+        cloud = in_nulls[0]
+    else:
+        cloud = _arch_node(subnet, "merge", "tube_cloud")
+        for i, n in enumerate(in_nulls):
+            cloud.setInput(i, n)
+
+    wr = _arch_node(subnet, "attribwrangle", "tube_graph")
+    wr.parm("snippet").set(_build_tube_graph_vex(tubes))
+    wr.parm("class").set("detail")
+    wr.setInput(0, cloud)
+
+    pw = _arch_node(subnet, "polywire", "tube_thickness")
+    pw.setInput(0, wr)
+    radius = params.get("radius")
+    if radius is not None:
+        _set_archetype_parm(pw, "radius", radius, core_path)
+    out_geo.setInput(0, pw)
+    subnet.layoutChildren()
+
+    return {"success": True, "archetype": "tube_graph",
+            "component": subnet.name(),
+            "nodes": ["tube_cloud" if len(in_nulls) > 1 else None,
+                      "tube_graph", "tube_thickness"],
+            "segments": len(tubes),
             "anchor_inputs": [n.name() for n in in_nulls],
             "project": core_path}

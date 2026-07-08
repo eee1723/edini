@@ -2618,5 +2618,116 @@ class TestCopyArrayArchetypeHython(unittest.TestCase):
                       f"got {s['ca_legs_prim_count']}: {res}")
 
 
+# ── tube_graph archetype (Phase 4.3): VEX-built tube graph between named anchors ──
+
+_TUBE_GRAPH_HARNESS = r"""
+import json, sys, os
+sys.path.insert(0, os.path.join(r"%s", "python3.11libs"))
+import hou
+_hda = os.path.join(r"%s", "otls", "edini_project.hda")
+if os.path.isfile(_hda):
+    hou.hda.installFile(_hda)
+from edini.project.state import empty_declaration, add_component, add_design_param
+from edini.project.node import create_project_hda
+from edini.project.builder import build_project_scaffold, emit_component, add_anchors
+
+result = {"steps": {}}
+
+core = create_project_hda(name="proj_tg")
+decl = empty_declaration("proj_tg")
+add_design_param(decl, "radius", default=0.05, min=0.01, max=0.2, label="管粗")
+add_component(decl, "base", purpose="基",
+    ports_out=[{"index": 0, "kind": "geometry"},
+               {"index": 1, "kind": "anchors", "points": [
+                   {"name": "head_top", "role": "m"},
+                   {"name": "seat_top", "role": "m"},
+                   {"name": "bb", "role": "m"}]}])
+add_component(decl, "frame", purpose="架",
+    ports_in=[{"from": "base", "port": 1, "anchor": "head_top"},
+              {"from": "base", "port": 1, "anchor": "seat_top"},
+              {"from": "base", "port": 1, "anchor": "bb"}],
+    ports_out=[{"index": 0, "kind": "geometry"}])
+build_project_scaffold(core, declaration=decl)
+
+# base: a unit box + 3 anchors at distinct positions (top-center + two corners).
+b = core.node("base")
+box = b.createNode("box", "b_box")
+box.parm("sizex").set(1.0); box.parm("sizey").set(1.0); box.parm("sizez").set(1.0)
+b.node("out_geometry").setInput(0, box)
+add_anchors(core, "base", [
+    {"measure": "bbox_face_center", "face": "+Y", "name": "head_top"},
+    {"measure": "bbox_corner", "axes": "+X+Y-Z", "name": "seat_top"},
+    {"measure": "bbox_corner", "axes": "-X-Y-Z", "name": "bb"}])
+
+# frame: tube_graph — connect the 3 anchors into a triangle, PolyWire for thickness.
+res = emit_component(core, "frame", "tube_graph", {
+    "tubes": [{"a": "head_top", "b": "seat_top"},
+              {"a": "seat_top", "b": "bb"},
+              {"a": "head_top", "b": "bb"}],
+    "radius": "radius"})
+result["steps"]["tg_success"] = res.get("success")
+result["steps"]["tg_segments"] = res.get("segments")
+
+frame = core.node("frame")
+og = frame.node("out_geometry")
+og.cook(force=True)
+g = og.geometry()
+result["steps"]["tg_frame_prim_count"] = int(g.intrinsicValue("primitivecount"))
+result["steps"]["tg_frame_errors"] = len(og.errors() or [])
+# LIVE: radius 0.05 → 0.15. PolyWire thickness follows → bbox grows.
+bb1 = g.boundingBox()
+result["steps"]["tg_bbox_max_dim_at_r005"] = max(
+    bb1.maxvec().x() - bb1.minvec().x(),
+    bb1.maxvec().y() - bb1.minvec().y(),
+    bb1.maxvec().z() - bb1.minvec().z())
+core.parm("radius").set(0.15)
+og.cook(force=True)
+bb2 = og.geometry().boundingBox()
+result["steps"]["tg_bbox_max_dim_at_r015"] = max(
+    bb2.maxvec().x() - bb2.minvec().x(),
+    bb2.maxvec().y() - bb2.minvec().y(),
+    bb2.maxvec().z() - bb2.minvec().z())
+
+print("RESULT_JSON:" + json.dumps(result))
+""" % (_REPO, _REPO)
+
+
+@unittest.skipUnless(HYTHON, "hython not installed")
+class TestTubeGraphArchetypeHython(unittest.TestCase):
+    """Phase 4.3: tube_graph archetype — VEX-built tube graph between anchors."""
+
+    def _run(self):
+        proc = subprocess.run(
+            [HYTHON, "-c", _TUBE_GRAPH_HARNESS],
+            capture_output=True, text=True, timeout=180, cwd=_REPO,
+            stdin=subprocess.DEVNULL)
+        combined = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 0,
+                         f"hython failed (rc={proc.returncode}):\n{combined[-2000:]}")
+        idx = combined.rfind("RESULT_JSON:")
+        self.assertGreater(idx, -1, f"no RESULT_JSON:\n{combined[-2000:]}")
+        return json.loads(combined[idx + len("RESULT_JSON:"):]), combined
+
+    def test_tube_graph_builds_edges_between_anchors(self):
+        """3 tubes spec → a connected tube graph; PolyWire produces non-zero
+        geometry with no cook errors (the whole point: no Python SOP errors)."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertTrue(s["tg_success"], f"tube_graph failed: {res}")
+        self.assertEqual(s["tg_segments"], 3)
+        self.assertEqual(s["tg_frame_errors"], 0,
+                         f"tube_graph should cook clean (no Python SOP errors): {res}")
+        self.assertGreater(s["tg_frame_prim_count"], 0,
+                           f"PolyWire should produce tube geometry: {res}")
+
+    def test_radius_is_param_driven(self):
+        """PolyWire radius follows the design param: radius 0.05 → 0.15 grows
+        the tube bbox (the parametric thickness promise)."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertGreater(s["tg_bbox_max_dim_at_r015"], s["tg_bbox_max_dim_at_r005"],
+                           f"thicker radius should grow the bbox: {res}")
+
+
 if __name__ == "__main__":
     unittest.main()
