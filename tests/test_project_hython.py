@@ -2618,6 +2618,217 @@ class TestCopyArrayArchetypeHython(unittest.TestCase):
                       f"got {s['ca_legs_prim_count']}: {res}")
 
 
+# ── P0-2 (2026-07-08): copy_array leaf params as a VECTOR size=[...] of ──
+# design_param NAMES. Sessions 2/3/4 all passed leaf.params={"size":[...]} (the
+# same convention box_panel accepts) — but copy_array forwarded it raw to the
+# old _set_archetype_parm, which no-op'd silently because box has no single
+# "size" parm (only sizex/y/z). emit_component returned success:true while the
+# leaf stayed 1x1x1. This harness proves the vector form now applies AND that a
+# genuinely-unknown parm fails LOUDLY (no silent drop).
+
+_COPY_ARRAY_VECTOR_LEAF_HARNESS = r"""
+import json, sys, os
+sys.path.insert(0, os.path.join(r"%s", "python3.11libs"))
+import hou
+_hda = os.path.join(r"%s", "otls", "edini_project.hda")
+if os.path.isfile(_hda):
+    hou.hda.installFile(_hda)
+from edini.project.state import empty_declaration, add_component, add_design_param
+from edini.project.node import create_project_hda
+from edini.project.builder import build_project_scaffold, emit_component, add_anchors
+
+result = {"steps": {}}
+
+core = create_project_hda(name="proj_cav")
+decl = empty_declaration("proj_cav")
+add_design_param(decl, "length", default=1.2, min=0.4, max=3.0, label="长")
+add_design_param(decl, "width", default=0.6, min=0.3, max=1.5, label="宽")
+add_design_param(decl, "leg_thick", default=0.08, min=0.02, max=0.2, label="腿粗")
+add_design_param(decl, "leg_h", default=0.7, min=0.2, max=1.2, label="腿高")
+add_component(decl, "tabletop", purpose="桌",
+    ports_out=[{"index": 0, "kind": "geometry"},
+               {"index": 1, "kind": "anchors", "points": [
+                   {"name": "leg_fr", "role": "m"}, {"name": "leg_fl", "role": "m"},
+                   {"name": "leg_br", "role": "m"}, {"name": "leg_bl", "role": "m"}]}])
+add_component(decl, "legs", purpose="腿",
+    ports_in=[{"from": "tabletop", "port": 1, "anchor": "leg_fr"},
+              {"from": "tabletop", "port": 1, "anchor": "leg_fl"},
+              {"from": "tabletop", "port": 1, "anchor": "leg_br"},
+              {"from": "tabletop", "port": 1, "anchor": "leg_bl"}],
+    ports_out=[{"index": 0, "kind": "geometry"}])
+build_project_scaffold(core, declaration=decl)
+
+emit_component(core, "tabletop", "box_panel", {"size": ["length", 0.05, "width"]})
+add_anchors(core, "tabletop", [
+    {"measure": "bbox_corner", "axes": "+X-Y+Z", "name": "leg_fr"},
+    {"measure": "bbox_corner", "axes": "-X-Y+Z", "name": "leg_fl"},
+    {"measure": "bbox_corner", "axes": "+X-Y-Z", "name": "leg_br"},
+    {"measure": "bbox_corner", "axes": "-X-Y-Z", "name": "leg_bl"}])
+
+# The vector size=[...] of design_param names — the exact form that was silently
+# dropped. After the fix sizex/sizez → leg_thick (0.08), sizey → leg_h (0.7).
+res = emit_component(core, "legs", "copy_array",
+    {"leaf": {"type": "box", "params": {"size": ["leg_thick", "leg_h", "leg_thick"]}}})
+result["steps"]["ca_success"] = res.get("success")
+result["steps"]["ca_error"] = res.get("error")
+
+leaf = core.node("legs/array_leaf")
+# eval() resolves the relative ch() to the design-param value. Before the fix
+# these were the box defaults (1.0) — the silent-drop signature.
+result["steps"]["leaf_sizex"] = float(leaf.parm("sizex").eval())
+result["steps"]["leaf_sizey"] = float(leaf.parm("sizey").eval())
+result["steps"]["leaf_sizez"] = float(leaf.parm("sizez").eval())
+# A live expression (not a baked literal) — proves it's ch()-driven, migratable.
+result["steps"]["leaf_sizex_is_expr"] = bool(leaf.parm("sizex").expression())
+
+# Loud-failure half of P0-2: an unknown leaf parm must NOT be silently dropped.
+res_bad = emit_component(core, "legs", "copy_array",
+    {"leaf": {"type": "box", "params": {"nonexistent_parm": 0.5}}})
+result["steps"]["ca_bad_success"] = res_bad.get("success")
+result["steps"]["ca_bad_error"] = res_bad.get("error") or ""
+
+print("RESULT_JSON:" + json.dumps(result))
+""" % (_REPO, _REPO)
+
+
+@unittest.skipUnless(HYTHON, "hython not installed")
+class TestCopyArrayVectorLeafHython(unittest.TestCase):
+    """P0-2 (2026-07-08): copy_array leaf params as a vector + loud failure."""
+
+    def _run(self):
+        proc = subprocess.run(
+            [HYTHON, "-c", _COPY_ARRAY_VECTOR_LEAF_HARNESS],
+            capture_output=True, text=True, timeout=180, cwd=_REPO,
+            stdin=subprocess.DEVNULL)
+        combined = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 0,
+                         f"hython failed (rc={proc.returncode}):\n{combined[-2000:]}")
+        idx = combined.rfind("RESULT_JSON:")
+        self.assertGreater(idx, -1, f"no RESULT_JSON:\n{combined[-2000:]}")
+        return json.loads(combined[idx + len("RESULT_JSON:"):]), combined
+
+    def test_vector_leaf_size_applies_design_params(self):
+        """leaf.params.size=[leg_thick,leg_h,leg_thick] → the box's sizex/sizey/
+        sizez actually reference the params (eval to 0.08/0.7/0.08, and sizex is
+        a live expression). Before P0-2 these stayed at the box default 1.0."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertTrue(s["ca_success"], f"copy_array failed: {res}")
+        self.assertAlmostEqual(s["leaf_sizex"], 0.08, places=4,
+                               msg=f"sizex should eval to leg_thick (0.08), got {s['leaf_sizex']}")
+        self.assertAlmostEqual(s["leaf_sizey"], 0.7, places=4,
+                               msg=f"sizey should eval to leg_h (0.7), got {s['leaf_sizey']}")
+        self.assertAlmostEqual(s["leaf_sizez"], 0.08, places=4,
+                               msg=f"sizez should eval to leg_thick (0.08), got {s['leaf_sizez']}")
+        self.assertTrue(s["leaf_sizex_is_expr"],
+                        "sizex should be a live ch() expression, not a baked literal")
+
+    def test_unknown_leaf_parm_fails_loudly(self):
+        """An unsettable leaf parm must return success:False with a message —
+        NOT the silent success that masked the original copy_array bug."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertFalse(s["ca_bad_success"],
+                         f"unknown parm should fail loudly, got success={s['ca_bad_success']}")
+        self.assertIn("nonexistent_parm", s["ca_bad_error"],
+                      f"error should name the bad parm: {s['ca_bad_error']}")
+
+
+# ── P0-1 (2026-07-08): multi-point anchor naming. grid_on_face emits rows×cols ──
+# points into __newpts, but add_anchors/emit_markers named only __newpts[0]. The
+# @name port filter then passed just 1/N to the downstream consumer (both
+# keyboard sessions got 1 key instead of 75). This harness proves EVERY emitted
+# point now carries the name AND reaches the consumer.
+
+_GRID_MULTINAME_HARNESS = r"""
+import json, sys, os
+sys.path.insert(0, os.path.join(r"%s", "python3.11libs"))
+import hou
+_hda = os.path.join(r"%s", "otls", "edini_project.hda")
+if os.path.isfile(_hda):
+    hou.hda.installFile(_hda)
+from edini.project.state import empty_declaration, add_component, add_design_param
+from edini.project.node import create_project_hda
+from edini.project.builder import build_project_scaffold, emit_component, add_anchors
+
+result = {"steps": {}}
+
+core = create_project_hda(name="proj_grid")
+decl = empty_declaration("proj_grid")
+add_design_param(decl, "length", default=0.4, min=0.1, max=1.0, label="长")
+add_design_param(decl, "width", default=0.14, min=0.05, max=0.4, label="宽")
+add_component(decl, "base", purpose="底座",
+    ports_out=[{"index": 0, "kind": "geometry"},
+               {"index": 1, "kind": "anchors", "points": [{"name": "keygrid", "role": "m"}]}])
+add_component(decl, "keys", purpose="键",
+    ports_in=[{"from": "base", "port": 1, "anchor": "keygrid"}],
+    ports_out=[{"index": 0, "kind": "geometry"}])
+build_project_scaffold(core, declaration=decl)
+
+emit_component(core, "base", "box_panel", {"size": ["length", 0.02, "width"]})
+add_anchors(core, "base", [
+    {"measure": "grid_on_face", "face": "+Y", "rows": 3, "cols": 4, "name": "keygrid"}])
+
+# Emitted anchor cloud: every one of the rows*cols points must be named.
+ba = core.node("base/out_anchors")
+ba.cook(force=True)
+gb = ba.geometry()
+result["steps"]["emitted_count"] = int(gb.intrinsicValue("pointcount"))
+result["steps"]["emitted_named"] = sum(
+    1 for pt in gb.points() if pt.stringAttribValue("name") == "keygrid")
+
+# End-to-end: the downstream consumer's filtered input null — how many points
+# actually survived the @name port filter. (Found dynamically, not by hardcoded
+# name, to stay robust to the scaffold's in_<from>_<anchor> naming.)
+keys = core.node("keys")
+in_null = next((n for n in keys.children()
+                if n.name().startswith("in_") and n.type().name() == "null"), None)
+if in_null is not None:
+    in_null.cook(force=True)
+    result["steps"]["consumed_count"] = int(in_null.geometry().intrinsicValue("pointcount"))
+else:
+    result["steps"]["consumed_count"] = -1
+
+print("RESULT_JSON:" + json.dumps(result))
+""" % (_REPO, _REPO)
+
+
+@unittest.skipUnless(HYTHON, "hython not installed")
+class TestGridMultiPointNamingHython(unittest.TestCase):
+    """P0-1 (2026-07-08): every multi-point anchor carries its @name."""
+
+    def _run(self):
+        proc = subprocess.run(
+            [HYTHON, "-c", _GRID_MULTINAME_HARNESS],
+            capture_output=True, text=True, timeout=180, cwd=_REPO,
+            stdin=subprocess.DEVNULL)
+        combined = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 0,
+                         f"hython failed (rc={proc.returncode}):\n{combined[-2000:]}")
+        idx = combined.rfind("RESULT_JSON:")
+        self.assertGreater(idx, -1, f"no RESULT_JSON:\n{combined[-2000:]}")
+        return json.loads(combined[idx + len("RESULT_JSON:"):]), combined
+
+    def test_every_grid_point_is_named(self):
+        """grid_on_face rows=3 cols=4 → 12 points, ALL carrying @name=keygrid.
+        Before P0-1 only 1 was named."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertEqual(s["emitted_count"], 12,
+                         f"grid should emit 3*4=12 points, got {s['emitted_count']}")
+        self.assertEqual(s["emitted_named"], 12,
+                         f"all 12 must be named (P0-1), got {s['emitted_named']}: {res}")
+
+    def test_all_points_reach_downstream_consumer(self):
+        """The end-to-end proof: all 12 named points survive the port filter and
+        reach the keys component's input. Before P0-1 the consumer saw 1."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertEqual(s["consumed_count"], 12,
+                         f"all 12 grid points should reach the consumer, "
+                         f"got {s['consumed_count']}: {res}")
+
+
 # ── tube_graph archetype (Phase 4.3): VEX-built tube graph between named anchors ──
 
 _TUBE_GRAPH_HARNESS = r"""

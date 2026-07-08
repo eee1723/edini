@@ -756,7 +756,16 @@ def add_anchors(core_node: "hou.Node", component_id: str,
                     "error": f"upstream node '{upstream_node_name}' vanished "
                              f"during anchor rebuild in {component_id}"}
         wr = subnet.createNode("attribwrangle", wr_name)
-        wr.parm("snippet").set(snippet + f'\nsetpointattrib(0, "name", __newpts[0], "{name}", "set");')
+        # Name EVERY emitted point (P0-1, 2026-07-08): multi-point measures
+        # (grid_on_face / pickets / cells / shelf / array) append N points to
+        # __newpts; naming only [0] let just 1/N through the downstream @name
+        # port filter (broke keyboard grids: 75 keys collapsed to 1). Single-
+        # point measures (bbox_corner etc.) are unaffected — foreach over one
+        # element. __newpts is guaranteed populated by every strategy (the
+        # module contract: append each addpoint's return to __newpts).
+        wr.parm("snippet").set(snippet +
+            f'\nforeach (int __pt; __newpts) '
+            f'setpointattrib(0, "name", __pt, "{name}", "set");')
         wr.parm("class").set("detail")
         wr.setInput(0, upstream)
         # Install the measurement parms (cx/cy/cz etc.) as concrete values.
@@ -893,8 +902,13 @@ def emit_markers(core_node: "hou.Node", component_id: str,
         if existing is not None:
             existing.destroy()
         wr = subnet.createNode("attribwrangle", wr_name)
+        # Name EVERY emitted point (P0-1, 2026-07-08) — mirrors add_anchors.
+        # A marker spec that emits multiple points (e.g. a grid marker) must
+        # name them ALL, not just __newpts[0], or the downstream @name port
+        # filter drops the rest (same root cause as the keyboard-grid bug).
         wr.parm("snippet").set(
-            snippet + f'\nsetpointattrib(0, "name", __newpts[0], "{name}", "set");')
+            snippet + f'\nforeach (int __pt; __newpts) '
+                      f'setpointattrib(0, "name", __pt, "{name}", "set");')
         wr.parm("class").set("detail")
         wr.setInput(0, source)
         # Install measurement parms (cx/cy/cz etc.) — mirrors add_anchors.
@@ -960,32 +974,54 @@ def _arch_node(subnet: "hou.Node", node_type: str, name: str) -> "hou.Node":
     return subnet.createNode(node_type, name)
 
 
-def _set_archetype_parm(node, parm_name: str, value, core_path: str) -> None:
-    """Set a parm where ``value`` is a number (literal) or string (design_param
-    name → RELATIVE ch() ref to the core, so the component is MIGRATABLE).
+def _resolve_archetype_value(value, rel: str):
+    """Resolve an archetype param value into a form ``_apply_one_param`` accepts.
 
-    Phase 1a: archetypes reference design params via RELATIVE ch() (depth
-    computed from the node to the core), not absolute. A component built by an
-    archetype can be copy-pasted into another project and still cooks — the
-    relative ref reaches the new project's core (the HDA structure guarantees
-    the depth: geo shell → project_core → component subnet → archetype node).
-    Hand-authored raw nodes still use absolute ch() (see SKILL.md) and can be
-    migrated on demand via project_repath_to_relative.
+    A bare design_param NAME (string like ``"length"``, with no ``ch(``) becomes
+    a RELATIVE ch() expression ``ch("{rel}length")`` so the built component is
+    migratable into another project. An already-expression string, a number, or
+    a bool passes through unchanged. A list/tuple resolves component-wise (box
+    ``size=[x,y,z]`` → three resolved components set via the size parmTuple).
+
+    Mirrors node_utils._looks_like_expr, simplified — archetype values are never
+    multi-line code snippets, so the bare ``"ch(" not in value`` test suffices.
     """
-    p = node.parm(parm_name)
-    if p is None:
-        return
-    if isinstance(value, bool):
-        p.set(int(value))
-    elif isinstance(value, (int, float)):
-        p.set(float(value))
-    elif isinstance(value, str):
-        # A design_param name → RELATIVE ch() to the core (migratable). Compute
-        # the depth from this node to the core (archetype nodes are direct
-        # subnet children → typically "../../").
-        from edini.node_utils import _relative_path_to_core
-        rel = _relative_path_to_core(node.path(), core_path) or "../../"
-        p.setExpression(f'ch("{rel}{value}")')
+    if isinstance(value, (list, tuple)):
+        return [_resolve_archetype_value(v, rel) for v in value]
+    if isinstance(value, str) and "ch(" not in value:
+        return f'ch("{rel}{value}")'
+    return value
+
+
+def _set_archetype_parm(node, parm_name: str, value, core_path: str) -> None:
+    """Set a parm where ``value`` is a number, a design_param NAME (→ RELATIVE
+    ch() ref, migratable), an expression string, or a vector list/tuple.
+
+    Delegates the actual write to node_utils._apply_one_param — the SAME
+    dispatch set_param / set_params_batch use — so archetypes inherit EVERY
+    capability of the hand-built path: vector → parmTuple (box ``size`` /
+    translate), expression → setExpression, scalar → .set() with menu-token
+    coercion, and a "did you mean" hint on an unknown parm name.
+
+    This closes the P0-2 silent-drop gap (2026-07-08): copy_array passed
+    ``leaf.params={"size":[...]}`` here, but box has no single ``size`` parm
+    (only the sizex/sizey/sizez tuple), so the old helper's ``if p is None:
+    return`` no-op'd it and emit_component still returned ``success: True`` —
+    the leaf stayed 1×1×1 with no signal. Now an unsettable parm RAISES, so
+    emit_component returns a clear {success: False, error} instead.
+
+    Phase 1a note: archetypes reference design params via RELATIVE ch() (depth
+    computed from the node to the core), so a component copy-pasted into another
+    project still cooks. Hand-authored raw nodes use absolute ch() (SKILL.md)
+    and can be migrated on demand via project_repath_to_relative.
+    """
+    from edini.node_utils import _relative_path_to_core, _apply_one_param
+    rel = _relative_path_to_core(node.path(), core_path) or "../../"
+    resolved = _resolve_archetype_value(value, rel)
+    ok, _applied, err = _apply_one_param(node, parm_name, resolved)
+    if not ok:
+        raise ValueError(f"archetype parm {parm_name!r} on "
+                         f"{node.type().name()} {node.path()}: {err}")
 
 
 def emit_component(core_node: "hou.Node", component_id: str,
@@ -1014,15 +1050,22 @@ def emit_component(core_node: "hou.Node", component_id: str,
         return {"success": False,
                 "error": f"component subnet not found: {component_id}"}
     params = params or {}
-    if archetype == "box_panel":
-        return _archetype_box_panel(core_node, subnet, params)
-    if archetype == "copy_array":
-        return _archetype_copy_array(core_node, subnet, params)
-    if archetype == "tube_graph":
-        return _archetype_tube_graph(core_node, subnet, params)
-    return {"success": False,
-            "error": f"unknown archetype {archetype!r}; supported: box_panel, "
-                     f"copy_array, tube_graph (extrude_profile lands incrementally)"}
+    # Wrap the archetype build so a loud failure (e.g. _set_archetype_parm
+    # raising on an unsettable leaf parm — P0-2) surfaces as a clean
+    # {success: False, error} instead of a raw traceback.
+    try:
+        if archetype == "box_panel":
+            return _archetype_box_panel(core_node, subnet, params)
+        if archetype == "copy_array":
+            return _archetype_copy_array(core_node, subnet, params)
+        if archetype == "tube_graph":
+            return _archetype_tube_graph(core_node, subnet, params)
+        return {"success": False,
+                "error": f"unknown archetype {archetype!r}; supported: box_panel, "
+                         f"copy_array, tube_graph (extrude_profile lands incrementally)"}
+    except Exception as e:
+        return {"success": False,
+                "error": f"{archetype!r} archetype failed: {e}"}
 
 
 def _archetype_box_panel(core_node: "hou.Node", subnet: "hou.Node",
