@@ -24,6 +24,7 @@ from edini.node_utils import (
     node_parms,
     verify_parametric,
     repath_to_relative,
+    project_status,
 )
 from edini import screenshots
 from edini.config import _load_edini_settings
@@ -452,6 +453,9 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     "project_build_scaffold": lambda **kw: _project_build_scaffold(**kw),
     "project_promote_params": lambda **kw: _project_promote_params(**kw),
     "project_add_anchors": lambda **kw: _project_add_anchors(**kw),
+    # One-shot per-component completion snapshot (geo_flow / anchors emitted /
+    # errors). Replaces the N-tool status-gathering loop with a single call.
+    "project_status": lambda **kw: project_status(kw["core_path"]),
 }
 
 # Backward-compatibility tool aliases (pre-Task-7 rename).

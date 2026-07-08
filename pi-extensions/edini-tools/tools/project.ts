@@ -180,4 +180,30 @@ export const projectTools = [
       return forwardTool("project_add_anchors", params);
     },
   },
+  {
+    name: "project_status",
+    label: "Project Completion Status",
+    description:
+      "One-shot completion snapshot of EVERY component in a Project HDA — replaces calling inspect_health + " +
+      "geometry_inventory + check_errors separately per component. For each declared component reports: " +
+      "geo_flow (ok|empty|broken — does out_geometry have cooked geometry?), prim/point counts, " +
+      "anchors {declared, emitted, missing} (ports.out declarations vs the anchor_<name> wrangles created), " +
+      "and error/warning counts across the subtree. Plus an overall summary: how many components have geometry, " +
+      "all anchors emitted, errors, and an 'incomplete' list (what's left to build). Read-only, non-destructive. " +
+      "Use this to see the whole project's state at a glance; use verify_parametric for the deeper LIVE proof.",
+    promptSnippet: "Snapshot every component's completion state in one call",
+    promptGuidelines: [
+      "Use project_status as the single status check instead of N per-component inspect calls.",
+      "Per component: geo_flow=ok means geometry is flowing into out_geometry; empty means the agent hasn't wired geometry yet; broken means a cook error (see cook_error).",
+      "anchors.missing lists declared-but-not-yet-emitted anchor names (call project_add_anchors for them).",
+      "overall.incomplete is the 'what's left to build' list — a component is complete when geo_flow=ok AND no missing anchors AND no errors.",
+      "Read-only. For the LIVE parametric guarantee (change a param → geometry responds), use verify_parametric.",
+    ],
+    parameters: Type.Object({
+      core_path: Type.String({ description: "Path to the edini::project SOP HDA instance." }),
+    }),
+    async execute(_id: string, params: { core_path: string }) {
+      return forwardTool("project_status", params);
+    },
+  },
 ];

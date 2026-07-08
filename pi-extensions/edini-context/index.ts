@@ -177,6 +177,11 @@ node versions, missing connections) without bounding what you can create.
 
 ## Geometry verification workflow (after any build)
 
+**For a Project HDA, call \`project_status\` first** — one call snapshots every
+component's geo_flow (ok|empty|broken) / anchors-emitted / errors + an
+\`overall.incomplete\` list ("what's left to build"). Then use the per-node
+checks below for detail on a specific component:
+
 1. inspect_health on the output node — MANDATORY first check.
    Fix orphan points (Fuse), stray open curves (Blast), degenerate faces (Clean),
    non-manifold edges BEFORE anything else. These silently break downstream work.

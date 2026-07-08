@@ -1992,5 +1992,141 @@ class TestHardeningEdgeCasesHython(unittest.TestCase):
                          f"reported={s['chain_internal_ready_reported']}: {res}")
 
 
+# =============================================================================
+# Phase 1c: project_status — one-shot per-component completion snapshot.
+# Replaces the N-tool status-gathering loop. Builds a 3-component project,
+# completes ONLY the tabletop (geometry + 4 anchors), leaves legs/shelf empty,
+# then asserts project_status distinguishes built from unbuilt components in
+# a single call.
+# =============================================================================
+
+_STATUS_HARNESS = r"""
+import json, sys, os
+sys.path.insert(0, os.path.join(r"%s", "python3.11libs"))
+import hou
+_hda = os.path.join(r"%s", "otls", "edini_project.hda")
+if os.path.isfile(_hda):
+    hou.hda.installFile(_hda)
+from edini.project.state import empty_declaration, add_component, add_design_param
+from edini.project.node import create_project_hda
+from edini.project.builder import build_project_scaffold, add_anchors
+from edini.node_utils import project_status
+
+result = {"steps": {}}
+
+# 3-component chain: tabletop (emits 4 leg anchors) → legs (emits 2 shelf
+# anchors) → shelf. Only tabletop will be built; legs/shelf left empty.
+core = create_project_hda(name="proj_status")
+decl = empty_declaration("proj_status")
+add_design_param(decl, "length", default=1.2, min=0.4, max=3.0, label="长度")
+add_component(decl, "tabletop", purpose="桌面",
+    ports_out=[
+        {"index": 0, "kind": "geometry"},
+        {"index": 1, "kind": "anchors", "points": [
+            {"name": "leg_fr", "role": "mount"},
+            {"name": "leg_fl", "role": "mount"},
+            {"name": "leg_br", "role": "mount"},
+            {"name": "leg_bl", "role": "mount"}]}])
+add_component(decl, "legs", purpose="四腿",
+    ports_in=[{"from": "tabletop", "port": 1, "anchor": "leg_fr"},
+              {"from": "tabletop", "port": 1, "anchor": "leg_fl"},
+              {"from": "tabletop", "port": 1, "anchor": "leg_br"},
+              {"from": "tabletop", "port": 1, "anchor": "leg_bl"}],
+    ports_out=[
+        {"index": 0, "kind": "geometry"},
+        {"index": 1, "kind": "anchors", "points": [
+            {"name": "shelf_fr", "role": "mount"},
+            {"name": "shelf_bl", "role": "mount"}]}])
+add_component(decl, "shelf", purpose="层板",
+    ports_in=[{"from": "legs", "port": 1, "anchor": "shelf_fr"},
+              {"from": "legs", "port": 1, "anchor": "shelf_bl"}])
+build_project_scaffold(core, declaration=decl)
+
+# Build geometry ONLY in tabletop + emit its 4 anchors. legs/shelf stay empty.
+top = core.node("tabletop")
+box = top.createNode("box", "top_box")
+box.parm("sizex").setExpression("ch('/obj/proj_status/project_core/length')")
+box.parm("sizey").set(0.05)
+box.parm("sizez").set(0.6)
+top.node("out_geometry").setInput(0, box)
+add_anchors(core, "tabletop", [
+    {"measure": "bbox_corner", "axes": "+X-Y+Z", "name": "leg_fr"},
+    {"measure": "bbox_corner", "axes": "-X-Y+Z", "name": "leg_fl"},
+    {"measure": "bbox_corner", "axes": "+X-Y-Z", "name": "leg_br"},
+    {"measure": "bbox_corner", "axes": "-X-Y-Z", "name": "leg_bl"}])
+
+status = project_status(core.path())
+comps = {c["id"]: c for c in status["components"]}
+result["steps"]["component_count"] = status["component_count"]
+result["steps"]["top_geo_flow"] = comps["tabletop"]["geo_flow"]
+result["steps"]["top_prim_count"] = comps["tabletop"]["prim_count"]
+result["steps"]["top_anchors_declared"] = comps["tabletop"]["anchors"]["declared"]
+result["steps"]["top_anchors_emitted"] = comps["tabletop"]["anchors"]["emitted"]
+result["steps"]["top_anchors_missing"] = comps["tabletop"]["anchors"]["missing"]
+result["steps"]["top_errors"] = comps["tabletop"]["errors"]
+result["steps"]["legs_geo_flow"] = comps["legs"]["geo_flow"]
+result["steps"]["legs_anchors_declared"] = comps["legs"]["anchors"]["declared"]
+result["steps"]["legs_anchors_emitted"] = comps["legs"]["anchors"]["emitted"]
+result["steps"]["shelf_geo_flow"] = comps["shelf"]["geo_flow"]
+result["steps"]["overall_with_geometry"] = status["overall"]["with_geometry"]
+result["steps"]["overall_complete"] = status["overall"]["complete"]
+result["steps"]["overall_incomplete"] = status["overall"]["incomplete"]
+
+print("RESULT_JSON:" + json.dumps(result))
+""" % (_REPO, _REPO)
+
+
+@unittest.skipUnless(HYTHON, "hython not installed")
+class TestProjectStatusHython(unittest.TestCase):
+    """Phase 1c: project_status — one-shot snapshot distinguishing built from
+    unbuilt components (replaces the N-tool status-gathering loop)."""
+
+    def _run(self):
+        proc = subprocess.run(
+            [HYTHON, "-c", _STATUS_HARNESS],
+            capture_output=True, text=True, timeout=180, cwd=_REPO,
+            stdin=subprocess.DEVNULL)
+        combined = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 0,
+                         f"hython failed (rc={proc.returncode}):\n{combined[-2000:]}")
+        idx = combined.rfind("RESULT_JSON:")
+        self.assertGreater(idx, -1, f"no RESULT_JSON:\n{combined[-2000:]}")
+        return json.loads(combined[idx + len("RESULT_JSON:"):]), combined
+
+    def test_built_component_reports_complete(self):
+        """tabletop (box wired + 4 anchors emitted + no errors) is complete."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertEqual(s["component_count"], 3)
+        self.assertEqual(s["top_geo_flow"], "ok",
+                         "tabletop has a box wired into out_geometry → ok")
+        self.assertGreater(s["top_prim_count"], 0)
+        self.assertEqual(s["top_anchors_declared"], 4)
+        self.assertEqual(s["top_anchors_emitted"], 4)
+        self.assertEqual(s["top_anchors_missing"], [])
+        self.assertEqual(s["top_errors"], 0)
+
+    def test_unbuilt_components_reported_empty(self):
+        """legs + shelf have no geometry wired → geo_flow empty; legs declares
+        anchors but emitted none."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertEqual(s["legs_geo_flow"], "empty")
+        self.assertEqual(s["shelf_geo_flow"], "empty")
+        self.assertEqual(s["legs_anchors_declared"], 2)
+        self.assertEqual(s["legs_anchors_emitted"], 0)
+
+    def test_overall_summary_and_incomplete_list(self):
+        """overall correctly tallies: 1 with geometry, 1 complete, legs+shelf
+        incomplete (tabletop NOT in the incomplete list)."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertEqual(s["overall_with_geometry"], 1)
+        self.assertEqual(s["overall_complete"], 1)
+        self.assertIn("legs", s["overall_incomplete"])
+        self.assertIn("shelf", s["overall_incomplete"])
+        self.assertNotIn("tabletop", s["overall_incomplete"])
+
+
 if __name__ == "__main__":
     unittest.main()

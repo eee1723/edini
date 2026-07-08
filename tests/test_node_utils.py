@@ -24,6 +24,7 @@ from edini.node_utils import (
     search_nodes, get_help, inspect_geometry,
     run_python, run_vex, create_hda, get_hda_info,
     get_selection, check_errors, set_display_flag,
+    _declared_anchor_names,
 )
 
 
@@ -1589,6 +1590,40 @@ class TestGetNodeRampSerialization(unittest.TestCase):
                 return _FloatTmpl()
 
         self.assertEqual(_serialize_parm_value(_FloatParm(), 3.5), 3.5)
+
+
+# ===================================================================
+# Phase 1c: _declared_anchor_names — pure-logic helper for project_status.
+# Extracts the declared anchor @name list from a component's ports.out.
+# ===================================================================
+
+class TestDeclaredAnchorNames(unittest.TestCase):
+    """Pure logic — no hou. Backs project_status's anchors {declared, emitted}."""
+
+    def test_extracts_anchor_names_from_anchors_output(self):
+        comp = {"ports": {"out": [
+            {"index": 0, "kind": "geometry"},
+            {"index": 1, "kind": "anchors", "points": [
+                {"name": "leg_fr", "role": "mount"},
+                {"name": "leg_fl", "role": "mount"}]}]}}
+        self.assertEqual(_declared_anchor_names(comp), ["leg_fr", "leg_fl"])
+
+    def test_empty_when_no_anchor_output(self):
+        # A leaf component that only emits geometry has no anchor names.
+        comp = {"ports": {"out": [{"index": 0, "kind": "geometry"}]}}
+        self.assertEqual(_declared_anchor_names(comp), [])
+
+    def test_empty_when_no_ports(self):
+        self.assertEqual(_declared_anchor_names({}), [])
+
+    def test_skips_non_string_names(self):
+        # Defensive: a malformed point (no name, or non-string name) is skipped.
+        comp = {"ports": {"out": [
+            {"index": 1, "kind": "anchors", "points": [
+                {"name": "good"},
+                {"role": "no name"},
+                {"name": 42}]}]}}
+        self.assertEqual(_declared_anchor_names(comp), ["good"])
 
 
 if __name__ == "__main__":

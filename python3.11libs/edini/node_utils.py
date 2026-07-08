@@ -4093,3 +4093,142 @@ def _make_replacer(core_path: str, rel: str):
     return repl
 
 
+def _declared_anchor_names(comp: dict) -> list[str]:
+    """The anchor @name list declared in a component's ports.out (the entry
+    with kind=="anchors"). Empty if the component declares no anchor output
+    (e.g. a leaf component that only emits geometry)."""
+    names: list[str] = []
+    for out_entry in (comp.get("ports", {}) or {}).get("out", []) or []:
+        if out_entry.get("kind") == "anchors":
+            for p in out_entry.get("points", []) or []:
+                nm = p.get("name")
+                if isinstance(nm, str):
+                    names.append(nm)
+    return names
+
+
+def project_status(core_path: str) -> dict[str, Any]:
+    """One-shot completion snapshot of every component in a Project HDA.
+
+    Replaces the N-tool status-gathering loop (inspect_health + geometry_inventory
+    + check_errors per component) with a single call. For each declared component
+    reports:
+
+      - ``geo_flow``: ``ok`` | ``empty`` | ``broken`` | ``no_scaffold`` |
+        ``missing_subnet`` — does ``out_geometry`` have cooked geometry?
+      - ``prim_count`` / ``point_count`` of that geometry.
+      - ``anchors``: ``{declared, emitted, missing}`` — declared in ``ports.out``
+        vs the ``anchor_<name>`` wrangles ``project_add_anchors`` created.
+      - ``errors`` / ``warnings``: counts across the component's subtree.
+
+    Plus an ``overall`` summary: components with geometry / with all anchors
+    emitted / with errors, and an ``incomplete`` list (the agent's "what's left").
+
+    Read-only — never cooks destructively or perturbs params. For the LIVE
+    parametric guarantee use ``verify_parametric`` (deeper; perturbs + restores).
+
+    Args:
+        core_path: the edini::project SOP HDA instance path.
+    """
+    try:
+        core = hou.node(core_path)
+        if core is None:
+            return {"success": False, "error": f"Core not found: {core_path}"}
+        from edini.project.state import load_declaration
+        from edini.project.ports import OUT_GEOMETRY_NODE
+        decl = load_declaration(core)
+        components = decl.get("components", []) or []
+
+        out: list[dict] = []
+        with_geo = with_all_anchors = with_errors = 0
+        incomplete: list[str] = []
+        for comp in components:
+            cid = comp.get("id", "?")
+            entry: dict[str, Any] = {"id": cid}
+            subnet = core.node(cid)
+            if subnet is None:
+                entry["geo_flow"] = "missing_subnet"
+                entry["prim_count"] = 0
+                entry["point_count"] = 0
+                entry["anchors"] = {"declared": 0, "emitted": 0, "missing": []}
+                entry["errors"] = 0
+                entry["warnings"] = 0
+                incomplete.append(cid)
+                out.append(entry)
+                continue
+
+            # ── geo flow: read out_geometry's cooked geometry ──
+            prim_count = point_count = 0
+            geo_flow = "empty"
+            cook_error: str | None = None
+            out_geo = subnet.node(OUT_GEOMETRY_NODE)
+            if out_geo is None:
+                geo_flow = "no_scaffold"   # out_geometry null missing (re-scaffold?)
+            else:
+                try:
+                    geo = out_geo.geometry()
+                    if geo is not None:
+                        prim_count = int(geo.intrinsicValue("primitivecount"))
+                        point_count = int(geo.intrinsicValue("pointcount"))
+                        geo_flow = "ok" if prim_count > 0 else "empty"
+                except Exception as e:
+                    # A cook failure inside the component (broken ch(), bad
+                    # VEX) surfaces here — the agent's signal to fix it.
+                    geo_flow = "broken"
+                    cook_error = str(e)
+            entry["geo_flow"] = geo_flow
+            entry["prim_count"] = prim_count
+            entry["point_count"] = point_count
+            if cook_error:
+                entry["cook_error"] = cook_error
+
+            # ── anchors: declared (ports.out) vs emitted (anchor_<name>) ──
+            declared = _declared_anchor_names(comp)
+            emitted = [n for n in declared
+                       if subnet.node(f"anchor_{n}") is not None]
+            missing = [n for n in declared if n not in emitted]
+            entry["anchors"] = {"declared": len(declared),
+                                "emitted": len(emitted), "missing": missing}
+
+            # ── errors/warnings across the component subtree ──
+            err_count = warn_count = 0
+            for n in subnet.allSubChildren():
+                try:
+                    err_count += len(n.errors() or [])
+                    warn_count += len(n.warnings() or [])
+                except Exception:
+                    pass
+            entry["errors"] = err_count
+            entry["warnings"] = warn_count
+
+            # ── tally ──
+            anchors_ok = (not declared) or (not missing)
+            done = geo_flow == "ok" and anchors_ok and err_count == 0
+            if geo_flow == "ok":
+                with_geo += 1
+            if anchors_ok:
+                with_all_anchors += 1
+            if err_count:
+                with_errors += 1
+            if not done:
+                incomplete.append(cid)
+            out.append(entry)
+
+        return {
+            "success": True,
+            "project": core_path,
+            "component_count": len(components),
+            "components": out,
+            "overall": {
+                "with_geometry": with_geo,
+                "with_all_anchors": with_all_anchors,
+                "with_errors": with_errors,
+                "complete": len(components) - len(incomplete),
+                "incomplete": incomplete,
+            },
+        }
+    except Exception as e:
+        return {"success": False,
+                "error": f"{e}\n{traceback.format_exc()}"}
+
+

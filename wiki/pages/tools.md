@@ -28,6 +28,7 @@
 | `project_add_anchors` | 从组件几何**测量**锚点(LIVE VEX,非硬编码) | 组件几何建好后,为下游发锚点 |
 | `project_repath_to_relative` | 单组件绝对 ch()→相对(可迁移) | 想把组件复制到别的 project 时(可选) |
 | `project_promote_params` | 提升子网 spare parm 到 core | design_params 路径下返回 `[]` 是**正确的**(no-op),非失败 |
+| `project_status` | 一次性快照:每组件 geo_flow / anchors{declared,emitted,missing} / errors + `overall.incomplete` | 替代 N 次逐组件 inspect;看"还差什么" |
 
 ## §2 节点操作(Scene)— 通用 Houdini 节点操纵
 
