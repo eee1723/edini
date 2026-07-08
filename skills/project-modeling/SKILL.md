@@ -159,8 +159,9 @@ matches one of:
 - **`copy_array`** — stamp a leaf onto consumed anchors (legs / spokes / keys).
 - **`tube_graph`** — connected tubes between named anchors (frame / fork / bars).
 
-Each archetype builds + wires the chain for you (idempotent, design-param-aware,
-zero Python-SOP error surface). Fall back to raw `houdini_create_node` /
+Each archetype builds + wires the chain for you (idempotent, design-param-aware
+via **RELATIVE `ch()`** — so archetype-built components are migratable across
+projects, zero Python-SOP error surface). Fall back to raw `houdini_create_node` /
 `houdini_connect_nodes` / `houdini_set_param` only when NO archetype fits
 (then follow `COMPONENT_TEMPLATE.md`'s Python SOP skeleton).
 

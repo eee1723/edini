@@ -2729,5 +2729,104 @@ class TestTubeGraphArchetypeHython(unittest.TestCase):
                            f"thicker radius should grow the bbox: {res}")
 
 
+# =============================================================================
+# Phase 1a: archetype components use RELATIVE ch() → MIGRATABLE. A box_panel
+# built in project A (length=1.2), copied into project B (length=3.0), reads
+# project B's length (3.0) — not A's 1.2. An absolute ref would still point at
+# A's path (or break). This is the steady 1a deliverable.
+# =============================================================================
+
+_MIGRATE_HARNESS = r"""
+import json, sys, os
+sys.path.insert(0, os.path.join(r"%s", "python3.11libs"))
+import hou
+_hda = os.path.join(r"%s", "otls", "edini_project.hda")
+if os.path.isfile(_hda):
+    hou.hda.installFile(_hda)
+from edini.project.state import empty_declaration, add_component, add_design_param
+from edini.project.node import create_project_hda
+from edini.project.builder import build_project_scaffold, emit_component
+
+result = {"steps": {}}
+
+# proj_A: a box_panel component "top" with sizex=length, length=1.2.
+coreA = create_project_hda(name="proj_mA")
+declA = empty_declaration("proj_mA")
+add_design_param(declA, "length", default=1.2, min=0.4, max=3.0, label="长")
+add_component(declA, "top", purpose="t", ports_out=[{"index": 0, "kind": "geometry"}])
+build_project_scaffold(coreA, declaration=declA)
+emit_component(coreA, "top", "box_panel", {"size": ["length", 0.05, 0.6]})
+boxA = coreA.node("top").node("panel_box")
+result["steps"]["ma_source_expr"] = boxA.parm("sizex").expression() if boxA else None
+result["steps"]["ma_source_sizex"] = boxA.parm("sizex").eval() if boxA else None
+
+# proj_B: a DIFFERENT project with length=3.0 (no component yet).
+coreB = create_project_hda(name="proj_mB")
+declB = empty_declaration("proj_mB")
+add_design_param(declB, "length", default=3.0, min=0.4, max=3.0, label="长")
+build_project_scaffold(coreB, declaration=declB)
+
+# Copy proj_A's "top" component subnet INTO proj_B's core.
+topA = coreA.node("top")
+compB = hou.copyNodesTo([topA], coreB)[0]
+compB.node("out_geometry").cook(force=True)
+boxB = compB.node("panel_box")
+# The copied box reads proj_B's length (3.0) via the RELATIVE ref — NOT proj_A's
+# 1.2 (which an absolute ref would still point at). This is the migratability proof.
+result["steps"]["ma_migrated_sizex"] = boxB.parm("sizex").eval() if boxB else None
+# And changing proj_B's length moves the migrated box (LIVE in its new home).
+coreB.parm("length").set(2.5)
+result["steps"]["ma_migrated_sizex_after_change"] = boxB.parm("sizex").eval() if boxB else None
+
+print("RESULT_JSON:" + json.dumps(result))
+""" % (_REPO, _REPO)
+
+
+@unittest.skipUnless(HYTHON, "hython not installed")
+class TestArchetypeMigratableHython(unittest.TestCase):
+    """Phase 1a: archetype components use relative ch() → migratable across projects."""
+
+    def _run(self):
+        proc = subprocess.run(
+            [HYTHON, "-c", _MIGRATE_HARNESS],
+            capture_output=True, text=True, timeout=180, cwd=_REPO,
+            stdin=subprocess.DEVNULL)
+        combined = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 0,
+                         f"hython failed (rc={proc.returncode}):\n{combined[-2000:]}")
+        idx = combined.rfind("RESULT_JSON:")
+        self.assertGreater(idx, -1, f"no RESULT_JSON:\n{combined[-2000:]}")
+        return json.loads(combined[idx + len("RESULT_JSON:"):]), combined
+
+    def test_archetype_uses_relative_ch_ref(self):
+        """The archetype-generated expression is RELATIVE (../../length), not
+        absolute (/obj/proj_mA/...)."""
+        res, _ = self._run()
+        s = res["steps"]
+        expr = s["ma_source_expr"] or ""
+        self.assertIn("../../length", expr,
+                      f"archetype should use relative ch(): {expr!r}")
+        self.assertNotIn("/proj_mA/", expr,
+                         f"archetype should NOT use absolute path: {expr!r}")
+
+    def test_migrated_component_reads_new_projects_param(self):
+        """A box_panel copied from proj_A (length=1.2) into proj_B (length=3.0)
+        reads proj_B's length (3.0) — the relative ref reaches the new core.
+        An absolute ref would still read 1.2 (or break)."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertAlmostEqual(s["ma_source_sizex"], 1.2, places=4)
+        self.assertAlmostEqual(s["ma_migrated_sizex"], 3.0, places=4,
+            msg="migrated component must read the NEW project's length (3.0), "
+                "not the source's (1.2) — the migratability guarantee")
+
+    def test_migrated_component_is_live_in_new_home(self):
+        """Changing proj_B's length moves the migrated box — it's fully live in
+        its new project, not a frozen copy."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertAlmostEqual(s["ma_migrated_sizex_after_change"], 2.5, places=4)
+
+
 if __name__ == "__main__":
     unittest.main()

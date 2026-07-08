@@ -962,7 +962,16 @@ def _arch_node(subnet: "hou.Node", node_type: str, name: str) -> "hou.Node":
 
 def _set_archetype_parm(node, parm_name: str, value, core_path: str) -> None:
     """Set a parm where ``value`` is a number (literal) or string (design_param
-    name → absolute ch() ref to the core, the official parameterization path)."""
+    name → RELATIVE ch() ref to the core, so the component is MIGRATABLE).
+
+    Phase 1a: archetypes reference design params via RELATIVE ch() (depth
+    computed from the node to the core), not absolute. A component built by an
+    archetype can be copy-pasted into another project and still cooks — the
+    relative ref reaches the new project's core (the HDA structure guarantees
+    the depth: geo shell → project_core → component subnet → archetype node).
+    Hand-authored raw nodes still use absolute ch() (see SKILL.md) and can be
+    migrated on demand via project_repath_to_relative.
+    """
     p = node.parm(parm_name)
     if p is None:
         return
@@ -971,8 +980,12 @@ def _set_archetype_parm(node, parm_name: str, value, core_path: str) -> None:
     elif isinstance(value, (int, float)):
         p.set(float(value))
     elif isinstance(value, str):
-        # A design_param name → live ch() reference to the core spare parm.
-        p.setExpression(f'ch("{core_path}/{value}")')
+        # A design_param name → RELATIVE ch() to the core (migratable). Compute
+        # the depth from this node to the core (archetype nodes are direct
+        # subnet children → typically "../../").
+        from edini.node_utils import _relative_path_to_core
+        rel = _relative_path_to_core(node.path(), core_path) or "../../"
+        p.setExpression(f'ch("{rel}{value}")')
 
 
 def emit_component(core_node: "hou.Node", component_id: str,

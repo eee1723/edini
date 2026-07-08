@@ -224,7 +224,8 @@ export const projectTools = [
       "Build a component's geometry from an ARCHETYPE — the platform-layer alternative to hand-authoring step 3 " +
       "with raw create_node/set_param (the #1 source of step-3 failures: Python SOP errors, wrong parm names, " +
       "broken ch() refs). Each archetype owns its nodes (deterministic names, idempotent), wires them to " +
-      "out_geometry, and references design params via absolute ch(). Value convention: a size/position component " +
+      "out_geometry, and references design params via RELATIVE ch() (so archetype-built components are migratable " +
+      "across projects — copy a component subnet into another project and it still cooks). Value convention: a size/position component " +
       "is a NUMBER (literal) or a STRING (a design_param name → live ch() ref). " +
       "ARCHETYPES: 'box_panel' — a parametric box (tabletop/seat/panel): params.size=[x,y,z] (each a number or " +
       "design_param name); optional params.markers (list, forwarded to project_emit_markers after the box is " +
