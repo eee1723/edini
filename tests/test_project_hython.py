@@ -2524,5 +2524,99 @@ class TestEmitComponentHython(unittest.TestCase):
                                 f"by_name anchor should pick the forwarded marker: {res}")
 
 
+# ── copy_array archetype (Phase 4.2): stamp a leaf onto consumed anchor points ──
+
+_COPY_ARRAY_HARNESS = r"""
+import json, sys, os
+sys.path.insert(0, os.path.join(r"%s", "python3.11libs"))
+import hou
+_hda = os.path.join(r"%s", "otls", "edini_project.hda")
+if os.path.isfile(_hda):
+    hou.hda.installFile(_hda)
+from edini.project.state import empty_declaration, add_component, add_design_param
+from edini.project.node import create_project_hda
+from edini.project.builder import build_project_scaffold, emit_component, add_anchors
+
+result = {"steps": {}}
+
+core = create_project_hda(name="proj_ca")
+decl = empty_declaration("proj_ca")
+add_design_param(decl, "length", default=1.2, min=0.4, max=3.0, label="长")
+add_design_param(decl, "width", default=0.6, min=0.3, max=1.5, label="宽")
+add_component(decl, "tabletop", purpose="桌",
+    ports_out=[{"index": 0, "kind": "geometry"},
+               {"index": 1, "kind": "anchors", "points": [
+                   {"name": "leg_fr", "role": "m"}, {"name": "leg_fl", "role": "m"},
+                   {"name": "leg_br", "role": "m"}, {"name": "leg_bl", "role": "m"}]}])
+add_component(decl, "legs", purpose="腿",
+    ports_in=[{"from": "tabletop", "port": 1, "anchor": "leg_fr"},
+              {"from": "tabletop", "port": 1, "anchor": "leg_fl"},
+              {"from": "tabletop", "port": 1, "anchor": "leg_br"},
+              {"from": "tabletop", "port": 1, "anchor": "leg_bl"}],
+    ports_out=[{"index": 0, "kind": "geometry"}])
+build_project_scaffold(core, declaration=decl)
+
+# tabletop: box_panel + 4 bottom-corner anchors.
+emit_component(core, "tabletop", "box_panel", {"size": ["length", 0.05, "width"]})
+add_anchors(core, "tabletop", [
+    {"measure": "bbox_corner", "axes": "+X-Y+Z", "name": "leg_fr"},
+    {"measure": "bbox_corner", "axes": "-X-Y+Z", "name": "leg_fl"},
+    {"measure": "bbox_corner", "axes": "+X-Y-Z", "name": "leg_br"},
+    {"measure": "bbox_corner", "axes": "-X-Y-Z", "name": "leg_bl"}])
+
+# legs: copy_array stamps a small box leaf at each of the 4 consumed corners.
+res = emit_component(core, "legs", "copy_array",
+    {"leaf": {"type": "box", "params": {"sizex": 0.1, "sizey": 0.5, "sizez": 0.1}}})
+result["steps"]["ca_success"] = res.get("success")
+result["steps"]["ca_anchor_inputs"] = res.get("anchor_inputs")
+
+legs = core.node("legs")
+og = legs.node("out_geometry")
+og.cook(force=True)
+g = og.geometry()
+result["steps"]["ca_legs_prim_count"] = int(g.intrinsicValue("primitivecount"))
+result["steps"]["ca_legs_point_count"] = int(g.intrinsicValue("pointcount"))
+# A single box leaf = 6 prims / 8 points. 4 stamped instances → 24 prims / 32
+# points (unpacked CTP). If CTP packs, the count differs — so the robust claim
+# is "more geometry than one leaf" + 4 anchor inputs consumed.
+result["steps"]["ca_single_leaf_prim_count"] = 6
+
+print("RESULT_JSON:" + json.dumps(result))
+""" % (_REPO, _REPO)
+
+
+@unittest.skipUnless(HYTHON, "hython not installed")
+class TestCopyArrayArchetypeHython(unittest.TestCase):
+    """Phase 4.2: copy_array archetype — CTP a leaf onto consumed anchor points."""
+
+    def _run(self):
+        proc = subprocess.run(
+            [HYTHON, "-c", _COPY_ARRAY_HARNESS],
+            capture_output=True, text=True, timeout=180, cwd=_REPO,
+            stdin=subprocess.DEVNULL)
+        combined = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 0,
+                         f"hython failed (rc={proc.returncode}):\n{combined[-2000:]}")
+        idx = combined.rfind("RESULT_JSON:")
+        self.assertGreater(idx, -1, f"no RESULT_JSON:\n{combined[-2000:]}")
+        return json.loads(combined[idx + len("RESULT_JSON:"):]), combined
+
+    def test_copy_array_stamps_one_leaf_per_consumed_anchor(self):
+        """4 declared anchor inputs → 4 stamped leaf instances. Unpacked CTP
+        gives 4×6=24 prims; the robust claim is >= 4 instances worth of geometry
+        (more than one leaf) + all 4 anchors consumed."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertTrue(s["ca_success"], f"copy_array failed: {res}")
+        self.assertEqual(len(s["ca_anchor_inputs"]), 4,
+                         f"should consume all 4 anchors: {res}")
+        single = s["ca_single_leaf_prim_count"]
+        # 4 stamped instances: unpacked CTP → 4×6 = 24 prims; packed → 4 prims.
+        # Either way it's exactly 4 instances worth (not 1, not 0).
+        self.assertIn(s["ca_legs_prim_count"], (4 * single, 4),
+                      f"expected 4 leaf instances (24 prims unpacked or 4 packed), "
+                      f"got {s['ca_legs_prim_count']}: {res}")
+
+
 if __name__ == "__main__":
     unittest.main()

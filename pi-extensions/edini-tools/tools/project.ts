@@ -229,7 +229,9 @@ export const projectTools = [
       "ARCHETYPES: 'box_panel' — a parametric box (tabletop/seat/panel): params.size=[x,y,z] (each a number or " +
       "design_param name); optional params.markers (list, forwarded to project_emit_markers after the box is " +
       "wired, so by_name anchors pick precise assembly points). " +
-      "(copy_array / tube_graph / extrude_profile archetypes land incrementally.) " +
+      "'copy_array' — stamp a leaf shape (box/tube/...) onto the component's consumed anchor points (legs/spokes/keys): " +
+      "params.leaf={type, params:{parm: number|design_param_name}}; the component's declared ports.in determines which anchors are consumed. " +
+      "(tube_graph / extrude_profile archetypes land incrementally.) " +
       "Prefer this over hand-building for any component that matches an archetype — it eliminates the recurring " +
       "step-3 errors (return/addAttrib/createPoint/ch-vs-hou.ch).",
     promptSnippet: "Build a component from a named archetype (box_panel/...) instead of raw nodes",

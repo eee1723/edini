@@ -1003,9 +1003,11 @@ def emit_component(core_node: "hou.Node", component_id: str,
     params = params or {}
     if archetype == "box_panel":
         return _archetype_box_panel(core_node, subnet, params)
+    if archetype == "copy_array":
+        return _archetype_copy_array(core_node, subnet, params)
     return {"success": False,
-            "error": f"unknown archetype {archetype!r}; supported: box_panel "
-                     f"(copy_array / tube_graph / extrude_profile land incrementally)"}
+            "error": f"unknown archetype {archetype!r}; supported: box_panel, "
+                     f"copy_array (tube_graph / extrude_profile land incrementally)"}
 
 
 def _archetype_box_panel(core_node: "hou.Node", subnet: "hou.Node",
@@ -1049,3 +1051,81 @@ def _archetype_box_panel(core_node: "hou.Node", subnet: "hou.Node",
     return {"success": True, "archetype": "box_panel",
             "component": subnet.name(), "nodes": ["panel_box"],
             "markers_built": markers_built, "project": core_path}
+
+
+def _archetype_copy_array(core_node: "hou.Node", subnet: "hou.Node",
+                          params: dict) -> dict:
+    """Stamp a leaf shape onto THIS component's consumed anchor points
+    (Copy-to-Points). The classic "legs / spokes / keys" component: declare
+    ports.in consuming an upstream component's anchors, then this archetype
+    builds the leaf once and stamps it at each anchor point.
+
+    params:
+      - leaf: ``{type, params}`` — a native SOP shape (box/tube/torus/...) where
+        ``params`` values are numbers or design_param names (→ ch() refs). Built
+        once; CTP stamps it at every consumed anchor point.
+      - The component's ``ports.in`` (declared at scaffold time) determines
+        WHICH anchor points are consumed — the scaffold already wired
+        ``in_<from>_<anchor>`` nulls carrying those points. This archetype
+        merges them into one cloud and CTPs the leaf onto it.
+
+    CTP reads ``@orient``/``@scale``/``@N`` on the anchor points (via
+    ``_init_copytopoints_attribs``) so a leaf can be oriented/scaled per-anchor
+    when the upstream emitted those attribs.
+    """
+    core_path = core_node.path()
+    out_geo = subnet.node(OUT_GEOMETRY_NODE)
+    if out_geo is None:
+        return {"success": False,
+                "error": f"out_geometry not found in {subnet.name()} (scaffold first)"}
+    leaf = params.get("leaf")
+    if not isinstance(leaf, dict) or not leaf.get("type"):
+        return {"success": False,
+                "error": "copy_array needs 'leaf': {type:'box'|'tube'|..., "
+                         "params:{parm: number|design_param_name}}"}
+
+    # Build the leaf shape (once).
+    leaf_node = _arch_node(subnet, leaf["type"], "array_leaf")
+    # tube defaults to 'Primitive' on H21 → a degenerate single prim; procedural
+    # workflows want Polygon (type=1). (Mirrors create_node / assembly_builder.)
+    if leaf["type"] == "tube" and "type" not in (leaf.get("params") or {}):
+        try:
+            leaf_node.parm("type").set(1)
+        except Exception:
+            pass
+    for pname, val in (leaf.get("params") or {}).items():
+        _set_archetype_parm(leaf_node, pname, val, core_path)
+
+    # Collect the consumed anchor points: the scaffold's in_<from>_<anchor> nulls.
+    in_nulls = [n for n in subnet.children()
+                if n.name().startswith("in_") and n.type().name() == "null"]
+    if not in_nulls:
+        return {"success": False,
+                "error": f"copy_array on {subnet.name()!r} found no consumed "
+                         f"anchors (in_<from>_<anchor> nulls). Declare ports.in "
+                         f"on the component and ensure the upstream emitted them."}
+    if len(in_nulls) == 1:
+        cloud = in_nulls[0]
+    else:
+        cloud = _arch_node(subnet, "merge", "array_cloud")
+        for i, n in enumerate(in_nulls):
+            cloud.setInput(i, n)
+
+    ctp = _arch_node(subnet, "copytopoints", "array_ctp")
+    ctp.setInput(0, leaf_node)
+    ctp.setInput(1, cloud)
+    # Make CTP read @orient/@scale/@N on the anchor points (per-anchor pose).
+    try:
+        from edini.node_utils import _init_copytopoints_attribs
+        _init_copytopoints_attribs(ctp)
+    except Exception:
+        pass
+    out_geo.setInput(0, ctp)
+    subnet.layoutChildren()
+
+    return {"success": True, "archetype": "copy_array",
+            "component": subnet.name(),
+            "nodes": ["array_leaf", "array_cloud" if len(in_nulls) > 1 else None,
+                      "array_ctp"],
+            "anchor_inputs": [n.name() for n in in_nulls],
+            "project": core_path}
