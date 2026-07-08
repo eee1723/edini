@@ -640,21 +640,34 @@ class _ToolHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args) -> None:
         pass  # Suppress default logging
 
+    def _write_response(self, code: int, body: bytes) -> None:
+        """Send a JSON response; swallow client-disconnect.
+
+        The Pi client (forwardTool) has a ~30s timeout. When a tool runs longer
+        (e.g. verify_robust sweeping 7×3=21 cooks under main-thread contention),
+        the client closes the socket before we finish writing. Writing to that
+        closed socket raised ConnectionAbortedError and — because the result-send
+        sits inside do_POST's try/except — cascaded into a SECOND failed
+        error-response write that propagated uncaught and printed a scary
+        traceback to the Houdini console. The client already retried (and usually
+        succeeds); this is noise, not a correctness issue, so we drop it quietly.
+        """
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            pass  # client gone (timed out) — nothing to deliver to
+
     def _send_json(self, data: dict[str, Any]) -> None:
-        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        self._write_response(
+            200, json.dumps(data, ensure_ascii=False).encode("utf-8"))
 
     def _send_error(self, code: int, message: str) -> None:
-        body = json.dumps({"success": False, "error": message}).encode("utf-8")
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        self._write_response(
+            code, json.dumps({"success": False, "error": message}).encode("utf-8"))
 
 
 class ToolExecutor:
