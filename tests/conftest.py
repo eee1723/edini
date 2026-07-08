@@ -93,7 +93,26 @@ def reload_edini_modules(*names):
 
     Each name clears itself plus any ``<name>.<sub>`` submodules, but NEVER
     touches unrelated ``edini.ui.*`` / ``edini.project.*`` modules.
+
+    SPECIAL CASE: ``edini.node_utils`` is a re-export shim (Phase 4 split); its
+    implementation lives in four SIBLING modules (node_ops / manifest /
+    geometry_inspect / verify), each binding ``hou`` at import time. Reloading
+    node_utils must also evict those siblings, or they keep a stale ``hou`` and
+    tests that swap the mock (capture / verify suites) read the wrong one.
     """
+    expanded = set(names)
+    if "edini.node_utils" in expanded:
+        expanded.update(_NODE_UTILS_IMPL_SIBLINGS)
     for _m in list(sys.modules):
-        if _m in names or any(_m.startswith(n + ".") for n in names):
+        if _m in expanded or any(_m.startswith(n + ".") for n in expanded):
             del sys.modules[_m]
+
+
+# node_utils shim's implementation modules (Phase 4 split). Reloaded together
+# with edini.node_utils so a swapped mock hou re-binds in every submodule.
+_NODE_UTILS_IMPL_SIBLINGS = (
+    "edini.node_ops",
+    "edini.manifest",
+    "edini.geometry_inspect",
+    "edini.verify",
+)

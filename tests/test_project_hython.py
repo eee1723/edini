@@ -3355,6 +3355,263 @@ class TestProjectFinalizeHython(unittest.TestCase):
 
 
 # =============================================================================
+# Phase 5a: project_finalize auto-drafts every gate failure into the knowledge
+# store as a quarantined draft (status=draft). The agent finds it later via
+# edini_search_drafts; a human promotes it. This harness isolates the knowledge
+# dir so the test never pollutes the real ~/.pi/agent/edini-knowledge/.
+# =============================================================================
+_FINALIZE_DRAFT_HARNESS = r"""
+import json, sys, os, tempfile
+from pathlib import Path
+sys.path.insert(0, os.path.join(r"%s", "python3.11libs"))
+import hou
+_hda = os.path.join(r"%s", "otls", "edini_project.hda")
+if os.path.isfile(_hda):
+    hou.hda.installFile(_hda)
+from edini.project.state import empty_declaration, add_component, add_design_param
+from edini.project.node import create_project_hda
+from edini.project.builder import build_project_scaffold
+from edini.node_utils import project_finalize
+import edini.ui.knowledge_store as ks
+
+# Isolate the knowledge store to a temp dir — do NOT touch the real one.
+_tmp = tempfile.mkdtemp(prefix="edini_draft_test_")
+ks._entries_path = lambda: Path(_tmp) / "entries.json"
+ks._rules_path = lambda: Path(_tmp) / "rules.json"
+ks._ensure_dir = lambda: Path(_tmp).mkdir(parents=True, exist_ok=True)
+
+result = {"steps": {}}
+
+# Incomplete project: 'top' built with a LIVE length ref (parametric ok), but
+# 'legs' scaffolded and left empty → status gate fails with category=incomplete.
+core = create_project_hda(name="proj_draft")
+decl = empty_declaration("proj_draft")
+decl["project"]["goal"] = "a small parametric table"
+add_design_param(decl, "length", default=1.0, min=0.5, max=3.0)
+add_component(decl, "top", purpose="tabletop",
+    ports_out=[{"index": 0, "kind": "geometry"}])
+add_component(decl, "legs", purpose="legs",
+    ports_out=[{"index": 0, "kind": "geometry"}])
+build_project_scaffold(core, declaration=decl)
+top = core.node("top")
+box = top.createNode("box", "top_box")
+box.parm("sizex").setExpression("ch('/obj/proj_draft/project_core/length')")
+box.parm("sizey").set(0.1)
+box.parm("sizez").set(0.6)
+top.node("out_geometry").setInput(0, box)
+top.layoutChildren()
+# legs deliberately left empty → status incomplete.
+
+res = project_finalize("/obj/proj_draft/project_core")
+result["steps"]["success"] = res.get("success")
+result["steps"]["finalized"] = res.get("finalized")
+result["steps"]["failures"] = res.get("failures", [])
+result["steps"]["drafts_created"] = res.get("drafts_created", -1)
+result["steps"]["failure_record_categories"] = sorted(
+    {r.get("category") for r in res.get("failure_records", [])})
+
+# Inspect the isolated store.
+drafts = [e for e in ks.load_entries() if e.get("status") == "draft"]
+result["steps"]["num_drafts"] = len(drafts)
+result["steps"]["draft_categories"] = sorted(
+    {e.get("failure", {}).get("category") for e in drafts})
+result["steps"]["draft_tags_include_auto"] = all(
+    "auto-draft" in e.get("tags", []) for e in drafts)
+result["steps"]["draft_has_legs"] = any(
+    "legs" in (e.get("title", "") + e.get("content", "")) for e in drafts)
+# Quarantine: default search excludes drafts; drafts_only finds them.
+result["steps"]["default_search_count"] = len(ks.search_entries("legs"))
+result["steps"]["drafts_search_count"] = len(ks.search_entries("legs", drafts_only=True))
+
+print("RESULT_JSON:" + json.dumps(result))
+""" % (_REPO, _REPO)
+
+
+@unittest.skipUnless(HYTHON, "hython not installed")
+class TestFinalizeDraftsHython(unittest.TestCase):
+    """Phase 5a: project_finalize auto-drafts failures into the knowledge store."""
+
+    def _run(self):
+        proc = subprocess.run(
+            [HYTHON, "-c", _FINALIZE_DRAFT_HARNESS],
+            capture_output=True, text=True, timeout=240, cwd=_REPO,
+            stdin=subprocess.DEVNULL)
+        combined = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 0,
+                         f"hython failed (rc={proc.returncode}):\n{combined[-2000:]}")
+        idx = combined.rfind("RESULT_JSON:")
+        self.assertGreater(idx, -1, f"no RESULT_JSON:\n{combined[-2000:]}")
+        return json.loads(combined[idx + len("RESULT_JSON:"):]), combined
+
+    def test_finalize_failure_auto_drafts(self):
+        """A failing finalize writes >=1 draft with the right structure."""
+        res, _ = self._run()
+        s = res["steps"]
+        # Finalize refused (incomplete project).
+        self.assertFalse(s["success"], "incomplete project should not finalize")
+        self.assertGreater(len(s["failures"]), 0)
+        # Auto-draft fired and reported the count.
+        self.assertGreaterEqual(s["drafts_created"], 1)
+        self.assertIn("incomplete", s["failure_record_categories"])
+        # The isolated store holds the draft(s).
+        self.assertGreaterEqual(s["num_drafts"], 1)
+        self.assertIn("incomplete", s["draft_categories"])
+        self.assertTrue(s["draft_tags_include_auto"])
+        self.assertTrue(s["draft_has_legs"], "draft should mention the 'legs' component")
+
+    def test_drafts_are_quarantined_from_default_search(self):
+        """Drafts are excluded from normal search but found by drafts_only."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertEqual(s["default_search_count"], 0,
+                         "drafts must NOT appear in normal edini_search_knowledge")
+        self.assertGreaterEqual(s["drafts_search_count"], 1,
+                                "drafts must be findable via edini_search_drafts")
+
+
+# =============================================================================
+# Phase 5b: project_capture_archetype — capture a built component as a reusable
+# archetype spec, then re-emit it. Round-trip is the correctness gate: a captured
+# box_panel must re-emit equivalent geometry with the SAME parametric ch() refs.
+# Harness isolates the captured-archetype sidecar to a temp dir.
+# =============================================================================
+_CAPTURE_HARNESS = r"""
+import json, sys, os, tempfile
+from pathlib import Path
+sys.path.insert(0, os.path.join(r"%s", "python3.11libs"))
+import hou
+_hda = os.path.join(r"%s", "otls", "edini_project.hda")
+if os.path.isfile(_hda):
+    hou.hda.installFile(_hda)
+from edini.project.state import empty_declaration, add_component, add_design_param
+from edini.project.node import create_project_hda
+from edini.project.builder import (build_project_scaffold, emit_component,
+                                   project_capture_archetype)
+import edini.project.archetype_emitter as ae
+
+# Isolate captured-archetype sidecar (don't pollute the real registry).
+_tmp = tempfile.mkdtemp(prefix="edini_capture_test_")
+ae._captured_dir = lambda: Path(_tmp)
+
+result = {"steps": {}}
+
+core = create_project_hda(name="proj_cap")
+decl = empty_declaration("proj_cap")
+for dp, dflt in [("length", 1.2), ("thickness", 0.1), ("width", 0.8)]:
+    add_design_param(decl, dp, default=dflt, min=0.1, max=5.0)
+add_component(decl, "top", purpose="tabletop",
+    ports_out=[{"index": 0, "kind": "geometry"}])
+add_component(decl, "top2", purpose="tabletop2",
+    ports_out=[{"index": 0, "kind": "geometry"}])
+build_project_scaffold(core, declaration=decl)
+
+# (1) Build 'top' via the box_panel archetype (sizex/sizey/sizez = ch() refs).
+res = emit_component(core, "top", "box_panel",
+    {"size": ["length", "thickness", "width"]})
+result["steps"]["build_top"] = res.get("success")
+
+# (2) Capture 'top' as 'captured_box'.
+cap = project_capture_archetype(core, "top", "captured_box", "captured tabletop")
+result["steps"]["capture_success"] = cap.get("success")
+spec = cap.get("spec", {})
+ops = spec.get("ops", [])
+node_ops = [o for o in ops if o.get("op") == "node"]
+box_op = next((o for o in node_ops if o.get("name") == "panel_box"), {})
+bp = box_op.get("params", {})
+result["steps"]["spec_op_count"] = len(ops)
+result["steps"]["node_names"] = sorted(o.get("name") for o in node_ops)
+result["steps"]["box_sizex"] = bp.get("sizex")
+result["steps"]["box_sizey"] = bp.get("sizey")
+result["steps"]["box_sizez"] = bp.get("sizez")
+result["steps"]["requires_design_params"] = spec.get("requires_design_params", [])
+result["steps"]["has_wire_out"] = any(o.get("op") == "wire_out" for o in ops)
+
+# (3) The captured archetype is immediately discoverable.
+result["steps"]["load_spec_found"] = ae.load_spec("captured_box") is not None
+result["steps"]["list_includes_captured"] = "captured_box" in ae.list_archetypes()
+
+# (4) Re-emit captured_box on a FRESH component (params empty — refs baked).
+res2 = emit_component(core, "top2", "captured_box", {})
+result["steps"]["reemit_success"] = res2.get("success")
+
+def _prims(path):
+    n = hou.node(path)
+    g = n.geometry() if n is not None else None
+    return g.intrinsicValue("primitivecount") if g is not None else -1
+
+top2_box = core.node("top2/panel_box")
+try:
+    result["steps"]["top2_sizex_expr"] = top2_box.parm("sizex").expression()
+except Exception:
+    result["steps"]["top2_sizex_expr"] = None
+result["steps"]["top_prims"] = _prims(core.path() + "/top/panel_box")
+result["steps"]["top2_prims"] = _prims(core.path() + "/top2/panel_box")
+
+# (5) LIVE: perturb length → BOTH boxes' sizex tracks it (round-trip preserved
+#     parametricity, not a baked literal).
+core.parm("length").set(3.0)
+result["steps"]["top_sizex_live"] = core.node("top/panel_box").parm("sizex").eval()
+result["steps"]["top2_sizex_live"] = top2_box.parm("sizex").eval()
+
+print("RESULT_JSON:" + json.dumps(result))
+""" % (_REPO, _REPO)
+
+
+@unittest.skipUnless(HYTHON, "hython not installed")
+class TestArchetypeCaptureHython(unittest.TestCase):
+    """Phase 5b: capture a built component → reusable archetype → re-emit."""
+
+    def _run(self):
+        proc = subprocess.run(
+            [HYTHON, "-c", _CAPTURE_HARNESS],
+            capture_output=True, text=True, timeout=240, cwd=_REPO,
+            stdin=subprocess.DEVNULL)
+        combined = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 0,
+                         f"hython failed (rc={proc.returncode}):\n{combined[-2000:]}")
+        idx = combined.rfind("RESULT_JSON:")
+        self.assertGreater(idx, -1, f"no RESULT_JSON:\n{combined[-2000:]}")
+        return json.loads(combined[idx + len("RESULT_JSON:"):]), combined
+
+    def test_capture_produces_correct_spec(self):
+        """Capture filters scaffold, recovers ch() refs as bare design-param names."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertTrue(s["build_top"], "box_panel build should succeed")
+        self.assertTrue(s["capture_success"], "capture should succeed")
+        # Only the archetype-owned node remains (scaffold filtered out).
+        self.assertEqual(s["node_names"], ["panel_box"])
+        self.assertTrue(s["has_wire_out"], "spec must wire_out to out_geometry")
+        # ch() expressions recovered as bare design_param names (not ch()-strings).
+        self.assertEqual(s["box_sizex"], "length")
+        self.assertEqual(s["box_sizey"], "thickness")
+        self.assertEqual(s["box_sizez"], "width")
+        self.assertEqual(s["requires_design_params"],
+                         ["length", "thickness", "width"])
+
+    def test_captured_archetype_is_immediately_usable(self):
+        """load_spec/list_archetypes see the captured archetype right away."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertTrue(s["load_spec_found"])
+        self.assertTrue(s["list_includes_captured"])
+
+    def test_round_trip_reemits_equivalent_parametric_geometry(self):
+        """Re-emitting captured_box reproduces the box with live ch() refs."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertTrue(s["reemit_success"], "re-emit should succeed")
+        # The re-emitted box's sizex is a ch() expression referencing length.
+        self.assertIn("length", s["top2_sizex_expr"] or "")
+        # Same prim count (both are a single box → 6 prims).
+        self.assertEqual(s["top_prims"], s["top2_prims"])
+        self.assertGreater(s["top2_prims"], 0)
+        # Parametricity round-tripped: perturbing length moves BOTH boxes.
+        self.assertAlmostEqual(s["top_sizex_live"], 3.0)
+        self.assertAlmostEqual(s["top2_sizex_live"], 3.0)
+
+
+# =============================================================================
 # Phase 3a: project_plan — intent gate (goal + success_criteria before scaffold).
 # =============================================================================
 _PLAN_HARNESS = r"""

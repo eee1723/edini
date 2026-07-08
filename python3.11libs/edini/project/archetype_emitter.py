@@ -48,7 +48,10 @@ Planned (Phase 2b — migrating copy_array + tube_graph):
 from __future__ import annotations
 
 import importlib
+import json
+import os
 import pkgutil
+from pathlib import Path
 from typing import Any
 
 from edini.project.builder import _arch_node, _set_archetype_parm, emit_markers
@@ -56,14 +59,60 @@ from edini.project.ports import OUT_GEOMETRY_NODE
 
 
 # ── spec loading ─────────────────────────────────────────────────────────
+#
+# Two registries (Phase 5b):
+#   1. Captured specs — JSON data files in ~/.pi/agent/edini-archetypes/<name>.json
+#      (written by builder.project_capture_archetype from a built component).
+#   2. Package specs — edini/project/archetypes/<name>.py modules exporting SPEC.
+# load_spec checks the captured (data) registry FIRST, then the package. Both are
+# immediately usable by emit_component. Adding a captured archetype never touches
+# the installed package dir.
+
+def _captured_dir() -> Path:
+    """Directory for captured (data) archetype specs."""
+    base = os.environ.get("USERPROFILE", os.environ.get("HOME", str(Path.home())))
+    return Path(base) / ".pi" / "agent" / "edini-archetypes"
+
+
+def _captured_path(name: str) -> Path:
+    return _captured_dir() / f"{name}.json"
+
+
+def save_captured_spec(name: str, spec: dict) -> Path:
+    """Persist a captured archetype spec as a data file. Returns its path."""
+    d = _captured_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    path = _captured_path(name)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(spec, f, ensure_ascii=False, indent=2)
+    return path
+
+
+def delete_captured_spec(name: str) -> bool:
+    path = _captured_path(name)
+    if path.exists():
+        path.unlink()
+        return True
+    return False
+
 
 def load_spec(archetype: str) -> dict | None:
-    """Load an archetype spec by name, or ``None`` if no spec module exists.
+    """Load an archetype spec by name, or ``None`` if none exists.
 
-    Archetypes live as ``edini.project.archetypes.<name>`` modules exporting a
-    ``SPEC`` dict. A missing module → ``None`` (lets ``emit_component`` fall
-    through to legacy hardcoded archetypes during the Phase 2b migration).
+    Checks the captured (data) registry first, then the package modules
+    (``edini.project.archetypes.<name>`` exporting ``SPEC``).
     """
+    # 1. Captured data spec (sidecar).
+    cpath = _captured_path(archetype)
+    if cpath.exists():
+        try:
+            with open(cpath, "r", encoding="utf-8") as f:
+                spec = json.load(f)
+            if isinstance(spec, dict):
+                return spec
+        except (json.JSONDecodeError, OSError):
+            pass
+    # 2. Package spec module.
     try:
         mod = importlib.import_module(f"edini.project.archetypes.{archetype}")
     except ModuleNotFoundError:
@@ -73,10 +122,37 @@ def load_spec(archetype: str) -> dict | None:
 
 
 def list_archetypes() -> list[str]:
-    """Names of all spec-backed archetypes (for error messages)."""
+    """Names of all specs — captured (data) + package — sorted."""
+    names: set[str] = set()
+    cdir = _captured_dir()
+    if cdir.exists():
+        for f in cdir.glob("*.json"):
+            names.add(f.stem)
     from edini.project import archetypes as _pkg
-    return sorted(name for _finder, name, _ispkg
-                  in pkgutil.iter_modules(_pkg.__path__))
+    for _finder, name, _ispkg in pkgutil.iter_modules(_pkg.__path__):
+        names.add(name)
+    return sorted(names)
+
+
+def list_captured_archetypes() -> list[dict]:
+    """Captured (data) specs as [{name, description, requires_design_params}]."""
+    out = []
+    cdir = _captured_dir()
+    if not cdir.exists():
+        return out
+    for f in sorted(cdir.glob("*.json")):
+        try:
+            with open(f, "r", encoding="utf-8") as fh:
+                spec = json.load(fh)
+            if isinstance(spec, dict):
+                out.append({
+                    "name": spec.get("archetype", f.stem),
+                    "description": spec.get("description", ""),
+                    "requires_design_params": spec.get("requires_design_params", []),
+                })
+        except (json.JSONDecodeError, OSError):
+            continue
+    return out
 
 
 # ── value resolution ─────────────────────────────────────────────────────

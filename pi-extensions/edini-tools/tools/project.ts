@@ -390,4 +390,52 @@ export const projectTools = [
       return forwardTool("project_list_snapshots", params);
     },
   },
+  {
+    name: "project_capture_archetype",
+    label: "Capture Component as Archetype",
+    description:
+      "Phase 5b — capture a successfully-built component subnet as a reusable ARCHETYPE spec. " +
+      "Walks the component, drops scaffold/anchor/marker plumbing, and emits one node op per " +
+      "archetype-owned node + a wire_out. ch() expressions referencing a declared design_param " +
+      "are recovered as parametric refs (re-emitted as relative ch(), depth-robust + migratable); " +
+      "literal values are baked. The captured spec is saved to the sidecar registry and is " +
+      "IMMEDIATELY usable by project_emit_component. Opt-in only — capture components you judge " +
+      "reusable across projects (a clean tabletop, a wheel) once they verify clean.",
+    promptSnippet: "Turn a reusable component into a parametric archetype",
+    promptGuidelines: [
+      "Only capture a component AFTER it verifies clean (project_finalize / verify_parametric pass) — capturing propagates whatever is there.",
+      "Pick a generic name (e.g. 'panel', 'spoke', 'bracket'), not a project-specific one — the archetype should read across projects.",
+      "The captured archetype requires the design_params it references — only re-emit it on a project that declares those same params.",
+      "Re-use immediately: project_emit_component(archetype=<name>) works the moment capture returns success.",
+    ],
+    parameters: Type.Object({
+      core_path: Type.String({ description: "Path to the edini::project SOP HDA instance." }),
+      component_id: Type.String({ description: "The built component subnet to capture." }),
+      name: Type.String({ description: "Archetype name (generic, reusable — e.g. 'panel', 'spoke')." }),
+      description: Type.Optional(Type.String({ description: "Human description of what this archetype builds." })),
+      recover_param_refs: Type.Optional(Type.Boolean({ description: "Recover ch() refs to design_params as parametric refs (default true).", default: true })),
+    }),
+    async execute(
+      _id: string,
+      params: { core_path: string; component_id: string; name: string; description?: string; recover_param_refs?: boolean }
+    ) {
+      return forwardTool("project_capture_archetype", params);
+    },
+  },
+  {
+    name: "project_list_captured_archetypes",
+    label: "List Captured Archetypes",
+    description:
+      "Phase 5b — list captured (data) archetype specs in the sidecar registry " +
+      "(~/.pi/agent/edini-archetypes/). Returns [{name, description, requires_design_params}]. " +
+      "These are immediately usable as the `archetype` argument to project_emit_component.",
+    promptSnippet: "List archetypes captured from past components",
+    promptGuidelines: [
+      "Use project_list_captured_archetypes to see what reusable archetypes you (or past sessions) have captured before building a similar component from scratch.",
+    ],
+    parameters: Type.Object({}),
+    async execute(_id: string, _params: Record<string, never>) {
+      return forwardTool("project_list_captured_archetypes", {});
+    },
+  },
 ];

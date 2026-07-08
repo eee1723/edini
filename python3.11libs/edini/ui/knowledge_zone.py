@@ -56,6 +56,7 @@ class KnowledgeZone(QtWidgets.QWidget):
         super().__init__(parent)
         self._rules_expanded = False
         self._entries_expanded = False
+        self._drafts_expanded = False
         self._pending_items: list[dict] = []
 
         layout = QtWidgets.QVBoxLayout(self)
@@ -99,6 +100,19 @@ class KnowledgeZone(QtWidgets.QWidget):
         self._entries_list_layout.setSpacing(1)
         self._browse_layout.addWidget(self._entries_list)
 
+        # Drafts section (Phase 5a) — auto-captured failure modes pending review.
+        # Each draft can be promoted to an entry (searchable) or to an iron rule
+        # (system-prompt). Promoted drafts leave this list.
+        self._drafts_btn = _section_btn("▶ Drafts (0)")
+        self._drafts_btn.clicked.connect(self._toggle_drafts)
+        self._browse_layout.addWidget(self._drafts_btn)
+        self._drafts_list = QtWidgets.QWidget()
+        self._drafts_list.setVisible(False)
+        self._drafts_list_layout = QtWidgets.QVBoxLayout(self._drafts_list)
+        self._drafts_list_layout.setContentsMargins(8, 0, 0, 0)
+        self._drafts_list_layout.setSpacing(2)
+        self._browse_layout.addWidget(self._drafts_list)
+
         layout.addWidget(self._browse)
 
         # Reflection overlay (hidden by default)
@@ -141,13 +155,70 @@ class KnowledgeZone(QtWidgets.QWidget):
     # ── Browse mode ──
 
     def refresh(self) -> None:
-        from edini.ui.knowledge_store import load_rules, load_entries
+        from edini.ui.knowledge_store import load_rules, load_entries, search_entries
         rules = load_rules()
         entries = load_entries()
+        drafts = search_entries(drafts_only=True)
         self._rules_btn.setText(f"▶ Iron Rules ({len(rules)})")
         self._entries_btn.setText(f"▶ Entries ({len(entries)})")
+        arrow_d = "▼" if self._drafts_expanded else "▶"
+        self._drafts_btn.setText(f"{arrow_d} Drafts ({len(drafts)})")
         self._populate_list(self._rules_list_layout, rules)
         self._populate_list(self._entries_list_layout, entries)
+        self._populate_drafts(drafts)
+
+    def _toggle_drafts(self):
+        self._drafts_expanded = not self._drafts_expanded
+        self._drafts_list.setVisible(self._drafts_expanded)
+        arrow = "▼" if self._drafts_expanded else "▶"
+        from edini.ui.knowledge_store import search_entries
+        n = len(search_entries(drafts_only=True))
+        self._drafts_btn.setText(f"{arrow} Drafts ({n})")
+
+    def _populate_drafts(self, drafts: list) -> None:
+        """Render draft cards with promote / promote-to-rule buttons."""
+        while self._drafts_list_layout.count() > 0:
+            w = self._drafts_list_layout.takeAt(0).widget()
+            if w:
+                w.deleteLater()
+        if not drafts:
+            self._drafts_list_layout.addWidget(_item_label(
+                "No drafts. project_finalize failures appear here.", "#5a6a7a"))
+            return
+        for d in drafts:
+            self._drafts_list_layout.addWidget(self._make_draft_card(d))
+
+    def _make_draft_card(self, draft: dict) -> QtWidgets.QWidget:
+        """A draft card: 🟡 badge + title/content + 提升 / 铁律 buttons."""
+        card = QtWidgets.QWidget()
+        cl = QtWidgets.QVBoxLayout(card)
+        cl.setContentsMargins(4, 2, 4, 2)
+        cl.setSpacing(1)
+        cat = draft.get("failure", {}).get("category", "")
+        title = draft.get("title", "")
+        cl.addWidget(_item_label(f"🟡 [{cat}] {title}", "#e0c060"))
+        content = draft.get("content", "")
+        if content:
+            cl.addWidget(_item_label(content, "#94a3b8"))
+
+        row = QtWidgets.QHBoxLayout()
+        row.setSpacing(4)
+        promote_btn = _action_btn("提升 (entry)", "#16a34a")
+        rule_btn = _action_btn("铁律 (rule)", "#b8860b")
+        eid = draft.get("id")
+        promote_btn.clicked.connect(lambda _=False, _id=eid: self._promote_draft(_id, False))
+        rule_btn.clicked.connect(lambda _=False, _id=eid: self._promote_draft(_id, True))
+        row.addWidget(promote_btn)
+        row.addWidget(rule_btn)
+        row.addStretch()
+        cl.addLayout(row)
+        return card
+
+    def _promote_draft(self, entry_id: str, to_rule: bool) -> None:
+        """Promote a draft (to entry or iron rule), then refresh."""
+        from edini.ui.knowledge_store import promote_entry
+        promote_entry(entry_id, to_rule=to_rule)
+        self.refresh()
 
     def _populate_list(self, layout, items):
         while layout.count() > 1:

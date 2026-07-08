@@ -1309,10 +1309,10 @@ class TestNodeParmsQuery(unittest.TestCase):
             },
         }
         # Monkeypatch the path resolver + reload the module's binding.
-        import edini.node_utils as nu
-        self._nu = nu
-        self._orig_path = nu._node_parms_manifest_path
-        nu._node_parms_manifest_path = lambda: self._manifest_file
+        import edini.manifest as _manifest_mod
+        self._nu = _manifest_mod
+        self._orig_path = _manifest_mod._node_parms_manifest_path
+        _manifest_mod._node_parms_manifest_path = lambda: self._manifest_file
 
     def tearDown(self):
         import shutil
@@ -1483,10 +1483,10 @@ class TestNodeParmsVersionResolution(unittest.TestCase):
                                              {"name": "divisions", "type": "Int"}]},
                 "lonecustom": {"parms": [{"name": "alpha", "type": "Float"}]},
             }}
-        import edini.node_utils as nu
-        self._nu = nu
-        self._orig_path = nu._node_parms_manifest_path
-        nu._node_parms_manifest_path = lambda: self._manifest_file
+        import edini.manifest as _manifest_mod
+        self._nu = _manifest_mod
+        self._orig_path = _manifest_mod._node_parms_manifest_path
+        _manifest_mod._node_parms_manifest_path = lambda: self._manifest_file
 
     def tearDown(self):
         import shutil

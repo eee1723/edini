@@ -9,7 +9,7 @@ import { harnessTools } from "./tools/harness";
 import { recipeTools } from "./tools/recipe";
 import { projectTools } from "./tools/project";
 import { ediniGetEvalStats } from "./tools/eval";
-import { ediniSearchKnowledge } from "./tools/knowledge";
+import { ediniSearchKnowledge, ediniSearchDrafts } from "./tools/knowledge";
 
 export default function (pi: ExtensionAPI) {
   // Visual verification gate — when disabled, hide capture_review (and the
@@ -27,6 +27,7 @@ export default function (pi: ExtensionAPI) {
     ...projectTools,
     ediniGetEvalStats,
     ediniSearchKnowledge,
+    ediniSearchDrafts,
   ].filter((tool) => visualVerificationOn || tool.name !== "capture_review");
 
   for (const tool of allTools) {

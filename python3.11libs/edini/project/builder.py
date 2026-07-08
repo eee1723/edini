@@ -1196,3 +1196,238 @@ def list_snapshots(core_node: "hou.Node",
                 pass
             out.append({"id": sid, "component": cid, "label": label})
     return {"success": True, "snapshots": out, "project": core_node.path()}
+
+
+# ── Phase 5b: success → archetype capture ──────────────────────────────────
+#
+# The inverse of emit_component: walk a BUILT component subnet, filter out the
+# scaffold/input/anchor/marker plumbing (deterministic names from ports.py), and
+# emit one `node` op per archetype-owned node + a `wire_out`. Parm expressions
+# that reference a declared design_param are recovered as bare design_param
+# names → on re-emit _set_archetype_parm turns them into RELATIVE ch() (depth-
+# robust, migratable). Literal values are baked. High-level op recognition
+# (vex_tube_graph / collect_anchors) is deliberately OUT of scope: a captured
+# tube_graph degrades to literal `node` ops, which still re-emit correctly.
+
+import re as _re
+_CH_REF = _re.compile(r'(?:hou\.)?ch\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
+
+
+def _capture_is_plumbing(name: str) -> bool:
+    """True if a subnet child is scaffold/input/anchor/marker plumbing (not an
+    archetype-owned node). Names come from ports.py constants + conventions."""
+    from edini.project import ports
+    if name in (ports.OUT_GEOMETRY_NODE, ports.OUT_ANCHORS_NODE,
+                ports.OUTPUT_0_NODE, ports.OUTPUT_1_NODE,
+                ports.TAG_COMPONENT_NODE, ports.AXIS_BAKE_NODE):
+        return True
+    if ports.is_internal_scaffold_node(name):  # __-prefixed
+        return True
+    if name.startswith(ports.INPUT_FILTER_PREFIX):      # filter_<from>_<anchor>
+        return True
+    if name.startswith(ports.ANCHOR_CLEAN_PREFIX):       # __edini_anchor_clean_*
+        return True
+    if name.startswith("in_"):                           # in_<from>_<anchor>
+        return True
+    if name.startswith("anchor_") or name == "anchor_merge":
+        return True
+    if name.startswith("marker_") or name == "markers_merge":
+        return True
+    return False
+
+
+def _capture_node_parms(node, design_params: set[str],
+                        recover: bool, refd: set[str]) -> dict:
+    """Capture a node's authored parms as {parm: value}.
+
+    - A parm with a ``ch()`` expression referencing a declared design_param →
+      the bare design_param NAME (re-emit makes it a relative ch() ref).
+    - Any other expression → kept verbatim (a ch()-string passes through).
+    - Otherwise → the literal eval() value (json-safe).
+
+    Auto/UI parms (recipe_library._is_auto_param) are skipped.
+    """
+    from edini.recipe_library import _is_auto_param, _json_safe
+    out: dict[str, Any] = {}
+    for p in node.parms():
+        try:
+            pname = p.name()
+        except Exception:
+            continue
+        if _is_auto_param(pname):
+            continue
+        # Expression? Real hou has no hasExpression(); parm.expression() returns
+        # the string or RAISES hou.OperationFailed when there is none.
+        expr = None
+        try:
+            e = p.expression()
+            expr = e if e else None
+        except Exception:
+            expr = None
+        if recover and expr:
+            m = _CH_REF.search(expr)
+            if m:
+                ref_path = m.group(1)
+                dp_name = ref_path.rsplit("/", 1)[-1]
+                if dp_name in design_params:
+                    out[pname] = dp_name  # bare name → relative ch() on re-emit
+                    refd.add(dp_name)
+                    continue
+            out[pname] = expr  # non-design_param expression, keep verbatim
+            continue
+        try:
+            val = _json_safe(p.eval())
+        except Exception:
+            continue
+        out[pname] = val
+    return out
+
+
+def _trace_wire_source(start_node, archetype_names: set[str]) -> str | None:
+    """Follow input-0 from ``start_node`` (possibly plumbing like markers_merge)
+    until reaching an archetype-owned node. Returns its name, or None."""
+    cur = start_node
+    seen: set[str] = set()
+    while cur is not None:
+        nm = None
+        try:
+            nm = cur.name()
+        except Exception:
+            return None
+        if nm in seen:
+            return None
+        seen.add(nm)
+        if nm in archetype_names:
+            return nm
+        try:
+            ins = cur.inputs()
+            cur = ins[0] if ins else None
+        except Exception:
+            return None
+    return None
+
+
+def project_capture_archetype(core_node: "hou.Node", component_id: str,
+                              name: str, description: str = "",
+                              recover_param_refs: bool = True) -> dict:
+    """Capture a successfully-built component as an archetype SPEC candidate.
+
+    Walks the component subnet, drops scaffold/input/anchor/marker plumbing,
+    and emits one ``node`` op per archetype-owned node + a ``wire_out`` op for
+    whoever feeds ``out_geometry`` (traced past ``markers_merge``). The spec is
+    saved to the captured-archetype sidecar (so ``emit_component`` can reuse it
+    immediately) and a reference is appended to the declaration.
+
+    Args:
+        core_node: the edini::project SOP HDA instance.
+        component_id: the component subnet whose nodes to capture.
+        name: archetype name (becomes the spec's ``archetype`` key + filename).
+        description: optional human description.
+        recover_param_refs: Tier-2 — recover ch() refs to design_params as bare
+            param names (default True).
+
+    Returns ``{success, archetype, component, spec, ops, requires_design_params}``
+    or ``{success: False, error}``.
+    """
+    from edini.project.state import (load_declaration, save_declaration,
+                                     append_log)
+    from edini.project import ports
+    from edini.project.archetype_emitter import save_captured_spec
+
+    subnet = core_node.node(component_id)
+    if subnet is None:
+        return {"success": False,
+                "error": f"component subnet {component_id!r} not found on the core"}
+
+    decl = load_declaration(core_node)
+    design_params = {p.get("name") for p in decl.get("design_params", [])
+                     if p.get("name")}
+
+    # Archetype-owned nodes = subnet children that aren't plumbing.
+    children = [c for c in subnet.children()
+                if not _capture_is_plumbing(_safe_name(c))]
+    if not children:
+        return {"success": False,
+                "error": (f"no archetype-owned nodes found in {component_id!r} "
+                          f"(only scaffold/plumbing) — build the component first")}
+
+    child_names = {_safe_name(c) for c in children}
+    referenced: set[str] = set()
+
+    # wire_out source: trace input-0 from out_geometry past any plumbing.
+    wire_source = None
+    out_geo = subnet.node(ports.OUT_GEOMETRY_NODE)
+    if out_geo is not None:
+        try:
+            seed = out_geo.inputs()[0] if out_geo.inputs() else None
+        except Exception:
+            seed = None
+        if seed is not None:
+            wire_source = _trace_wire_source(seed, child_names)
+
+    node_ops: list[dict] = []
+    for c in children:
+        cname = _safe_name(c)
+        try:
+            type_name = c.type().name()
+        except Exception:
+            continue
+        op: dict[str, Any] = {"op": "node", "name": cname, "type": type_name}
+        params = _capture_node_parms(c, design_params, recover_param_refs,
+                                     referenced)
+        if params:
+            op["params"] = params
+        # inputs (by name, only to other archetype-owned children)
+        inputs: dict[str, str] = {}
+        try:
+            for i, src in enumerate(c.inputs()):
+                if src is None:
+                    continue
+                sname = _safe_name(src)
+                if sname in child_names:
+                    inputs[str(i)] = sname
+        except Exception:
+            pass
+        if inputs:
+            op["inputs"] = inputs
+        node_ops.append(op)
+
+    if wire_source:
+        node_ops.append({"op": "wire_out", "from": wire_source})
+
+    spec = {
+        "archetype": name,
+        "description": (description
+                        or f"captured from component {component_id!r}"),
+        "requires_design_params": sorted(referenced),
+        "ops": node_ops,
+    }
+
+    # Persist to sidecar registry (usable by emit_component immediately).
+    save_captured_spec(name, spec)
+
+    # Append a reference to the declaration + audit log.
+    decl = load_declaration(core_node)
+    decl.setdefault("archetype_candidates", []).append(
+        {"name": name, "source_component": component_id})
+    append_log(decl, kind="archetype_capture",
+               summary=f"captured {component_id!r} as archetype {name!r}",
+               payload={"name": name, "ops": len(node_ops),
+                        "requires_design_params": sorted(referenced)},
+               result_ok=True)
+    save_declaration(core_node, decl)
+
+    return {"success": True, "archetype": name, "component": component_id,
+            "spec": spec, "ops": len(node_ops),
+            "requires_design_params": sorted(referenced),
+            "project": core_node.path()}
+
+
+def _safe_name(node) -> str:
+    """node.name() that never raises (capture must be defensive — a stale
+    handle from a destroyed node would otherwise crash the whole capture)."""
+    try:
+        return node.name()
+    except Exception:
+        return ""
+

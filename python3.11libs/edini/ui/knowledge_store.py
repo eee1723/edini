@@ -165,13 +165,21 @@ def _default_rules() -> list[dict[str, Any]]:
 # ==========================================================================
 
 def load_entries() -> list[dict[str, Any]]:
-    """Load all knowledge entries, sorted by created_at descending."""
+    """Load all knowledge entries, sorted by created_at descending.
+
+    Entries written before the Phase 5 draft tier have no ``status`` field;
+    they are normalised to ``"promoted"`` in memory (transparent upgrade —
+    the on-disk file is only rewritten on the next explicit save).
+    """
     path = _entries_path()
     if not path.exists():
         return []
     try:
         with open(path, "r", encoding="utf-8") as f:
             entries = json.load(f)
+        for e in entries:
+            if "status" not in e:
+                e["status"] = "promoted"
         return sorted(entries, key=lambda e: e.get("created_at", ""), reverse=True)
     except (json.JSONDecodeError, OSError):
         return []
@@ -185,7 +193,8 @@ def save_entries(entries: list[dict[str, Any]]) -> None:
 
 def add_entry(category: str, title: str, content: str,
               tags: list[str] | None = None,
-              source_session: str = "") -> dict:
+              source_session: str = "",
+              status: str = "promoted") -> dict:
     entries = load_entries()
     entry = {
         "id": uuid.uuid4().hex[:8],
@@ -195,6 +204,7 @@ def add_entry(category: str, title: str, content: str,
         "tags": tags or [],
         "source_session": source_session,
         "created_at": _now(),
+        "status": status,
     }
     entries.append(entry)
     save_entries(entries)
@@ -222,15 +232,32 @@ def delete_entry(entry_id: str) -> bool:
 
 def search_entries(query: str = "", category: str = "",
                    tags: list[str] | None = None,
-                   limit: int = 20) -> list[dict[str, Any]]:
+                   limit: int = 20,
+                   include_drafts: bool = False,
+                   drafts_only: bool = False) -> list[dict[str, Any]]:
     """Search knowledge entries by query, category, and/or tags.
-    
+
     Simple substring match on title and content. Returns newest first.
+
+    Draft tier (Phase 5): entries have a ``status`` of ``"draft"`` or
+    ``"promoted"``. By default drafts are EXCLUDED so the agent's normal
+    ``edini_search_knowledge`` is not flooded with auto-captured failures —
+    drafts are quarantined until a human promotes them. Pass
+    ``include_drafts=True`` to search everything, or ``drafts_only=True`` to
+    search only drafts (the ``edini_search_drafts`` path the agent uses when a
+    verify/finalize fails).
     """
     entries = load_entries()
     results = []
     q_lower = query.lower()
     for e in entries:
+        is_draft = e.get("status") == "draft"
+        if drafts_only:
+            if not is_draft:
+                continue
+        elif not include_drafts:
+            if is_draft:
+                continue
         if category and e.get("category") != category:
             continue
         if tags:
@@ -250,6 +277,112 @@ def search_entries(query: str = "", category: str = "",
 
 def entries_count() -> int:
     return len(load_entries())
+
+
+# ==========================================================================
+# Failure drafts (Phase 5a — closed-loop learning)
+# ==========================================================================
+#
+# project_finalize auto-captures every gate failure as a structured record.
+# Each record becomes a DRAFT entry here: excluded from normal search and the
+# system prompt (so auto-capture can't noise up the agent), but searchable via
+# edini_search_drafts when the agent hits a similar failure, and promotable by
+# a human (promote_entry) once the lesson proves worth keeping.
+
+# Closed category vocabulary (drives the draft title + promotion UX). Anything
+# outside this set falls back to the raw category string.
+_FAILURE_CATEGORY_LABELS = {
+    "incomplete": "组件未完成",
+    "cook_error": "Cook 错误",
+    "degenerate": "几何退化(区间坍缩)",
+    "dead_param": "死参数(未驱动几何)",
+    "orientation": "朝向错误",
+    "missing_param": "设计参数缺失",
+}
+
+
+def _build_failure_draft(record: dict, project_context: dict | None) -> dict:
+    """Build (but do not persist) a draft entry from a failure record.
+
+    A record looks like::
+        {"category", "component_id"|"components", "param"?, "node_path"?,
+         "tool", "message", "hint"?}
+    """
+    raw_cat = record.get("category") or "failure"
+    label = _FAILURE_CATEGORY_LABELS.get(raw_cat, raw_cat)
+    where = (record.get("component_id") or record.get("components")
+             or record.get("node_path") or "")
+    param = record.get("param")
+    head = f"{label}"
+    if where:
+        head += f": {where}"
+    if param:
+        head += f" / {param}"
+    title = head.strip()[:60]
+
+    parts = [record.get("message", "").strip()]
+    if record.get("hint"):
+        parts.append(f"修复方向: {record['hint']}")
+    if project_context and project_context.get("goal"):
+        parts.append(f"(项目意图: {project_context['goal']})")
+    content = "\n".join(p for p in parts if p)[:500]
+
+    return {
+        "id": uuid.uuid4().hex[:8],
+        "category": "避坑",
+        "title": title,
+        "content": content,
+        "tags": ["auto-draft", raw_cat],
+        "source_session": "",
+        "created_at": _now(),
+        "status": "draft",
+        "failure": record,  # structured blob for search/diagnostics
+    }
+
+
+def add_failure_draft(record: dict, project_context: dict | None = None) -> dict:
+    """Persist a single failure record as a draft entry."""
+    entries = load_entries()
+    entry = _build_failure_draft(record, project_context)
+    entries.append(entry)
+    save_entries(entries)
+    return entry
+
+
+def add_failure_drafts(records: list[dict],
+                       project_context: dict | None = None) -> int:
+    """Persist many failure records as drafts in one save. Returns count."""
+    if not records:
+        return 0
+    entries = load_entries()
+    for record in records:
+        entries.append(_build_failure_draft(record, project_context))
+    save_entries(entries)
+    return len(records)
+
+
+def promote_entry(entry_id: str, to_rule: bool = False) -> dict | None:
+    """Promote a draft entry to live.
+
+    - ``to_rule=False`` (default): flip ``status`` to ``"promoted"`` — the entry
+      now appears in normal ``edini_search_knowledge`` results.
+    - ``to_rule=True``: move it to ``rules.json`` as an always-on iron rule
+      (reuses ``add_rule``) and remove the entry. Iron rules reach the system
+      prompt, so reserve this for high-confidence lessons.
+    Returns the promoted entry (or the consumed entry for to_rule), else None.
+    """
+    entries = load_entries()
+    for e in entries:
+        if e["id"] == entry_id:
+            if to_rule:
+                add_rule(e.get("category", "避坑"),
+                         e.get("title", ""), e.get("content", ""))
+                save_entries([x for x in entries if x["id"] != entry_id])
+                return e
+            e["status"] = "promoted"
+            save_entries(entries)
+            return e
+    return None
 
 
 # ==========================================================================

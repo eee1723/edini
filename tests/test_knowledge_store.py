@@ -14,6 +14,8 @@ from edini.ui.knowledge_store import (  # noqa: E402
     MAX_RULES,
     accept_extracted,
     add_entry,
+    add_failure_draft,
+    add_failure_drafts,
     add_rule,
     delete_entry,
     delete_rule,
@@ -22,6 +24,7 @@ from edini.ui.knowledge_store import (  # noqa: E402
     load_entries,
     load_rules,
     parse_extraction_response,
+    promote_entry,
     rules_count,
     save_entries,
     save_rules,
@@ -450,3 +453,105 @@ class TestCounts:
                 add_entry("技巧", "t1", "c1")
                 add_entry("技巧", "t2", "c2")
                 assert entries_count() == 2
+
+
+# ── TestFailureDrafts (Phase 5a) ───────────────────────────────────────────
+
+
+class TestFailureDrafts:
+    """Draft tier: backwards-compat status, auto-draft isolation, promotion."""
+
+    def test_legacy_entry_without_status_treated_as_promoted(self):
+        """An entries.json written before Phase 5 (no status field) loads as
+        promoted — transparent upgrade, no re-save needed to be searchable."""
+        with tempfile.TemporaryDirectory() as td:
+            with _patch_dir(td):
+                # Hand-write a legacy entry with NO status field.
+                save_entries([{"id": "leg1", "category": "技巧", "title": "old",
+                               "content": "c", "tags": [], "source_session": "",
+                               "created_at": "2026-01-01T00:00:00"}])
+                entries = load_entries()
+                assert entries[0]["status"] == "promoted"
+                # Default search includes it (it is not a draft).
+                assert len(search_entries("old")) == 1
+
+    def test_add_failure_draft_is_draft_and_quarantined(self):
+        """A failure draft has status=draft and is EXCLUDED from the default
+        search (so edini_search_knowledge isn't flooded) but found by the
+        drafts-only search (edini_search_drafts)."""
+        with tempfile.TemporaryDirectory() as td:
+            with _patch_dir(td):
+                rec = {"category": "dead_param", "param": "length",
+                       "message": "length does not drive geometry",
+                       "hint": "fix the ch() ref"}
+                e = add_failure_draft(rec, project_context={"goal": "a table"})
+                assert e["status"] == "draft"
+                assert e["category"] == "避坑"
+                assert "auto-draft" in e["tags"]
+                assert e["failure"] == rec
+                # Default search excludes the draft.
+                assert search_entries("length") == []
+                # drafts_only search finds it.
+                found = search_entries("length", drafts_only=True)
+                assert len(found) == 1 and found[0]["id"] == e["id"]
+                # include_drafts returns it alongside normal results.
+                assert len(search_entries("length", include_drafts=True)) == 1
+
+    def test_draft_title_synthesises_label_component_param(self):
+        """Title is human-readable: <category label>: <component> / <param>."""
+        with tempfile.TemporaryDirectory() as td:
+            with _patch_dir(td):
+                e = add_failure_draft(
+                    {"category": "degenerate", "component_id": "legs",
+                     "param": "count", "message": "collapses at count=0",
+                     "hint": "widen min"})
+                assert "几何退化" in e["title"]
+                assert "legs" in e["title"]
+                assert "count" in e["title"]
+                assert "collapses at count=0" in e["content"]
+                assert "修复方向: widen min" in e["content"]
+
+    def test_add_failure_drafts_batch(self):
+        """Batch write returns count and persists all as drafts."""
+        with tempfile.TemporaryDirectory() as td:
+            with _patch_dir(td):
+                recs = [
+                    {"category": "cook_error", "message": "node X errored"},
+                    {"category": "orientation", "component_id": "back",
+                     "message": "axis Y vs Z"},
+                ]
+                n = add_failure_drafts(recs, project_context={"goal": "chair"})
+                assert n == 2
+                drafts = search_entries(drafts_only=True)
+                assert len(drafts) == 2
+                # None leak into the default search.
+                assert search_entries() == [] or all(
+                    x["status"] != "draft" for x in search_entries())
+
+    def test_promote_entry_flips_status(self):
+        """promote_entry moves a draft into the default search surface."""
+        with tempfile.TemporaryDirectory() as td:
+            with _patch_dir(td):
+                e = add_failure_draft({"category": "dead_param",
+                                       "param": "width", "message": "dead"})
+                assert search_entries("dead") == []
+                promote_entry(e["id"])
+                found = search_entries("dead")
+                assert len(found) == 1
+                assert found[0]["status"] == "promoted"
+                # No longer a draft.
+                assert search_entries("dead", drafts_only=True) == []
+
+    def test_promote_entry_to_rule_moves_into_rules(self):
+        """promote_entry(to_rule=True) graduates the draft to an iron rule
+        (rules.json) and removes the entry."""
+        with tempfile.TemporaryDirectory() as td:
+            with _patch_dir(td):
+                e = add_failure_draft({"category": "dead_param",
+                                       "param": "height", "message": "dead h"})
+                base_rules = rules_count()
+                promote_entry(e["id"], to_rule=True)
+                assert rules_count() == base_rules + 1
+                # Entry gone from entries.json.
+                assert all(x["id"] != e["id"] for x in load_entries())
+

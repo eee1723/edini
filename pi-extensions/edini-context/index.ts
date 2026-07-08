@@ -212,6 +212,19 @@ verify_robust + verify_parametric itself and refuses to mark complete on
 failure (returns a failures[] list naming what to fix; fix them, do NOT just
 re-declare done). Only consider the model done once project_finalize returns
 finalized:true (or you used acknowledge_skip with a real reason).
+
+**Closed-loop learning (Phase 5):**
+- **Failures are remembered.** Every \`project_finalize\` failure is auto-captured
+  as a knowledge *draft*. When a verify/finalize fails, search past diagnoses
+  with **\`edini_search_drafts\`** (by failure category: dead_param / degenerate /
+  cook_error / orientation / incomplete) BEFORE retrying — a past session may
+  have already solved it. (Drafts are excluded from \`edini_search_knowledge\`
+  until a human promotes them.)
+- **Successes compound.** After a component verifies clean AND you judge it
+  reusable across projects, capture it with **\`project_capture_archetype\`**.
+  The captured archetype is immediately reusable via
+  **\`project_emit_component(archetype=<name>)\`** — prefer reusing a captured
+  archetype over rebuilding a similar component from scratch.
 ${vv ? `
 
 --- BEGIN PROCEDURAL_VERIFY_PROMPT ---

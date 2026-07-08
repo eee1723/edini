@@ -53,6 +53,7 @@ from edini.recipe_library import (
 from edini.project.builder import (
     build_project_scaffold, promote_params, add_anchors, emit_markers,
     emit_component, snapshot_component, restore_component, list_snapshots,
+    project_capture_archetype,
 )
 from edini.project.guards import lint_wrangle_snippet
 
@@ -351,6 +352,43 @@ def _project_list_snapshots(core_path: str | None = None,
                 "traceback": traceback.format_exc()}
 
 
+def _project_capture_archetype(core_path: str | None = None,
+                               component_id: str | None = None,
+                               name: str | None = None,
+                               description: str = "",
+                               recover_param_refs: bool = True, **_) -> dict[str, Any]:
+    """Phase 5b: capture a built component as a reusable archetype spec."""
+    if not core_path:
+        return {"success": False, "error": "'core_path' is required"}
+    if not component_id:
+        return {"success": False, "error": "'component_id' is required"}
+    if not name:
+        return {"success": False, "error": "'name' is required"}
+    try:
+        import hou
+        node = hou.node(core_path)
+        if node is None:
+            return {"success": False, "error": f"core node not found: {core_path}"}
+        return project_capture_archetype(node, component_id, name, description,
+                                         recover_param_refs)
+    except Exception as e:
+        import traceback
+        return {"success": False, "error": str(e),
+                "traceback": traceback.format_exc()}
+
+
+def _project_list_captured_archetypes(**_) -> dict[str, Any]:
+    """Phase 5b: list captured (data) archetype specs in the sidecar registry."""
+    try:
+        from edini.project.archetype_emitter import list_captured_archetypes
+        return {"success": True,
+                "captured_archetypes": list_captured_archetypes()}
+    except Exception as e:
+        import traceback
+        return {"success": False, "error": str(e),
+                "traceback": traceback.format_exc()}
+
+
 # ── Guarded set_param wrappers (Fix 1) ──────────────────────────────────
 # Intercept `houdini_set_param` / `houdini_set_params_batch` when they target
 # a wrangle `snippet` inside a Project HDA component, and refuse hand-rolled
@@ -527,6 +565,12 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
         category=kw.get("category", ""),
         limit=kw.get("limit", 10),
     ),
+    "edini_search_drafts": lambda **kw: search_entries(
+        query=kw.get("query", ""),
+        category=kw.get("category", ""),
+        limit=kw.get("limit", 10),
+        drafts_only=True,
+    ),
     "dump_parm_catalog": lambda **kw: dump_parm_catalog(
         output_path=kw.get("output_path"),
         force=kw.get("force", False),
@@ -568,6 +612,8 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     "project_snapshot_component": lambda **kw: _project_snapshot_component(**kw),
     "project_restore_component": lambda **kw: _project_restore_component(**kw),
     "project_list_snapshots": lambda **kw: _project_list_snapshots(**kw),
+    "project_capture_archetype": lambda **kw: _project_capture_archetype(**kw),
+    "project_list_captured_archetypes": lambda **kw: _project_list_captured_archetypes(**kw),
     # One-shot per-component completion snapshot (geo_flow / anchors emitted /
     # errors). Replaces the N-tool status-gathering loop with a single call.
     "project_status": lambda **kw: project_status(kw["core_path"]),
