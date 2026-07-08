@@ -3354,5 +3354,82 @@ class TestProjectFinalizeHython(unittest.TestCase):
         self.assertIn("skip_reason", s["skip_noreason_error"])
 
 
+# =============================================================================
+# Phase 3a: project_plan — intent gate (goal + success_criteria before scaffold).
+# =============================================================================
+_PLAN_HARNESS = r"""
+import json, sys, os
+sys.path.insert(0, os.path.join(r"%s", "python3.11libs"))
+import hou
+_hda = os.path.join(r"%s", "otls", "edini_project.hda")
+if os.path.isfile(_hda):
+    hou.hda.installFile(_hda)
+from edini.project.state import load_declaration
+from edini.project.node import create_project_hda
+from edini.node_utils import project_plan
+
+result = {"steps": {}}
+
+core = create_project_hda(name="proj_plan")
+# Valid plan: goal + success_criteria captured + stored on the declaration.
+res = project_plan(core.path(), "a small parametric table",
+    ["tabletop is parametric in length", "4 legs at measured corners"])
+result["steps"]["plan_success"] = res.get("success")
+decl = load_declaration(core)
+result["steps"]["stored_goal"] = decl.get("project", {}).get("goal")
+result["steps"]["stored_criteria_count"] = len(decl.get("success_criteria", []))
+
+# Invalid: empty success_criteria → refused (no building until intent is stated).
+res_bad = project_plan(core.path(), "x", [])
+result["steps"]["bad_empty_success"] = res_bad.get("success")
+result["steps"]["bad_empty_error"] = res_bad.get("error", "")
+
+# Invalid: empty goal → refused.
+res_bad2 = project_plan(core.path(), "", ["criterion"])
+result["steps"]["bad_empty_goal"] = res_bad2.get("success")
+
+print("RESULT_JSON:" + json.dumps(result))
+""" % (_REPO, _REPO)
+
+
+@unittest.skipUnless(HYTHON, "hython not installed")
+class TestProjectPlanHython(unittest.TestCase):
+    """Phase 3a: project_plan — intent gate (goal + success_criteria before
+    scaffold). The structural cure for upstream errors compounding downstream."""
+
+    def _run(self):
+        proc = subprocess.run(
+            [HYTHON, "-c", _PLAN_HARNESS],
+            capture_output=True, text=True, timeout=120, cwd=_REPO,
+            stdin=subprocess.DEVNULL)
+        combined = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 0,
+                         f"hython failed (rc={proc.returncode}):\n{combined[-2000:]}")
+        idx = combined.rfind("RESULT_JSON:")
+        self.assertGreater(idx, -1, f"no RESULT_JSON:\n{combined[-2000:]}")
+        return json.loads(combined[idx + len("RESULT_JSON:"):]), combined
+
+    def test_plan_captures_and_stores(self):
+        """A valid plan stores goal + success_criteria on the declaration."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertTrue(s["plan_success"], "valid plan should be captured")
+        self.assertEqual(s["stored_goal"], "a small parametric table")
+        self.assertEqual(s["stored_criteria_count"], 2)
+
+    def test_plan_refuses_empty_criteria(self):
+        """Empty success_criteria is refused — no building until 'done' is stated."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertFalse(s["bad_empty_success"])
+        self.assertIn("success_criteria", s["bad_empty_error"])
+
+    def test_plan_refuses_empty_goal(self):
+        """Empty goal is refused."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertFalse(s["bad_empty_goal"])
+
+
 if __name__ == "__main__":
     unittest.main()

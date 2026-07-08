@@ -27,6 +27,7 @@ from edini.node_utils import (
     repath_to_relative,
     project_status,
     project_finalize,
+    project_plan,
 )
 from edini import screenshots
 from edini.config import _load_edini_settings
@@ -579,6 +580,13 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
         acknowledge_skip=kw.get("acknowledge_skip", False),
         skip_reason=kw.get("skip_reason"),
         samples=kw.get("samples", "min_default_max"),
+    ),
+    # Intent gate: capture goal + success_criteria BEFORE scaffolding (the
+    # structural cure for upstream errors compounding downstream).
+    "project_plan": lambda **kw: project_plan(
+        kw["core_path"],
+        kw["goal"],
+        kw["success_criteria"],
     ),
 }
 

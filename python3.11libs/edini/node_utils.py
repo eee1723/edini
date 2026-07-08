@@ -4574,3 +4574,54 @@ def project_finalize(
                 "error": f"{e}\n{traceback.format_exc()}"}
 
 
+def project_plan(core_path: str, goal: str,
+                 success_criteria: list[str]) -> dict[str, Any]:
+    """Capture the modeling intent (goal + success criteria) BEFORE scaffolding.
+
+    The structural cure for upstream errors compounding downstream: forces the
+    agent to articulate what 'done' means BEFORE building anything, with
+    platform validation. The captured ``success_criteria`` is stored on the
+    declaration (later cross-checkable by :func:`project_finalize`). Replaces
+    the vague "inspect_health overall_ok = done" trap — overall_ok only proves
+    "not broken right now", not "parametric + meets intent".
+
+    Call right after ``project_create``, before ``project_build_scaffold``.
+
+    Args:
+        core_path: the edini::project SOP HDA instance path.
+        goal: what the project will build, in natural language.
+        success_criteria: a non-empty list of strings — the explicitly-stated
+            conditions for "done".
+
+    Returns ``{success, plan:{goal, success_criteria}, core_path}``.
+    """
+    try:
+        core = hou.node(core_path)
+        if core is None:
+            return {"success": False, "error": f"Core not found: {core_path}"}
+        if not (isinstance(goal, str) and goal.strip()):
+            return {"success": False,
+                    "error": "project_plan requires a non-empty 'goal' "
+                             "(what the project will build)."}
+        if not isinstance(success_criteria, list) or not success_criteria:
+            return {"success": False,
+                    "error": "project_plan requires 'success_criteria': a "
+                             "non-empty list of strings (what 'done' means)."}
+        cleaned = [c.strip() for c in success_criteria
+                   if isinstance(c, str) and c.strip()]
+        if not cleaned:
+            return {"success": False,
+                    "error": "success_criteria must be non-empty strings."}
+
+        from edini.project.state import load_declaration, save_declaration
+        decl = load_declaration(core)
+        decl.setdefault("project", {})["goal"] = goal.strip()
+        decl["success_criteria"] = cleaned
+        save_declaration(core, decl)
+        return {"success": True, "core_path": core_path,
+                "plan": {"goal": goal.strip(), "success_criteria": cleaned}}
+    except Exception as e:
+        return {"success": False,
+                "error": f"{e}\n{traceback.format_exc()}"}
+
+

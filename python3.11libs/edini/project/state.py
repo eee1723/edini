@@ -24,6 +24,7 @@ def empty_declaration(project_name: str, goal: str | None = None) -> dict:
             "goal": goal,
         },
         "plan": [],
+        "success_criteria": [],
         "design_params": [],
         "components": [],
         "log": [],

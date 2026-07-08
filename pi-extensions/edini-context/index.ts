@@ -168,7 +168,7 @@ node versions, missing connections) without bounding what you can create.
 
 | Task | Preferred approach |
 |---|---|
-| **Any multi-part model (table=top+legs, car=body+wheels, keyboard=tray+keys)** | **Project HDA component pipeline** (read the project-modeling skill): project_create → declare components + anchors → project_build_scaffold → model in subnets (measure anchors) → verify_parametric |
+| **Any multi-part model (table=top+legs, car=body+wheels, keyboard=tray+keys)** | **Project HDA component pipeline** (read the project-modeling skill): project_create → **project_plan(goal, success_criteria)** → declare components + anchors → project_build_scaffold → model in subnets (measure anchors) → verify_parametric → **project_finalize** |
 | Geometry that matches a recipe's intent (tube, copy, extrude...) | **recipe_list** → **recipe_read** → study the python_script → author your own network (adapt freely) |
 | Want a quick faithful copy of an existing recipe verbatim | **recipe_rebuild** (the optional deterministic-copy path) |
 | Single-piece generator / parametric surface | houdini_run_python_sandbox (single-SOP) |

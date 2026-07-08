@@ -41,6 +41,33 @@ export const projectTools = [
     },
   },
   {
+    name: "project_plan",
+    label: "Capture Project Intent (Goal + Success Criteria)",
+    description:
+      "Capture the modeling intent — the goal + success criteria — BEFORE scaffolding. " +
+      "Forces you to articulate what 'done' means up front (platform validates non-empty), " +
+      "so upstream errors don't compound into a model that builds but misses the point. " +
+      "The success_criteria are stored on the project declaration and are later cross-checkable " +
+      "by project_finalize. Call this right after project_create, before project_build_scaffold. " +
+      "Replaces the vague 'inspect_health overall_ok = done' trap (overall_ok only proves 'not " +
+      "broken right now', not 'parametric + meets intent').",
+    promptSnippet: "State the goal + success criteria before building",
+    promptGuidelines: [
+      "Call project_plan as the FIRST step after project_create — before project_build_scaffold — to commit to what 'done' means.",
+      "goal: what the project will build, in natural language (e.g. 'a small parametric table').",
+      "success_criteria: a non-empty list of strings — the explicitly-stated conditions for done (e.g. ['tabletop is parametric in length', '4 legs at measured corners', 'passes verify_parametric + verify_robust']).",
+      "Both goal and success_criteria are REQUIRED (the tool refuses empty ones) — that's the point: no building until intent is articulated.",
+    ],
+    parameters: Type.Object({
+      core_path: Type.String({ description: "Path to the edini::project SOP HDA instance (from project_create)." }),
+      goal: Type.String({ description: "What the project will build, in natural language." }),
+      success_criteria: Type.Array(Type.String(), { description: "Non-empty list of conditions for 'done'." }),
+    }),
+    async execute(_id: string, params: { core_path: string; goal: string; success_criteria: string[] }) {
+      return forwardTool("project_plan", params);
+    },
+  },
+  {
     name: "project_build_scaffold",
     label: "Build Project Scaffold",
     description:
