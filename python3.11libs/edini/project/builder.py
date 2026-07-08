@@ -370,6 +370,38 @@ def _ensure_node(parent: "hou.Node", node_type: str,
     return parent.createNode(node_type, node_name=node_name)
 
 
+def _has_input(node, idx: int = 0) -> bool:
+    """True if ``node`` has a non-None input at ``idx`` — the disconnect check.
+
+    Catches the case where a chain node still EXISTS but its input was dropped
+    (e.g. the agent ran ``setInput(0, None)``).
+    """
+    try:
+        return node.input(idx) is not None
+    except Exception:
+        return False
+
+
+def _input_name_is(node, idx: int, expected) -> bool:
+    """True if ``node``'s input ``idx`` is ``expected`` (compared by node name).
+
+    Used to verify the internal filter→clean→in_null chain is wired in the
+    right ORDER (clean ← blast, in_null ← clean). Name comparison is robust
+    across hou.Node object identities (which can differ across queries) and
+    avoids the SubnetIndirectInput identity-comparison pitfall.
+    """
+    try:
+        actual = node.input(idx)
+    except Exception:
+        return False
+    if actual is None:
+        return False
+    try:
+        return actual.name() == expected.name()
+    except Exception:
+        return False
+
+
 def _collect_input_wires(core_node: "hou.Node", decl: dict) -> list[dict]:
     """Read back the ACTUAL cross-component wiring state and report ground-truth.
 
@@ -461,16 +493,20 @@ def _collect_input_wires(core_node: "hou.Node", decl: dict) -> list[dict]:
                         wire["port_matches"] = True
                         wire["carries"] = ("anchors" if declared_port >= 1
                                            else "geometry")
-                # Internal three-piece chain: filter / clean / in null.
-                chain_ok = True
-                for prefix in (INPUT_FILTER_PREFIX, ANCHOR_CLEAN_PREFIX):
-                    nm = f"{prefix}{from_id}_{anchor}"
-                    if subnet.node(nm) is None:
-                        chain_ok = False
-                        break
-                if subnet.node(f"in_{from_id}_{anchor}") is None:
-                    chain_ok = False
-                wire["internal_chain_ready"] = chain_ok
+                # Internal three-piece chain: indirect→filter(blast)→clean→in_null.
+                # Phase 1b: verify the nodes EXIST and are actually WIRED (not just
+                # present). A disconnected chain (e.g. the agent ran
+                # setInput(0,None), or a wire got dropped) now reports
+                # internal_chain_ready=False — closes the audit's false-positive
+                # gap (session-logs-analysis xfail → now genuinely verified).
+                blast = subnet.node(f"{INPUT_FILTER_PREFIX}{from_id}_{anchor}")
+                clean_n = subnet.node(f"{ANCHOR_CLEAN_PREFIX}{from_id}_{anchor}")
+                in_null = subnet.node(f"in_{from_id}_{anchor}")
+                wire["internal_chain_ready"] = (
+                    blast is not None and clean_n is not None and in_null is not None
+                    and _has_input(blast, 0)                       # blast ← indirect (not disconnected)
+                    and _input_name_is(clean_n, 0, blast)         # clean ← blast
+                    and _input_name_is(in_null, 0, clean_n))      # in_null ← clean
             wires.append(wire)
     return wires
 

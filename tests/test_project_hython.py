@@ -1967,26 +1967,24 @@ class TestHardeningEdgeCasesHython(unittest.TestCase):
                          f"only sizex should be rewritten (sizey is a "
                          f"near-collision); count={s['hc_count']}: {res}")
 
-    # ── (4) internal_chain_ready false-positive (KNOWN deficiency) ──
+    # ── (4) internal_chain_ready — a DISCONNECTED chain reports not-ready ──
+    # Phase 1b: _collect_input_wires now verifies real setInput wiring (not just
+    # node existence), so a disconnected filter→clean→in_null chain correctly
+    # reports internal_chain_ready=False. (Was @expectedFailure pre-1b.)
 
-    @unittest.expectedFailure
     def test_internal_chain_disconnected_reports_not_ready(self):
-        """KNOWN DEFICIENCY (audit, builder.py:464-473): _collect_input_wires
-        checks only that the chain NODES EXIST, not that they are wired
-        together. A disconnected-but-present chain falsely reports
-        internal_chain_ready=True. This test asserts the IDEAL behavior
-        (disconnected → not ready) and is marked expectedFailure until
-        builder.py is hardened to check real setInput wiring. When that
-        happens, this test will XPASS and the decorator should be removed.
-
-        Why we keep it: it documents the gap and guards against the fix
-        landing without removing the decorator (XPASS fails the suite)."""
+        """Phase 1b (builder.py _collect_input_wires): the chain check now
+        verifies the filter→clean→in_null nodes are actually WIRED together
+        (indirect→blast→clean→in_null), not just present. A deliberately
+        disconnected filter input (setInput(0,None)) → internal_chain_ready=False.
+        Previously a known false-positive (node-exists-only check); the xfail is
+        removed because the check is now hardened."""
         res, _ = self._run()
         s = res["steps"]
         self.assertTrue(s["chain_nodes_exist"],
                         "precondition: the chain nodes must exist for this test "
                         f"to mean anything: {res}")
-        # IDEAL: a disconnected chain reports internal_chain_ready=False.
+        # A disconnected chain now reports internal_chain_ready=False.
         self.assertFalse(s["chain_internal_ready_reported"],
                          f"disconnected chain should report not-ready; "
                          f"reported={s['chain_internal_ready_reported']}: {res}")
