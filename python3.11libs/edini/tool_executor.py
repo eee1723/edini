@@ -23,6 +23,7 @@ from edini.node_utils import (
     verify_orientation, inspect_geometry_health, geometry_inventory,
     node_parms,
     verify_parametric,
+    verify_robust,
     repath_to_relative,
     project_status,
 )
@@ -374,6 +375,12 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
         kw["new_value"],
         expected_axis=kw.get("expected_axis"),
         min_relative_change=kw.get("min_relative_change", 0.05),
+    ),
+    "verify_robust": lambda **kw: verify_robust(
+        kw["node_path"],
+        kw["core_path"],
+        params=kw.get("params"),
+        samples=kw.get("samples", "min_default_max"),
     ),
     "project_repath_to_relative": lambda **kw: repath_to_relative(
         kw["core_path"],

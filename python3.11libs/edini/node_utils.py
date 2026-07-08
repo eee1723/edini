@@ -3953,6 +3953,169 @@ def verify_parametric(
                 "error": f"{e}\n{traceback.format_exc()}"}
 
 
+def verify_robust(
+    node_path: str,
+    core_path: str,
+    params: list[str] | None = None,
+    samples: str = "min_default_max",
+) -> dict[str, Any]:
+    """Prove the model holds across the FULL valid range of its design params
+    (not just at one perturbation).
+
+    The "stable correct" guarantee that point-in-time :func:`verify_parametric`
+    cannot give alone: a model parametric at the default but broken (zero
+    geometry / cook errors) at the extremes is fragile. For each design param,
+    this samples at its declared min / default / max (configurable), recooks,
+    and asserts the geometry stays non-degenerate + error-free at EVERY sample.
+
+    Complementary to verify_parametric: that proves a param DRIVES the geometry
+    (direction change at one point); this proves the model HOLDS across the
+    range (no degenerate / errored samples at the extremes).
+
+    Read-only across the whole sweep: params are isolated (each restored before
+    sweeping the next) and all restored to their originals at the end
+    (try/finally safety net), so the user's scene is never mutated.
+
+    Args:
+        node_path: node whose geometry proves robustness (usually the OUT node).
+        core_path: the edini::project HDA core carrying the design params.
+        params: list of design param names to sweep (default: all declared
+            design_params).
+        samples: ``"min_default_max"`` (default) samples each param's declared
+            min/default/max; ``"min_max"`` samples only the extremes.
+
+    Returns:
+        ``{success, passed, project, params:[{name, passed, samples:[{value,
+        passed, points, prims, sizes, errors, reason}]}], overall_reason}``.
+    """
+    try:
+        node = hou.node(node_path)
+        if node is None:
+            return {"success": False, "error": f"Node not found: {node_path}"}
+        core = hou.node(core_path)
+        if core is None:
+            return {"success": False, "error": f"Core not found: {core_path}"}
+        from edini.project.state import load_declaration
+        decl = load_declaration(core)
+        decl_params = decl.get("design_params", []) or []
+        if params:
+            requested = set(params)
+            decl_params = [p for p in decl_params if p.get("name") in requested]
+            found = {p.get("name") for p in decl_params}
+            missing = requested - found
+            if missing:
+                return {"success": False,
+                        "error": f"params not found in declaration: {sorted(missing)}"}
+        if not decl_params:
+            return {"success": False,
+                    "error": "no design_params declared on the core; nothing to sweep"}
+
+        extremes_only = (samples == "min_max")
+
+        def _samples_for(p: dict) -> list[float]:
+            mn, df, mx = p.get("min"), p.get("default"), p.get("max")
+            ordered = [mn, mx] if extremes_only else [mn, df, mx]
+            vals: list[float] = []
+            for v in ordered:
+                try:
+                    fv = float(v)
+                except (TypeError, ValueError):
+                    continue
+                if fv not in vals:   # dedupe (e.g. min==default)
+                    vals.append(fv)
+            return vals
+
+        def _snapshot() -> dict | None:
+            g = node.geometry()
+            if g is None:
+                return None
+            bb = g.boundingBox()
+            mn = _vector_to_list(bb.minvec())
+            mx = _vector_to_list(bb.maxvec())
+            return {"sizes": [mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2]],
+                    "points": len(g.points()), "prims": len(g.prims())}
+
+        original = {}
+        for p in decl_params:
+            parm = core.parm(p["name"])
+            if parm is not None:
+                original[p["name"]] = parm.eval()
+
+        overall_pass = True
+        per_param: list[dict] = []
+        try:
+            for p in decl_params:
+                pname = p["name"]
+                parm = core.parm(pname)
+                if parm is None:
+                    per_param.append({"name": pname, "passed": False,
+                                      "samples": [],
+                                      "reason": f"parm {pname!r} not found on core"})
+                    overall_pass = False
+                    continue
+                sresults: list[dict] = []
+                param_pass = True
+                for v in _samples_for(p):
+                    errs: list[str] = []
+                    snap = None
+                    try:
+                        parm.set(v)
+                        node.cook(force=True)
+                        snap = _snapshot()
+                        errs = list(node.errors() or [])
+                    except Exception as e:
+                        errs = [str(e)]
+                    ok = (not errs) and snap is not None and snap["points"] > 0
+                    if not ok:
+                        param_pass = False
+                    sresults.append({
+                        "value": v, "passed": ok,
+                        "points": snap["points"] if snap else 0,
+                        "prims": snap["prims"] if snap else 0,
+                        "sizes": snap["sizes"] if snap else None,
+                        "errors": errs,
+                        "reason": ("ok" if ok else
+                                   (f"errors: {errs}" if errs
+                                    else f"zero/empty geometry at {pname}={v}")),
+                    })
+                per_param.append({"name": pname, "passed": param_pass,
+                                  "samples": sresults})
+                if not param_pass:
+                    overall_pass = False
+                # Isolate params: restore this one before sweeping the next so
+                # param B's sweep isn't taken with param A clamped at its max.
+                if original.get(pname) is not None:
+                    try:
+                        parm.set(original[pname])
+                        node.cook(force=True)
+                    except Exception:
+                        pass
+        finally:
+            # Safety net: restore ALL params to originals (exception mid-sweep).
+            for pname, val in original.items():
+                try:
+                    core.parm(pname).set(val)
+                except Exception:
+                    pass
+            try:
+                node.cook(force=True)
+            except Exception:
+                pass
+
+        return {
+            "success": True, "passed": overall_pass, "project": core_path,
+            "params": per_param,
+            "overall_reason": (
+                "all design params held non-degenerate + error-free across "
+                "their sampled range" if overall_pass else
+                "one or more samples produced zero geometry or cook errors — "
+                "the model is fragile at the param extremes (fix the ch() "
+                "chain or clamp the param range)"),
+        }
+    except Exception as e:
+        return {"success": False, "error": f"{e}\n{traceback.format_exc()}"}
+
+
 # Regex matching ch('...') / hou.ch('...') calls inside an expression string.
 # Captures the function name (group 1) and the quoted path argument (group 2).
 # Handles single OR double quotes. Used by repath_to_relative.

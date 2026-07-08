@@ -85,6 +85,7 @@
 | `geometry_inventory` | 按 @component_id 的面/点清单(项目感知) |
 | `verify_orientation` | 朝向轴校验 |
 | `verify_parametric` | **参数化硬门**:扰动 design_param→recook→量化验证→还原原值 |
+| `verify_robust` | **区间稳健门**:每个 design_param 在 min/default/max 扫描,断言非零+无错(全区间不崩) |
 
 ## §6 捕获(Capture)— 多为视觉验证门控
 

@@ -2258,5 +2258,137 @@ class TestEmitMarkersHython(unittest.TestCase):
                          f"re-emit should replace, not duplicate: {res}")
 
 
+# =============================================================================
+# Phase 2: verify_robust — prove the model HOLDS across each design param's
+# min/default/max range (the 'stable correct' guarantee), not just at one
+# perturbation. Complementary to verify_parametric (which proves a param
+# DRIVES the geometry at one point).
+# =============================================================================
+
+_ROBUST_HARNESS = r"""
+import json, sys, os
+sys.path.insert(0, os.path.join(r"%s", "python3.11libs"))
+import hou
+_hda = os.path.join(r"%s", "otls", "edini_project.hda")
+if os.path.isfile(_hda):
+    hou.hda.installFile(_hda)
+from edini.project.state import empty_declaration, add_component, add_design_param
+from edini.project.node import create_project_hda
+from edini.project.builder import build_project_scaffold
+from edini.node_utils import verify_robust
+
+result = {"steps": {}}
+
+# ── PASS case: a box whose sizex is driven by 'length' (min 0.4 / def 1.2 /
+# max 3.0). Robust across the whole range — geometry stays non-degenerate. ──
+core = create_project_hda(name="proj_robust")
+decl = empty_declaration("proj_robust")
+add_design_param(decl, "length", default=1.2, min=0.4, max=3.0, label="长度")
+add_component(decl, "top", purpose="桌面",
+    ports_out=[{"index": 0, "kind": "geometry"}])
+build_project_scaffold(core, declaration=decl)
+top = core.node("top")
+box = top.createNode("box", "top_box")
+box.parm("sizex").setExpression("ch('/obj/proj_robust/project_core/length')")
+box.parm("sizey").set(0.05)
+box.parm("sizez").set(0.6)
+top.node("out_geometry").setInput(0, box)
+out = core.node("OUT")
+
+res = verify_robust(out.path(), core.path(), params=["length"])
+result["steps"]["pass_overall"] = res["passed"]
+pp = res["params"][0] if res.get("params") else {}
+result["steps"]["pass_param_passed"] = pp.get("passed")
+result["steps"]["pass_sample_values"] = [s["value"] for s in pp.get("samples", [])]
+result["steps"]["pass_sample_points"] = [s["points"] for s in pp.get("samples", [])]
+# Non-destructive: length restored to its original (1.2) after the sweep.
+result["steps"]["pass_length_after"] = core.parm("length").eval()
+
+# ── FAIL case: a component whose geometry VANISHES at the param's min. The
+# generator emits int(ch('n')) points; at n=0 → 0 points. verify_robust must
+# detect this fragility (the sample at n=0 fails). ──
+core2 = create_project_hda(name="proj_robust_fail")
+decl2 = empty_declaration("proj_robust_fail")
+add_design_param(decl2, "n", default=4.0, min=0.0, max=8.0, label="点数")
+add_component(decl2, "gen", purpose="生成器",
+    ports_out=[{"index": 0, "kind": "geometry"}])
+build_project_scaffold(core2, declaration=decl2)
+gen = core2.node("gen")
+b2 = gen.createNode("box", "src_box")
+b2.parm("sizex").set(0.1)
+wr = gen.createNode("attribwrangle", "emit_n")
+wr.parm("class").set("detail")
+wr.parm("snippet").set(
+    'int n = int(ch("/obj/proj_robust_fail/project_core/n"));\n'
+    'for (int i = npoints(geoself())-1; i>=0; i--) removepoint(geoself(), i);\n'
+    'for (int i = 0; i < n; i++) addpoint(geoself(), set(float(i)*0.1, 0, 0));\n')
+wr.setInput(0, b2)
+gen.node("out_geometry").setInput(0, wr)
+out2 = core2.node("OUT")
+
+res2 = verify_robust(out2.path(), core2.path(), params=["n"])
+result["steps"]["fail_overall"] = res2["passed"]
+pp2 = res2["params"][0] if res2.get("params") else {}
+result["steps"]["fail_sample_values"] = [s["value"] for s in pp2.get("samples", [])]
+result["steps"]["fail_sample_points"] = [s["points"] for s in pp2.get("samples", [])]
+result["steps"]["fail_sample_passed"] = [s["passed"] for s in pp2.get("samples", [])]
+
+print("RESULT_JSON:" + json.dumps(result))
+""" % (_REPO, _REPO)
+
+
+@unittest.skipUnless(HYTHON, "hython not installed")
+class TestVerifyRobustHython(unittest.TestCase):
+    """Phase 2: verify_robust — the range-sweep 'stable correct' gate."""
+
+    def _run(self):
+        proc = subprocess.run(
+            [HYTHON, "-c", _ROBUST_HARNESS],
+            capture_output=True, text=True, timeout=180, cwd=_REPO,
+            stdin=subprocess.DEVNULL)
+        combined = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 0,
+                         f"hython failed (rc={proc.returncode}):\n{combined[-2000:]}")
+        idx = combined.rfind("RESULT_JSON:")
+        self.assertGreater(idx, -1, f"no RESULT_JSON:\n{combined[-2000:]}")
+        return json.loads(combined[idx + len("RESULT_JSON:"):]), combined
+
+    def test_robust_model_passes_across_range(self):
+        """A box driven by 'length' stays non-degenerate at min/default/max →
+        verify_robust passes, every sample has points > 0."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertTrue(s["pass_overall"], f"robust model should pass: {res}")
+        self.assertTrue(s["pass_param_passed"])
+        # 3 samples (min/default/max), all non-zero geometry.
+        self.assertEqual(len(s["pass_sample_values"]), 3)
+        self.assertTrue(all(p > 0 for p in s["pass_sample_points"]),
+                        f"all samples should have geometry: {res}")
+
+    def test_non_destructive_restores_params(self):
+        """After the sweep, 'length' is restored to its original value (1.2)."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertAlmostEqual(s["pass_length_after"], 1.2, places=5,
+            msg="verify_robust must restore the param after the sweep")
+
+    def test_fragile_model_detected(self):
+        """A model whose geometry vanishes at n=0 → verify_robust fails, and
+        the n=0 sample specifically reports 0 points + passed:False."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertFalse(s["fail_overall"],
+                         f"fragile model (vanishes at n=0) should fail: {res}")
+        # The n=0 sample has 0 points and passed=False.
+        vals = s["fail_sample_values"]
+        pts = s["fail_sample_points"]
+        passed = s["fail_sample_passed"]
+        zero_idx = vals.index(0.0)
+        self.assertEqual(pts[zero_idx], 0,
+                         f"n=0 sample should have 0 points: {res}")
+        self.assertFalse(passed[zero_idx],
+                         f"n=0 sample should fail: {res}")
+
+
 if __name__ == "__main__":
     unittest.main()

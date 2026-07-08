@@ -256,6 +256,57 @@ export const verifyParametricTool = {
   },
 };
 
+export const verifyRobustTool = {
+  name: "verify_robust",
+  label: "Verify Robust (Range Sweep)",
+  description:
+    "Prove the model holds across the FULL valid range of its design params (the 'stable correct' guarantee). " +
+    "For each design param, samples at its declared min/default/max, recooks, and asserts the geometry stays " +
+    "non-degenerate + error-free at EVERY sample. Complementary to verify_parametric: that proves a param DRIVES " +
+    "the geometry (direction at one point); this proves the model HOLDS across the range (no zero-geometry / " +
+    "cook-error samples at the extremes). A model parametric at the default but broken at length=max is fragile — " +
+    "this catches it. Non-destructive (all params restored to originals after the sweep).",
+  promptSnippet: "Prove the model holds across each param's min/default/max range",
+  promptGuidelines: [
+    "The range-robustness gate: use AFTER verify_parametric proves a param drives the geometry, to confirm the model doesn't break at the param extremes (min/max).",
+    "Sweeps each design param through its declared min/default/max, recooking at each sample. A sample FAILS if geometry is zero/empty or cook errors appear.",
+    "params: omit to sweep ALL declared design_params, or pass a list of names to sweep a subset.",
+    "samples: 'min_default_max' (default, 3 samples) or 'min_max' (extremes only, 2 samples).",
+    "Returns passed:false + per-sample reasons when any sample degenerates — the model is fragile at that extreme (fix the ch() chain or clamp the param's declared min/max).",
+    "Non-destructive: params are isolated (each restored before sweeping the next) and all restored to originals at the end.",
+  ],
+  parameters: Type.Object({
+    node_path: Type.String({
+      description: "Full path of the SOP node whose geometry proves robustness (usually the project OUT node)",
+    }),
+    core_path: Type.String({
+      description: "Full path of the edini::project HDA core carrying the design params",
+    }),
+    params: Type.Optional(
+      Type.Array(Type.String(), {
+        description: "Design param names to sweep. Omit to sweep ALL declared design_params.",
+      })
+    ),
+    samples: Type.Optional(
+      Type.Union(
+        [Type.Literal("min_default_max"), Type.Literal("min_max")],
+        { description: "Sample mode: 'min_default_max' (default) or 'min_max' (extremes only)." }
+      )
+    ),
+  }),
+  async execute(
+    _toolCallId: string,
+    params: {
+      node_path: string;
+      core_path: string;
+      params?: string[];
+      samples?: "min_default_max" | "min_max";
+    }
+  ) {
+    return forwardTool("verify_robust", params);
+  },
+};
+
 export const commitSandboxTool = {
   name: "commit_sandbox",
   label: "Commit Houdini Sandbox",
@@ -481,6 +532,7 @@ export const harnessTools = [
   houdiniVerifyAsset,
   verifyOrientationTool,
   verifyParametricTool,
+  verifyRobustTool,
   commitSandboxTool,
   discardSandboxTool,
   // captureReviewTool is gated by EDINI_VISUAL_VERIFICATION (registered only
