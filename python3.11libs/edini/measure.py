@@ -1,4 +1,4 @@
-"""Geometry measurement layer — the core of rooted-modeling.
+"""Geometry measurement layer — oracle + shared measurement primitives.
 
 This module answers ONE question, the question the old declarative pipeline
 could not: *"Given a component that has already been built, where exactly does
@@ -27,6 +27,23 @@ Design contract
 - The library is deliberately SMALL and named by physical meaning. M0 ships
   bounding-box features (the common case); M1+ will add named anchors and
   face/edge sampling without changing the existing surface.
+
+Current role (post 2026-07-08 refactor)
+---------------------------------------
+The rooted-modeling assembly pipeline this module was the "core" of is retired
+(see docs/superpowers/plans/2026-07-08-procedural-agent-refactor.md Phase 0a).
+This module now serves TWO roles:
+
+1. ORACLE — the ``measure_*`` functions are Python reference implementations
+   used by ``tests/test_measure.py`` to verify ``vex_strategies`` VEX
+   point-by-point. They are NOT called at runtime.
+2. SHARED PRIMITIVES — ``vex_strategies`` (runtime) imports three helpers from
+   here: ``_parse_axes`` / ``_parse_face`` / ``_rule_rot``.
+
+This module is PURE PYTHON (no ``hou`` import at module level), so the runtime
+cost of the import is a one-time parse — negligible. Extracting the three
+primitives into a ``measure_primitives.py`` (to decouple runtime from the
+oracle module) is a Phase 4 candidate, deferred until the node_utils split.
 """
 from __future__ import annotations
 

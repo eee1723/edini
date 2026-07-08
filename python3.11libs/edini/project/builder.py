@@ -1029,13 +1029,16 @@ def emit_component(core_node: "hou.Node", component_id: str,
     """Build a component's geometry from an ARCHETYPE — the platform-layer
     alternative to hand-authoring step 3 with raw node tools.
 
-    Archetypes (each owns its nodes, idempotent, wired to out_geometry):
-      - ``box_panel``: a parametric box (tabletop / seat / panel). ``size`` is
-        ``[x, y, z]``, each a number or a design_param name (→ live ch() ref).
-        Optional ``markers`` forwards to :func:`emit_markers` after the geometry
-        is wired (so by_name anchors can pick precise assembly points).
+    Archetypes are declarative SPECS (data) under ``edini/project/archetypes/``,
+    realized by :mod:`edini.project.archetype_emitter` (adding one = adding a
+    spec module, zero emitter changes). The legacy hardcoded archetypes
+    (``copy_array`` / ``tube_graph``) are migrating to specs in Phase 2b and
+    fall through to the old code below until then.
 
-    (copy_array / tube_graph / extrude_profile archetypes land incrementally.)
+    Each archetype owns its nodes (deterministic names → idempotent rebuild),
+    wires them to ``out_geometry``, and references design params via RELATIVE
+    ``ch()`` (migratable across projects). Value convention: a size/position
+    component is a NUMBER (literal) or a STRING (design_param name → live ref).
 
     Args:
         core_node: the edini::project SOP HDA instance.
@@ -1045,247 +1048,17 @@ def emit_component(core_node: "hou.Node", component_id: str,
 
     Returns ``{success, archetype, component, nodes, markers_built?, project}``.
     """
-    subnet = core_node.node(component_id)
-    if subnet is None:
+    # All archetypes are declarative SPECS under edini/project/archetypes/,
+    # realized by the data-driven emitter (Phase 2b retired the last hardcoded
+    # archetype functions). Adding one = adding a spec module.
+    from edini.project.archetype_emitter import (load_spec,
+                                                 emit_component_from_spec,
+                                                 list_archetypes)
+    if load_spec(archetype) is None:
         return {"success": False,
-                "error": f"component subnet not found: {component_id}"}
-    params = params or {}
-    # Wrap the archetype build so a loud failure (e.g. _set_archetype_parm
-    # raising on an unsettable leaf parm — P0-2) surfaces as a clean
-    # {success: False, error} instead of a raw traceback.
-    try:
-        if archetype == "box_panel":
-            return _archetype_box_panel(core_node, subnet, params)
-        if archetype == "copy_array":
-            return _archetype_copy_array(core_node, subnet, params)
-        if archetype == "tube_graph":
-            return _archetype_tube_graph(core_node, subnet, params)
-        return {"success": False,
-                "error": f"unknown archetype {archetype!r}; supported: box_panel, "
-                         f"copy_array, tube_graph (extrude_profile lands incrementally)"}
-    except Exception as e:
-        return {"success": False,
-                "error": f"{archetype!r} archetype failed: {e}"}
-
-
-def _archetype_box_panel(core_node: "hou.Node", subnet: "hou.Node",
-                         params: dict) -> dict:
-    """A parametric box panel (tabletop / seat / shelf / slab).
-
-    params:
-      - size: ``[x, y, z]`` (each a number or a design_param name). Default
-        ``[1, 1, 1]``.
-      - markers: optional list of marker specs (forwarded to emit_markers AFTER
-        the box is wired, so markers are measured from the built panel and a
-        downstream by_name anchor picks them at real positions).
-
-    The box references design params via ABSOLUTE ch() to the core
-    (``ch('/obj/.../project_core/<p>')``) — the official parameterization path.
-    """
-    core_path = core_node.path()
-    out_geo = subnet.node(OUT_GEOMETRY_NODE)
-    if out_geo is None:
-        return {"success": False,
-                "error": f"out_geometry not found in {subnet.name()} (scaffold first)"}
-    size = params.get("size", [1, 1, 1])
-    if not isinstance(size, (list, tuple)) or len(size) != 3:
-        return {"success": False,
-                "error": "box_panel 'size' must be a 3-list [x, y, z] "
-                         "(each a number or a design_param name)"}
-    box = _arch_node(subnet, "box", "panel_box")
-    for axis, val in zip(("sizex", "sizey", "sizez"), size):
-        _set_archetype_parm(box, axis, val, core_path)
-    out_geo.setInput(0, box)
-    subnet.layoutChildren()
-
-    markers_built: list = []
-    markers = params.get("markers")
-    if markers:
-        mres = emit_markers(core_node, subnet.name(), markers)
-        if not mres.get("success"):
-            return mres
-        markers_built = mres.get("markers_built", [])
-
-    return {"success": True, "archetype": "box_panel",
-            "component": subnet.name(), "nodes": ["panel_box"],
-            "markers_built": markers_built, "project": core_path}
-
-
-def _archetype_copy_array(core_node: "hou.Node", subnet: "hou.Node",
-                          params: dict) -> dict:
-    """Stamp a leaf shape onto THIS component's consumed anchor points
-    (Copy-to-Points). The classic "legs / spokes / keys" component: declare
-    ports.in consuming an upstream component's anchors, then this archetype
-    builds the leaf once and stamps it at each anchor point.
-
-    params:
-      - leaf: ``{type, params}`` — a native SOP shape (box/tube/torus/...) where
-        ``params`` values are numbers or design_param names (→ ch() refs). Built
-        once; CTP stamps it at every consumed anchor point.
-      - The component's ``ports.in`` (declared at scaffold time) determines
-        WHICH anchor points are consumed — the scaffold already wired
-        ``in_<from>_<anchor>`` nulls carrying those points. This archetype
-        merges them into one cloud and CTPs the leaf onto it.
-
-    CTP reads ``@orient``/``@scale``/``@N`` on the anchor points (via
-    ``_init_copytopoints_attribs``) so a leaf can be oriented/scaled per-anchor
-    when the upstream emitted those attribs.
-    """
-    core_path = core_node.path()
-    out_geo = subnet.node(OUT_GEOMETRY_NODE)
-    if out_geo is None:
-        return {"success": False,
-                "error": f"out_geometry not found in {subnet.name()} (scaffold first)"}
-    leaf = params.get("leaf")
-    if not isinstance(leaf, dict) or not leaf.get("type"):
-        return {"success": False,
-                "error": "copy_array needs 'leaf': {type:'box'|'tube'|..., "
-                         "params:{parm: number|design_param_name}}"}
-
-    # Build the leaf shape (once).
-    leaf_node = _arch_node(subnet, leaf["type"], "array_leaf")
-    # tube defaults to 'Primitive' on H21 → a degenerate single prim; procedural
-    # workflows want Polygon (type=1). (Mirrors create_node / assembly_builder.)
-    if leaf["type"] == "tube" and "type" not in (leaf.get("params") or {}):
-        try:
-            leaf_node.parm("type").set(1)
-        except Exception:
-            pass
-    for pname, val in (leaf.get("params") or {}).items():
-        _set_archetype_parm(leaf_node, pname, val, core_path)
-
-    # Collect the consumed anchor points: the scaffold's in_<from>_<anchor> nulls.
-    in_nulls = [n for n in subnet.children()
-                if n.name().startswith("in_") and n.type().name() == "null"]
-    if not in_nulls:
-        return {"success": False,
-                "error": f"copy_array on {subnet.name()!r} found no consumed "
-                         f"anchors (in_<from>_<anchor> nulls). Declare ports.in "
-                         f"on the component and ensure the upstream emitted them."}
-    if len(in_nulls) == 1:
-        cloud = in_nulls[0]
-    else:
-        cloud = _arch_node(subnet, "merge", "array_cloud")
-        for i, n in enumerate(in_nulls):
-            cloud.setInput(i, n)
-
-    ctp = _arch_node(subnet, "copytopoints", "array_ctp")
-    ctp.setInput(0, leaf_node)
-    ctp.setInput(1, cloud)
-    # Make CTP read @orient/@scale/@N on the anchor points (per-anchor pose).
-    try:
-        from edini.node_utils import _init_copytopoints_attribs
-        _init_copytopoints_attribs(ctp)
-    except Exception:
-        pass
-    out_geo.setInput(0, ctp)
-    subnet.layoutChildren()
-
-    return {"success": True, "archetype": "copy_array",
-            "component": subnet.name(),
-            "nodes": ["array_leaf", "array_cloud" if len(in_nulls) > 1 else None,
-                      "array_ctp"],
-            "anchor_inputs": [n.name() for n in in_nulls],
-            "project": core_path}
-
-
-def _build_tube_graph_vex(tubes: list[dict]) -> str:
-    """Generate a detail-wrangle body that builds polyline edges between named
-    anchor points (a tube graph). Uses VEX (not a Python SOP) so there is ZERO
-    Python-SOP error surface (no bare-return / addAttrib-order / createPoint /
-    ch-vs-hou.ch pitfalls) — the whole reason tube_graph exists.
-
-    Each tube ``{a, b}`` becomes a block that finds the two ``@name`` points and
-    connects them with a polyline prim. The segment names are baked into the VEX
-    (the agent passes them at build; they are not free params).
-    """
-    lines = [
-        "// tube_graph: build polyline edges between named anchor points.",
-        "int __findpt(string nm) {",
-        "    for (int i = 0; i < npoints(geoself()); i++) {",
-        '        if (pointattrib(geoself(), "name", i, 0) == nm) return i;',
-        "    }",
-        "    return -1;",
-        "}",
-    ]
-    for seg in tubes:
-        a = seg.get("a")
-        b = seg.get("b")
-        if not a or not b:
-            continue
-        lines.append("{")
-        lines.append(f'    int ia = __findpt("{a}"); int ib = __findpt("{b}");')
-        lines.append("    if (ia >= 0 && ib >= 0) {")
-        lines.append('        int pr = addprim(geoself(), "polyline");')
-        lines.append("        addvertex(geoself(), pr, ia);")
-        lines.append("        addvertex(geoself(), pr, ib);")
-        lines.append("    }")
-        lines.append("}")
-    return "\n".join(lines)
-
-
-def _archetype_tube_graph(core_node: "hou.Node", subnet: "hou.Node",
-                          params: dict) -> dict:
-    """Build a tube graph (a frame / fork / handlebar): polyline edges between
-    THIS component's consumed anchor points, then PolyWire for thickness.
-
-    The classic "connected tubes" component (a bike frame: head_tube →
-    seat_tube → bottom_bracket). Declare ports.in consuming an upstream's named
-    markers, then this archetype connects them per the ``tubes`` spec.
-
-    Uses VEX (not a Python SOP) to build the edges — zero Python-SOP error
-    surface (the #1 step-3 failure mode this archetype exists to eliminate).
-
-    params:
-      - tubes: ``[{a: <anchor_name>, b: <anchor_name>}, ...]`` — the graph edges.
-        Each edge becomes a polyline between the two named anchor points.
-      - radius: a number or design_param name (→ ch() ref) for the PolyWire
-        tube thickness.
-    """
-    core_path = core_node.path()
-    out_geo = subnet.node(OUT_GEOMETRY_NODE)
-    if out_geo is None:
-        return {"success": False,
-                "error": f"out_geometry not found in {subnet.name()} (scaffold first)"}
-    tubes = params.get("tubes")
-    if not isinstance(tubes, list) or not tubes:
-        return {"success": False,
-                "error": "tube_graph needs 'tubes': [{a:<name>, b:<name>}, ...]"}
-
-    in_nulls = [n for n in subnet.children()
-                if n.name().startswith("in_") and n.type().name() == "null"]
-    if not in_nulls:
-        return {"success": False,
-                "error": f"tube_graph on {subnet.name()!r} found no consumed "
-                         f"anchors (in_<from>_<anchor> nulls). Declare ports.in "
-                         f"consuming the upstream's named markers."}
-    if len(in_nulls) == 1:
-        cloud = in_nulls[0]
-    else:
-        cloud = _arch_node(subnet, "merge", "tube_cloud")
-        for i, n in enumerate(in_nulls):
-            cloud.setInput(i, n)
-
-    wr = _arch_node(subnet, "attribwrangle", "tube_graph")
-    wr.parm("snippet").set(_build_tube_graph_vex(tubes))
-    wr.parm("class").set("detail")
-    wr.setInput(0, cloud)
-
-    pw = _arch_node(subnet, "polywire", "tube_thickness")
-    pw.setInput(0, wr)
-    radius = params.get("radius")
-    if radius is not None:
-        _set_archetype_parm(pw, "radius", radius, core_path)
-    out_geo.setInput(0, pw)
-    subnet.layoutChildren()
-
-    return {"success": True, "archetype": "tube_graph",
-            "component": subnet.name(),
-            "nodes": ["tube_cloud" if len(in_nulls) > 1 else None,
-                      "tube_graph", "tube_thickness"],
-            "segments": len(tubes),
-            "anchor_inputs": [n.name() for n in in_nulls],
-            "project": core_path}
+                "error": f"unknown archetype {archetype!r}; spec-backed: "
+                         f"{list_archetypes()}"}
+    return emit_component_from_spec(core_node, component_id, archetype, params)
 
 
 # ── Component snapshot/restore (Phase 5) ────────────────────────────

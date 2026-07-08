@@ -4,14 +4,14 @@ Verifies spec §8 steps 1-3, 5 (subnet structure, anchor consumption,
 idempotency). mock_hou cannot model subnet internal `output` nodes or
 multi-output-port formation, so these MUST run under real hython.
 
-Auto-discovers hython via the same _find_hython() as test_assembly_hython
-(覆盖两台开发机). Skips when not found.
+Auto-discovers hython via tests/_hython.py (shared with conftest's report
+header so a skipped decisive layer can't hide behind a passing mock count).
+Skips when not found — pass --edini-require-hython to fail loud instead.
 
 Run: py -3 -m pytest tests/test_project_hython.py -v
 """
 import json
 import os
-import shutil
 import subprocess
 import sys
 import unittest
@@ -23,41 +23,8 @@ from edini.project.ports import (  # noqa: E402
     TAG_COMPONENT_NODE, AXIS_BAKE_NODE, INPUT_FILTER_PREFIX,
 )
 
-_HOUDINI_CANDIDATES = [
-    r"C:\Program Files\Side Effects Software",  # 精创机
-    r"D:\houdini",                               # 另一台机
-    "/Applications/Houdini",
-    "/opt/hfs",
-]
+from _hython import HYTHON  # noqa: E402  (shared discovery; conftest reports availability)
 
-
-def _find_hython():
-    env = os.environ.get("EDINI_HYTHON") or os.environ.get("HYTHON")
-    if env and os.path.isfile(env):
-        return env
-    found = shutil.which("hython") or shutil.which("hython.exe")
-    if found:
-        return found
-    for base in _HOUDINI_CANDIDATES:
-        if not os.path.isdir(base):
-            continue
-        candidates = []
-        for exe in ("hython.exe" if os.name == "nt" else "hython",):
-            exe_path = os.path.join(base, "bin", exe)
-            if os.path.isfile(exe_path):
-                candidates.append(("0-direct", exe_path))
-        for name in os.listdir(base):
-            exe = os.path.join(base, name, "bin",
-                               "hython.exe" if os.name == "nt" else "hython")
-            if os.path.isfile(exe):
-                candidates.append((name, exe))
-        if candidates:
-            candidates.sort(reverse=True)
-            return candidates[0][1]
-    return None
-
-
-HYTHON = _find_hython()
 _REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 
@@ -2445,6 +2412,12 @@ emit_component(core, "top", "box_panel", {"size": ["length", "thickness", "width
 result["steps"]["c1_panel_box_count"] = sum(
     1 for n in top.children() if n.name() == "panel_box")
 
+# Bad size (2-list) → loud-fail (param_specs validation restores the old
+# _archetype_box_panel guard).
+res_bad = emit_component(core, "top", "box_panel", {"size": [1, 2]})
+result["steps"]["c1_bad_size_success"] = res_bad.get("success")
+result["steps"]["c1_bad_size_error"] = res_bad.get("error", "")
+
 # ── (2) box_panel WITH markers: forwards to emit_markers; a by_name anchor
 # then picks the marker at the real position. ──
 core2 = create_project_hda(name="proj_comp2")
@@ -2469,6 +2442,33 @@ oa = base.node("out_anchors")
 oa.cook(force=True)
 pts = [p for p in oa.geometry().points() if p.stringAttribValue("name") == "top_m"]
 result["steps"]["c2_marker_anchor_count"] = len(pts)
+
+# ── (3) extrude_profile: a parametric tube/pillar (radius + height). ──
+# Phase 2c: validates "add archetype = add a spec module, ZERO emitter change"
+# (extrude_profile reuses only node + wire_out + the tube tweak — no new op).
+core3 = create_project_hda(name="proj_comp3")
+decl3 = empty_declaration("proj_comp3")
+add_design_param(decl3, "radius", default=0.1, min=0.02, max=0.5, label="半径")
+add_design_param(decl3, "height", default=1.0, min=0.1, max=5.0, label="高")
+add_component(decl3, "pillar", purpose="柱", ports_out=[{"index": 0, "kind": "geometry"}])
+build_project_scaffold(core3, declaration=decl3)
+res3 = emit_component(core3, "pillar", "extrude_profile",
+    {"radius": "radius", "height": "height"})
+result["steps"]["c3_success"] = res3.get("success")
+result["steps"]["c3_error"] = res3.get("error", "")
+result["steps"]["c3_nodes"] = res3.get("nodes")
+tube = core3.node("pillar/profile_tube")
+result["steps"]["c3_rad1_at_default"] = tube.parm("rad1").eval() if tube else None
+result["steps"]["c3_height_at_default"] = tube.parm("height").eval() if tube else None
+out3 = core3.node("OUT")
+out3.cook(force=True)
+bb3 = out3.geometry().boundingBox()
+result["steps"]["c3_bbox_y_at_default"] = bb3.maxvec().y() - bb3.minvec().y()
+# LIVE: height 1.0 → 2.0 → bbox Y grows to ~2.0.
+core3.parm("height").set(2.0)
+out3.cook(force=True)
+bb4 = out3.geometry().boundingBox()
+result["steps"]["c3_bbox_y_at_H2"] = bb4.maxvec().y() - bb4.minvec().y()
 
 print("RESULT_JSON:" + json.dumps(result))
 """ % (_REPO, _REPO)
@@ -2522,6 +2522,35 @@ class TestEmitComponentHython(unittest.TestCase):
         s = res["steps"]
         self.assertGreaterEqual(s["c2_marker_anchor_count"], 1,
                                 f"by_name anchor should pick the forwarded marker: {res}")
+
+    def test_bad_size_fails_loudly(self):
+        """A size that isn't a 3-list is rejected (param_specs validation
+        restores the loud-fail the old _archetype_box_panel had — no silent
+        success on a malformed param)."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertFalse(s["c1_bad_size_success"],
+                         "bad size (2-list) should be rejected, not silently built")
+        self.assertIn("size", s["c1_bad_size_error"])
+
+    def test_extrude_profile_is_parametric(self):
+        """extrude_profile — a NEW archetype added as a SPEC ONLY (zero emitter
+        change, Phase 2c) — builds a tube whose rad1/height read the design
+        params via live ch(). Proves the spec format scales."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertTrue(s["c3_success"], f"extrude_profile failed: {s['c3_error']}")
+        self.assertEqual(s["c3_nodes"], ["profile_tube"])
+        self.assertAlmostEqual(s["c3_rad1_at_default"], 0.1, places=4)
+        self.assertAlmostEqual(s["c3_height_at_default"], 1.0, places=4)
+
+    def test_extrude_profile_tracks_param_live(self):
+        """height 1.0→2.0 grows the pillar's bbox Y to ~2.0 (LIVE ch() ref)."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertGreater(s["c3_bbox_y_at_H2"], s["c3_bbox_y_at_default"],
+                           "taller height should grow bbox Y")
+        self.assertAlmostEqual(s["c3_bbox_y_at_H2"], 2.0, places=3)
 
 
 # ── copy_array archetype (Phase 4.2): stamp a leaf onto consumed anchor points ──
@@ -3147,6 +3176,182 @@ class TestComponentSnapshotHython(unittest.TestCase):
         s = res["steps"]
         self.assertIn("top_1", s["s_list_ids"],
                       f"snapshot list should contain top_1: {res}")
+
+
+# =============================================================================
+# Phase 1c: project_finalize — the hard gate. Refuses to mark a project
+# complete until status is complete + verify_robust passes + verify_parametric
+# passes per design param. The structural cure for "declared done prematurely"
+# (the bike session log declared done after inspect_health without ever proving
+# parametricity). Escape hatch: acknowledge_skip + skip_reason (audited).
+# =============================================================================
+_FINALIZE_HARNESS = r"""
+import json, sys, os
+sys.path.insert(0, os.path.join(r"%s", "python3.11libs"))
+import hou
+_hda = os.path.join(r"%s", "otls", "edini_project.hda")
+if os.path.isfile(_hda):
+    hou.hda.installFile(_hda)
+from edini.project.state import (empty_declaration, add_component,
+                                 add_design_param, load_declaration)
+from edini.project.node import create_project_hda
+from edini.project.builder import build_project_scaffold
+from edini.node_utils import project_finalize
+
+result = {"steps": {}}
+
+# ── Project 1: robust parametric model (length drives sizex) ──
+core1 = create_project_hda(name="proj_final_ok")
+decl1 = empty_declaration("proj_final_ok")
+add_design_param(decl1, "length", default=1.0, min=0.5, max=3.0)
+add_component(decl1, "top", purpose="tabletop",
+    ports_out=[{"index": 0, "kind": "geometry"}])
+build_project_scaffold(core1, declaration=decl1)
+top1 = core1.node("top")
+box1 = top1.createNode("box", "top_box")
+box1.parm("sizex").setExpression("ch('/obj/proj_final_ok/project_core/length')")
+box1.parm("sizey").set(0.1)
+box1.parm("sizez").set(0.6)
+top1.node("out_geometry").setInput(0, box1)
+top1.layoutChildren()
+
+res_ok = project_finalize("/obj/proj_final_ok/project_core")
+result["steps"]["ok_success"] = res_ok["success"]
+result["steps"]["ok_finalized"] = res_ok["finalized"]
+result["steps"]["ok_failures"] = res_ok.get("failures", [])
+
+# ── Project 2: DEAD param (length declared but does NOT drive geometry) ──
+core2 = create_project_hda(name="proj_final_dead")
+decl2 = empty_declaration("proj_final_dead")
+add_design_param(decl2, "length", default=1.0, min=0.5, max=3.0)
+add_component(decl2, "top", purpose="tabletop",
+    ports_out=[{"index": 0, "kind": "geometry"}])
+build_project_scaffold(core2, declaration=decl2)
+top2 = core2.node("top")
+box2 = top2.createNode("box", "top_box")
+box2.parm("sizex").set(1.0)   # FIXED — length is a dead param
+box2.parm("sizey").set(0.1)
+box2.parm("sizez").set(0.6)
+top2.node("out_geometry").setInput(0, box2)
+top2.layoutChildren()
+
+res_dead = project_finalize("/obj/proj_final_dead/project_core")
+result["steps"]["dead_success"] = res_dead["success"]
+result["steps"]["dead_finalized"] = res_dead["finalized"]
+result["steps"]["dead_failures"] = res_dead.get("failures", [])
+_parametric = res_dead.get("checks", {}).get("parametric") or []
+result["steps"]["dead_parametric_passed"] = (
+    _parametric[0].get("passed") if _parametric else None)
+
+# ── Project 3: INCOMPLETE (legs component scaffolded but unbuilt) ──
+core3 = create_project_hda(name="proj_final_inc")
+decl3 = empty_declaration("proj_final_inc")
+add_design_param(decl3, "length", default=1.0, min=0.5, max=3.0)
+add_component(decl3, "top", purpose="tabletop",
+    ports_out=[{"index": 0, "kind": "geometry"}])
+add_component(decl3, "legs", purpose="legs",
+    ports_out=[{"index": 0, "kind": "geometry"}])
+build_project_scaffold(core3, declaration=decl3)
+top3 = core3.node("top")
+box3 = top3.createNode("box", "top_box")
+box3.parm("sizex").setExpression("ch('/obj/proj_final_inc/project_core/length')")
+box3.parm("sizey").set(0.1)
+box3.parm("sizez").set(0.6)
+top3.node("out_geometry").setInput(0, box3)
+top3.layoutChildren()
+# legs left empty (no geometry wired) → status incomplete
+
+res_inc = project_finalize("/obj/proj_final_inc/project_core")
+result["steps"]["inc_success"] = res_inc["success"]
+result["steps"]["inc_finalized"] = res_inc["finalized"]
+result["steps"]["inc_failures"] = res_inc.get("failures", [])
+
+# ── Skip path on the robust project ──
+res_skip = project_finalize("/obj/proj_final_ok/project_core",
+                            acknowledge_skip=True, skip_reason="testing the escape hatch")
+result["steps"]["skip_success"] = res_skip["success"]
+result["steps"]["skip_finalized"] = res_skip["finalized"]
+result["steps"]["skip_skipped"] = res_skip["skipped"]
+decl1_after = load_declaration(core1)
+result["steps"]["skip_log_count"] = sum(
+    1 for e in decl1_after.get("log", []) if e.get("kind") == "finalize_skip")
+
+res_skip_no_reason = project_finalize("/obj/proj_final_ok/project_core",
+                                      acknowledge_skip=True, skip_reason=None)
+result["steps"]["skip_noreason_success"] = res_skip_no_reason["success"]
+result["steps"]["skip_noreason_error"] = res_skip_no_reason.get("error", "")
+
+print("RESULT_JSON:" + json.dumps(result))
+""" % (_REPO, _REPO)
+
+
+@unittest.skipUnless(HYTHON, "hython not installed")
+class TestProjectFinalizeHython(unittest.TestCase):
+    """Phase 1c: project_finalize — the hard gate that refuses to mark a
+    project complete until verification passes (status + robust + parametric).
+    The structural cure for 'declared done prematurely'."""
+
+    def _run(self):
+        proc = subprocess.run(
+            [HYTHON, "-c", _FINALIZE_HARNESS],
+            capture_output=True, text=True, timeout=240, cwd=_REPO,
+            stdin=subprocess.DEVNULL)
+        combined = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 0,
+                         f"hython failed (rc={proc.returncode}):\n{combined[-2000:]}")
+        idx = combined.rfind("RESULT_JSON:")
+        self.assertGreater(idx, -1, f"no RESULT_JSON:\n{combined[-2000:]}")
+        return json.loads(combined[idx + len("RESULT_JSON:"):]), combined
+
+    def test_robust_model_finalizes(self):
+        """A parametric model (length drives sizex) passes all gates → finalized."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertTrue(s["ok_success"],
+                        f"robust model should finalize: {s['ok_failures']}")
+        self.assertTrue(s["ok_finalized"])
+        self.assertEqual(s["ok_failures"], [])
+
+    def test_dead_param_is_caught(self):
+        """A design param that does NOT drive geometry (sizex fixed) fails the
+        parametric gate. verify_robust alone would miss it (geometry stays
+        non-degenerate across the range), so the per-param verify_parametric
+        gate is essential — this is the whole reason finalize runs BOTH."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertFalse(s["dead_success"], "dead param should NOT finalize")
+        self.assertFalse(s["dead_finalized"])
+        self.assertFalse(s["dead_parametric_passed"],
+                         "verify_parametric should detect the dead param")
+        self.assertTrue(any("length" in f for f in s["dead_failures"]),
+                        f"failures should name 'length': {s['dead_failures']}")
+
+    def test_incomplete_model_is_caught(self):
+        """A project with an unbuilt component (legs empty) fails the status gate."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertFalse(s["inc_success"], "incomplete project should NOT finalize")
+        self.assertFalse(s["inc_finalized"])
+        self.assertTrue(any("legs" in f for f in s["inc_failures"]),
+                        f"failures should name 'legs': {s['inc_failures']}")
+
+    def test_acknowledge_skip_bypasses_and_audits(self):
+        """acknowledge_skip + skip_reason bypasses verify and audits the log."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertTrue(s["skip_success"])
+        self.assertTrue(s["skip_finalized"])
+        self.assertTrue(s["skip_skipped"])
+        self.assertGreaterEqual(s["skip_log_count"], 1,
+                                "skip should append a finalize_skip log entry")
+
+    def test_acknowledge_skip_requires_reason(self):
+        """acknowledge_skip without skip_reason is refused — the 'right door'
+        still requires stating why (don't let the escape become a loophole)."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertFalse(s["skip_noreason_success"])
+        self.assertIn("skip_reason", s["skip_noreason_error"])
 
 
 if __name__ == "__main__":

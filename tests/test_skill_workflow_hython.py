@@ -12,44 +12,14 @@ Run: py -3 -m pytest tests/test_skill_workflow_hython.py -v -s
 """
 import json
 import os
-import shutil
 import subprocess
 import sys
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "python3.11libs"))
 
-_HOUDINI_CANDIDATES = [
-    r"C:\Program Files\Side Effects Software",
-    r"D:\houdini",
-    "/Applications/Houdini",
-    "/opt/hfs",
-]
+from _hython import HYTHON  # noqa: E402  (shared discovery; conftest reports availability)
 
-
-def _find_hython():
-    env = os.environ.get("EDINI_HYTHON") or os.environ.get("HYTHON")
-    if env and os.path.isfile(env):
-        return env
-    found = shutil.which("hython") or shutil.which("hython.exe")
-    if found:
-        return found
-    for base in _HOUDINI_CANDIDATES:
-        if not os.path.isdir(base):
-            continue
-        for exe in ("hython.exe" if os.name == "nt" else "hython",):
-            exe_path = os.path.join(base, "bin", exe)
-            if os.path.isfile(exe_path):
-                return exe_path
-        for name in os.listdir(base):
-            exe = os.path.join(base, name, "bin",
-                               "hython.exe" if os.name == "nt" else "hython")
-            if os.path.isfile(exe):
-                return exe
-    return None
-
-
-HYTHON = _find_hython()
 _REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 # The harness mirrors the SKILL.md 4-step workflow exactly. __REPO__ is the

@@ -4395,3 +4395,182 @@ def project_status(core_path: str) -> dict[str, Any]:
                 "error": f"{e}\n{traceback.format_exc()}"}
 
 
+def _finalize_perturbation(p: dict, current: float) -> float:
+    """Pick a ``verify_parametric`` new_value for a design param: a value
+    meaningfully different from its CURRENT value (so verify_parametric's
+    no-op guard doesn't reject it), preferring the declared max, then min,
+    then current*1.5 (or +1 if current is 0)."""
+    try:
+        cur = float(current)
+    except (TypeError, ValueError):
+        cur = 1.0
+    for key in ("max", "min"):
+        v = p.get(key)
+        if v is None:
+            continue
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            continue
+        if abs(fv - cur) > 1e-9:
+            return fv
+    return cur * 1.5 if cur != 0 else 1.0
+
+
+def project_finalize(
+    core_path: str,
+    acknowledge_skip: bool = False,
+    skip_reason: str | None = None,
+    samples: str = "min_default_max",
+) -> dict[str, Any]:
+    """Hard gate: refuse to mark a project complete until it passes verification.
+
+    The structural enforcement of the "don't declare done prematurely" rule.
+    ``verify_parametric`` / ``verify_robust`` are TOOLS the agent could skip
+    (the road-bike session log did exactly that — declared done after
+    ``inspect_health``'s ``overall_ok``, never verified parametricity).
+    ``project_finalize`` is a GATE: it runs the verification itself and refuses
+    to mark complete on failure. The only way past without passing is an
+    explicit ``acknowledge_skip=True`` + non-empty ``skip_reason`` (audited to
+    the declaration log) — the "open the right door" principle from
+    pitfalls.md (refuse the wrong action, but leave a correct channel).
+
+    Runs, in order:
+      1. ``project_status`` — every declared component complete (geo_flow ok,
+         no missing anchors, no errors)?
+      2. ``verify_robust`` — the model holds (non-degenerate + error-free)
+         across every design_param's min/default/max?
+      3. ``verify_parametric`` per design_param — each param actually DRIVES
+         the geometry (not a dead param that passes robust vacuously).
+
+    If the project has NO design_params, steps 2-3 are N/A (a static model has
+    nothing parametric to prove) and finalize proceeds on step 1 alone — this
+    is NOT a skip and needs no ``acknowledge_skip``.
+
+    Args:
+        core_path: the edini::project SOP HDA instance path.
+        acknowledge_skip: bypass running verification. Requires ``skip_reason``.
+            Use only when verification genuinely can't run (e.g. an intentionally
+            non-parametric study). The skip is audited to the declaration log.
+        skip_reason: required when ``acknowledge_skip=True``; why verify is skipped.
+        samples: passed through to ``verify_robust`` ("min_default_max" | "min_max").
+
+    Returns:
+        ``{success, finalized, core_path, checks:{status, robust, parametric},
+        failures:[...], skipped, skip_reason}``. ``success=True`` iff finalized
+        (all gates passed OR ``acknowledge_skip`` was used correctly).
+    """
+    try:
+        core = hou.node(core_path)
+        if core is None:
+            return {"success": False, "error": f"Core not found: {core_path}"}
+
+        from edini.project.state import (load_declaration, save_declaration,
+                                         append_log)
+
+        # ── SKIP path: explicit acknowledgement, audited to the log ──
+        if acknowledge_skip:
+            if not (skip_reason and skip_reason.strip()):
+                return {"success": False,
+                        "error": ("acknowledge_skip=True requires a non-empty "
+                                  "skip_reason (the 'right door' — state WHY "
+                                  "verification is skipped).")}
+            decl = load_declaration(core)
+            append_log(decl, kind="finalize_skip",
+                       summary=f"finalized without verification: {skip_reason.strip()}",
+                       payload={"skip_reason": skip_reason.strip()},
+                       result_ok=True)
+            save_declaration(core, decl)
+            return {"success": True, "finalized": True, "skipped": True,
+                    "skip_reason": skip_reason.strip(), "core_path": core_path,
+                    "checks": {}, "failures": []}
+
+        failures: list[str] = []
+        checks: dict[str, Any] = {}
+
+        # ── Gate 1: completeness (project_status) ──
+        status = project_status(core_path)
+        checks["status"] = status
+        if not status.get("success"):
+            failures.append(f"project_status failed to run: {status.get('error')}")
+        else:
+            incomplete = status.get("overall", {}).get("incomplete", [])
+            if incomplete:
+                failures.append(
+                    f"components not complete: {incomplete} (geo_flow/anchors/"
+                    f"errors — see project_status). Build or fix them first.")
+            elif status.get("overall", {}).get("with_errors", 0):
+                failures.append("a component has cook errors (see project_status).")
+
+        # ── Resolve the project OUT node (verify reads its geometry) ──
+        out_node = core.node("OUT")
+        if out_node is None:
+            failures.append("project OUT node not found on the core "
+                            "(re-run project_build_scaffold).")
+
+        decl = load_declaration(core)
+        design_params = decl.get("design_params", []) or []
+
+        # ── Gates 2 & 3: parametric verification (only if design params exist) ──
+        if not design_params:
+            checks["robust"] = None
+            checks["parametric"] = None
+            checks["note"] = ("no design_params declared — parametric gates "
+                               "(robust/parametric) are N/A, not skipped.")
+        elif out_node is not None:
+            out_path = out_node.path()
+
+            # Gate 2: robust across the declared range.
+            robust = verify_robust(out_path, core_path, samples=samples)
+            checks["robust"] = robust
+            if not robust.get("success"):
+                failures.append(f"verify_robust did not run: {robust.get('error')}")
+            elif not robust.get("passed"):
+                bad = [p.get("name") for p in robust.get("params", [])
+                       if not p.get("passed")]
+                failures.append(f"verify_robust FAILED for params: {bad} "
+                                f"(model degenerates or errors across the range).")
+
+            # Gate 3: each param actually drives the geometry (not a dead param).
+            parametric_results: list[dict] = []
+            for p in design_params:
+                pname = p.get("name")
+                parm = core.parm(pname) if pname else None
+                if parm is None:
+                    failures.append(f"design param {pname!r} not found on the core "
+                                    f"(re-run project_build_scaffold).")
+                    continue
+                new_value = _finalize_perturbation(p, parm.eval())
+                pr = verify_parametric(out_path, core_path, pname, new_value)
+                pr["_param"] = pname
+                parametric_results.append(pr)
+                if not pr.get("success"):
+                    failures.append(f"verify_parametric did not run for "
+                                    f"{pname!r}: {pr.get('error')}")
+                elif not pr.get("passed"):
+                    failures.append(f"verify_parametric FAILED for {pname!r}: "
+                                    f"param does not drive the geometry "
+                                    f"(dead param? broken ch() ref?).")
+            checks["parametric"] = parametric_results
+
+        # ── Decide ──
+        if failures:
+            return {"success": False, "finalized": False, "core_path": core_path,
+                    "checks": checks, "failures": failures, "skipped": False}
+
+        # All green — audit the finalize to the log.
+        decl = load_declaration(core)
+        append_log(decl, kind="finalize",
+                   summary=("passed all gates: status complete"
+                            + (f" + robust + parametric over {len(design_params)} "
+                               f"param(s)" if design_params else " (no design_params)")),
+                   payload={"design_params": [p.get("name") for p in design_params]},
+                   result_ok=True)
+        save_declaration(core, decl)
+        return {"success": True, "finalized": True, "core_path": core_path,
+                "checks": checks, "failures": [], "skipped": False}
+    except Exception as e:
+        return {"success": False,
+                "error": f"{e}\n{traceback.format_exc()}"}
+
+

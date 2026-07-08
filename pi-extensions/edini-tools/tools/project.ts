@@ -97,31 +97,6 @@ export const projectTools = [
     },
   },
   {
-    name: "project_promote_params",
-    label: "Promote Component Params",
-    description:
-      "Promote all component subnets' spare parms to the Project HDA core's top-level interface. " +
-      "LEGACY/bottom-up path: under the official design_params path (Step 2b), geometry references core parms " +
-      "directly via absolute ch(), so you never create subnet spare parms and this returns promoted:[] (correct, " +
-      "not a failure). Only relevant if you took the bottom-up path of building subnet spare parms. The LIVE " +
-      "guarantee is now checked by verify_parametric, not promote.",
-    promptSnippet: "Promote subnet spare parms to core (legacy bottom-up path)",
-    promptGuidelines: [
-      "Under the design_params path (Step 2b), this returns promoted:[] — that is CORRECT, not a failure. The design params already live on the core and geometry already references them.",
-      "Do NOT call promote expecting it to fix parametricity. Use verify_parametric to prove a param reaches the geometry.",
-      "Only relevant if you built subnet spare parms (the legacy bottom-up path Step 3 no longer teaches).",
-      "Requires core_path (the edini::project SOP HDA instance).",
-    ],
-    parameters: Type.Object({
-      core_path: Type.String({
-        description: "Path to the edini::project SOP HDA instance (e.g. /obj/project_table/project_core).",
-      }),
-    }),
-    async execute(_id: string, params: { core_path: string }) {
-      return forwardTool("project_promote_params", params);
-    },
-  },
-  {
     name: "project_repath_to_relative",
     label: "Repath Component ch() to Relative",
     description:
@@ -234,7 +209,8 @@ export const projectTools = [
       "params.leaf={type, params:{parm: number|design_param_name}}; the component's declared ports.in determines which anchors are consumed. " +
       "'tube_graph' — build a tube graph (frame/fork/handlebar): polyline edges between the component's consumed named anchors, then PolyWire " +
       "for thickness. params.tubes=[{a:<name>,b:<name>},...] + params.radius (number or design_param name). Uses VEX — zero Python-SOP error surface. " +
-      "(extrude_profile archetype lands incrementally.) " +
+      "'extrude_profile' — a parametric tube/pillar (columns/handles/cylinders): params.radius + params.height " +
+      "(each a number or design_param name). " +
       "Prefer this over hand-building for any component that matches an archetype — it eliminates the recurring " +
       "step-3 errors (return/addAttrib/createPoint/ch-vs-hou.ch).",
     promptSnippet: "Build a component from a named archetype (box_panel/...) instead of raw nodes",
@@ -249,7 +225,7 @@ export const projectTools = [
       core_path: Type.String({ description: "Path to the edini::project SOP HDA instance." }),
       component_id: Type.String({ description: "The component subnet to build inside." }),
       archetype: Type.String({
-        description: "Archetype name: 'box_panel' (others — copy_array/tube_graph/extrude_profile — land incrementally).",
+        description: "Archetype name: 'box_panel' | 'copy_array' | 'tube_graph' | 'extrude_profile'.",
       }),
       params: Type.Optional(
         Type.Object({}, { additionalProperties: true, description:
@@ -285,6 +261,44 @@ export const projectTools = [
     }),
     async execute(_id: string, params: { core_path: string }) {
       return forwardTool("project_status", params);
+    },
+  },
+  {
+    name: "project_finalize",
+    label: "Finalize Project (Hard Verify Gate)",
+    description:
+      "Hard gate that refuses to mark a Project HDA complete until it passes verification. " +
+      "Runs project_status (every component complete?) + verify_robust (model holds across every " +
+      "design_param's min/default/max?) + verify_parametric per design_param (each param actually " +
+      "drives the geometry?). Returns {success, finalized, failures:[...]} — a non-empty failures list " +
+      "means the project is NOT complete (fix the named issues; do NOT just re-declare done). This is " +
+      "the structural cure for 'declared done prematurely' (declaring complete after inspect_health " +
+      "without ever proving parametricity). ESCAPE HATCH: if verification genuinely cannot run, pass " +
+      "acknowledge_skip=true + a non-empty skip_reason; the skip is audited to the project's declaration " +
+      "log. A project with NO design_params finalizes on status completeness alone (parametric gates " +
+      "are N/A, not skipped).",
+    promptSnippet: "Gate the project complete on verification passing",
+    promptGuidelines: [
+      "Call project_finalize as the LAST step before reporting a Project HDA model as done — it is the hard gate that proves 'done' means 'parametric + robust + complete'.",
+      "It runs verification itself (you do not call verify_parametric/verify_robust separately for finalize); on failure it returns a failures[] list naming exactly what to fix.",
+      "On failure: FIX the named issues, then re-finalize. Do NOT re-declare done, and do NOT use acknowledge_skip to bypass a real failure.",
+      "acknowledge_skip=true + skip_reason is ONLY for when verification genuinely can't run (e.g. an intentionally non-parametric study); the skip is recorded in the project log. Using it to bypass a failure defeats the gate.",
+      "A project with no design_params finalizes on status completeness alone — no acknowledge_skip needed for that.",
+    ],
+    parameters: Type.Object({
+      core_path: Type.String({ description: "Path to the edini::project SOP HDA instance." }),
+      acknowledge_skip: Type.Optional(Type.Boolean({
+        description: "Bypass running verification (requires skip_reason). Audited to the declaration log. Use ONLY when verify genuinely can't run, never to bypass a real failure.",
+      })),
+      skip_reason: Type.Optional(Type.String({
+        description: "Required when acknowledge_skip=true: why verification is skipped.",
+      })),
+      samples: Type.Optional(Type.String({
+        description: "verify_robust sampling: 'min_default_max' (default) or 'min_max'.",
+      })),
+    }),
+    async execute(_id: string, params: { core_path: string; acknowledge_skip?: boolean; skip_reason?: string; samples?: string }) {
+      return forwardTool("project_finalize", params);
     },
   },
   {

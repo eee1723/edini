@@ -168,7 +168,7 @@ node versions, missing connections) without bounding what you can create.
 
 | Task | Preferred approach |
 |---|---|
-| **Any multi-part model (table=top+legs, car=body+wheels, keyboard=tray+keys)** | **Project HDA component pipeline** (read the project-modeling skill): project_create → declare components + anchors → project_build_scaffold → model in subnets (measure anchors) → promote_params |
+| **Any multi-part model (table=top+legs, car=body+wheels, keyboard=tray+keys)** | **Project HDA component pipeline** (read the project-modeling skill): project_create → declare components + anchors → project_build_scaffold → model in subnets (measure anchors) → verify_parametric |
 | Geometry that matches a recipe's intent (tube, copy, extrude...) | **recipe_list** → **recipe_read** → study the python_script → author your own network (adapt freely) |
 | Want a quick faithful copy of an existing recipe verbatim | **recipe_rebuild** (the optional deterministic-copy path) |
 | Single-piece generator / parametric surface | houdini_run_python_sandbox (single-SOP) |
@@ -204,10 +204,14 @@ ${vv ? `4. houdini_capture_review with views=['perspective','top','front','right
 path; geometry lives inside component subnets (each has out_geometry → output_0).
 Feed the core's OUT to steps 1/3/4. Anchors must be MEASURED from geometry via
 project_add_anchors (never hardcoded — the platform guard refuses with 'measure
-violation'). After modeling + promote_params, VERIFY the live guarantee: set one
-of the promoted parms on the core to a new value, re-cook, and confirm the
-geometry updated (the two-layer ch() chain should propagate). Only consider the
-model done once the live tweak works.
+violation'). After modeling, VERIFY the live guarantee: set one of the core's
+design params to a new value, re-cook, and confirm the geometry updated (the
+two-layer ch() chain should propagate). Then call **project_finalize** as the
+HARD GATE before declaring the model done — it runs project_status +
+verify_robust + verify_parametric itself and refuses to mark complete on
+failure (returns a failures[] list naming what to fix; fix them, do NOT just
+re-declare done). Only consider the model done once project_finalize returns
+finalized:true (or you used acknowledge_skip with a real reason).
 ${vv ? `
 
 --- BEGIN PROCEDURAL_VERIFY_PROMPT ---

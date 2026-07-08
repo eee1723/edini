@@ -26,6 +26,7 @@ from edini.node_utils import (
     verify_robust,
     repath_to_relative,
     project_status,
+    project_finalize,
 )
 from edini import screenshots
 from edini.config import _load_edini_settings
@@ -36,7 +37,6 @@ from edini.harness import (
     commit_sandbox,
     discard_sandbox,
     dump_parm_catalog,
-    add_parm,
     _create_sandbox_root,
 )
 from edini.recipe_library import (
@@ -69,9 +69,11 @@ from edini.project.guards import lint_wrangle_snippet
 #      (Root/Measure/Mount/Shape build) is gone. See docs/superpowers/plans/
 #      2026-07-08-procedural-agent-refactor.md Phase 0a.
 # None is imported here. harness.py (sandbox/commit lifecycle) is kept live for
-# the project-modeling skill. exprs.py is retained only for its own tests — the
-# project pipeline uses Houdini's native ch() expressions, not a custom engine
-# (exprs retirement is a Phase 0b candidate).
+# the project-modeling skill. exprs.py was retired in Phase 0b (the project
+# pipeline uses Houdini's native ch() expressions, not a custom engine); it is
+# gone, not retained. add_parm was removed from TOOL_HANDLERS in Phase 1b (no TS
+# tool exposed it; the official design_params path forbids subnet spare parms,
+# so it was dead agent surface — the function stays in harness.py for internal use).
 
 # Knowledge and eval handlers (available only in Houdini runtime)
 try:
@@ -531,15 +533,6 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     "edini_get_eval_stats": lambda **kw: _edini_get_eval_stats(
         period=kw.get("period", 10),
     ),
-    "add_parm": lambda **kw: add_parm(
-        node_path=kw["node_path"],
-        name=kw["name"],
-        type=kw.get("type", "float"),
-        default=kw.get("default", 0.0),
-        min=kw.get("min", 0.0),
-        max=kw.get("max", 10.0),
-        label=kw.get("label", ""),
-    ),
     "recipe_list": lambda **kw: recipe_list(
         query=kw.get("query", ""),
         category=kw.get("category", ""),
@@ -577,6 +570,16 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     # One-shot per-component completion snapshot (geo_flow / anchors emitted /
     # errors). Replaces the N-tool status-gathering loop with a single call.
     "project_status": lambda **kw: project_status(kw["core_path"]),
+    # Hard gate: refuse to mark the project complete until it passes
+    # verification (status complete + verify_robust + verify_parametric per
+    # design param). The structural cure for "declared done prematurely"
+    # (bike session log). acknowledge_skip + skip_reason is the audited escape.
+    "project_finalize": lambda **kw: project_finalize(
+        kw["core_path"],
+        acknowledge_skip=kw.get("acknowledge_skip", False),
+        skip_reason=kw.get("skip_reason"),
+        samples=kw.get("samples", "min_default_max"),
+    ),
 }
 
 # Backward-compatibility tool aliases (pre-Task-7 rename).
