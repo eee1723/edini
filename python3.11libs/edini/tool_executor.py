@@ -49,7 +49,7 @@ from edini.recipe_library import (
     create_recipe_manager,
     set_node_notes,
 )
-from edini.project.builder import build_project_scaffold, promote_params, add_anchors, emit_markers
+from edini.project.builder import build_project_scaffold, promote_params, add_anchors, emit_markers, emit_component
 from edini.project.guards import lint_wrangle_snippet
 
 # NOTE: Three procedural pipelines are archived under _disabled_backup/:
@@ -257,6 +257,29 @@ def _project_emit_markers(core_path: str | None = None,
         if node is None:
             return {"success": False, "error": f"core node not found: {core_path}"}
         return emit_markers(node, component_id, markers)
+    except Exception as e:
+        import traceback
+        return {"success": False, "error": str(e),
+                "traceback": traceback.format_exc()}
+
+
+def _project_emit_component(core_path: str | None = None,
+                            component_id: str | None = None,
+                            archetype: str | None = None,
+                            params: dict | None = None, **_) -> dict[str, Any]:
+    """Build a component's geometry from an ARCHETYPE (box_panel/...)."""
+    if not core_path:
+        return {"success": False, "error": "'core_path' is required"}
+    if not component_id:
+        return {"success": False, "error": "'component_id' is required"}
+    if not archetype:
+        return {"success": False, "error": "'archetype' is required (e.g. 'box_panel')"}
+    try:
+        import hou
+        node = hou.node(core_path)
+        if node is None:
+            return {"success": False, "error": f"core node not found: {core_path}"}
+        return emit_component(node, component_id, archetype, params or {})
     except Exception as e:
         import traceback
         return {"success": False, "error": str(e),
@@ -485,6 +508,7 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     "project_promote_params": lambda **kw: _project_promote_params(**kw),
     "project_add_anchors": lambda **kw: _project_add_anchors(**kw),
     "project_emit_markers": lambda **kw: _project_emit_markers(**kw),
+    "project_emit_component": lambda **kw: _project_emit_component(**kw),
     # One-shot per-component completion snapshot (geo_flow / anchors emitted /
     # errors). Replaces the N-tool status-gathering loop with a single call.
     "project_status": lambda **kw: project_status(kw["core_path"]),

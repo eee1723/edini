@@ -218,6 +218,45 @@ export const projectTools = [
     },
   },
   {
+    name: "project_emit_component",
+    label: "Emit Component from Archetype",
+    description:
+      "Build a component's geometry from an ARCHETYPE — the platform-layer alternative to hand-authoring step 3 " +
+      "with raw create_node/set_param (the #1 source of step-3 failures: Python SOP errors, wrong parm names, " +
+      "broken ch() refs). Each archetype owns its nodes (deterministic names, idempotent), wires them to " +
+      "out_geometry, and references design params via absolute ch(). Value convention: a size/position component " +
+      "is a NUMBER (literal) or a STRING (a design_param name → live ch() ref). " +
+      "ARCHETYPES: 'box_panel' — a parametric box (tabletop/seat/panel): params.size=[x,y,z] (each a number or " +
+      "design_param name); optional params.markers (list, forwarded to project_emit_markers after the box is " +
+      "wired, so by_name anchors pick precise assembly points). " +
+      "(copy_array / tube_graph / extrude_profile archetypes land incrementally.) " +
+      "Prefer this over hand-building for any component that matches an archetype — it eliminates the recurring " +
+      "step-3 errors (return/addAttrib/createPoint/ch-vs-hou.ch).",
+    promptSnippet: "Build a component from a named archetype (box_panel/...) instead of raw nodes",
+    promptGuidelines: [
+      "Use project_emit_component for any component matching an archetype, BEFORE reaching for raw houdini_create_node/set_param.",
+      "box_panel: params={size:[x,y,z]} where each is a number OR a design_param name (e.g. size:['length','thickness','width'] → sizex=ch(length), sizey=ch(thickness), sizez=ch(width)).",
+      "box_panel params.markers: optional list of {name, measure, ...} forwarded to project_emit_markers AFTER the box is wired — so a downstream by_name anchor picks precise assembly points (e.g. leg mount corners).",
+      "Idempotent: re-running with the same archetype rebuilds the chain (deterministic node names), so you can tweak size/markers and re-run safely.",
+      "Only hand-build with raw node tools when NO archetype fits (then follow COMPONENT_TEMPLATE.md's Python SOP skeleton).",
+    ],
+    parameters: Type.Object({
+      core_path: Type.String({ description: "Path to the edini::project SOP HDA instance." }),
+      component_id: Type.String({ description: "The component subnet to build inside." }),
+      archetype: Type.String({
+        description: "Archetype name: 'box_panel' (others — copy_array/tube_graph/extrude_profile — land incrementally).",
+      }),
+      params: Type.Optional(
+        Type.Object({}, { additionalProperties: true, description:
+          "Archetype-specific params. box_panel: {size:[x,y,z]} (each a number or design_param name); " +
+          "optional {markers:[{name,measure,...}]}." })
+      ),
+    }),
+    async execute(_id: string, params: { core_path: string; component_id: string; archetype: string; params?: Record<string, unknown> }) {
+      return forwardTool("project_emit_component", params);
+    },
+  },
+  {
     name: "project_status",
     label: "Project Completion Status",
     description:

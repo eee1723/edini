@@ -2390,5 +2390,139 @@ class TestVerifyRobustHython(unittest.TestCase):
                          f"n=0 sample should fail: {res}")
 
 
+# =============================================================================
+# Phase 4: project_emit_component — build a component from an ARCHETYPE.
+# box_panel: a parametric box referencing design params (the platform-layer
+# alternative to hand-authoring step 3 with raw create_node/set_param).
+# =============================================================================
+
+_COMPONENT_HARNESS = r"""
+import json, sys, os
+sys.path.insert(0, os.path.join(r"%s", "python3.11libs"))
+import hou
+_hda = os.path.join(r"%s", "otls", "edini_project.hda")
+if os.path.isfile(_hda):
+    hou.hda.installFile(_hda)
+from edini.project.state import empty_declaration, add_component, add_design_param
+from edini.project.node import create_project_hda
+from edini.project.builder import build_project_scaffold, emit_component, add_anchors
+
+result = {"steps": {}}
+
+# ── (1) box_panel: sizex=length, sizey=thickness, sizez=width. Parametric + idempotent. ──
+core = create_project_hda(name="proj_comp")
+decl = empty_declaration("proj_comp")
+add_design_param(decl, "length", default=1.2, min=0.4, max=3.0, label="长")
+add_design_param(decl, "thickness", default=0.05, min=0.01, max=0.2, label="厚")
+add_design_param(decl, "width", default=0.6, min=0.3, max=1.5, label="宽")
+add_component(decl, "top", purpose="桌面", ports_out=[{"index": 0, "kind": "geometry"}])
+build_project_scaffold(core, declaration=decl)
+
+res = emit_component(core, "top", "box_panel",
+    {"size": ["length", "thickness", "width"]})
+result["steps"]["c1_success"] = res.get("success")
+result["steps"]["c1_nodes"] = res.get("nodes")
+
+top = core.node("top")
+box = top.node("panel_box")
+result["steps"]["c1_sizex_at_default"] = box.parm("sizex").eval() if box else None
+result["steps"]["c1_sizey_at_default"] = box.parm("sizey").eval() if box else None
+
+out = core.node("OUT")
+out.cook(force=True)
+bb = out.geometry().boundingBox()
+result["steps"]["c1_out_bbox_x_at_default"] = bb.maxvec().x() - bb.minvec().x()
+
+# LIVE: length 1.2 → 2.0. box sizex + OUT bbox X follow.
+core.parm("length").set(2.0)
+out.cook(force=True)
+result["steps"]["c1_sizex_at_L2"] = box.parm("sizex").eval() if box else None
+bb2 = out.geometry().boundingBox()
+result["steps"]["c1_out_bbox_x_at_L2"] = bb2.maxvec().x() - bb2.minvec().x()
+
+# Idempotency: re-run — still 1 panel_box (rebuilt, not duplicated).
+emit_component(core, "top", "box_panel", {"size": ["length", "thickness", "width"]})
+result["steps"]["c1_panel_box_count"] = sum(
+    1 for n in top.children() if n.name() == "panel_box")
+
+# ── (2) box_panel WITH markers: forwards to emit_markers; a by_name anchor
+# then picks the marker at the real position. ──
+core2 = create_project_hda(name="proj_comp2")
+decl2 = empty_declaration("proj_comp2")
+add_design_param(decl2, "height", default=1.0, min=0.1, max=5.0, label="高")
+add_component(decl2, "base", purpose="基座",
+    ports_out=[{"index": 0, "kind": "geometry"},
+               {"index": 1, "kind": "anchors", "points": [
+                   {"name": "top_m", "role": "mount"}]}])
+build_project_scaffold(core2, declaration=decl2)
+# box spanning 0..height (sizey=height, centery=height/2) + a top marker in ONE call.
+emit_component(core2, "base", "box_panel", {
+    "size": [1.0, "height", 1.0],
+    "markers": [{"measure": "bbox_face_center", "face": "+Y", "name": "top_marker"}],
+})
+# (center the box at height/2 so its top face = height — set via a follow-up
+# isn't needed for this test; we only need the marker to exist + be picked.)
+add_anchors(core2, "base", [
+    {"measure": "by_name", "marker": "top_marker", "name": "top_m"}])
+base = core2.node("base")
+oa = base.node("out_anchors")
+oa.cook(force=True)
+pts = [p for p in oa.geometry().points() if p.stringAttribValue("name") == "top_m"]
+result["steps"]["c2_marker_anchor_count"] = len(pts)
+
+print("RESULT_JSON:" + json.dumps(result))
+""" % (_REPO, _REPO)
+
+
+@unittest.skipUnless(HYTHON, "hython not installed")
+class TestEmitComponentHython(unittest.TestCase):
+    """Phase 4: project_emit_component — archetype-driven component building."""
+
+    def _run(self):
+        proc = subprocess.run(
+            [HYTHON, "-c", _COMPONENT_HARNESS],
+            capture_output=True, text=True, timeout=180, cwd=_REPO,
+            stdin=subprocess.DEVNULL)
+        combined = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 0,
+                         f"hython failed (rc={proc.returncode}):\n{combined[-2000:]}")
+        idx = combined.rfind("RESULT_JSON:")
+        self.assertGreater(idx, -1, f"no RESULT_JSON:\n{combined[-2000:]}")
+        return json.loads(combined[idx + len("RESULT_JSON:"):]), combined
+
+    def test_box_panel_is_parametric_via_design_params(self):
+        """box_panel size=['length','thickness','width'] → sizex/sizey/sizez
+        eval to the design param values (the box references them via ch())."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertTrue(s["c1_success"], f"emit_component failed: {res}")
+        self.assertEqual(s["c1_nodes"], ["panel_box"])
+        self.assertAlmostEqual(s["c1_sizex_at_default"], 1.2, places=4)
+        self.assertAlmostEqual(s["c1_sizey_at_default"], 0.05, places=4)
+        self.assertAlmostEqual(s["c1_out_bbox_x_at_default"], 1.2, places=4)
+
+    def test_box_panel_tracks_param_live(self):
+        """Changing length 1.2→2.0 moves box sizex + OUT bbox X to 2.0."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertAlmostEqual(s["c1_sizex_at_L2"], 2.0, places=4)
+        self.assertAlmostEqual(s["c1_out_bbox_x_at_L2"], 2.0, places=4)
+
+    def test_box_panel_rebuild_is_idempotent(self):
+        """Re-running the archetype rebuilds (1 panel_box), not duplicates."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertEqual(s["c1_panel_box_count"], 1,
+                         f"re-run should rebuild, not duplicate: {res}")
+
+    def test_box_panel_forwards_markers_to_emit_markers(self):
+        """box_panel with params.markers forwards to emit_markers; a downstream
+        by_name anchor picks the emitted marker (full chain in one archetype call)."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertGreaterEqual(s["c2_marker_anchor_count"], 1,
+                                f"by_name anchor should pick the forwarded marker: {res}")
+
+
 if __name__ == "__main__":
     unittest.main()

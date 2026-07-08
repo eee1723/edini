@@ -933,3 +933,119 @@ def emit_markers(core_node: "hou.Node", component_id: str,
     save_declaration(core_node, decl)
     return {"success": True, "markers_built": built,
             "project": core_node.path()}
+
+
+# ── Component archetypes (Phase 4) ──────────────────────────────────
+#
+# project_emit_component: platform-layer generation of a component's node chain
+# by ARCHETYPE, so the agent doesn't hand-build step 3 with raw create_node /
+# set_param (the #1 source of step-3 failures: Python SOP errors, wrong parm
+# names, broken ch() refs). Each archetype owns its nodes (deterministic names,
+# replace-on-rebuild = idempotent), wires them to out_geometry, and uses the
+# official absolute ch() param-referencing path (Phase 1a may later migrate).
+#
+# Value convention: a size/position component is a NUMBER (literal) or a STRING
+# (a design_param name → live ch('/obj/.../core/<param>') reference).
+
+
+def _arch_node(subnet: "hou.Node", node_type: str, name: str) -> "hou.Node":
+    """Create ``node_type`` named ``name``, replacing any existing same-named node.
+
+    Archetypes own their nodes (deterministic names) — re-running an archetype
+    rebuilds its chain cleanly rather than accumulating stale nodes.
+    """
+    existing = subnet.node(name)
+    if existing is not None:
+        existing.destroy()
+    return subnet.createNode(node_type, name)
+
+
+def _set_archetype_parm(node, parm_name: str, value, core_path: str) -> None:
+    """Set a parm where ``value`` is a number (literal) or string (design_param
+    name → absolute ch() ref to the core, the official parameterization path)."""
+    p = node.parm(parm_name)
+    if p is None:
+        return
+    if isinstance(value, bool):
+        p.set(int(value))
+    elif isinstance(value, (int, float)):
+        p.set(float(value))
+    elif isinstance(value, str):
+        # A design_param name → live ch() reference to the core spare parm.
+        p.setExpression(f'ch("{core_path}/{value}")')
+
+
+def emit_component(core_node: "hou.Node", component_id: str,
+                   archetype: str, params: dict | None = None) -> dict:
+    """Build a component's geometry from an ARCHETYPE — the platform-layer
+    alternative to hand-authoring step 3 with raw node tools.
+
+    Archetypes (each owns its nodes, idempotent, wired to out_geometry):
+      - ``box_panel``: a parametric box (tabletop / seat / panel). ``size`` is
+        ``[x, y, z]``, each a number or a design_param name (→ live ch() ref).
+        Optional ``markers`` forwards to :func:`emit_markers` after the geometry
+        is wired (so by_name anchors can pick precise assembly points).
+
+    (copy_array / tube_graph / extrude_profile archetypes land incrementally.)
+
+    Args:
+        core_node: the edini::project SOP HDA instance.
+        component_id: the component subnet to build inside.
+        archetype: ``"box_panel"`` (others TBD).
+        params: archetype-specific dict (see above).
+
+    Returns ``{success, archetype, component, nodes, markers_built?, project}``.
+    """
+    subnet = core_node.node(component_id)
+    if subnet is None:
+        return {"success": False,
+                "error": f"component subnet not found: {component_id}"}
+    params = params or {}
+    if archetype == "box_panel":
+        return _archetype_box_panel(core_node, subnet, params)
+    return {"success": False,
+            "error": f"unknown archetype {archetype!r}; supported: box_panel "
+                     f"(copy_array / tube_graph / extrude_profile land incrementally)"}
+
+
+def _archetype_box_panel(core_node: "hou.Node", subnet: "hou.Node",
+                         params: dict) -> dict:
+    """A parametric box panel (tabletop / seat / shelf / slab).
+
+    params:
+      - size: ``[x, y, z]`` (each a number or a design_param name). Default
+        ``[1, 1, 1]``.
+      - markers: optional list of marker specs (forwarded to emit_markers AFTER
+        the box is wired, so markers are measured from the built panel and a
+        downstream by_name anchor picks them at real positions).
+
+    The box references design params via ABSOLUTE ch() to the core
+    (``ch('/obj/.../project_core/<p>')``) — the official parameterization path.
+    """
+    core_path = core_node.path()
+    out_geo = subnet.node(OUT_GEOMETRY_NODE)
+    if out_geo is None:
+        return {"success": False,
+                "error": f"out_geometry not found in {subnet.name()} (scaffold first)"}
+    size = params.get("size", [1, 1, 1])
+    if not isinstance(size, (list, tuple)) or len(size) != 3:
+        return {"success": False,
+                "error": "box_panel 'size' must be a 3-list [x, y, z] "
+                         "(each a number or a design_param name)"}
+    box = _arch_node(subnet, "box", "panel_box")
+    for axis, val in zip(("sizex", "sizey", "sizez"), size):
+        _set_archetype_parm(box, axis, val, core_path)
+    out_geo.setInput(0, box)
+    subnet.layoutChildren()
+
+    markers_built: list = []
+    markers = params.get("markers")
+    if markers:
+        mres = emit_markers(core_node, subnet.name(), markers)
+        if not mres.get("success"):
+            return mres
+        markers_built = mres.get("markers_built", [])
+
+    return {"success": True, "archetype": "box_panel",
+            "component": subnet.name(), "nodes": ["panel_box"],
+            "markers_built": markers_built, "project": core_path}
