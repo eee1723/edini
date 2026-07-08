@@ -165,6 +165,11 @@ projects, zero Python-SOP error surface). Fall back to raw `houdini_create_node`
 `houdini_connect_nodes` / `houdini_set_param` only when NO archetype fits
 (then follow `COMPONENT_TEMPLATE.md`'s Python SOP skeleton).
 
+**Before a risky change to a component, snapshot it** via
+`project_snapshot_component` — then `project_restore_component` reverts to the
+saved version if the new iteration is worse (selective multi-round optimization
+without re-running the whole project).
+
 Use `houdini_create_node`, `houdini_connect_nodes`, `houdini_set_param`.
 **Reference design params from geometry via ABSOLUTE `ch()` to the core**
 (`ch('/obj/.../project_core/length')`) — this is the only official

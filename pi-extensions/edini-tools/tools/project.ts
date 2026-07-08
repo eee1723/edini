@@ -287,4 +287,66 @@ export const projectTools = [
       return forwardTool("project_status", params);
     },
   },
+  {
+    name: "project_snapshot_component",
+    label: "Snapshot Component",
+    description:
+      "Snapshot a component's current state (copy it aside) for selective multi-round optimization. " +
+      "Snapshot before a risky change, iterate, then project_restore_component if the new version is worse — " +
+      "WITHOUT re-running the whole project. The snapshot is stored under the core's _snapshots subnet " +
+      "(travels with the .hip; skipped by OUT/inspect). Returns snapshot_id = '<component>_<N>'.",
+    promptSnippet: "Save a component version to restore later",
+    promptGuidelines: [
+      "Use project_snapshot_component BEFORE a risky change to a component (e.g. rebuilding its geometry, changing its archetype).",
+      "Returns snapshot_id ('<component>_<N>') — pass it to project_restore_component to revert.",
+      "Snapshots persist in the .hip (the _snapshots subnet inside the core); they don't pollute the model (OUT/inspect skip them).",
+    ],
+    parameters: Type.Object({
+      core_path: Type.String({ description: "Path to the edini::project SOP HDA instance." }),
+      component_id: Type.String({ description: "The component subnet to snapshot." }),
+      label: Type.Optional(Type.String({ description: "Optional human label for the snapshot (e.g. 'before bevel')." })),
+    }),
+    async execute(_id: string, params: { core_path: string; component_id: string; label?: string }) {
+      return forwardTool("project_snapshot_component", params);
+    },
+  },
+  {
+    name: "project_restore_component",
+    label: "Restore Component from Snapshot",
+    description:
+      "Restore a component from a snapshot (replaces its current state). copyNodesTo preserves internal wiring " +
+      "and external ports.in connections, and the relative ch() refs re-resolve at the restored depth. Use this " +
+      "to revert a component to a saved version after an iteration went wrong.",
+    promptSnippet: "Revert a component to a saved snapshot",
+    promptGuidelines: [
+      "Use project_restore_component to revert a component to a prior snapshot (from project_list_snapshots / a returned snapshot_id).",
+      "The current component subnet is destroyed and replaced with the snapshot copy; external anchor wires reconnect automatically.",
+    ],
+    parameters: Type.Object({
+      core_path: Type.String({ description: "Path to the edini::project SOP HDA instance." }),
+      component_id: Type.String({ description: "The component subnet to restore into." }),
+      snapshot_id: Type.String({ description: "The snapshot id (from project_snapshot_component / project_list_snapshots)." }),
+    }),
+    async execute(_id: string, params: { core_path: string; component_id: string; snapshot_id: string }) {
+      return forwardTool("project_restore_component", params);
+    },
+  },
+  {
+    name: "project_list_snapshots",
+    label: "List Component Snapshots",
+    description:
+      "List component snapshots in the core's _snapshots store. Pass component_id to filter to one component, " +
+      "or omit to list all. Returns [{id, component, label}].",
+    promptSnippet: "List saved component snapshots",
+    promptGuidelines: [
+      "Use project_list_snapshots to see available snapshots before restoring (or to find a snapshot_id).",
+    ],
+    parameters: Type.Object({
+      core_path: Type.String({ description: "Path to the edini::project SOP HDA instance." }),
+      component_id: Type.Optional(Type.String({ description: "Filter to one component's snapshots. Omit for all." })),
+    }),
+    async execute(_id: string, params: { core_path: string; component_id?: string }) {
+      return forwardTool("project_list_snapshots", params);
+    },
+  },
 ];

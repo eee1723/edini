@@ -28,6 +28,9 @@
 | `project_add_anchors` | 从组件几何**测量**锚点(LIVE VEX,非硬编码) | 组件几何建好后,为下游发锚点 |
 | `project_emit_markers` | 往组件几何里发射 `@name` 标记点(真实测量位置) | 精确装配点(dropout/头管顶端);配合 `by_name` 锚点,优于 bbox |
 | `project_emit_component` | 按 **archetype** 生成组件节点链(替代手搓 step 3) | `box_panel`(板)/`copy_array`(点到点复制)/`tube_graph`(管子图);优先于裸 create_node |
+| `project_snapshot_component` | 快照组件当前状态(存 `_snapshots`,随 .hip) | 风险改动前快照,迭代失败可 restore |
+| `project_restore_component` | 从快照恢复组件(替换当前) | 回退到保存版本;相对 ch() + 外部接线自动重连 |
+| `project_list_snapshots` | 列组件快照 `[{id,component,label}]` | restore 前找 snapshot_id |
 | `project_repath_to_relative` | 单组件绝对 ch()→相对(可迁移) | 想把组件复制到别的 project 时(可选) |
 | `project_promote_params` | 提升子网 spare parm 到 core | design_params 路径下返回 `[]` 是**正确的**(no-op),非失败 |
 | `project_status` | 一次性快照:每组件 geo_flow / anchors{declared,emitted,missing} / errors + `overall.incomplete` | 替代 N 次逐组件 inspect;看"还差什么" |

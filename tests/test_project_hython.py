@@ -2828,5 +2828,115 @@ class TestArchetypeMigratableHython(unittest.TestCase):
         self.assertAlmostEqual(s["ma_migrated_sizex_after_change"], 2.5, places=4)
 
 
+# =============================================================================
+# Phase 5: component snapshot/restore — selective multi-round optimization.
+# Snapshot a component, mutate it, restore → reverts; the relative ch() ref
+# survives the restore (still reads the design param).
+# =============================================================================
+
+_SNAPSHOT_HARNESS = r"""
+import json, sys, os
+sys.path.insert(0, os.path.join(r"%s", "python3.11libs"))
+import hou
+_hda = os.path.join(r"%s", "otls", "edini_project.hda")
+if os.path.isfile(_hda):
+    hou.hda.installFile(_hda)
+from edini.project.state import empty_declaration, add_component, add_design_param
+from edini.project.node import create_project_hda
+from edini.project.builder import (
+    build_project_scaffold, emit_component,
+    snapshot_component, restore_component, list_snapshots)
+
+result = {"steps": {}}
+
+core = create_project_hda(name="proj_snap")
+decl = empty_declaration("proj_snap")
+add_design_param(decl, "length", default=1.2, min=0.4, max=3.0, label="长")
+add_component(decl, "top", purpose="t", ports_out=[{"index": 0, "kind": "geometry"}])
+build_project_scaffold(core, declaration=decl)
+emit_component(core, "top", "box_panel", {"size": ["length", 0.05, 0.6]})
+
+# Snapshot the current state (sizez=0.6). NOTE: re-lookup nodes fresh before
+# each read — snapshot/mutate/restore destroy+recreate nodes, which can stale
+# held Python handles (hou.ObjectWasDeleted). This mirrors builder.py's own
+# "re-resolve after destroy" discipline.
+snap = snapshot_component(core, "top", label="v1")
+result["steps"]["s_snap_success"] = snap.get("success")
+result["steps"]["s_snap_id"] = snap.get("snapshot_id")
+
+# Mutate: rebuild top with a DIFFERENT sizez (0.6 → 2.0).
+emit_component(core, "top", "box_panel", {"size": ["length", 0.05, 2.0]})
+_og = core.node("top").node("out_geometry")
+_og.cook(force=True)
+bb = _og.geometry().boundingBox()
+result["steps"]["s_bbox_z_after_mutate"] = bb.maxvec().z() - bb.minvec().z()
+
+# Restore from the snapshot → sizez reverts to 0.6.
+rest = restore_component(core, "top", snap["snapshot_id"])
+result["steps"]["s_restore_success"] = rest.get("success")
+# Re-lookup AFTER restore (it destroyed + recreated the top subnet).
+_og2 = core.node("top").node("out_geometry")
+_og2.cook(force=True)
+box3 = core.node("top").node("panel_box")
+result["steps"]["s_sizez_after_restore"] = box3.parm("sizez").eval()
+bb2 = _og2.geometry().boundingBox()
+result["steps"]["s_bbox_z_after_restore"] = bb2.maxvec().z() - bb2.minvec().z()
+# sizex is still length-driven (the relative ch() ref survived the restore).
+result["steps"]["s_sizex_after_restore"] = box3.parm("sizex").eval()
+
+# list_snapshots shows the saved snapshot.
+ls = list_snapshots(core)
+result["steps"]["s_list_ids"] = [s["id"] for s in ls.get("snapshots", [])]
+
+print("RESULT_JSON:" + json.dumps(result))
+""" % (_REPO, _REPO)
+
+
+@unittest.skipUnless(HYTHON, "hython not installed")
+class TestComponentSnapshotHython(unittest.TestCase):
+    """Phase 5: component snapshot/restore — selective multi-round optimization."""
+
+    def _run(self):
+        proc = subprocess.run(
+            [HYTHON, "-c", _SNAPSHOT_HARNESS],
+            capture_output=True, text=True, timeout=180, cwd=_REPO,
+            stdin=subprocess.DEVNULL)
+        combined = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 0,
+                         f"hython failed (rc={proc.returncode}):\n{combined[-2000:]}")
+        idx = combined.rfind("RESULT_JSON:")
+        self.assertGreater(idx, -1, f"no RESULT_JSON:\n{combined[-2000:]}")
+        return json.loads(combined[idx + len("RESULT_JSON:"):]), combined
+
+    def test_snapshot_then_mutate_then_restore_reverts(self):
+        """Snapshot (sizez=0.6) → mutate (sizez=2.0) → restore → sizez reverts
+        to 0.6 (the saved version wins)."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertTrue(s["s_snap_success"])
+        self.assertEqual(s["s_snap_id"], "top_1")
+        self.assertAlmostEqual(s["s_bbox_z_after_mutate"], 2.0, places=4,
+                               msg="mutate should change sizez to 2.0")
+        self.assertTrue(s["s_restore_success"])
+        self.assertAlmostEqual(s["s_sizez_after_restore"], 0.6, places=4,
+                               msg="restore should revert sizez to 0.6")
+        self.assertAlmostEqual(s["s_bbox_z_after_restore"], 0.6, places=4)
+
+    def test_relative_ch_ref_survives_restore(self):
+        """The restored box's sizex still reads the design param (1.2) — the
+        relative ch() ref re-resolves correctly after the copy-back."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertAlmostEqual(s["s_sizex_after_restore"], 1.2, places=4,
+                               msg="relative ch() ref should survive restore")
+
+    def test_list_snapshots_records_saved_versions(self):
+        """list_snapshots shows the saved snapshot id."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertIn("top_1", s["s_list_ids"],
+                      f"snapshot list should contain top_1: {res}")
+
+
 if __name__ == "__main__":
     unittest.main()

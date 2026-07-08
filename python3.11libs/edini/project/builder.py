@@ -1243,3 +1243,140 @@ def _archetype_tube_graph(core_node: "hou.Node", subnet: "hou.Node",
             "segments": len(tubes),
             "anchor_inputs": [n.name() for n in in_nulls],
             "project": core_path}
+
+
+# ── Component snapshot/restore (Phase 5) ────────────────────────────
+#
+# Selective multi-round optimization: snapshot a component's current state
+# before a risky change, iterate, and restore if the new version is worse —
+# WITHOUT re-running the whole project. Snapshots live in a `_snapshots`
+# subnet inside the core (not a declared component, so OUT/inspect skip it),
+# travel with the .hip, and are restored via copyNodesTo (which preserves both
+# internal wiring and external ports.in connections by path). The relative
+# ch() refs (Phase 1a) re-resolve correctly once a snapshot is copied back to
+# its component slot (depth-2 again).
+
+_SNAPSHOTS_NODE = "_snapshots"
+_SNAP_PREFIX = "_snap_"
+
+
+def _ensure_snapshots_store(core_node: "hou.Node") -> "hou.Node":
+    """The `_snapshots` subnet inside the core that holds component copies.
+    Not a declared component → skipped by _ensure_core_output / build_scaffold."""
+    store = core_node.node(_SNAPSHOTS_NODE)
+    if store is None:
+        store = core_node.createNode("subnet", _SNAPSHOTS_NODE)
+    return store
+
+
+def snapshot_component(core_node: "hou.Node", component_id: str,
+                       label: str | None = None) -> dict:
+    """Snapshot a component's current state (copy it aside for later restore).
+
+    Enables selective multi-round optimization: snapshot before a risky change,
+    iterate, and :func:`restore_component` if the new version is worse. The
+    snapshot is a copy of the component subnet stored under the core's
+    ``_snapshots`` subnet (travels with the .hip; skipped by OUT/inspect since
+    it's not a declared component).
+
+    Returns ``{success, snapshot_id, component, label, project}``. The
+    ``snapshot_id`` is ``<component_id>_<N>`` (N = next snapshot number for
+    that component); pass it to :func:`restore_component`.
+    """
+    subnet = core_node.node(component_id)
+    if subnet is None:
+        return {"success": False,
+                "error": f"component subnet not found: {component_id}"}
+    store = _ensure_snapshots_store(core_node)
+    existing = [n for n in store.children()
+                if n.name().startswith(f"{_SNAP_PREFIX}{component_id}_")]
+    snap_n = len(existing) + 1
+    snap_id = f"{component_id}_{snap_n}"
+    snap_name = f"{_SNAP_PREFIX}{snap_id}"
+    copy = hou.copyNodesTo([subnet], store)[0]
+    copy.setName(snap_name)
+    if label:
+        try:
+            copy.setComment(label)
+        except Exception:
+            pass
+    decl = load_declaration(core_node)
+    append_log(decl, kind="snapshot",
+               summary=f"snapshot {component_id} → {snap_id}",
+               payload={"component": component_id, "snapshot_id": snap_id,
+                        "label": label},
+               result_ok=True)
+    save_declaration(core_node, decl)
+    return {"success": True, "snapshot_id": snap_id,
+            "component": component_id, "label": label,
+            "project": core_node.path()}
+
+
+def restore_component(core_node: "hou.Node", component_id: str,
+                      snapshot_id: str) -> dict:
+    """Restore a component from a snapshot (replaces its current state).
+
+    The current component subnet is destroyed and replaced with a copy of the
+    snapshot. ``copyNodesTo`` preserves both internal wiring and the external
+    ``ports.in`` connections (by path), so the restored component re-connects
+    to its upstream correctly. The relative ``ch()`` refs (Phase 1a) re-resolve
+    at the restored depth-2 location.
+
+    Returns ``{success, restored, from_snapshot, project}``.
+    """
+    store = core_node.node(_SNAPSHOTS_NODE)
+    snap = store.node(f"{_SNAP_PREFIX}{snapshot_id}") if store else None
+    if snap is None:
+        return {"success": False,
+                "error": f"snapshot {snapshot_id!r} not found"
+                         + ("" if store else " (no _snapshots store)")}
+    current = core_node.node(component_id)
+    if current is not None:
+        current.destroy()
+    copy = hou.copyNodesTo([snap], core_node)[0]
+    copy.setName(component_id)
+    try:
+        core_node.layoutChildren()
+    except Exception:
+        pass
+    decl = load_declaration(core_node)
+    append_log(decl, kind="restore",
+               summary=f"restore {component_id} ← {snapshot_id}",
+               payload={"component": component_id, "snapshot_id": snapshot_id},
+               result_ok=True)
+    save_declaration(core_node, decl)
+    return {"success": True, "restored": component_id,
+            "from_snapshot": snapshot_id, "project": core_node.path()}
+
+
+def list_snapshots(core_node: "hou.Node",
+                   component_id: str | None = None) -> dict:
+    """List component snapshots in the core's ``_snapshots`` store.
+
+    Args:
+        component_id: if given, list only that component's snapshots; otherwise
+            list all.
+
+    Returns ``{success, snapshots:[{id, component, label}], project}``.
+    """
+    store = core_node.node(_SNAPSHOTS_NODE)
+    out: list[dict] = []
+    if store is not None:
+        for n in store.children():
+            nm = n.name()
+            if not nm.startswith(_SNAP_PREFIX):
+                continue
+            sid = nm[len(_SNAP_PREFIX):]
+            # snap_id = "<component>_<N>" — split off the last _N.
+            if "_" not in sid:
+                continue
+            cid = sid.rsplit("_", 1)[0]
+            if component_id and cid != component_id:
+                continue
+            label = ""
+            try:
+                label = n.comment() or ""
+            except Exception:
+                pass
+            out.append({"id": sid, "component": cid, "label": label})
+    return {"success": True, "snapshots": out, "project": core_node.path()}
