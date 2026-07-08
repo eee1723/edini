@@ -9,7 +9,7 @@
   "wiki": {
     "version": "2.0",
     "created": "2026-06-03",
-    "last_updated": "2026-07-07-hardening-regression"
+    "last_updated": "2026-07-08-procedural-refactor-0b"
   },
   "features": {
     "search": true,

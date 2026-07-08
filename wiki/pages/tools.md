@@ -1,194 +1,159 @@
-# 🔧 工具清单
+# 🧰 工具分类总览
 
-> Edini 30+ 个 Houdini 工具的完整目录。最后更新：2026-06-21。
+> Edini agent 工具面的权威分类参考。按**功能职责**分组(非文件结构),
+> 标注每个工具的唯一职责 + 何时用哪个(重叠工具的决策表)。
+> 工具注册的真相源:`tool_executor.py::TOOL_HANDLERS`(Python handler)
+> + `pi-extensions/edini-tools/tools/*.ts`(agent 可见的工具定义)。
+> 最后更新:2026-07-08(Phase 0b)
 
-## 工具总览
+---
 
-| 分类 | 数量 | 工具 |
-|------|------|------|
-| 场景/节点 | 11 | Scene Info · Create · Delete · Connect · Set Param · Get Param · List · Layout · Selection · Errors · Display Flag |
-| 查询/检查 | 5 | Search · Help · Node Info · Inspect Geo · **query_parms** |
-| 脚本/HDA | 3 | Run VEX · Create HDA · Get HDA Info |
-| 捕获 | 2 | Capture Viewport Safe · Capture Network |
-| Procedural Harness | 12 | Sandbox · Diagnostics · Verify · Commit · Discard · Safe Capture · Build Asset · Variant Scatter · **validate_recipe** · **build_component** · **assemble_components** · **add_parm** |
-| 目录 | 1 | **dump_parm_catalog** |
+## 决策原则
 
-## 场景工具 (scene.ts)
+1. **先选路径,再选工具**。多部件模型 → Project HDA 管线(下表 §1);
+   单件生成器 → sandbox(§7);匹配现成模式 → recipe(§8)。
+2. **验证用数值,不用眼睛**(视觉验证默认关闭)。§5 的工具是质量门。
+3. **重叠工具看"要什么数据"**,不看名字相似度(§5 决策表)。
 
-### houdini_get_scene_info
-- **说明**：获取当前 Houdini 场景概览
-- **返回**：hip 文件名 · /obj 子级 · 总节点数 · 当前路径
-- **示例**："What's in my scene right now?"
+---
 
-### houdini_create_node
-- **参数**：`node_type` (必填) · `name` (可选) · `parent_path` (默认 /obj)
-- **返回**：新节点路径
-- **示例**："Create a geometry node called smoke_sim"
+## §1 项目建模(Project HDA 管线)— 核心路径
 
-### houdini_delete_node
-- **参数**：`node_path` (必填)
-- **返回**：删除确认
-- **示例**："Remove /obj/old_geo"
+多部件程序化模型的**唯一官方路径**。组件 = 子网,经测量锚点协作。
 
-### houdini_connect_nodes
-- **参数**：`from_path` · `to_path` · `input_index` (默认 0)
-- **返回**：连接确认
-- **示例**："Connect the sphere to the scatter node"
+| 工具 | 职责 | 何时用 |
+|---|---|---|
+| `project_create` | 建 Project HDA,返回 core_path | 任何多部件建模的第一步 |
+| `project_build_scaffold` | 声明组件+设计参数 → 建空子网+端口+连线+core spare parm | 跑完 create,组件分解定了 |
+| `project_add_anchors` | 从组件几何**测量**锚点(LIVE VEX,非硬编码) | 组件几何建好后,为下游发锚点 |
+| `project_repath_to_relative` | 单组件绝对 ch()→相对(可迁移) | 想把组件复制到别的 project 时(可选) |
+| `project_promote_params` | 提升子网 spare parm 到 core | design_params 路径下返回 `[]` 是**正确的**(no-op),非失败 |
 
-### houdini_set_param
-- **参数**：`node_path` · `param_name` · `value`
-- **返回**：设置确认
-- **示例**："Set the sphere radius to 2.5"
+## §2 节点操作(Scene)— 通用 Houdini 节点操纵
 
-### houdini_get_param
-- **参数**：`node_path` · `param_name`
-- **返回**：当前参数值和元数据
-- **示例**："What's the current grid size?"
+| 工具 | 职责 |
+|---|---|
+| `houdini_create_node` | 建节点(返回含 `parms` 参数清单,免再查) |
+| `houdini_connect_nodes` | 连线(from→to,input/output index) |
+| `houdini_set_param` / `houdini_set_params_batch` | 设参(**带 addpoint 守卫**:组件内 wrangle 拒硬编码 addpoint) |
+| `houdini_get_param` | 读参 |
+| `houdini_delete_node` / `houdini_list_nodes` / `houdini_get_node` | 节点 CRUD |
+| `houdini_get_scene_info` / `houdini_get_selection` | 场景/选区概览 |
+| `houdini_layout_nodes` / `houdini_set_display_flag` | 布局/display flag(观感,不影响逻辑) |
+| `houdini_search_nodes` / `houdini_get_help` | 按关键词找节点 / 查节点帮助 |
 
-### houdini_list_nodes
-- **参数**：`parent_path` (默认 /) · `type_filter` (可选)
-- **返回**：节点列表 (路径、类型)
-- **示例**："List all geo nodes under /obj"
+## §3 参数查询(Parameters)
 
+| 工具 | 职责 |
+|---|---|
+| `query_parms` | 读节点类型的参数 manifest(**创建前**查询,注意可能与实际版本漂移) |
+| `add_parm` | 给节点加 spare parm |
+| `dump_parm_catalog` | 导出全节点参数目录(离线参考) |
 
-### houdini_get_selection ✨ 新增
-- **参数**：无
-- **返回**：选中节点列表 (名称/路径/类型)
-- **示例**："What is selected right now?"
-- 💡 用户说"这个节点"时自动获取选中
+> `create_node` 返回的 `parms` 字段是**创建后实证**(反映实际版本),
+> 比 `query_parms`(manifest)更准。两者互补。
 
-### houdini_check_errors ✨ 新增
-- **参数**： (可选，省略扫描全场景)
-- **返回**：错误列表 + 警告列表
-- **示例**："Check for errors in my scene"
+## §4 几何探查(Geometry Inspection)— 低层探针
 
-### houdini_set_display_flag ✨ 新增
-- **参数**： (必填)
-- **返回**：设置确认
-- **示例**："Show this node in the viewport"
+| 工具 | 要什么数据 |
+|---|---|
+| `houdini_inspect_geo` | 点/面数、bbox、属性(通用几何探针) |
+| `houdini_collect_diagnostics` | 几何+参数+错误打包(一次性聚合诊断) |
 
-### houdini_layout_nodes
-- **参数**：`parent_path` (默认 /obj)
-- **返回**：布局确认
-- **示例**："Clean up the network layout"
+## §5 验证(Verification)— 质量门
 
-## 查询工具 (query.ts)
+**这是"模型对不对"的判据层。** 重叠工具决策表:
 
-### houdini_search_nodes
-- **参数**：`keyword` (必填)
-- **返回**：匹配的节点类型列表 (分类/名称/描述)
-- **示例**："Find all Pyro-related node types"
+| 你想知道... | 用 | 别用 |
+|---|---|---|
+| 节点有没有 cook 错(VEX 语法/编译错) | `houdini_check_errors` | — |
+| 几何健不健康(退化面/孤儿点/重合点/非流形) | `inspect_health` | inspect_geo |
+| 每个组件(@component_id)各多少面/点 | `geometry_inventory` | inspect_health |
+| 几何基础数值(点面数/bbox/属性) | `houdini_inspect_geo` | inspect_health |
+| 朝向轴对不对(组件 construction axis) | `verify_orientation` | — |
+| **参数化成立吗**(改参→几何朝预期方向变) | `verify_parametric` | inspect_health(只证"此刻没坏") |
 
-### houdini_get_help
-- **参数**：`node_type_name` (必填)
-- **返回**：节点帮助文档 (参数说明/用法)
-- **示例**："What does the Pyro Solver do?"
+> **`inspect_health` 的 `overall_ok` ≠ 参数化成立。** 它只证明"此刻没坏"。
+> 证明"改参后几何正确响应"必须用 `verify_parametric`(扰动→recook→量化→还原)。
 
-### houdini_get_node
-- **参数**：`node_path` (必填)
-- **返回**：节点详细信息 (类型/输入/输出/所有参数)
-- **示例**："Show me all parameters on /obj/geo1"
+| 工具 | 职责 |
+|---|---|
+| `houdini_check_errors` | 节点 errors/warnings(VEX/cook 失败) |
+| `inspect_health` | 几何健康(退化/孤儿/重合/非流形)→ `overall_ok` |
+| `geometry_inventory` | 按 @component_id 的面/点清单(项目感知) |
+| `verify_orientation` | 朝向轴校验 |
+| `verify_parametric` | **参数化硬门**:扰动 design_param→recook→量化验证→还原原值 |
 
-### houdini_inspect_geo
-- **参数**：`node_path` (必填，必须是 SOP 节点)
-- **返回**：点/面/顶点数 · 属性列表 · 包围盒
-- **示例**："How many points does this geometry have?"
+## §6 捕获(Capture)— 多为视觉验证门控
 
-### query_parms ✨ 新增
-- **参数**：`node_type` (必填) · `category` (默认 Sop)
-- **返回**：节点的参数目录（名称/类型/默认值/菜单项），由 `parm-catalog.json` 驱动
-- **示例**："What parameters does the Normal SOP have?"
-- 💡 在任何 parm 设置前先用此工具查参数名——不要猜测 H21 参数名
+| 工具 | 状态 |
+|---|---|
+| `capture_review` | 视觉验证;**默认关闭**(`visual_verification_enabled`) |
+| `houdini_capture_network` | 网络截图 |
+| `houdini_capture_component_detail` | 组件细节截图 |
 
-## 脚本工具 (script.ts)
+## §7 沙箱生命周期(Sandbox)
 
-### houdini_run_vex
-- **参数**：`code` (必填) · `node_path` (可选) · `attrib_name` (默认 result)
-- **返回**：VEX 执行输出
-- **示例**："Write VEX to scatter points on the surface"
-- ⚠️ 此工具**非沙盒**——直接在 /obj 创建实时节点。优先用 `houdini_run_python_sandbox` 做程序化资产工作
+无依赖的单件试错用 sandbox;组件生成器必须在 subnet 内(sandbox 无输入)。
 
-### houdini_create_hda
-- **参数**：`node_path` · `hda_name` · `hda_label` (可选)
-- **返回**：HDA 创建确认
-- **示例**："Package this network as 'my_smoke_sim' HDA"
+| 工具 | 职责 |
+|---|---|
+| `houdini_run_python_sandbox` | 隔离 geo 跑 Python(试错算法;`network_mode` 建网络) |
+| `houdini_verify_asset` | 校验资产符合预期 |
+| `commit_sandbox` | 沙箱转正(命名落地) |
+| `discard_sandbox` | 丢弃沙箱 |
 
-### houdini_get_hda_info
-- **参数**：`hda_name` (必填)
-- **返回**：HDA 定义详情 (参数接口/输入输出)
-- **示例**："What parameters does the 'sidefx_smoke' HDA have?"
+## §8 配方库(Recipes)
+
+参考样本,非死模板。读 `python_script` 学语法,自建网络。
+
+| 工具 | 职责 |
+|---|---|
+| `recipe_list` / `recipe_read` | 列/读配方 |
+| `recipe_capture` / `recipe_capture_tree` | 从子网/树捕获新配方 |
+| `recipe_rebuild` | 确定性复刻配方(可选) |
+| `recipe_tree_scan` / `recipe_manager_create` / `recipe_set_notes` | 树扫描/管理器/注记 |
+
+## §9 脚本/VEX/HDA(Scripting)
+
+| 工具 | 职责 |
+|---|---|
+| `houdini_run_vex` | 跑 VEX 片段(探属性) |
+| `houdini_create_hda` / `houdini_get_hda_info` | HDA 创建/查询 |
+
+## §10 知识/评估(Knowledge & Eval)
+
+| 工具 | 职责 |
+|---|---|
+| `edini_search_knowledge` | 搜沉淀的知识条目 |
+| `edini_get_eval_stats` | 近期会话评估统计 |
+
+---
 
 ## 工具转发架构
 
-## Procedural Harness Tools
+```
+Pi Extension (TypeScript)                  Houdini (Python)
+┌─────────────────────────┐    HTTP     ┌─────────────────────────┐
+│  forwardTool(name,args) │────POST────▶│  ToolExecutor            │
+│  (_shared.ts: 重试/超时) │  /execute   │  TOOL_HANDLERS[name]     │
+│                         │◄───JSON────│  node_utils.fn()         │
+└─────────────────────────┘             └─────────────────────────┘
+```
 
-> 程序化建模默认走这组工具：先验证→逐组件构建→组装→诊断→提交。详细手测重点见 [Procedural Harness](procedural-harness.html)。
+所有工具通过统一 `forwardTool()`(`_shared.ts`,带瞬时错误重试 + 30s 超时 +
+结构化错误体)转发到 Houdini 内的 `ToolExecutor`。参数校验由 TypeBox schema
+在 Pi 端完成,执行在 Houdini Python 端完成。
 
-### Pipeline Tools (Phase A/B/C)
+---
 
-### dump_parm_catalog
-- 从已安装的 Houdini 版本生成参数目录（`parm-catalog.json`）
-- 每会话调用一次，在使用 `validate_recipe` 或 `build_procedural_asset` 之前
+## 别名(向后兼容,agent 不直接可见)
 
-### validate_recipe
-- Phase A：零 Houdini 操作验证程序化资产 recipe
-- 六层检查：Schema · Parm 名 · 节点类型 · VEX Lint · 构造轴 · 依赖图
-- 在任何 cook 之前捕获参数名拼写错误和无效节点类型
+`TOOL_HANDLERS` 内置旧名→规范名映射(`_TOOL_ALIASES`),供历史 Pi 配置/脚本
+平滑过渡。agent 通过 TS 注册看到的始终是规范名:
 
-### build_component
-- Phase B：在沙盒内构建单个组件。Cook、验证几何健康、确认 @component_id 标记
-
-### assemble_components
-- Phase C：将所有通过的组件组装为最终资产（anchors + CTP + merge + postprocess）
-
-### build_procedural_asset
-- 声明式 Recipe Builder（PREFERRED）：agent 只写纯几何代码 + recipe JSON，harness 确定性建网
-- 内部串联 Phase A 验证→逐组件构建→组装→cook→返回诊断
-
-### houdini_variant_scatter
-- Variant Scatter Builder：多 variant 几何体加权分布到散点
-
-### houdini_collect_diagnostics
-- 收集节点 cook 错误、参数值、几何摘要和上下文
-
-### houdini_run_python_sandbox
-- 在程序化沙盒内执行 Python 代码。两种模式：single-SOP（默认）/ network_mode
-
-### houdini_verify_asset
-- 验证生成的资产：点/面数、bounds、节点错误、结构检查
-
-### commit_sandbox
-- 验证后将沙盒提交到最终资产位置。运行朝向门+结构门
-
-### discard_sandbox
-- 删除不再需要的程序化沙盒
-
-### capture_review
-- 多视角、多帧审查接触表。支持 4-view quad、frame-range
-
-### houdini_capture_component_detail
-- @component_id 值的特写单元格，各自包围盒取景
-
-### verify_orientation
-- 按组件 PCA 或 construction_axis 验证轴向方向（authoritative）
-
-### inspect_health
-- 几何健康检查：orphan/degenerate/non-manifold 检测
-
-### geometry_inventory
-- 列出每个 @component_id 的 prim 数和相对大小
-
-### add_parm ✨ 新增
-- 在任意 Houdini 节点上快速创建 spare float 参数
-- 参数：`node_path` · `name` · `default` · `min` · `max` · `label`
-- 返回 channel_path 可直接用于 `hou.ch()`
-- 示例：`add_parm("/obj/my_asset", "crank_len", default=0.17, min=0.15, max=0.20)`
-
-## 工具别名（向后兼容）
-
-| 旧名 | 新名 |
-|------|------|
-| `houdini_build_procedural_asset` | `build_procedural_asset` |
+| 旧名 | 规范名 |
+|---|---|
 | `houdini_commit_sandbox` | `commit_sandbox` |
 | `houdini_discard_sandbox` | `discard_sandbox` |
 | `houdini_verify_orientation` | `verify_orientation` |
@@ -197,16 +162,13 @@
 | `houdini_inspect_geometry_health` | `inspect_health` |
 | `houdini_geometry_inventory` | `geometry_inventory` |
 
-## Tool Forwarding Architecture
+---
 
-```
-Pi Extension (TypeScript)                  Houdini (Python)
-┌─────────────────────────┐    HTTP     ┌─────────────────────────┐
-│  forwardTool(name,args) │────POST────▶│  ToolExecutor            │
-│                         │  /execute   │  TOOL_HANDLERS[name]     │
-│                         │◄───JSON────│  node_utils.fn()         │
-└─────────────────────────┘             └─────────────────────────┘
-```
+## 已退役(不在工具面)
 
-所有工具通过统一的 `forwardTool()` 函数转发到 `http://127.0.0.1:9876/execute`。
-参数校验由 TypeBox schema 在 Pi 端完成，执行在 Houdini Python 端完成。
+| 工具/模块 | 退役时间 | 原因 |
+|---|---|---|
+| `build_assembly` / `assembly_builder.py` | 2026-07-08 (Phase 0a) | 被 Project HDA 组件管线取代;VEX 策略已内化进 `vex_strategies` |
+| `exprs.py`(表达式引擎) | 2026-07-08 (Phase 0b) | project 路径用原生 ch(),assembly/asset 管线退役后无消费者 |
+| `build_procedural_asset` / `validate_recipe` / `build_component` / `assemble_components` / `houdini_variant_scatter` | 2026-06 | 归档于 `_disabled_backup/procedural-modeling/`,被组件管线取代 |
+| 声明式资产管道(asset_model/builder/skeleton_resolver) | 2026-06 | 无法表达"测量真实 root 几何定位叶子",见 `_disabled_backup/asset-pipeline-2026-06/` |
