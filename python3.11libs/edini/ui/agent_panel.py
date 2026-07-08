@@ -124,7 +124,6 @@ class AgentPanel(QtWidgets.QWidget):
     abort_requested = QtCore.Signal()
     sig_eval_completed = QtCore.Signal(str, float)  # session_id, total_score
 
-    STREAM_FLUSH_CHARS = 80
     STREAM_FLUSH_INTERVAL_MS = 80
 
     def __init__(self, parent=None):
@@ -499,24 +498,32 @@ class AgentPanel(QtWidgets.QWidget):
             self._streaming_bubble = _AiBubble()
             self.timeline_view.add_widget(self._streaming_bubble)
 
-        # Update bubble in-place with FULL accumulated text
-        if self._streaming_bubble:
-            self._streaming_bubble.update_streaming(self._streaming_full_text)
-
         # Update live thinking panel
         if self._thinking_buf:
             self._update_live_thinking()
             if not self._thinking_panel.is_expanded() and not self._thinking_panel.has_content():
                 self._auto_expand_thinking()
 
-        if len(self._current_text) >= self.STREAM_FLUSH_CHARS:
-            self._flush_stream()
-        elif not self._stream_flush_timer.isActive():
+        # Coalesce the bubble render onto the _stream_flush_timer (~80ms) instead
+        # of re-laying-out the FULL growing QLabel text on every token. The eager
+        # per-chunk update_streaming(_streaming_full_text) monopolized the main
+        # thread during streaming — and with the agent firing graph-mutating
+        # tools on the same main thread, an open chat panel made Houdini lag
+        # badly. SingleShot + "start only if not already counting" absorbs a burst
+        # into one render per window; a slow stream still renders within ~80ms of
+        # each chunk. finish_streaming does a final flush before the markdown pass.
+        if not self._stream_flush_timer.isActive():
             self._stream_flush_timer.start()
 
     def _flush_stream(self):
-        """No-op in widget mode — updates happen in append_stream_chunk."""
-        pass
+        """Render accumulated streaming text to the bubble (timer-coalesced).
+
+        append_stream_chunk only buffers; the actual QLabel.setText happens here,
+        on the _stream_flush_timer cadence — ~12 renders/sec instead of one per
+        token (each of which re-laid-out the entire growing text).
+        """
+        if self._streaming_bubble:
+            self._streaming_bubble.update_streaming(self._streaming_full_text)
 
     def finish_streaming(self):
         """Finalize the streaming response."""
@@ -524,6 +531,11 @@ class AgentPanel(QtWidgets.QWidget):
         self._stream_flush_timer.stop()
         if self._thinking_buf.strip():
             self._flush_thinking_buf()
+        # Render any text buffered since the last timer tick BEFORE finalize —
+        # finalize's one-shot markdown pass reads the bubble's _raw_text, which
+        # update_streaming sets. Without this, the tail of a fast final burst
+        # (buffered, timer stopped) would be missing from the rendered output.
+        self._flush_stream()
 
         # Finalize the bubble
         if self._streaming_bubble:
