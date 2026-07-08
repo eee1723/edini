@@ -47,20 +47,26 @@ from edini.recipe_library import (
     create_recipe_manager,
     set_node_notes,
 )
-from edini.assembly_builder import build_assembly as _build_assembly_network
 from edini.project.builder import build_project_scaffold, promote_params, add_anchors
 from edini.project.guards import lint_wrangle_snippet
 
-# NOTE: Two procedural pipelines are archived under _disabled_backup/:
+# NOTE: Three procedural pipelines are archived under _disabled_backup/:
 #   1. procedural-modeling/  — prompt-driven build_procedural_asset + G1-G3 gates.
 #   2. asset-pipeline-2026-06/ — declarative asset (params+skeleton DAG,
 #      asset_model.py/asset_builder.py/skeleton_resolver.py, validate_asset/
 #      build_asset tools). Its positions-come-from-an-expression-DAG premise
-#      could not express "measure real root geometry to place leaves", which is
-#      why the new rooted-modeling skill exists.
-# Neither is imported here. The shared infrastructure they relied on —
-# exprs.py (expression engine) and harness.py (sandbox/commit lifecycle) —
-# is kept live for the new skill.
+#      could not express "measure real root geometry to place leaves".
+#   3. rooted-modeling (assembly_builder.py) — Root → Measure → Mount → Shape.
+#      Retired 2026-07-08: its flat single-root model was superseded by the
+#      Project HDA component pipeline (project_* tools), which expresses
+#      multi-component DAGs. Its VEX measurement strategies were internalized
+#      into vex_strategies.py (now self-sufficient); the orchestration layer
+#      (Root/Measure/Mount/Shape build) is gone. See docs/superpowers/plans/
+#      2026-07-08-procedural-agent-refactor.md Phase 0a.
+# None is imported here. harness.py (sandbox/commit lifecycle) is kept live for
+# the project-modeling skill. exprs.py is retained only for its own tests — the
+# project pipeline uses Houdini's native ch() expressions, not a custom engine
+# (exprs retirement is a Phase 0b candidate).
 
 # Knowledge and eval handlers (available only in Houdini runtime)
 try:
@@ -104,43 +110,6 @@ def _edini_get_eval_stats(period: int = 10) -> dict[str, Any]:
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
-
-
-def build_assembly(assembly: dict | None = None, assembly_path: str | None = None,
-                   sandbox_name: str = "assembly") -> dict[str, Any]:
-    """Build a rooted-modeling assembly (Root → Measure → Mount → Shape).
-
-    Validates first (shift-left — rejects bad assemblies before any node is
-    made), then creates a sandbox geo container and builds the root shape,
-    cooks it, measures it to resolve every mount, places the leaves, and
-    merges into a display-flagged OUT.
-
-    Returns: ``out_path`` (OUT node — feed to inspect_health/verify_orientation/
-    capture_review), ``sandbox_root``/``sandbox_root_path`` (container — feed to
-    commit_sandbox as sandbox_root_path), ``live_params`` (the editable spare
-    parm names — tweak these in the UI to re-measure the root live), plus the
-    ``mount_ids``/``leaf_ids`` present. ``live=True`` marks this as the
-    live (VEX+CTP) build. The sandbox is preserved on failure so the agent can
-    inspect/discard it.
-    """
-    import json as _json
-    if assembly is None and not assembly_path:
-        return {"success": False, "error": "provide 'assembly' (dict) or 'assembly_path'"}
-    if assembly is None:
-        try:
-            with open(assembly_path, "r", encoding="utf-8") as f:
-                assembly = _json.load(f)
-        except Exception as e:
-            return {"success": False, "error": f"could not read assembly: {e}"}
-
-    try:
-        _job_id, root_path = _create_sandbox_root(sandbox_name)
-    except Exception as exc:
-        return {"success": False, "error": f"could not create sandbox: {exc}"}
-
-    result = _build_assembly_network(assembly, root_path)
-    result["sandbox_root"] = root_path
-    return result
 
 
 def _project_create(name: str | None = None, goal: str | None = None, **_) -> dict[str, Any]:
@@ -475,15 +444,6 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     ),
     "recipe_set_notes": lambda **kw: set_node_notes(
         kw["node_path"], kw["notes"]),
-    # ── Rooted-modeling assembly (Root → Measure → Mount → Shape) ──
-    # Build a procedural model where leaves attach to the ROOT by measuring its
-    # real geometry — no hardcoded coordinates. The root is cooked, measured to
-    # resolve each mount, and leaves are placed onto the measured mounts.
-    "build_assembly": lambda **kw: build_assembly(
-        assembly=kw.get("assembly"),
-        assembly_path=kw.get("assembly_path"),
-        sandbox_name=kw.get("sandbox_name", "assembly"),
-    ),
     # Build component scaffolds INSIDE a Project HDA core node (SOP context).
     # Pass inline `components` (list of component dicts) to set+build in one
     # shot, or omit it to rebuild the existing declaration. `core_path` is the

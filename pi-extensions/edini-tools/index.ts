@@ -7,7 +7,6 @@ import { queryTools } from "./tools/query";
 import { scriptTools } from "./tools/script";
 import { harnessTools } from "./tools/harness";
 import { recipeTools } from "./tools/recipe";
-import { rootedTools } from "./tools/rooted";
 import { projectTools } from "./tools/project";
 import { ediniGetEvalStats } from "./tools/eval";
 import { ediniSearchKnowledge } from "./tools/knowledge";
@@ -25,7 +24,6 @@ export default function (pi: ExtensionAPI) {
     ...scriptTools,
     ...harnessTools,
     ...recipeTools,
-    ...rootedTools,
     ...projectTools,
     ediniGetEvalStats,
     ediniSearchKnowledge,

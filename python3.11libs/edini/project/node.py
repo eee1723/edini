@@ -5,7 +5,7 @@ tested via tests/mock_hou.py for template construction.
 
 **SOP-context HDA.** `edini::project` registers in the Sop node-type category
 (see scripts/make_project_hda.py). Instances therefore live INSIDE a geo and
-host a SOP network directly — exactly what rooted build_assembly needs. A
+host a SOP network directly — the modeling core the project_* tools build inside. A
 Project is structured as a geo "shell" at /obj (the displayable object) with a
 single `edini::project` SOP HDA instance inside it (the modeling core that
 carries the declaration + geometry).
@@ -40,7 +40,7 @@ def create_project_hda(name: str = "project", parent_path: str = "/obj",
     ``edini::project`` SOP HDA instance inside it at
     ``<parent>/<name>/project_core`` — the modeling core. The declaration JSON
     and (later) rooted geometry live on/in the core node. Returns the **core**
-    node (it carries the state + is build_assembly's root_path).
+    node (it carries the state; it is the core_path the project_* tools target).
 
     The node type `edini::project` must already be registered (via
     HOUDINI_OTLSCAN_PATH pointing at otls/edini_project.hda) in the Sop
@@ -54,8 +54,8 @@ def create_project_hda(name: str = "project", parent_path: str = "/obj",
     # SOP HDA instance inside the shell — the modeling core.
     core = shell.createNode("edini::project", node_name=CORE_NODE_NAME)
 
-    # Install the hidden state parm on the CORE (it holds the declaration +
-    # is build_assembly's root_path), then seed the empty declaration.
+    # Install the hidden state parm on the CORE (it holds the declaration;
+    # it is the core_path the project_* tools target), then seed the empty declaration.
     core.addSpareParmTuple(build_state_parm_template())
     declaration = empty_declaration(project_name=name, goal=goal)
     save_declaration(core, declaration)

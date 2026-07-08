@@ -247,7 +247,7 @@ def main():
     # (positions only — we extract [t[0] for t in triples]). Orient/scale
     # correctness (per-cell rotation, layer height, block height) is the hython
     # suite's job. pickets needs its `count`→cells expansion (builder layer).
-    from edini.assembly_builder import _expand_pickets_count
+    from edini.vex_strategies import _expand_pickets_count
 
     # pickets: count=N → N equal-width posts along an edge (a 1D row).
     pickets_margin = 0.1

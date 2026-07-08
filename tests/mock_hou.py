@@ -1396,7 +1396,7 @@ def _make_torus_ptg():
     radii radx/rady (NOT a rad parmTuple — unlike tube's rad1/rad2), plus
     rows/cols. This mirrors the real H21.0.440 torus so a leaf shape with
     e.g. params.radx can be built under the mock (grouping tests differentiate
-    leaves by shape params). See assembly_builder._VALID_SHAPES doc note."""
+    leaves by shape params; torus uses independent radx/rady, unlike tube)."""
     g = MockParmTemplateGroup()
     g.append(MockFloatParmTemplate("radx", "Radius X", 1, default_value=(1.0,)))
     g.append(MockFloatParmTemplate("rady", "Radius Y", 1, default_value=(0.3,)))

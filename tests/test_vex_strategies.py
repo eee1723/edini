@@ -135,6 +135,111 @@ class TestExistingStrategiesUnchanged(unittest.TestCase):
             build_mount_vex({"measure": "nonexistent"})
 
 
+# ── Internalized builder-layer sugar (Phase 0a, 2026-07-08) ──
+# _expand_pickets_count / _expand_repeat_cells / _expand_shelf_layers used to
+# live in assembly_builder.py and were tested by test_assembly_builder.py (now
+# retired with the assembly pipeline). They moved into vex_strategies so each
+# tabular-fill strategy is self-sufficient — these tests restore the coverage
+# that was lost, and additionally assert the strategies resolve the sugar via
+# their own build() (no external builder needed).
+
+class TestInternalizedExpanders(unittest.TestCase):
+    """The three spec pre-expanders, now internalized into vex_strategies
+    (pure data transforms — no hou, fully unit-testable)."""
+
+    def test_expand_pickets_count_makes_equal_width_cells(self):
+        from edini.vex_strategies import _expand_pickets_count
+        out = _expand_pickets_count({"measure": "pickets", "count": 6})
+        self.assertNotIn("count", out)
+        cells = out["cells"]
+        self.assertEqual(len(cells), 6)
+        # count=N → N cells of width 1 at gx=0,1,...,N-1.
+        self.assertEqual([c["gx"] for c in cells], [0.0, 1.0, 2.0, 3.0, 4.0, 5.0])
+        self.assertTrue(all(c["w"] == 1.0 for c in cells))
+
+    def test_expand_pickets_count_passes_through_without_count(self):
+        from edini.vex_strategies import _expand_pickets_count
+        spec = {"measure": "pickets", "cells": [{"gx": 0, "w": 2}]}
+        # No count → returned unchanged (caller already gave explicit cells).
+        self.assertIs(_expand_pickets_count(spec), spec)
+
+    def test_expand_repeat_cells_fills_empty_slots(self):
+        from edini.vex_strategies import _expand_repeat_cells
+        # A 2x1 declared cell (total_u_x=2, total_u_z=1) → target=2 fills a 2x2
+        # grid. Slots (0,1) and (1,1) are empty → two 1u filler cells added so
+        # both axes match the larger span.
+        cells = [{"gx": 0, "gz": 0, "w": 2, "d": 1}]
+        out = _expand_repeat_cells(cells)
+        self.assertEqual(len(out), 3)  # 1 declared + 2 fillers
+        fillers = sorted((c["gx"], c["gz"]) for c in out[1:])
+        self.assertEqual(fillers, [(0.0, 1.0), (1.0, 1.0)])
+        self.assertTrue(all((c["w"], c["d"]) == (1, 1) for c in out[1:]))
+
+    def test_expand_repeat_cells_no_fill_when_already_full(self):
+        from edini.vex_strategies import _expand_repeat_cells
+        # A single 1x1 cell: total_u_x=total_u_z=1, target=1 → slot (0,0) is
+        # occupied → no filler added (skip-occupied logic).
+        cells = [{"gx": 0, "gz": 0, "w": 1, "d": 1}]
+        out = _expand_repeat_cells(cells)
+        self.assertEqual(len(out), 1)
+
+    def test_expand_shelf_layers_flattens_with_layer_info(self):
+        from edini.vex_strategies import _expand_shelf_layers
+        spec = {"measure": "shelf", "face": "+Y",
+                "layers": [{"height": 2, "cells": [{"gx": 0, "w": 1}]},
+                           {"height": 3, "cells": [{"gx": 0, "w": 1}]}]}
+        out = _expand_shelf_layers(spec)
+        self.assertNotIn("layers", out)
+        cells = out["cells"]
+        self.assertEqual(len(cells), 2)
+        # Layer 0: base gy=0, h=2; Layer 1: base gy=2 (cumulative), h=3.
+        self.assertEqual(cells[0]["__layer_gy"], 0.0)
+        self.assertEqual(cells[0]["__layer_h"], 2.0)
+        self.assertEqual(cells[1]["__layer_gy"], 2.0)
+        self.assertEqual(cells[1]["__layer_h"], 3.0)
+
+
+class TestStrategyBuildSugar(unittest.TestCase):
+    """Each tabular-fill strategy resolves its own sugar via build() — no
+    external builder pre-expansion is needed (the internalization contract).
+    These prove the strategies are self-sufficient after assembly_builder's
+    retirement."""
+
+    def test_pickets_count_sugar_resolves_via_build(self):
+        # count=6 → PicketStrategy.build expands to 6 cells, then builds VEX.
+        snippet, parms = build_mount_vex(
+            {"measure": "pickets", "face": "+Y", "count": 6})
+        self.assertIn("__cw[]", snippet)   # cell-widths array present (6 entries)
+        self.assertEqual(parms["face_axis"], 1)  # +Y
+        self.assertEqual(parms["face_sign"], 1)
+
+    def test_pickets_explicit_cells_still_work(self):
+        # Without count (explicit cells) the strategy still builds — the sugar
+        # is optional, not required.
+        snippet, _ = build_mount_vex(
+            {"measure": "pickets", "face": "+Y",
+             "cells": [{"gx": 0, "w": 2}, {"gx": 2, "w": 1}]})
+        self.assertIn("__cw[]", snippet)
+
+    def test_cells_repeat_sugar_resolves_via_build(self):
+        # fill=repeat with a 2x1 layout → CellsStrategy.build adds fillers.
+        snippet, _ = build_mount_vex(
+            {"measure": "cells", "face": "+Y", "fill": "repeat",
+             "cells": [{"gx": 0, "gz": 0, "w": 2, "d": 1}]})
+        self.assertIn("__cx[]", snippet)   # cell-centers array present
+
+    def test_shelf_layers_sugar_resolves_via_build(self):
+        # layers → ShelfStrategy.build flattens, then builds VEX with the
+        # shelf 3D fragment.
+        snippet, _ = build_mount_vex(
+            {"measure": "shelf", "face": "+Y",
+             "layers": [{"height": 2, "cells": [{"gx": 0, "w": 1}]},
+                        {"height": 3, "cells": [{"gx": 0, "w": 1}]}]})
+        # The shelf fragment's signature markers.
+        self.assertIn("__layer_h[]", snippet)
+        self.assertIn("__u_axis", snippet)
+
+
 # ── Finding 4: _relative_path_to_core (pure-logic, no hou) ──
 # repath_to_relative's depth computation is pure path arithmetic, testable
 # without hython. Imported from node_utils — re-imported here to keep the

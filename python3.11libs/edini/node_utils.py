@@ -471,7 +471,7 @@ def _apply_one_param(node, param_name: str, value: Any) -> tuple[bool, Any, str 
 
     Shared dispatch used by BOTH set_param and set_params_batch, so batch and
     single-set have identical capabilities. Supports three value shapes
-    (mirrors assembly_builder._set_parm + node_utils menu coercion):
+    (vector / expression / scalar dispatch + menu-token coercion):
       - vector (list/tuple, len > 1): parmTuple; per-component setExpression if
         any component is an expression (ch("../x")), else tuple .set().
       - scalar expression string (contains "ch("): setExpression (Hscript).

@@ -556,6 +556,94 @@ for (int __ci = 0; __ci < __ncell; __ci++) {
         return snippet
 
 
+# ── Spec pre-expansion (internalized builder-layer sugar) ──────────
+#
+# Three tabular-fill strategies accept a higher-level spec that expands into
+# the canonical {gx,gz,w,d} cells table the VEX loop consumes. These expansions
+# used to live in assembly_builder.py (the retired rooted-modeling builder
+# layer); they are internalized HERE so each strategy is SELF-SUFFICIENT — call
+# build_mount_vex directly and the sugar resolves. No external builder needed.
+# (assembly_builder retired 2026-07-08; see docs/superpowers/plans/
+#  2026-07-08-procedural-agent-refactor.md Phase 0a.)
+
+
+def _expand_repeat_cells(cells: list[dict]) -> list[dict]:
+    """Extend a cells table with 1u filler cells (the ``fill=repeat`` mode).
+
+    ``repeat`` keeps cells SQUARE (unit = min, like pad) but FILLS the leftover
+    space on the larger axis by auto-adding 1u cells. The VEX loop is unchanged
+    — it just receives a longer table.
+
+    The layout's grid-unit span is ``max(gx+w)`` / ``max(gz+d)``. With unit=min,
+    the smaller axis fills exactly; the larger axis has leftover grid units. We
+    extend the layout's declared span so both axes match the LARGER one, filling
+    the now-empty grid slots with 1u cells (skipping any slot already occupied
+    by a declared cell). Result: square keys, no gaps.
+    """
+    if not cells:
+        return cells
+    total_u_x = max(float(c["gx"]) + float(c["w"]) for c in cells)
+    total_u_z = max(float(c["gz"]) + float(c["d"]) for c in cells)
+    target = max(total_u_x, total_u_z)   # fill both axes to the larger span
+
+    # Occupancy grid (integer slots) of declared cells.
+    occupied: set[tuple[int, int]] = set()
+    for c in cells:
+        gx, gz = int(float(c["gx"])), int(float(c["gz"]))
+        w, d = int(float(c["w"])), int(float(c["d"]))
+        for ix in range(gx, gx + w):
+            for iz in range(gz, gz + d):
+                occupied.add((ix, iz))
+
+    out = list(cells)
+    for ix in range(int(target)):
+        for iz in range(int(target)):
+            if (ix, iz) not in occupied:
+                out.append({"gx": float(ix), "gz": float(iz), "w": 1, "d": 1})
+    return out
+
+
+def _expand_pickets_count(position_spec: dict) -> dict:
+    """Expand a pickets ``count`` into an explicit equal-width cells table.
+
+    count=N → N cells of width 1 at gx=0,1,...,N-1. The VEX loop is unchanged;
+    only fed a generated table.
+    """
+    if "count" not in position_spec:
+        return position_spec
+    count = int(position_spec["count"])
+    if count < 1:
+        raise VexStrategyError(f"pickets count must be >= 1, got {count}")
+    cells = [{"gx": float(i), "w": 1.0} for i in range(count)]
+    out = {k: v for k, v in position_spec.items() if k != "count"}
+    out["cells"] = cells
+    return out
+
+
+def _expand_shelf_layers(position_spec: dict) -> dict:
+    """Flatten a shelf ``layers`` table into a cells list carrying per-cell
+    layer info (for the VEX strategy). Each cell gets its layer's gy (cumulative
+    u) and h (layer height) injected, so the inherited TabularFill loop can
+    place it in 3D. The layer axis comes from basis.face's normal.
+    """
+    layers = position_spec.get("layers")
+    if not isinstance(layers, list):
+        return position_spec
+    out_spec = {k: v for k, v in position_spec.items() if k != "layers"}
+    flat_cells = []
+    cum = 0.0
+    for layer in layers:
+        h = float(layer.get("height", 0))
+        for c in layer.get("cells", []):
+            cell = dict(c)
+            cell["__layer_gy"] = cum      # layer's base in u (consumed by strategy)
+            cell["__layer_h"] = h          # layer height in u
+            flat_cells.append(cell)
+        cum += h
+    out_spec["cells"] = flat_cells
+    return out_spec
+
+
 class CellsStrategy(TabularFillStrategy):
     """The gx/gz/w/d keyboard-layout schema.
 
@@ -564,6 +652,17 @@ class CellsStrategy(TabularFillStrategy):
     in width (spacebar 6.25u, normal 1u) and rows are staggered. The leaf shape
     is a 1u BASIS box; the per-point v@scale grows it to each cell's footprint.
     """
+
+    def build(self, position_spec: dict) -> tuple[str, dict[str, Any]]:
+        # fill=repeat sugar (internalized): extend the cells table with 1u
+        # filler cells to fill the leftover space on the larger axis. The VEX
+        # loop is unchanged — only fed a longer table. Makes the strategy
+        # self-sufficient — no external builder needs to pre-expand.
+        if position_spec.get("fill") == "repeat":
+            spec = dict(position_spec)
+            spec["cells"] = _expand_repeat_cells(spec.get("cells", []))
+            return super().build(spec)
+        return super().build(position_spec)
 
     def _parse_table(self, cells: list[dict]
                      ) -> tuple[list[float], list[float], list[float], list[float]]:
@@ -586,8 +685,16 @@ class PicketStrategy(TabularFillStrategy):
     """The 1D picket/fence schema. Each cell declares {gx, w}. Reuses the
     TabularFill 2D loop with the 2nd axis degenerate (gz=0, d=1) — exactly as
     measure_pickets does — so the inherited _build_vex produces a 1D-effective
-    row (all points share the same z). The `count`→cells expansion happens in
-    the builder layer (_expand_pickets_count) BEFORE this sees the spec."""
+    row (all points share the same z). The `count`→cells sugar is expanded by
+    build() via _expand_pickets_count (internalized) before parsing."""
+
+    def build(self, position_spec: dict) -> tuple[str, dict[str, Any]]:
+        # count→cells sugar (internalized): count=N becomes N equal-width 1u
+        # cells. Makes the strategy self-sufficient — no external builder needs
+        # to pre-expand.
+        spec = (_expand_pickets_count(position_spec)
+                if "count" in position_spec else position_spec)
+        return super().build(spec)
 
     def _parse_table(self, cells):
         gx_vals, w_vals = [], []
@@ -652,10 +759,9 @@ class ShelfStrategy(TabularFillStrategy):
 
     def build(self, position_spec: dict) -> tuple[str, dict[str, Any]]:
         # Flatten layers into a single cells table (carrying per-cell __layer_gy
-        # / __layer_h) BEFORE the inherited build parses the table. The builder
-        # layer (build_assembly) also does this; build() repeats it so the
-        # strategy is self-sufficient when called directly (e.g. from tests).
-        from edini.assembly_builder import _expand_shelf_layers
+        # / __layer_h) BEFORE the inherited build parses the table. The expander
+        # is internalized above (_expand_shelf_layers) so the strategy is
+        # self-sufficient when called directly (e.g. from tests).
         spec = (_expand_shelf_layers(position_spec)
                 if "layers" in position_spec else position_spec)
         return super().build(spec)
@@ -983,8 +1089,8 @@ def build_mount_vex(mount_position: dict) -> tuple[str, dict[str, Any]]:
     # flattens layers into a cells table (carrying per-cell __layer_gy/__layer_h),
     # reuses the TabularFill loop in-plane, and appends a shelf fragment that
     # overrides each point's face-axis P/scale with the layer-derived values.
-    # The layer flattening (Task 6's _expand_shelf_layers) also happens in the
-    # builder layer; ShelfStrategy.build repeats it so it's self-sufficient.
+    # The layer flattening (_expand_shelf_layers) is internalized so the
+    # strategy is self-sufficient when called directly.
     if kind == "shelf":
         return _SHELF_STRATEGY.build(mount_position)
 
