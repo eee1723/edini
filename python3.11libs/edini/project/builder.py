@@ -785,15 +785,22 @@ def add_anchors(core_node: "hou.Node", component_id: str,
         built.append(name)
 
     # Merge all anchor wrangles into out_anchors (the component's anchor port).
+    # Phase 3 fix: gather ALL anchor_* wrangles in the subnet (this call + any
+    # from prior add_anchors calls), so multiple calls APPEND rather than
+    # overwrite. Previously a 2nd single-anchor call did setInput(0, new_only),
+    # silently disconnecting the 1st call's anchor — a latent fragility exposed
+    # when emit_markers' test added a control anchor after the by_name anchor.
     out_anc = subnet.node(OUT_ANCHORS_NODE)
     if out_anc is not None:
-        if len(anchor_wrangles) == 1:
-            out_anc.setInput(0, anchor_wrangles[0])
+        all_anchors = [n for n in subnet.children()
+                       if n.name().startswith("anchor_")]
+        if len(all_anchors) == 1:
+            out_anc.setInput(0, all_anchors[0])
         else:
             merge = subnet.node("anchor_merge")
             if merge is None:
                 merge = subnet.createNode("merge", "anchor_merge")
-            for i, wr in enumerate(anchor_wrangles):
+            for i, wr in enumerate(all_anchors):
                 merge.setInput(i, wr)
             out_anc.setInput(0, merge)
     subnet.layoutChildren()
@@ -806,4 +813,123 @@ def add_anchors(core_node: "hou.Node", component_id: str,
                result_ok=True)
     save_declaration(core_node, decl)
     return {"success": True, "anchors_built": built,
+            "project": core_node.path()}
+
+
+def emit_markers(core_node: "hou.Node", component_id: str,
+                 markers: list[dict],
+                 source_node_name: str = OUT_GEOMETRY_NODE) -> dict:
+    """Emit semantic ``@name`` marker points INTO a component's geometry so a
+    downstream ``by_name`` anchor can pick them at REAL geometric locations.
+
+    The cure for 发现3 (session log 2, road bike): anchors measured via
+    ``bbox_face_center`` on a merged mesh sit at the bbox hull, not the real
+    dropout/head-tube. Instead the component emits NAMED markers at true
+    geometric positions, and downstream uses ``measure:"by_name"`` to pick them.
+    This function makes emitting those markers a declarative one-call (like
+    :func:`add_anchors`) so the agent never hand-writes the marker-emission
+    wrangle — closing the gap that made ``by_name`` harder than ``bbox``.
+
+    Each marker is a measurement spec (same vocabulary as anchors:
+    bbox_corner/bbox_face_center/bbox_center/...) resolved via
+    :func:`vex_strategies.build_mount_vex` into a wrangle that reads the
+    component's main geometry (what feeds ``out_geometry``) and emits ONE point
+    tagged ``@name = <marker name>``. Marker points are merged INTO
+    ``out_geometry`` (alongside the agent's geometry) so a downstream
+    ``by_name`` anchor reading this component's geometry finds them.
+
+    Idempotent: a ``markers_merge`` node sits between the agent's geometry and
+    ``out_geometry``; re-calls append/replace ``marker_<name>`` wrangles and
+    re-wire the merge. The agent's original geometry (the merge's input 0) is
+    preserved across calls. Append-only across calls (a new marker name is
+    added; an existing name is replaced in place).
+
+    Args:
+        core_node: the edini::project SOP HDA instance.
+        component_id: which component emits these markers.
+        markers: list of ``{name, measure, ...measure-params}``. ``name`` is the
+            @name tag (identity for downstream by_name); ``measure`` selects the
+            strategy (bbox_corner/bbox_face_center/bbox_center/...).
+
+    Returns ``{success, markers_built, project}``.
+    """
+    subnet = core_node.node(component_id)
+    if subnet is None:
+        return {"success": False,
+                "error": f"component subnet not found: {component_id}"}
+    out_geo = subnet.node(OUT_GEOMETRY_NODE)
+    if out_geo is None:
+        return {"success": False,
+                "error": f"out_geometry not found in {component_id}"}
+
+    # Resolve the SOURCE geometry (what the agent built). If a markers_merge
+    # already exists, the source is its input 0 (the original agent geometry,
+    # preserved across re-calls); otherwise it's out_geometry's current input.
+    markers_merge = subnet.node("markers_merge")
+    if markers_merge is not None:
+        src_inputs = markers_merge.inputs()
+        source = src_inputs[0] if src_inputs else None
+    else:
+        geo_inputs = out_geo.inputs()
+        source = geo_inputs[0] if geo_inputs else None
+    if source is None:
+        return {"success": False,
+                "error": f"build geometry in {component_id} (connect something "
+                         f"into out_geometry) BEFORE emitting markers — markers "
+                         f"are measured from that geometry."}
+
+    built = []
+    for spec in markers:
+        name = spec.get("name")
+        if not name:
+            return {"success": False, "error": f"marker missing 'name': {spec}"}
+        vex_spec = {k: v for k, v in spec.items() if k != "name"}
+        try:
+            snippet, parms = build_mount_vex(vex_spec)
+        except (VexStrategyError, ValueError) as e:
+            return {"success": False, "error": f"marker {name!r}: {e}"}
+        wr_name = f"marker_{name}"
+        existing = subnet.node(wr_name)
+        if existing is not None:
+            existing.destroy()
+        wr = subnet.createNode("attribwrangle", wr_name)
+        wr.parm("snippet").set(
+            snippet + f'\nsetpointattrib(0, "name", __newpts[0], "{name}", "set");')
+        wr.parm("class").set("detail")
+        wr.setInput(0, source)
+        # Install measurement parms (cx/cy/cz etc.) — mirrors add_anchors.
+        for raw_pname, pval in parms.items():
+            pname = raw_pname.lstrip("_")
+            is_string = isinstance(pval, str)
+            p = wr.parm(pname)
+            if p is None:
+                if is_string:
+                    tmpl = hou.StringParmTemplate(pname, pname, 1)
+                else:
+                    tmpl = hou.IntParmTemplate(pname, pname, 1)
+                wr.addSpareParmTuple(tmpl)
+                p = wr.parm(pname)
+            if p is not None:
+                p.set(pval if is_string else int(pval))
+        built.append(name)
+
+    # (Re)wire markers_merge: input 0 = source, inputs 1..N = ALL marker_* nodes
+    # currently in the subnet (append-only; a replaced name reuses its slot).
+    if markers_merge is None:
+        markers_merge = subnet.createNode("merge", "markers_merge")
+    markers_merge.setInput(0, source)
+    all_marker_nodes = [n for n in subnet.children()
+                        if n.name().startswith("marker_")]
+    for i, wr in enumerate(all_marker_nodes):
+        markers_merge.setInput(i + 1, wr)
+    out_geo.setInput(0, markers_merge)
+    subnet.layoutChildren()
+
+    decl = load_declaration(core_node)
+    append_log(decl, kind="markers",
+               summary=f"emitted {len(built)} marker(s) into {component_id}",
+               payload={"component": component_id, "markers": built},
+               result_ok=True)
+    save_declaration(core_node, decl)
+    return {"success": True, "markers_built": built,
             "project": core_node.path()}

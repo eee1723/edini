@@ -2126,5 +2126,137 @@ class TestProjectStatusHython(unittest.TestCase):
         self.assertNotIn("tabletop", s["overall_incomplete"])
 
 
+# =============================================================================
+# Phase 3: project_emit_markers — make by_name as easy as bbox.
+# Emits @name marker points INTO a component's geometry at REAL measured
+# positions, so a downstream by_name anchor picks them (tracking the real
+# geometry, not the bbox hull). Closes 发现3's root cause: by_name used to
+# require a hand-written marker-emission wrangle, so the agent always picked
+# the easier bbox path.
+# =============================================================================
+
+_MARKERS_HARNESS = r"""
+import json, sys, os
+sys.path.insert(0, os.path.join(r"%s", "python3.11libs"))
+import hou
+_hda = os.path.join(r"%s", "otls", "edini_project.hda")
+if os.path.isfile(_hda):
+    hou.hda.installFile(_hda)
+from edini.project.state import empty_declaration, add_component, add_design_param
+from edini.project.node import create_project_hda
+from edini.project.builder import build_project_scaffold, add_anchors, emit_markers
+
+result = {"steps": {}}
+
+# 'base': a box spanning 0..H (sizey=H, ty=H/2). emit_markers places a NAMED
+# marker at the REAL top face center (y=H) — no hand-written wrangle.
+core = create_project_hda(name="proj_markers")
+decl = empty_declaration("proj_markers")
+add_design_param(decl, "height", default=1.0, min=0.1, max=5.0, label="高度")
+add_component(decl, "base", purpose="基座",
+    ports_out=[
+        {"index": 0, "kind": "geometry"},
+        {"index": 1, "kind": "anchors", "points": [
+            {"name": "top_mount", "role": "mount"}]}])
+build_project_scaffold(core, declaration=decl)
+
+base = core.node("base")
+box = base.createNode("box", "base_box")
+box.parm("sizex").set(1.0)
+box.parm("sizey").setExpression("ch('/obj/proj_markers/project_core/height')")
+box.parm("sizez").set(1.0)
+box.parm("ty").setExpression("ch('/obj/proj_markers/project_core/height') * 0.5")
+base.node("out_geometry").setInput(0, box)
+
+# Emit a marker at the REAL top face center (bbox_face_center +Y → y = H).
+emit_markers(core, "base", [
+    {"measure": "bbox_face_center", "face": "+Y", "name": "top_marker"}])
+
+# Downstream anchor: by_name picks top_marker (the real top), NOT bbox center.
+add_anchors(core, "base", [
+    {"measure": "by_name", "marker": "top_marker", "name": "top_mount"}])
+
+out_anc = base.node("out_anchors")
+out_anc.cook(force=True)
+pts = [p for p in out_anc.geometry().points()
+       if p.stringAttribValue("name") == "top_mount"]
+result["steps"]["m1_anchor_point_count"] = len(pts)
+if pts:
+    result["steps"]["m1_anchor_y_at_H1"] = pts[0].position().y()
+
+# CONTROL: a bbox_center anchor would sit at y=H/2 (=0.5 at H=1) — proving
+# by_name picks the marker (y=H=1.0), not the bbox hull.
+add_anchors(core, "base", [
+    {"measure": "bbox_center", "name": "bbox_ctl"}])
+out_anc.cook(force=True)
+for pt in out_anc.geometry().points():
+    if pt.stringAttribValue("name") == "bbox_ctl":
+        result["steps"]["m1_bbox_ctl_y_at_H1"] = pt.position().y()
+
+# LIVE: height 1.0 → 2.0. The emitted marker moves to y=2.0 (real top), and the
+# by_name anchor follows — proving the marker tracks the real geometry.
+core.parm("height").set(2.0)
+out_anc.cook(force=True)
+for pt in out_anc.geometry().points():
+    if pt.stringAttribValue("name") == "top_mount":
+        result["steps"]["m1_anchor_y_at_H2"] = pt.position().y()
+
+# Idempotency: re-emit the same marker name — replaces in place, no duplicate.
+emit_markers(core, "base", [
+    {"measure": "bbox_face_center", "face": "+Y", "name": "top_marker"}])
+result["steps"]["m1_marker_node_count_after_reemit"] = sum(
+    1 for n in base.children() if n.name().startswith("marker_"))
+
+print("RESULT_JSON:" + json.dumps(result))
+""" % (_REPO, _REPO)
+
+
+@unittest.skipUnless(HYTHON, "hython not installed")
+class TestEmitMarkersHython(unittest.TestCase):
+    """Phase 3: project_emit_markers — by_name made as easy as bbox."""
+
+    def _run(self):
+        proc = subprocess.run(
+            [HYTHON, "-c", _MARKERS_HARNESS],
+            capture_output=True, text=True, timeout=180, cwd=_REPO,
+            stdin=subprocess.DEVNULL)
+        combined = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 0,
+                         f"hython failed (rc={proc.returncode}):\n{combined[-2000:]}")
+        idx = combined.rfind("RESULT_JSON:")
+        self.assertGreater(idx, -1, f"no RESULT_JSON:\n{combined[-2000:]}")
+        return json.loads(combined[idx + len("RESULT_JSON:"):]), combined
+
+    def test_by_name_anchor_picks_emitted_marker_at_real_position(self):
+        """The by_name anchor sits at the REAL top (y=H=1.0), not the bbox
+        center (y=0.5) — proving project_emit_markers placed a marker the
+        by_name anchor picks at the true geometric position."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertGreaterEqual(s["m1_anchor_point_count"], 1,
+                                f"by_name anchor emitted no point: {res}")
+        self.assertAlmostEqual(s["m1_anchor_y_at_H1"], 1.0, places=4,
+            msg="by_name anchor must sit at the REAL top (y=H=1.0), not bbox center")
+        # Control: bbox_center sits at H/2=0.5 — proving by_name ≠ bbox.
+        self.assertAlmostEqual(s["m1_bbox_ctl_y_at_H1"], 0.5, places=4,
+            msg="bbox_center control must sit at H/2=0.5")
+
+    def test_marker_tracks_geometry_live(self):
+        """Changing height 1.0→2.0 moves the marker to the new real top (y=2.0),
+        and the by_name anchor follows — the LIVE parametric guarantee."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertAlmostEqual(s["m1_anchor_y_at_H2"], 2.0, places=4,
+            msg="marker must track the real top (y=2.0) when height changes")
+
+    def test_reemit_is_idempotent(self):
+        """Re-emitting the same marker name replaces in place (1 node), not
+        duplicates."""
+        res, _ = self._run()
+        s = res["steps"]
+        self.assertEqual(s["m1_marker_node_count_after_reemit"], 1,
+                         f"re-emit should replace, not duplicate: {res}")
+
+
 if __name__ == "__main__":
     unittest.main()

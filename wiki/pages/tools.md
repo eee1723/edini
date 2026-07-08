@@ -26,6 +26,7 @@
 | `project_create` | 建 Project HDA,返回 core_path | 任何多部件建模的第一步 |
 | `project_build_scaffold` | 声明组件+设计参数 → 建空子网+端口+连线+core spare parm | 跑完 create,组件分解定了 |
 | `project_add_anchors` | 从组件几何**测量**锚点(LIVE VEX,非硬编码) | 组件几何建好后,为下游发锚点 |
+| `project_emit_markers` | 往组件几何里发射 `@name` 标记点(真实测量位置) | 精确装配点(dropout/头管顶端);配合 `by_name` 锚点,优于 bbox |
 | `project_repath_to_relative` | 单组件绝对 ch()→相对(可迁移) | 想把组件复制到别的 project 时(可选) |
 | `project_promote_params` | 提升子网 spare parm 到 core | design_params 路径下返回 `[]` 是**正确的**(no-op),非失败 |
 | `project_status` | 一次性快照:每组件 geo_flow / anchors{declared,emitted,missing} / errors + `overall.incomplete` | 替代 N 次逐组件 inspect;看"还差什么" |

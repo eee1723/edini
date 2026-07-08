@@ -181,6 +181,43 @@ export const projectTools = [
     },
   },
   {
+    name: "project_emit_markers",
+    label: "Emit Semantic Markers",
+    description:
+      "Emit @name-tagged marker points INTO a component's geometry at REAL measured positions, so a downstream " +
+      "by_name anchor can pick them. Closes the gap that made by_name harder than bbox: instead of the agent " +
+      "hand-writing a marker-emission wrangle, this is a declarative one-call (same measure vocabulary as " +
+      "project_add_anchors: bbox_corner/bbox_face_center/bbox_center/...). Each marker {name, measure, ...params} " +
+      "becomes a wrangle reading the component's main geometry (out_geometry's source) and emitting ONE point " +
+      "tagged @name=<name>, merged into out_geometry. A downstream component then uses " +
+      "project_add_anchors with measure:'by_name' + marker:'<name>' to pick that exact point. This is the cure " +
+      "for bbox-derived anchors that sit on the bbox hull instead of the real geometric feature (e.g. a bike " +
+      "frame's true dropout vs its bbox face center). MUST build the component's geometry first (markers are " +
+      "measured from it). Idempotent + append-only across calls.",
+    promptSnippet: "Emit named marker points at real geometric positions for by_name anchors",
+    promptGuidelines: [
+      "Use project_emit_markers AFTER building a component's main geometry — markers are measured from that geometry.",
+      "Each marker: {name, measure, ...params}. name = the @name tag (downstream by_name picks it by this name). measure ∈ bbox_corner/bbox_face_center/bbox_center/... (same as anchors).",
+      "A marker sits at a REAL geometric position (a measured bbox corner/face/etc.), so when the geometry resizes the marker moves with it — unlike a hardcoded coordinate.",
+      "Downstream consumes a marker via project_add_anchors with measure:'by_name' + marker:'<name>' — that picks the exact marker point, not a bbox derivation.",
+      "Prefer by_name (marker) anchors for PRECISE assembly points (dropout, head-tube top); use bbox anchors only for gross posture points.",
+      "Idempotent: re-running with the same marker name replaces it in place; new names are appended.",
+    ],
+    parameters: Type.Object({
+      core_path: Type.String({ description: "Path to the edini::project SOP HDA instance." }),
+      component_id: Type.String({ description: "Which component subnet emits these markers (e.g. 'frame')." }),
+      markers: Type.Array(
+        Type.Object({}, { additionalProperties: true, description:
+          "Marker spec: {measure:'bbox_corner'|..., name:'<marker_name>', ...measure-params}. " +
+          "measure selects the strategy; name tags the emitted point's @name." }),
+        { description: "List of marker measurement specs (same vocabulary as project_add_anchors)." },
+      ),
+    }),
+    async execute(_id: string, params: { core_path: string; component_id: string; markers: Record<string, unknown>[] }) {
+      return forwardTool("project_emit_markers", params);
+    },
+  },
+  {
     name: "project_status",
     label: "Project Completion Status",
     description:
