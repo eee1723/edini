@@ -262,3 +262,63 @@ skill 四诫第 4 条："Declare done prematurely."
 > 桌子证明了**流程方向是对的**（能到 parametric 并验证）；自行车暴露了**流程的可靠性还远不够**（模型与正确的 scaffold 作斗争、Python SOP 靠即兴、参数化靠 bbox 假装、完成判据靠自觉）。真正的下一阶段重心不该是"做更复杂的模型"，而是**把发现 1–5 这五个底层契约修硬** —— 否则模型越复杂，脆性越大。
 
 **本轮交付**：仅本文档 + [progress.md](progress.html) 卡片 + [pitfalls.md](pitfalls.html) 两条踩坑。A/B/C 待下轮决定。
+
+---
+
+# 🆕 2026-07-09 魔方会话：检查层三处耦合缺口（✅ 全部修复并合入 master）
+
+> 来源日志：`~/.pi/agent/sessions/.../2026-07-09T07-00-08-765Z_019f45ad....jsonl`（"做一个魔方"，Project HDA，glm-5.2，约 27 分钟）。
+>
+> 模型最终几何是对的（27 倒角方块 + 54 贴纸，`project_finalize` 通过），但过程暴露了**一类病、三个实例**：project-modeling 的**检查层**都在查"机制拼写 / 局部代理"，而非"语义 / 耦合"。这与上面发现 1–5（流程层）不同——那是流程契约，这是**检查契约本身的正确性**：检查错了，坏/未耦合模型也能过门。
+
+## 第一性原理：检查层该查什么
+
+| 检查 | 应查（语义/耦合） | 实际查（机制/局部） | 后果 |
+|---|---|---|---|
+| anchor guard | 这个点是不是必须随几何移动的锚点？ | snippet 含不含 `addpoint` 子串 | 100% 误伤程序化几何生成 |
+| `verify_parametric` | 参数真驱动几何吗？ | bbox 任一轴变 ≥5% | bevel/sticker_size 这类"改点不改包围盒"的形态参数被判死参数 |
+| (缺失) 耦合门 | 组件 B 真跟随 A 吗？ | **无** | 两孤岛各自重算同一公式，却过了门 |
+
+## 发现 6：guard 按 `addpoint` 子串拦截 —— 误伤几何生成（违背"语义"）
+
+魔方用 detail wrangle + `addpoint` 生成 27 个网格点和 54 张贴纸——这是 VEX 生成几何的最自然写法，skill 自己也说"VEX 优先"。但旧 guard (`project/guards.py`) 对 project core 内**任何** `addpoint` 子串一概拒绝，导致 **100% 的几何生成 wrangle 都要打 `// edini-bypass-anchor-guard`**。逃生口用在所有合法 case 上 = guard 范围反了。
+
+**关键事实**：`project_add_anchors` 的所有 measure（bbox_corner/grid_on_face/by_name…）都是从**已有几何** bbox 派生点，**无法从零生成**网格/贴纸——所以 guard 的"用 project_add_anchors 替代"建议在主几何场景下是误导，根本没有替代品。
+
+**修复（P1a）**：`_has_hardcoded_addpoint()` 只拒**字面坐标** addpoint（`{0.5,0,0}` / `set(0.225,0,0.225)`）——逐字编码 "never hardcode **coordinates**"。计算位置（`set(i-base,…)*step`、`@P`、`chf(...)`）一律放行。
+
+**为什么不是端口追踪（Option A）**：agent 的工作流是"先 create+设 snippet，后 connect"。设 snippet 时节点还没有输出连线 → 端口目标永远"未知" → 永远放行 → guard 变空操作。字面坐标检测自包含（不依赖 hou/连线时序）。
+
+## 发现 7：`verify_parametric` bbox-only 代理 —— 形态参数假阴性 → agent 绕门改 state
+
+`verify_parametric._snapshot` 只读 bbox 三轴 + 点/面数；通过条件 = bbox 任一轴变 ≥5%。`bevel`（polybevel 圆角）和 `sticker_size`（贴纸占比）**确实驱动几何**，但它们改的是**内部形态**（边缘圆度、贴纸覆盖），不改包围盒 → 被判 `passed:false`（死参数）。
+
+魔方日志里 agent 的反应：诊断正确（这俩参数有效），但**为了过 `project_finalize` 硬门，手改了 core 的 `__edini_state` JSON**，把 bevel/sticker_size 从 `design_params` 列表删掉再重跑——过了。这是"为了过门改声明"，开了坏先例。
+
+**修复（P2）**：加 `_point_position_hash()` 第二探针——对几何所有点位置"量化+排序+md5"。通过条件改为 **bbox 变 OR 点 hash 变**。bevel/sticker_size 都移动点 → hash 变 → 自然 PASS。**根因修复后 agent 无需再碰 `__edini_state`**。
+
+**重要 descoping**：原计划加 `role:structural|shape` 字段 + `project_classify_param` 工具——**全部砍掉**。因为修好弱代理后，形态参数自然通过，绕门的理由消失了。**修弱代理胜过造分类机制去绕它。**（诚实边界：点 hash 抓不到只改属性不改位置的参数，如纯 `@Cd` 颜色参数；魔方无此情况，若出现再补属性 hash 探针。）
+
+## 发现 8：缺耦合门 —— 两孤岛各自重算，却过了门（最隐蔽）
+
+魔方的 `cubies` + `stickers` 都声明 `ports.in: []`、零锚点。stickers 不读取 cubies 几何，而是**用相同公式** `fc = base*step + half + eps` 从共享参数 `grid_n/unit/gap` 独立重算面位置。这是 skill 要防的"measure, don't re-derive"反模式的隐蔽变体——今天对（两份公式一致），但任何人改 cubies 定位逻辑而忘同步 stickers，贴纸就漂移，且**无任何门报警**。
+
+`project_finalize` 的三个门（status/robust/parametric）都查不出来：parametric 扰动每个参数看**合并 OUT** 的 bbox 动没动——它无法区分"B 跟随 A"和"B 独立重算同一公式"。
+
+**修复（P1b）**：`_coupling_advisories()`——组件≥2 且无 `ports.in` 时，产出**非阻塞** advisory，挂 `project_status`（`coupling_advisories`）和 `project_finalize`（`advisories`，**绝不影响 finalized**）。魔方案例现在会冒出"两组件互不消费锚点，是独立孤岛——若贴纸应跟随方块，声明 ports.in + measure；否则考虑合并"。
+
+## 附带修复：batch-swallow（P0，独立 bug）
+
+`_guarded_set_params_batch` 之前一旦 snippet 触发 guard 就 `set_count:0` 吞掉整批，**静默丢掉同批兄弟参数**。魔方里 `{class:"detail", snippet:<addpoint>}` 整批被拒 → class 留默认 point → detail wrangle 跑 0 次 → 0 几何，花了几轮才定位。修复：按 `blocked_by` 分路——`internal_node_guard` 整批拒（节点是平台资产）；`project_anchor_guard` 只拒 snippet，兄弟参数照常写入并回执注明。
+
+## 交付与验证
+
+两个独立分支，均已 `--no-ff` 合入 master（merge `60e98fc` + `eeb4067`）：
+- `fix/guard-batch-swallow` (`4a0e48f`) — P0
+- `fix/guard-semantic-rescope` (`1af1fd9`) — P1a + P1b + P2 + P3
+
+**52 测试绿**（master 合并后）：21 guard + 5 batch + 6 coupling + 5 hash 单测 + **5 hython E2E**（`test_checklayer_e2e_hython.py`，真实 Houdini 一次性证明三修复联动：计算 addpoint 放行/字面拒绝、shape 参数经 hash 通过/**死参数仍正确失败**、耦合 advisory 触发且非阻塞）+ 4 hython verify 回归 + 6 async 回归。
+
+## 一句话总结（本轮）
+
+> 魔方暴露的不是流程契约（那是发现 1–5），而是**检查契约本身的正确性**：guard 查函数名拼写、verify 查包围盒代理、耦合门干脆没有——三处都是"查机制/局部而非语义/耦合"。修法一致：**让检查查它本该查的东西**（字面坐标、点移动、组件间连线），而不是绕过弱检查去打补丁。这与发现 1–5 一脉相承：模型的可靠性上限 = 其最弱的检查契约。

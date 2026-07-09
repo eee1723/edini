@@ -57,7 +57,7 @@ build_project_scaffold(core, declaration=decl)
 
 这是新范式的核心价值：组件通过端口信息点协作。
 
-> ⚠️ **重要更新（2026-07-06，平台契约强化）**：直接手写 `addpoint()` 在 Project HDA 组件内**会被 `project_anchor_guard` 拒绝**（防止硬编码坐标、引导用声明式锚点）。请用 `project_add_anchors`——锚点从几何 bbox 测量派生，改参数 live 重算。下面的旧写法（attribwrangle + addpoint）仅作原理示意；生产路径用工具。
+> ⚠️ **重要更新（2026-07-06，平台契约强化；2026-07-09 收窄）**：在 Project HDA 组件内手写**字面坐标** `addpoint`（如 `addpoint(0, {0.5,0,0})` / `addpoint(0, set(0.225,0,0.225))`）**会被 `project_anchor_guard` 拒绝**——字面坐标不会随参数移动。锚点请用 `project_add_anchors`（从几何 bbox 测量派生，改参数 live 重算）。注意：**计算位置**的 `addpoint`（如 `set(i-base,j-base,k-base)*step`、`@P`、`chf(...)`）是允许的——那是生成程序化几何（网格/贴纸/scatter）的正常写法，不是硬编码。
 
 先给 chassis 造锚点（**声明式，测量几何而非硬编码**）：
 ```python
@@ -188,7 +188,7 @@ verify_orientation(node_path, checks=[
 |---|---|---|
 | `ImportError: build_project_scaffold` | Houdini 加载的还是旧代码 | 确认分支/合并状态 + 重启 Houdini |
 | `create_project_hda` 报类型找不到 | `edini::project` HDA 没加载 | 确认 `otls/edini_project.hda` 存在 + `HOUDINI_OTLSCAN_PATH` 指向 `otls/` |
-| **`blocked_by: project_anchor_guard`** | 在 Project HDA 组件里手写 `addpoint()` | 用 `project_add_anchors`（声明式测量锚点）。手写坐标已被平台拒绝 |
+| **`blocked_by: project_anchor_guard`** | 在 Project HDA 组件里写了**字面坐标** `addpoint`（`{0.5,0,0}` / `set(0.2,0,0.2)`） | 若是锚点 → 用 `project_add_anchors`；若是几何 → 从参数/属性算位置（`chf()`/`@P`），别写字面坐标。计算位置的 addpoint 不被拦 |
 | **`blocked_by: internal_node_guard`** | 编辑了 `__edini_axis_bake` 等 `__` 前缀内部节点 | 改声明里组件的 `axis` 字段再 rebuild；不要编辑内部节点 |
 | **`verify_orientation` 90° 失败但几何对** | baked `edini_world_axis` 默认 Y，但组件是 Z/X 朝向 | 在组件声明加 `"axis": "Z"`（或对应轴）rebuild；或 verify 时传 `construction_axis` 覆盖 |
 | **copytopoints 只复制锚点不复制几何** | tube 等 SOP 默认 `type=prim`（单基本体）| 设 `type=poly` 或 `type=mesh`（`query_parms` 的 access_hint 会提示）|

@@ -41,7 +41,7 @@
 |---|---|
 | `houdini_create_node` | 建节点(返回含 `parms` 参数清单,免再查) |
 | `houdini_connect_nodes` | 连线(from→to,input/output index) |
-| `houdini_set_param` / `houdini_set_params_batch` | 设参(**带 addpoint 守卫**:组件内 wrangle 拒硬编码 addpoint) |
+| `houdini_set_param` / `houdini_set_params_batch` | 设参(**带守卫**:组件内 wrangle 拒**字面坐标** addpoint 如 `{0.5,0,0}`/`set(0.2,0,0.2)`,计算位置放行;`set_params_batch` 的 snippet 被拒时**只跳过 snippet、仍写入同批兄弟参数**) |
 | `houdini_get_param` | 读参 |
 | `houdini_delete_node` / `houdini_list_nodes` / `houdini_get_node` | 节点 CRUD |
 | `houdini_get_scene_info` / `houdini_get_selection` | 场景/选区概览 |
@@ -80,7 +80,7 @@
 | **参数化成立吗**(改参→几何朝预期方向变) | `verify_parametric` | inspect_health(只证"此刻没坏") |
 
 > **`inspect_health` 的 `overall_ok` ≠ 参数化成立。** 它只证明"此刻没坏"。
-> 证明"改参后几何正确响应"必须用 `verify_parametric`(扰动→recook→量化→还原)。
+> 证明"改参后几何正确响应"必须用 `verify_parametric`(扰动→recook→量化→还原)。它用**双探针**:bbox 任一轴变 **或** 点位置 hash 变即算驱动——后者抓 bevel/sticker_size 这类"改点不改包围盒"的形态参数(旧 bbox-only 代理会误判它们为死参数)。
 
 | 工具 | 职责 |
 |---|---|
@@ -88,7 +88,7 @@
 | `inspect_health` | 几何健康(退化/孤儿/重合/非流形)→ `overall_ok` |
 | `geometry_inventory` | 按 @component_id 的面/点清单(项目感知) |
 | `verify_orientation` | 朝向轴校验 |
-| `verify_parametric` | **参数化硬门**:扰动 design_param→recook→量化验证→还原原值 |
+| `verify_parametric` | **参数化硬门**:扰动 design_param→recook→**双探针(bbox + 点位置 hash)**验证→还原原值 |
 | `verify_robust` | **区间稳健门**:每个 design_param 在 min/default/max 扫描,断言非零+无错(全区间不崩) |
 
 ## §6 捕获(Capture)— 多为视觉验证门控
