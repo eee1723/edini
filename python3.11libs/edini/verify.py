@@ -34,6 +34,27 @@ from edini.orientation_math import (
 )
 
 
+def _ui_yield() -> None:
+    """Let the Houdini UI breathe during a long main-thread sweep.
+
+    Verification gates (verify_robust / project_finalize) run many recooks in a
+    row on the main thread. Each cook is inherently main-thread work, but
+    BETWEEN them we can pump the Qt event loop so the viewport repaints and the
+    app stays responsive — instead of "Houdini frozen solid" while a finalize
+    sweep churns through ~21 cooks. A no-op when PySide6 / a Qt app isn't
+    available (headless tests, hython batch). Call only BETWEEN recook
+    iterations, never inside a perturb/restore try/finally where param state
+    must stay controlled.
+    """
+    try:
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance()
+        if app is not None:
+            app.processEvents()
+    except Exception:
+        pass
+
+
 def verify_orientation(
     node_path: str,
     checks: list[dict],
@@ -625,6 +646,9 @@ def verify_robust(
                         node.cook(force=True)
                     except Exception:
                         pass
+                # Param restored + re-cooked to baseline → safe to let the UI
+                # repaint before sweeping the next param (no perturbed state).
+                _ui_yield()
         finally:
             # Safety net: restore ALL params to originals (exception mid-sweep).
             for pname, val in original.items():
@@ -1121,6 +1145,9 @@ def project_finalize(
                                  f"param does not drive the geometry "
                                  f"(dead param? broken ch() ref?).",
                                  param=pname)
+                # verify_parametric perturbs+restores one param per call; between
+                # params is a safe, restored-baseline moment to let the UI repaint.
+                _ui_yield()
             checks["parametric"] = parametric_results
 
         # ── Auto-draft failures into the knowledge store (5a closed loop) ──

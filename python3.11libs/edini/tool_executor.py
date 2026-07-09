@@ -6,9 +6,12 @@ from Pi extensions via HTTP POST and dispatches to node_utils.
 from __future__ import annotations
 
 import atexit
+import collections
 import json
 import os
 import threading
+import time
+import uuid
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any, Callable
@@ -658,6 +661,159 @@ for _alias, _target in _TOOL_ALIASES.items():
 
 
 
+# ── Async tool execution (background job queue) ───────────────────────────
+#
+# Root cause of the 2026-07-09 "Houdini freezes solid during an agent run"
+# incident: AMPLIFICATION. The old synchronous do_POST ran each tool in-line and
+# blocked until it returned. A heavy tool (project_finalize's verify_robust
+# sweep ≈ 21 recooks) outlasted the Pi client's 30s timeout, so the client
+# aborted and RETRIED — re-running the whole sweep on an already-busy
+# single-threaded server. One finalize became up to three orphaned back-to-back
+# sweeps (every result discarded), locking Houdini for minutes and leaving the
+# executor unreachable to every later call.
+#
+# THE FIX (architectural, not a patch): never let a slow tool amplify, and never
+# run tools on Houdini's main thread.
+#   1. do_POST enqueues a _Job and returns a job id INSTANTLY (no hou, no block).
+#   2. A single drain thread runs each job on a BACKGROUND thread, one at a time
+#      (serialized → hou-safe). Tools stay OFF the main thread so the UI/render
+#      event loop is never starved. (An earlier revision marshaled each job to
+#      the main thread via hou.executeInMainThreadWithResult — that serialized
+#      tools BEHIND the streaming-render timers and froze Houdini; reverted.)
+#   3. The client polls GET /result/<id>. A slow cook can take arbitrarily long
+#      with no timeout→retry→amplification: the heavy op is issued exactly once;
+#      only cheap status polls retry, and only on a transport hiccup, never by
+#      re-issuing the work.
+#   4. Heavy handlers yield to the UI between sub-steps
+#      (QApplication.processEvents between recooks) so the viewport repaints
+#      mid-sweep — see verify._ui_yield.
+#
+# In tests hou is a stub (no real Houdini); jobs still run on the drain thread
+# exactly as in production, so the protocol tests exercise the real path.
+
+
+class _Job:
+    """One tool execution. Runs on the background drain thread; outcome polled
+    over HTTP."""
+
+    __slots__ = ("id", "tool", "params", "done", "result", "error", "finished_at")
+
+    def __init__(self, tool: str, params: dict[str, Any]) -> None:
+        self.id = uuid.uuid4().hex[:16]
+        self.tool = tool
+        self.params = params
+        self.done = threading.Event()
+        self.result: Any = None
+        self.error: dict[str, Any] | None = None
+        self.finished_at = 0.0
+
+    def run(self) -> None:
+        """Execute the handler. Runs on the background drain thread (hou is
+        accessed single-threaded from there).
+
+        Never raises: the handler's own result/error envelope — or a synthesized
+        one on exception — is stored on the job, and ``done`` is always set so a
+        polling client is never left waiting forever.
+        """
+        try:
+            handler = TOOL_HANDLERS.get(self.tool)
+            if handler is None:
+                self.result = {"success": False,
+                               "error": f"Unknown tool: {self.tool}"}
+            else:
+                self.result = handler(**self.params)
+        except Exception as e:  # capture; never propagate across threads
+            import traceback
+            self.error = {"success": False, "error": str(e),
+                          "traceback": traceback.format_exc()}
+        finally:
+            self.finished_at = time.time()
+            self.done.set()
+
+
+class ToolJobExecutor:
+    """Runs tool jobs one at a time on a background drain thread (see module
+    note). Tools stay OFF Houdini's main thread — marshaling them there queues
+    them behind the streaming-render timers and freezes the UI."""
+
+    _MAX_JOBS = 256
+
+    def __init__(self) -> None:
+        self._queue: collections.deque[_Job] = collections.deque()
+        self._cond = threading.Condition()
+        self._jobs: dict[str, _Job] = {}
+        self._thread: threading.Thread | None = None
+        self._stopping = False
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._stopping = False
+        self._thread = threading.Thread(
+            target=self._drain, daemon=True, name="edini-tool-drain")
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stopping = True
+        with self._cond:
+            self._cond.notify_all()
+        if self._thread is not None:
+            self._thread.join(timeout=2)
+            self._thread = None
+
+    def submit(self, tool: str, params: dict[str, Any]) -> _Job:
+        job = _Job(tool, params)
+        with self._cond:
+            self._jobs[job.id] = job
+            self._gc_locked()
+            self._queue.append(job)
+            self._cond.notify()
+        return job
+
+    def get(self, job_id: str) -> _Job | None:
+        return self._jobs.get(job_id)
+
+    def _gc_locked(self) -> None:
+        """Bound memory: drop the oldest FINISHED jobs past the cap. A running
+        job is never evicted (a client may still be polling it)."""
+        if len(self._jobs) <= self._MAX_JOBS:
+            return
+        finished = [(jid, j) for jid, j in self._jobs.items() if j.done.is_set()]
+        finished.sort(key=lambda pair: pair[1].finished_at)
+        for jid, _ in finished[:len(self._jobs) - self._MAX_JOBS]:
+            del self._jobs[jid]
+
+    def _drain(self) -> None:
+        while not self._stopping:
+            with self._cond:
+                while not self._queue and not self._stopping:
+                    self._cond.wait()
+                if self._stopping:
+                    return
+                job = self._queue.popleft()
+            # Run the job HERE, on this dedicated drain thread — NOT marshaled
+            # to Houdini's main thread. 2026-07-09 regression: an earlier
+            # revision used hou.executeInMainThreadWithResult, which serialized
+            # every tool onto the main-thread event queue, BEHIND the streaming
+            # render timers (text/thinking reflow every ~80-120ms during an LLM
+            # stream). Under a busy agent the queue backed up so a trivial
+            # set_param took ~40s and Houdini's UI froze — progressively worse
+            # over a session. Running on this single background thread keeps
+            # tools OFF the main thread (UI/render stay responsive) while still
+            # serializing them (one at a time → hou-safe, no concurrent scene
+            # access). This is the original, proven hou-access model; the ASYNC
+            # POLL PROTOCOL (do_POST returns a job id, client polls) is what
+            # kills the timeout→retry amplification — NOT main-thread marshaling.
+            # _Job.run never raises (it captures exceptions), so the drain loop
+            # can't die from a handler error.
+            job.run()
+            # Every completion is a natural GC point — evict the oldest FINISHED
+            # jobs past the cap so a long session can't leak. The just-finished
+            # job is the newest, so it is never the one evicted here.
+            with self._cond:
+                self._gc_locked()
+
+
 class _ToolHandler(BaseHTTPRequestHandler):
     """HTTP request handler for tool execution."""
 
@@ -675,15 +831,24 @@ class _ToolHandler(BaseHTTPRequestHandler):
             params = request.get("params", {})
 
             if tool_name not in TOOL_HANDLERS:
-                self._send_json({"success": False, "error": f"Unknown tool: {tool_name}"})
+                self._send_json({"success": False,
+                                 "error": f"Unknown tool: {tool_name}"})
                 return
 
-            result = TOOL_HANDLERS[tool_name](**params)
-            self._send_json(result)
+            # Enqueue onto the background job queue and return a job id
+            # INSTANTLY. The client polls GET /result/<id> for the outcome. This
+            # decouples HTTP I/O from (potentially long) hou work: the heavy op
+            # runs exactly ONCE on a background thread, the HTTP layer never
+            # blocks on it, and a slow cook can no longer trigger a client
+            # timeout→retry that re-runs the whole thing (the old multi-minute
+            # freeze).
+            executor: ToolJobExecutor = self.server.executor  # type: ignore[attr-defined]
+            job = executor.submit(tool_name, params)
+            self._send_json({"status": "queued", "job_id": job.id})
 
         except json.JSONDecodeError as e:
             self._send_error(400, f"Invalid JSON: {e}")
-        except Exception as e:
+        except Exception as e:  # pragma: no cover - defensive
             self._send_json({"success": False, "error": str(e)})
 
     def do_GET(self) -> None:
@@ -691,8 +856,24 @@ class _ToolHandler(BaseHTTPRequestHandler):
             # Include PID + port so a client can verify it's talking to the
             # intended Houdini instance (multi-instance diagnostics).
             self._send_json({"status": "ok", "pid": os.getpid()})
-        else:
-            self._send_error(404, "Not found")
+            return
+        if self.path.startswith("/result/"):
+            job_id = self.path[len("/result/"):]
+            executor: ToolJobExecutor = self.server.executor  # type: ignore[attr-defined]
+            job = executor.get(job_id)
+            if job is None:
+                self._send_json({"status": "unknown", "job_id": job_id})
+                return
+            if job.done.is_set():
+                # error is set only when the handler itself raised; result holds
+                # the normal {success:...} envelope (including success:false).
+                payload = job.error if job.error is not None else job.result
+                self._send_json({"status": "done", "job_id": job_id,
+                                 "result": payload})
+                return
+            self._send_json({"status": "running", "job_id": job_id})
+            return
+        self._send_error(404, "Not found")
 
     def log_message(self, format, *args) -> None:
         pass  # Suppress default logging
@@ -736,6 +917,10 @@ class ToolExecutor:
         self._port: int = 0
         self._server: HTTPServer | None = None
         self._thread: threading.Thread | None = None
+        # All tool work runs through this (one job at a time on a background
+        # drain thread). See the module note above for why tools must NOT run on
+        # the HTTP thread (amplification) or the main thread (render-starve).
+        self._executor = ToolJobExecutor()
 
     @property
     def port(self) -> int:
@@ -759,9 +944,12 @@ class ToolExecutor:
         # throwaway socket instead of relying on HTTPServer bind to fail.
         port = self._probe_free_port(self._requested_port)
         self._server = HTTPServer((self._host, port), _ToolHandler)
+        # Expose the executor to the per-request handler (it has no other ref).
+        self._server.executor = self._executor  # type: ignore[attr-defined]
         self._port = self._server.server_address[1]
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
+        self._executor.start()
         _write_port_file(self._port)
 
     @staticmethod
@@ -791,6 +979,7 @@ class ToolExecutor:
         if self._thread is not None:
             self._thread.join(timeout=2)
             self._thread = None
+        self._executor.stop()
         _remove_port_file()
 
 

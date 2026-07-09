@@ -28,6 +28,13 @@ class ThinkingPanel(QtWidgets.QFrame):
 
     COLLAPSED_H = 24
     EXPANDED_H = 200
+    # Bound the LIVE render: render_live / append call QTextEdit.setHtml, whose
+    # layout cost is O(text). A high-thinking turn emits thousands of chars, so
+    # reflowing the whole accumulated thinking on every (throttled) render
+    # froze Houdini's main thread during the stream. We only render a recent
+    # TAIL — the full thinking is pinned into the timeline by finish_streaming,
+    # and _thinking_full stays complete as the source of truth (uncapped).
+    THINKING_RENDER_CHAR_CAP = 2000
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -81,6 +88,21 @@ class ThinkingPanel(QtWidgets.QFrame):
         self._view.verticalScrollBar().setValue(
             self._view.verticalScrollBar().maximum())
 
+    def _capped_source(self, text: str) -> str:
+        """Return ``text`` trimmed to a recent tail if it exceeds the render cap.
+
+        Keeps the QTextEdit.setHtml layout cost bounded regardless of how large
+        a thinking turn grows. The caller still stores the FULL text in
+        ``_thinking_full`` (uncapped) — only what is RENDERED is trimmed, since
+        the full thinking is already preserved in the timeline."""
+        if len(text) <= self.THINKING_RENDER_CHAR_CAP:
+            return text
+        tail = text[-(self.THINKING_RENDER_CHAR_CAP):]
+        nl = tail.find("\n")
+        if 0 <= nl < 200:           # start on a clean line boundary
+            tail = tail[nl + 1:]
+        return "…(早期思考已折叠，完整内容见时间线)\n" + tail
+
     # ── public API (mirrors original AgentPanel thinking methods) ──
 
     def toggle(self):
@@ -111,8 +133,9 @@ class ThinkingPanel(QtWidgets.QFrame):
             self._thinking_full = text
         else:
             self._thinking_full += "\n\n" + text
+        src = self._capped_source(self._thinking_full)
         display = (
-            html.escape(self._thinking_full)
+            html.escape(src)
             .replace("\n\n", "<br><br>")
             .replace("\n", "<br>")
         )
@@ -124,16 +147,13 @@ class ThinkingPanel(QtWidgets.QFrame):
         self._thinking_buf = buf
         if not self._thinking_buf:
             return
-        live = html.escape(self._thinking_buf).replace("\n", "<br>")
-        if self._thinking_full:
-            base = (
-                html.escape(self._thinking_full)
-                .replace("\n\n", "<br><br>")
-                .replace("\n", "<br>")
-            )
-            display = f'{base}<br><br>{live}'
-        else:
-            display = live
+        combined = (self._thinking_full + "\n\n" + buf) if self._thinking_full else buf
+        src = self._capped_source(combined)
+        display = (
+            html.escape(src)
+            .replace("\n\n", "<br><br>")
+            .replace("\n", "<br>")
+        )
         self._view.setHtml(
             f'<div style="color:#8b8fa8;font-size:{fs(11)};line-height:1.5;">{display}'
             f'<span style="color:#a78bfa;">▊</span></div>'

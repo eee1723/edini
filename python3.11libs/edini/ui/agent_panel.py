@@ -125,6 +125,12 @@ class AgentPanel(QtWidgets.QWidget):
     sig_eval_completed = QtCore.Signal(str, float)  # session_id, total_score
 
     STREAM_FLUSH_INTERVAL_MS = 80
+    # Live thinking render cadence. Thinking is auxiliary (read-only), so it
+    # can update a bit less often than the chat bubble — and it MUST be
+    # coalesced: render_live() does a full QTextEdit setHtml reflow of the
+    # whole accumulated thinking, which per-token over a long high-thinking
+    # stream (glm models emit thousands of tokens) is O(K²) and froze the UI.
+    THINKING_RENDER_INTERVAL_MS = 120
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -153,6 +159,12 @@ class AgentPanel(QtWidgets.QWidget):
         self._stream_flush_timer.setSingleShot(True)
         self._stream_flush_timer.setInterval(self.STREAM_FLUSH_INTERVAL_MS)
         self._stream_flush_timer.timeout.connect(self._flush_stream)
+
+        # Coalesce live-thinking renders (see THINKING_RENDER_INTERVAL_MS).
+        self._thinking_render_timer = QtCore.QTimer(self)
+        self._thinking_render_timer.setSingleShot(True)
+        self._thinking_render_timer.setInterval(self.THINKING_RENDER_INTERVAL_MS)
+        self._thinking_render_timer.timeout.connect(self._update_live_thinking)
 
         self._build_ui()
         self._bind_events()
@@ -448,6 +460,7 @@ class AgentPanel(QtWidgets.QWidget):
         """Cancel the current streaming response without rendering separator."""
         self._streaming = False
         self._stream_flush_timer.stop()
+        self._thinking_render_timer.stop()
         if self._streaming_bubble:
             self.timeline_view.remove_last_widget()
             self._streaming_bubble = None
@@ -485,6 +498,15 @@ class AgentPanel(QtWidgets.QWidget):
         self._streaming = True
         self._thinking_count = 0
         self._streaming_bubble = None  # Will be created on first chunk
+        # Clear the ThinkingPanel's ACCUMULATED store (_thinking_full). A single
+        # user request spans many tool-call turns; this begin fires per turn, but
+        # _thinking_full used to persist across ALL of them. render_live() /
+        # append() reflow the entire _thinking_full via QTextEdit.setHtml on every
+        # (throttled) render, so it grew unbounded over a session (observed 60K+
+        # chars) and each reflow got slower → Houdini UI progressively froze.
+        # The previous turn's thinking is already pinned into its timeline bubble
+        # by finish_streaming(), so clearing the live panel here loses nothing.
+        self._clear_thinking()
 
     def append_stream_chunk(self, text: str):
         """Stream a chunk of text. Creates or updates the streaming bubble."""
@@ -529,6 +551,7 @@ class AgentPanel(QtWidgets.QWidget):
         """Finalize the streaming response."""
         self._streaming = False
         self._stream_flush_timer.stop()
+        self._thinking_render_timer.stop()
         if self._thinking_buf.strip():
             self._flush_thinking_buf()
         # Render any text buffered since the last timer tick BEFORE finalize —
@@ -600,8 +623,12 @@ class AgentPanel(QtWidgets.QWidget):
                     self._stream_segments.append({"type": "thinking", "content": para.strip()})
                     self._thinking_panel.append(para.strip())
             self._thinking_buf = parts[-1]
-        # Update thinking panel view in real-time as thinking arrives
-        self._update_live_thinking()
+        # Update thinking panel view in real-time as thinking arrives — but
+        # COALESCED onto _thinking_render_timer. Calling render_live() (a full
+        # QTextEdit setHtml reflow) per-token froze the UI over long thinking
+        # streams; ~8 renders/sec keeps it live without monopolizing the main
+        # thread. Final flush happens in finish_streaming.
+        self._schedule_thinking_render()
         if not self._thinking_panel.is_expanded() and not self._thinking_panel.has_content():
             self._auto_expand_thinking()
 
@@ -762,6 +789,12 @@ class AgentPanel(QtWidgets.QWidget):
         if not self._thinking_buf:
             return
         self._thinking_panel.render_live(self._thinking_buf)
+
+    def _schedule_thinking_render(self):
+        """Coalesce live-thinking render onto _thinking_render_timer (one
+        reflow per interval, not one per token)."""
+        if not self._thinking_render_timer.isActive():
+            self._thinking_render_timer.start()
 
     def _clear_thinking(self):
         # Clear content but preserve expand state (matches original).

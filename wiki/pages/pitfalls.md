@@ -19,16 +19,31 @@ pip install mistune --target "E:/edini/python3.11libs" --no-deps
 
 当前外部依赖：`mistune`（零依赖、纯 Python Markdown 渲染器）。PySide6 由 Houdini 自带，
 
-### QThread 与 Houdini 主线程
+### Houdini 主线程：工具执行 + 流式渲染（2026-07-09 卡死根治）
 
 - **分类**: Python/PySide6
 - **优先级**: 高
-- **状态**: 信息
+- **状态**: 已修复 (2026-07-09)
 
-Houdini 的 hou 模块只能在主线程调用。RpcClient 使用 QThread 管理 Pi 子进程的 stdin/stdout 读取，
-但所有 UI 操作和 hou API 调用必须在主线程。`ToolExecutor` 的 HTTP server 使用 daemon thread，
-接收到工具调用请求后，实际执行仍在主线程（通过 hou 模块自动排队）。
-**注意**：`RpcClient` 的信号通过 Qt 的 queued connection 自动跨线程安全。
+Edini 面板是嵌入 Houdini 的 PySide6 面板，**共享 Houdini 主线程**——所以 Edini 在主线程上的任何
+重活都会冻结整个 Houdini（不只是面板）。曾导致"agent 运行时 Houdini 卡死、越用越卡"的三类主线程
+饥饿，现已全部 bound：
+
+1. **工具执行放大**：旧同步 `do_POST` + 客户端 30s 超时重试 → 一个重工具（`project_finalize` ≈21
+   recook）被孤儿化重跑最多 3 次，锁死数分钟、后续调用全 `fetch failed`。**修复**：异步 job/poll
+   协议——`POST /execute` 立即回 `job_id`（`tool_executor.py` 的 `ToolJobExecutor` + drain 线程），
+   `GET /result/<id>` 轮询；客户端 `_shared.ts:forwardTool` 拿到 job_id 后**绝不重发重活**，放大
+   结构上不可能。
+2. **工具编排到主线程（曾引入的回归，已回退）**：一度用 `hou.executeInMainThreadWithResult` 把
+   工具投递到主线程，结果排在流式渲染 timer（80–120ms）后面 → 一个 `set_param` 等到 40s、越用越卡。
+   **修复**：工具在**单一后台 drain 线程**串行执行（hou 安全），永不碰主线程。
+3. **流式/思考渲染**：`QTextEdit.setHtml` 全文档重排 O(n)，glm high-thinking 每轮上万 token →
+   "思考更新时冻 Houdini"。**三重 bound**：频率（思考 120ms 节流）/ 跨轮（`begin_assistant_message`
+   每回合清空 `_thinking_full`）/ 单次成本（`ThinkingPanel` 渲染截断到尾部 2000 字符，完整思考在时间线）。
+
+**铁律**：工具永不跑在 Houdini 主线程；流式文本/思考渲染必须 timer 节流 + 有界。
+`RpcClient` 的信号走 Qt queued connection，跨线程安全。详见
+[开发进度](progress.md) 2026-07-09 卡死根治段。
 
 ### npm 全局路径在 Houdini 中不可见
 
