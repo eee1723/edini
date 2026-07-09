@@ -415,10 +415,44 @@ def _guarded_set_params_batch(**kw) -> dict[str, Any]:
     if node_path and isinstance(params.get("snippet"), str):
         blocked = lint_wrangle_snippet(node_path, params["snippet"])
         if blocked is not None:
-            # Mirror the batch shape so the agent's partial-result handling
-            # still works, but make refusal unambiguous via success:false.
-            blocked["set_count"] = 0
+            # A snippet refusal must NOT silently drop sibling params set in
+            # the same batch. The 2026-07-09 cube-session bug: a batch
+            # {class:"detail", snippet:<addpoint>} was refused wholesale →
+            # `class` stayed at its default (point, not detail) → the detail
+            # wrangle ran 0 times → 0 geometry → a long diagnostic detour.
+            #
+            # The two sub-guards diverge on scope, so branch on `blocked_by`:
+            #   - internal_node_guard: the WHOLE node is platform-owned, so
+            #     ALL params (not just snippet) are off-limits. Refuse the
+            #     batch wholesale.
+            #   - project_anchor_guard: only the snippet is suspect. Apply
+            #     the sibling params normally, refuse only the snippet, and
+            #     tell the agent exactly what to re-send.
+            if blocked.get("blocked_by") == "internal_node_guard":
+                blocked["set_count"] = 0
+                blocked["total_count"] = len(params)
+                return blocked
+            others = {k: v for k, v in params.items() if k != "snippet"}
+            applied = set_params_batch(node_path, others) if others else None
+            set_count = applied.get("set_count", 0) if applied else 0
+            blocked["success"] = False
+            blocked["partial"] = True
+            blocked["set_count"] = set_count
             blocked["total_count"] = len(params)
+            blocked["skipped_fields"] = ["snippet"]
+            if others:
+                blocked["applied_fields"] = list(others.keys())
+                blocked["note"] = (
+                    f"snippet refused by addpoint guard, but the "
+                    f"{len(others)} sibling param(s) "
+                    f"{list(others.keys())} WERE still applied. Fix the "
+                    f"snippet (use project_add_anchors, or add "
+                    f"`// edini-bypass-anchor-guard`) and re-send ONLY the "
+                    f"snippet — do not re-send the siblings.")
+            else:
+                blocked["note"] = (
+                    "snippet refused by addpoint guard; no other params in "
+                    "this batch.")
             return blocked
     return set_params_batch(node_path, params)
 
