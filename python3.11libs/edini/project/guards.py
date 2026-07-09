@@ -1,31 +1,44 @@
 """Pre-execution guards for project-modeling tool calls (Fix 1).
 
-Shifts the "use declarative primitives, not hand-rolled addpoint" rule from
-SKILL.md prose into a fail-fast platform gate. The chair-modeling log showed
-the agent hand-writing ``addpoint(set(0.225,0,0.225), ...)`` inside a component
-subnet instead of calling ``project_add_anchors`` — which then cascaded into
-VEX syntax errors, wrong wrangle class, and silent anchor cross-talk that took
-5 extra tool rounds to patch.
+Encodes the "never hardcode coordinates" rule (SKILL.md Guardrail 2) as a
+fail-fast platform gate. The chair-modeling log showed the agent hand-writing
+``addpoint(set(0.225,0,0.225), ...)`` inside a component subnet instead of
+calling ``project_add_anchors`` — which then cascaded into VEX syntax errors,
+wrong wrangle class, and silent anchor cross-talk that took 5 extra tool rounds
+to patch.
 
 This module exports ``lint_wrangle_snippet`` — called by the tool_executor
 dispatch BEFORE the param is applied. It returns an error dict (refuse) or
 None (allow). The guard is narrowly scoped:
 
   - ONLY fires when the target is an ``attribwrangle`` node
-  - whose snippet contains ``addpoint(``
+  - whose snippet contains an ``addpoint(...)`` call whose position is a
+    HARDCODED COORDINATE LITERAL (e.g. ``addpoint(0, {0.5,0,0})`` or
+    ``addpoint(0, set(0.225,0,0.225))``) — the thing that does NOT move when
+    params change.
   - AND the wrangle lives inside a component subnet of an ``edini::project``
     core (walked via ``node.parent()``).
 
 So recipe / sandbox / standalone wrangles are never affected — the gate is
 gated to the project-modeling context where the declarative primitive exists.
 
+Procedural geometry generation (``addpoint`` with a COMPUTED position —
+``set(i-base,j-base,k-base)*step``, ``@P``, ``chf(...)``) is ALLOWED: grids,
+stickers, scatter, point clouds are the natural VEX way to emit geometry and
+were false-positived by the earlier "any addpoint" version on 100% of the
+Rubik's-cube session's geometry-gen wrangles. Only the literal-coordinate
+signature is refused — that is the exact thing "never hardcode coordinates"
+forbids.
+
 Escape hatch: a snippet containing ``// edini-bypass-anchor-guard`` is allowed
 through. (``project_add_anchors`` builds its own wrangles via createNode +
 .parm().set() in-process, NOT through this tool path, so it never hits the
-guard; the hatch is for rare agent-legitimate cases.)
+guard; the hatch is for rare agent-legitimate cases — e.g. a genuinely fixed
+point.)
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 try:
@@ -38,10 +51,91 @@ from edini.project.ports import is_internal_scaffold_node
 # Substring that marks the agent explicitly opting out (e.g. a legit one-off).
 _BYPASS_MARKER = "edini-bypass-anchor-guard"
 
-# The forbidden primitive: hand-emitting anchor points by coordinate. We match
-# on the bare call token to catch both VEX ``addpoint(0, pos)`` and Python-SOP
-# ``geo.addPoint(hou.Vector(...))`` (lowercased check covers both).
-_FORBIDDEN_TOKEN = "addpoint"
+# The anti-pattern: hand-emitting points by HARDCODED coordinate. A coordinate
+# typed as a literal ({0.5,0,0} / set(0.225,0,0.225)) does not move when params
+# change — the chair-incident failure. But addpoint() with a COMPUTED position
+# (set(i-base,j-base,k-base)*step, @P, chf(...)) is legitimate procedural
+# geometry generation (grids, stickers, scatter). We refuse only the
+# LITERAL-coordinate signature — the exact thing "never hardcode coordinates"
+# forbids — so geometry-gen wrangles are no longer false-positived.
+_ADDPOINT_TOKEN = "addpoint"
+# Numeric literal (incl. scientific notation) — stripped before the identifier
+# search so the 'e' in 1e3 isn't misread as a variable name.
+_NUM_RE = re.compile(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?")
+# Vector-constructor names that legitimately wrap literal components. Stripped
+# so set(0.225,0,0.225) / hou.Vector3(0,0,0) read as literals, not identifiers.
+_LITERAL_CONSTRUCTORS = ("set", "hou", "vector", "vector2", "vector3", "vector4")
+_IDENT_RE = re.compile(r"[A-Za-z_]\w*")
+
+
+def _position_is_literal(pos: str) -> bool:
+    """True if a position expression is a hardcoded coordinate (no parametric
+    references — no variables, channels, or @-attributes)."""
+    s = _NUM_RE.sub("", pos)            # drop numbers first (e.g. 1e3's 'e')
+    for ctor in _LITERAL_CONSTRUCTORS:  # drop vector-constructor names
+        s = s.replace(ctor, "")
+    # Any surviving identifier = a variable / channel / attribute → parametric.
+    return _IDENT_RE.search(s) is None
+
+
+def _addpoint_positions(snippet: str) -> list[str]:
+    """Extract the position (2nd) argument of each VEX ``addpoint(geohandle,
+    pos)`` call. Python-SOP ``geo.addPoint(arg)`` has different arity (single
+    arg) and is skipped by the comma-search — Python SOPs aren't wrangle-gated
+    anyway (the type check excludes them)."""
+    positions: list[str] = []
+    lowered = snippet.lower()
+    search_from = 0
+    while True:
+        idx = lowered.find(_ADDPOINT_TOKEN, search_from)
+        if idx == -1:
+            break
+        paren_open = snippet.find("(", idx)
+        if paren_open == -1:
+            break
+        # Walk to the first top-level comma (end of the geohandle argument).
+        depth = 0
+        i = paren_open
+        comma_at = None
+        while i < len(snippet):
+            c = snippet[i]
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            elif c == "," and depth == 1:
+                comma_at = i
+                break
+            i += 1
+        if comma_at is None:
+            search_from = idx + len(_ADDPOINT_TOKEN)
+            continue
+        # Capture the position argument up to the matching close paren.
+        depth = 1
+        j = comma_at + 1
+        chars: list[str] = []
+        while j < len(snippet):
+            c = snippet[j]
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            chars.append(c)
+            j += 1
+        positions.append("".join(chars).strip())
+        search_from = j + 1
+    return positions
+
+
+def _has_hardcoded_addpoint(snippet: str) -> bool:
+    """True if the snippet contains an ``addpoint()`` whose position is a
+    hardcoded coordinate literal. Procedural geometry (computed/parametric
+    position) and benign anchor-less snippets pass through."""
+    return any(_position_is_literal(p) for p in _addpoint_positions(snippet))
 
 # How far up the parent chain to walk looking for an edini::project core.
 # subnet → core is 1 hop; a wrangle directly parented to core is 1 hop. A few
@@ -128,13 +222,18 @@ def lint_wrangle_snippet(node_path: str, snippet: Any) -> dict[str, Any] | None:
             "suggested_node": "tag_component",
         }
 
-    # ── Guard B: addpoint hardcoding ──
+    # ── Guard B: hardcoded-coordinate addpoint ──
     # Pure-logic gate on the snippet content first (cheap, no hou needed).
     if not isinstance(snippet, str):
         return None
     if _BYPASS_MARKER in snippet:
         return None
-    if _FORBIDDEN_TOKEN not in snippet.lower():
+    # Cheap fast-path: no addpoint token at all → nothing to refuse.
+    if _ADDPOINT_TOKEN not in snippet.lower():
+        return None
+    # Precise check: refuse only a LITERAL-coordinate addpoint. Computed
+    # positions (procedural geometry) pass — see _has_hardcoded_addpoint.
+    if not _has_hardcoded_addpoint(snippet):
         return None
 
     # Context gate: only refuse inside a project core. Requires hou. We use the
@@ -152,20 +251,23 @@ def lint_wrangle_snippet(node_path: str, snippet: Any) -> dict[str, Any] | None:
     if not _inside_project_core(node):
         return None
 
-    # Refuse. Name the right tool + the rule, so the agent learns in one round.
-    # Vocabulary aligned with project-modeling SKILL.md leading words: "measure".
+    # Refuse. Name the rule and BOTH resolution paths, so the agent learns in
+    # one round: this is either an anchor (use project_add_anchors) or geometry
+    # (derive the position parametrically). Vocabulary aligned with SKILL.md.
     return {
         "success": False,
         "blocked_by": "project_anchor_guard",
         "error": (
-            "Refused: measure violation — hardcoded addpoint() inside a "
-            "Project HDA component. ALWAYS measure anchors from geometry via "
-            "project_add_anchors so they move when params change; NEVER "
-            "hardcode coordinates. project_add_anchors generates a LIVE VEX "
-            "wrangle that measures the component's bbox on every cook. "
-            "(Guardrail 2: always measure — never hardcode.) If this addpoint "
-            "is genuinely not an anchor (rare), add "
-            "`// edini-bypass-anchor-guard` to the snippet."
+            "Refused: hardcoded-coordinate addpoint() inside a Project HDA "
+            "component — a position typed as a literal ({0.5,0,0} / "
+            "set(0.225,0,0.225)) does NOT move when parameters change. "
+            "Either: (a) this is a cross-component anchor → use "
+            "project_add_anchors, which emits a LIVE wrangle measuring the "
+            "component's bbox every cook (Guardrail 2: always measure — never "
+            "hardcode); or (b) this is geometry → derive the position from "
+            "design params or point attributes (ch()/chf()/@P), not a literal. "
+            "(A genuinely fixed point is rare — add "
+            "`// edini-bypass-anchor-guard` to the snippet.)"
         ),
         "suggested_tool": "project_add_anchors",
         "schema_hint": {
@@ -185,9 +287,10 @@ def lint_wrangle_snippet(node_path: str, snippet: Any) -> dict[str, Any] | None:
 # half; tests inject a fake via monkeypatching `hou` in this module's globals.
 def _snippet_violates(snippet: Any) -> bool:
     """Pure-logic: True if the snippet text itself is a violation candidate
-    (contains addpoint, no bypass marker). Does NOT check project context."""
+    (a literal-coordinate addpoint, no bypass marker). Does NOT check project
+    context. Computed-position addpoint (procedural geometry) returns False."""
     if not isinstance(snippet, str):
         return False
     if _BYPASS_MARKER in snippet:
         return False
-    return _FORBIDDEN_TOKEN in snippet.lower()
+    return _has_hardcoded_addpoint(snippet)

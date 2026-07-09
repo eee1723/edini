@@ -158,7 +158,7 @@ export const projectTools = [
     description:
       "Procedurally generate anchor points by MEASURING a component's geometry (LIVE — recompute when geometry changes). " +
       "Each anchor is a measurement spec resolved into a VEX wrangle that measures the component's bbox on every cook. " +
-      "Always measure — never hardcode addpoint coordinates (the platform guard refuses hardcoded addpoint with 'measure violation'). " +
+      "Always measure — never hardcode addpoint coordinates (the platform guard refuses a LITERAL-coordinate addpoint, e.g. addpoint(0,{0.5,0,0}) or addpoint(0,set(0.225,0,0.225)), with 'Refused: hardcoded-coordinate addpoint'; a COMPUTED position like addpoint(0,set(i-base,...)*step) is fine — that's procedural geometry). " +
       "Resizing the component (via a design param) automatically moves the measured anchors. Anchors are tagged with @name for downstream components to consume.",
     promptSnippet: "Generate live anchor points from a component's geometry",
     promptGuidelines: [

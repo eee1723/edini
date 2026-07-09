@@ -40,10 +40,13 @@ it rather than restating it.
 
 **2. Always `measure` — never hardcode coordinates.**
 Anchors must be measured from geometry (`project_add_anchors`) so they move
-when parameters change. Never type `addpoint(x,y,z)`. The platform guard
-**refuses** hardcoded `addpoint` inside a Project HDA component — you will see
-a `Refused: measure violation ...` error. That refusal is the rule below made
-executable.
+when parameters change. Never type a literal coordinate like
+`addpoint(0, {0.5,0,0})` or `addpoint(0, set(0.225,0,0.225))`. The platform
+guard **refuses** literal-coordinate `addpoint` inside a Project HDA component
+— you will see a `Refused: hardcoded-coordinate addpoint ...` error. Note:
+`addpoint` with a **computed** position (`set(i-base,...)*step`, `@P`,
+`chf(...)`) is fine and is the normal way to generate procedural geometry
+(grids, stickers, scatter); only typed-in number coordinates are refused.
 
 **3. Brainstorming is a fast-path, not a full interview.**
 For modeling tasks, ask 1-2 quick questions (style? size?), present a brief
@@ -117,6 +120,15 @@ button on the core panel.
 
 **Before calling this**, draw the dependency graph (tabletop → legs,
 tabletop → apron). Every arrow is a `ports.in` entry (see Guardrail 1).
+
+**Split vs. merge — decide deliberately.** Components are for PARTS that
+physically attach and must track each other (table + legs, car body + wheels);
+declare `ports.in` between them. If two "components" are really one object
+(e.g. a cube + its surface stickers), **merge them into one component** rather
+than splitting — otherwise each independently re-derives the same formula from
+shared params and can drift. A 2+ component project with no `ports.in` surfaces
+a non-blocking `coupling_advisory: independent_components` in
+`project_status` / `project_finalize` as a prompt to reconsider.
 
 A component may declare its orientation `axis` (one of `X`/`Y`/`Z`/`-X`/`-Y`/
 `-Z`; default `Y`). `verify_orientation` reads it as ground truth — declare the

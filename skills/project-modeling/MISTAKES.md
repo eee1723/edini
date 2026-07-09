@@ -8,12 +8,13 @@
 
 | Symptom | Root cause | Fix |
 |---|---|---|
-| **Anchors don't move when you resize the component** | You hardcoded `addpoint(x,y,z)` instead of measuring. The platform guard refuses this with `Refused: measure violation`. | Use `project_add_anchors` — anchors are measured from the bbox on every cook. NEVER hardcode anchor coordinates. |
-| **`Refused: measure violation ... hardcoded addpoint`** | The platform guard (`guards.py`) caught `addpoint()` inside a Project HDA component subnet. This is Guardrail 2 made executable. | Replace the hand-written addpoint with `project_add_anchors`. If it is genuinely NOT an anchor (rare), add `// edini-bypass-anchor-guard` to the snippet. |
+| **Anchors don't move when you resize the component** | You hardcoded a coordinate (`addpoint(0, {x,y,z})` / `addpoint(0, set(x,y,z))` with literal numbers) instead of measuring. The platform guard refuses this with `Refused: hardcoded-coordinate addpoint`. | Use `project_add_anchors` — anchors are measured from the bbox on every cook. NEVER hardcode anchor coordinates. |
+| **`Refused: hardcoded-coordinate addpoint ...`** | The platform guard (`guards.py`) caught an `addpoint()` whose position is a **literal coordinate** inside a Project HDA component. This is Guardrail 2 made executable. Note: `addpoint` with a **computed** position (`set(i-base,...)*step`, `@P`, `chf(...)`) is allowed — that's procedural geometry, not hardcoding. | If it's an anchor → use `project_add_anchors`. If it's geometry → derive the position from params/attributes, not a literal. A genuinely fixed point is rare — add `// edini-bypass-anchor-guard`. |
 | **`Refused: ... internal scaffold node ... '__' prefix`** | You tried to edit a node the builder owns (`out_geometry`, `output_0`, `__edini_axis_bake`, etc.). The `__` prefix marks platform-owned nodes. | Edit `tag_component` in the same subnet instead (for component_id / per-component attribs). For axis, update the declaration's `axis` and re-scaffold. |
 | **Box can't read a param (zero geometry, "Bad parameter reference")** | Relative `ch("../../length")` across subnet nesting is unreliable. | Use ABSOLUTE paths: `ch('/obj/.../project_core/length')`. The core_path is in the `[Current Houdini Context]` block of every message. |
 | **`connect_nodes` can't reach the anchor cloud** | You used the default `output_index=0` (main geometry). Anchors are on port 1. | Pass `output_index=1` to reach the upstream component's anchor cloud. See `PORT_PROTOCOL.md`. |
 | **Components float in space, disconnected** | Missing `ports.in` — the builder created no input port, so the downstream component cannot consume upstream anchors. | Declare the dependency in `ports.in` at scaffold time (Guardrail 1). Draw the dependency graph first. |
+| **`coupling_advisory: independent_components` from project_status / finalize** | You declared 2+ components but none consumes another's anchors (no `ports.in`). They are independent parametric islands — each recomputes its geometry from shared params (e.g. a cube's `cubies` + `stickers` both reading `grid_n/unit/gap` but not connected). Works while their formulas stay identical, but is latently fragile (drift) and duplicates formulas. `verify_parametric` cannot detect this — it checks each param drives the merged bbox, not that B follows A. | **Non-blocking** — decide deliberately. If a component should TRACK another (e.g. stickers on a cube body), declare `ports.in` + `project_add_anchors` so it measures the upstream geometry. If the parts are genuinely one object (cube + its stickers), merge them into a single component so there's no duplicated formula to drift. Multi-part models (table+legs) SHOULD declare ports.in — a missing advisory there means real coupling. |
 | **Param has no min/max on the core after promote** | The subnet spare parm was created without min/max. | Add the spare parm on the subnet WITH min/max (FloatParmTemplate), then `project_promote_params` copies them up. Or use step 2b `design_params` (min/max built in). |
 | **`project_create` made a new HDA instead of using the selected one** | A stale selection was in the network editor. | Deselect first, or pass the intended core explicitly. |
 | **Built geometry but nothing shows at core OUT** | Your geometry never feeds into `out_geometry` → `output_0` → core's OUT merge. | Connect the last geometry node → the subnet's `out_geometry` null. |
@@ -47,12 +48,15 @@ rounds before giving up.
 model ("I need a point here") did not match the parametric requirement ("the
 point must follow the geometry").
 
-**Fix:** `guards.py` now refuses `addpoint()` inside Project HDA component
-subnets with `Refused: measure violation`. The agent is forced to use
-`project_add_anchors`, which emits a VEX wrangle that measures the bbox on
-every cook. The leading word `measure` appears in the skill, the tool
-description, AND the refusal message — so the agent sees the same vocabulary
-whether it learns the rule, calls the tool, or hits the guard.
+**Fix:** `guards.py` now refuses a **literal-coordinate** `addpoint()` (e.g.
+`addpoint(0, set(0.225, 0, 0.225))`) inside Project HDA component subnets with
+`Refused: hardcoded-coordinate addpoint`. (A computed-position addpoint —
+`set(i-base,...)*step`, `@P`, `chf(...)` — is allowed; that's procedural
+geometry, not hardcoding.) The agent is forced to use `project_add_anchors`
+for anchors, which emits a VEX wrangle that measures the bbox on every cook.
+The leading word `measure` appears in the skill, the tool description, AND the
+refusal message — so the agent sees the same vocabulary whether it learns the
+rule, calls the tool, or hits the guard.
 
 ### The relative-path zero-geometry bug
 
