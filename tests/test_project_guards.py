@@ -56,19 +56,58 @@ def _install_fake_hou(guards_module, target_node):
 
 
 class TestSnippetViolates(unittest.TestCase):
-    """Pure-logic predicate — no hou."""
+    """Pure-logic predicate — no hou.
 
-    def test_detects_vex_addpoint(self):
+    The 2026-07-09 rescoping: the guard refuses only a LITERAL-coordinate
+    addpoint (the "never hardcode coordinates" anti-pattern). Procedural
+    geometry — addpoint with a computed/parametric position — is ALLOWED.
+    """
+
+    # ── Literal coordinates (the chair-incident signature) → REFUSE ──
+
+    def test_detects_literal_braced_vector(self):
         from edini.project.guards import _snippet_violates
         self.assertTrue(_snippet_violates("int p = addpoint(0, {0,0,0});"))
+        self.assertTrue(_snippet_violates("addpoint(0, {0.5, -0.2, 1e3});"))
 
-    def test_detects_python_addpoint(self):
+    def test_detects_literal_set_constructor(self):
+        """The exact chair-incident snippet: set() with numeric literals."""
         from edini.project.guards import _snippet_violates
-        self.assertTrue(_snippet_violates("geo.addPoint(hou.Vector3(0,0,0))"))
+        self.assertTrue(_snippet_violates(
+            "int p = addpoint(0, set(0.225, 0, 0.225));"))
 
-    def test_detects_addpoint_with_whitespace(self):
+    def test_detects_literal_with_whitespace(self):
         from edini.project.guards import _snippet_violates
-        self.assertTrue(_snippet_violates("addpoint (0, pos)"))
+        self.assertTrue(_snippet_violates("addpoint (0,  {1, 2, 3})"))
+
+    # ── Computed positions (procedural geometry) → ALLOW ──
+    # These are the Rubik's-cube grid_pts / build_stickers patterns that the
+    # old "any addpoint" guard false-positived on 100% of geometry-gen wrangles.
+
+    def test_allows_computed_variable_position(self):
+        from edini.project.guards import _snippet_violates
+        self.assertFalse(_snippet_violates("addpoint(0, pos);"))
+        self.assertFalse(_snippet_violates("addpoint (0, p)"))
+
+    def test_allows_computed_set_with_loop_vars(self):
+        """The cube grid_pts pattern: set(i-base, j-base, k-base)*step."""
+        from edini.project.guards import _snippet_violates
+        self.assertFalse(_snippet_violates(
+            "addpoint(0, set(i - base, j - base, k - base) * step);"))
+
+    def test_allows_computed_with_channel_ref(self):
+        from edini.project.guards import _snippet_violates
+        self.assertFalse(_snippet_violates(
+            "addpoint(0, set(chf('/obj/geo1/project1/unit'), 0, 0));"))
+
+    def test_allows_computed_with_attribute(self):
+        from edini.project.guards import _snippet_violates
+        self.assertFalse(_snippet_violates("addpoint(0, @P);"))
+
+    def test_allows_braced_times_variable(self):
+        """A literal scaled by a param IS parametric → allow."""
+        from edini.project.guards import _snippet_violates
+        self.assertFalse(_snippet_violates("addpoint(0, {1,2,3} * scale);"))
 
     def test_allows_benign_snippet(self):
         from edini.project.guards import _snippet_violates

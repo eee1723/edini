@@ -302,7 +302,7 @@
 
 <div class="callout danger">
   <span class="callout-title">2. 永远 measure(测量)—— 绝不硬编码坐标</span>
-  <p>锚点必须从几何体中测量(<code>project_add_anchors</code>),这样参数变化时它们才会跟着移动。绝不手打 <code>addpoint(x,y,z)</code>。平台护栏会<strong>拒绝</strong>在 Project HDA 组件内硬编码 <code>addpoint</code> —— 你会看到一个 <code>Refused: measure violation ...</code> 错误。这个拒绝就是下文规则的可执行化。</p>
+  <p>锚点必须从几何体中测量(<code>project_add_anchors</code>),这样参数变化时它们才会跟着移动。绝不手打字面坐标,如 <code>addpoint(0, {0.5,0,0})</code> 或 <code>addpoint(0, set(0.225,0,0.225))</code>。平台护栏会<strong>拒绝</strong>在 Project HDA 组件内使用<strong>字面坐标</strong>的 <code>addpoint</code> —— 你会看到一个 <code>Refused: hardcoded-coordinate addpoint ...</code> 错误。注意:用<strong>计算出的</strong>位置(<code>set(i-base,...)*step</code>、<code>@P</code>、<code>chf(...)</code>)是允许的,那是生成程序化几何(网格、贴纸、scatter)的正常写法;只有手打数字坐标才会被拒。</p>
 </div>
 
 <div class="callout danger">

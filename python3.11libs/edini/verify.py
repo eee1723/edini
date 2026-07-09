@@ -7,6 +7,7 @@ Split out of node_utils.py in the Phase 4 refactor. Re-exported from
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import json
 import re
@@ -319,6 +320,40 @@ def verify_orientation(
         }
 
 
+def _point_position_hash(geo) -> str:
+    """Deterministic signature of a geometry's point positions.
+
+    Catches ANY real geometric change — including params that move points
+    WITHOUT moving the bbox (bevel rounding, sticker coverage, edge insets) —
+    which the bbox-only proxy in :func:`verify_parametric` used to
+    false-negative as a 'dead param'. That false-negative is what drove agents
+    to hand-edit ``__edini_state`` to shrink the verified param set (the
+    2026-07-09 cube session). With this hash, a param that genuinely drives
+    geometry is detected regardless of whether the bbox moves.
+
+    Positions are quantized relative to the bbox diagonal (float-noise
+    insensitive across model scales) and sorted (point-order insensitive). Two
+    geometries whose points occupy the same locations hash equal; one moved
+    point differs. O(n log n) in point count — cheap for the per-param
+    perturbation verify_parametric runs.
+    """
+    bb = geo.boundingBox()
+    diff = bb.maxvec() - bb.minvec()
+    diag = diff.length()
+    # Relative quantization: ~4 significant digits of model size. Guards
+    # against float noise from recook without masking real movement. The
+    # floor avoids divide-by-tiny for degenerate (zero-volume) geometry.
+    quant = diag * 1e-4 if diag > 1e-9 else 1e-7
+    quants = []
+    for p in geo.points():
+        pos = p.position()
+        quants.append((round(pos[0] / quant),
+                       round(pos[1] / quant),
+                       round(pos[2] / quant)))
+    quants.sort()
+    return hashlib.md5(repr(quants).encode()).hexdigest()
+
+
 def verify_parametric(
     node_path: str,
     core_path: str,
@@ -335,13 +370,18 @@ def verify_parametric(
     moved the geometry. `overall_ok` only proves "not broken right now"; it does
     NOT prove "parametric". This tool proves parametric by PERTURBATION:
 
-      1. Read the target node's current geometry (bbox size + point/prim count).
+      1. Read the target node's current geometry (bbox size, point/prim count,
+         and a point-position hash).
       2. Set the core's design param to ``new_value``.
       3. Force-recook the target node.
       4. Read the perturbed geometry.
-      5. Assert: geometry non-empty, no new cook errors, and at least one bbox
-         axis changed by >= ``min_relative_change`` (the param propagated to the
-         geometry). If ``expected_axis`` is given (X/Y/Z), THAT axis MUST change.
+      5. Assert: geometry non-empty, no new cook errors, and EITHER at least one
+         bbox axis changed by >= ``min_relative_change`` OR the point-position
+         hash changed (the param propagated to the geometry). The hash is the
+         second probe: it catches params that move points WITHOUT moving the
+         bbox (bevel rounding, sticker coverage) — the bbox-only proxy used to
+         false-negative these as 'dead params'. If ``expected_axis`` is given
+         (X/Y/Z), THAT axis MUST change (the hash does not satisfy an axis hint).
       6. ALWAYS restore the param to its original value (never mutate the user's
          scene as a side effect of a check).
 
@@ -352,14 +392,15 @@ def verify_parametric(
         param: design param name on the core (e.g. "length").
         new_value: the perturbation value (should be meaningfully different from
             the current value; a sanity check rejects no-op perturbations).
-        expected_axis: optional "X"/"Y"/"Z" — if given, this axis MUST change.
+        expected_axis: optional "X"/"Y"/"Z" — if given, this axis MUST change
+            (the point-hash probe does NOT satisfy an explicit axis expectation).
         min_relative_change: minimum |Δsize|/|size| for an axis to count as
             "changed" (default 5%, guards against float noise).
 
     Returns:
         {success, passed, param, original_value, new_value, restored,
-         before:{sizes,points,prims}, after:{...}, axis_changes:{X,Y,Z},
-         reason}
+         before:{sizes,points,prims,point_hash}, after:{...},
+         axis_changes:{X,Y,Z}, point_hash_changed, reason}
     """
     try:
         node = hou.node(node_path)
@@ -374,7 +415,10 @@ def verify_parametric(
                     "error": f"Param {param!r} not found on {core_path}"}
 
         def _snapshot():
-            """Read bbox sizes (X/Y/Z), point count, prim count of `node`."""
+            """Read bbox sizes (X/Y/Z), point count, prim count, and a point-
+            position hash of `node`. The hash catches params that move points
+            without moving the bbox (bevel, sticker_size) — see
+            _point_position_hash."""
             g = node.geometry()
             if g is None:
                 return None
@@ -385,6 +429,7 @@ def verify_parametric(
                 "sizes": [mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2]],
                 "points": len(g.points()),
                 "prims": len(g.prims()),
+                "point_hash": _point_position_hash(g),
             }
 
         original_value = parm.eval()
@@ -461,16 +506,27 @@ def verify_parametric(
             if rel >= min_relative_change:
                 any_changed = True
 
+        # ── Point-position hash: the second probe ──
+        # Catches params that drive geometry WITHOUT moving the bbox (bevel
+        # rounding, sticker coverage) — the bbox-only proxy false-negatived
+        # these as 'dead params', which drove agents to hand-edit
+        # __edini_state to pass the gate. Any real movement changes the hash.
+        hash_changed = before.get("point_hash") != after.get("point_hash")
+        if hash_changed:
+            any_changed = True
+
         if not any_changed:
             return {"success": True, "passed": False,
                     "param": param, "original_value": original_value,
                     "new_value": new_value, "restored": True,
                     "before": before, "after": after,
                     "axis_changes": axis_changes,
+                    "point_hash_changed": False,
                     "reason": (f"no bbox axis changed by >= {min_relative_change} "
-                               f"when {param} {original_value}->{new_value}; "
-                               f"the param likely does not reach the geometry "
-                               f"(broken ch() chain?)")}
+                               f"AND point positions are identical when "
+                               f"{param} {original_value}->{new_value}; the "
+                               f"param does not reach the geometry (broken "
+                               f"ch() chain?)")}
 
         # If an expected axis was named, it specifically must have changed.
         if expected_axis:
@@ -494,9 +550,14 @@ def verify_parametric(
                 "new_value": new_value, "restored": True,
                 "before": before, "after": after,
                 "axis_changes": axis_changes,
+                "point_hash_changed": hash_changed,
                 "reason": (f"PASS: {param} {original_value}->{new_value} moved "
                            f"the geometry"
                            + (f" on axis {expected_axis.upper()}" if expected_axis else "")
+                           + (f" (via point positions; bbox unchanged — a shape "
+                              f"param like bevel/sticker_size)" if hash_changed
+                              and not any(c >= min_relative_change
+                                          for c in axis_changes.values()) else "")
                            + f"; axis_changes={axis_changes}")}
     except Exception as e:
         # If the exception happened after perturbation, the inner finally has
@@ -826,6 +887,48 @@ def _declared_anchor_names(comp: dict) -> list[str]:
     return names
 
 
+def _coupling_advisories(components: list) -> list[dict]:
+    """Non-blocking advisories about cross-component coupling.
+
+    A multi-component model where NO component declares a ``ports.in``
+    dependency is a set of independent parametric islands — each recomputes
+    its own geometry from shared design params rather than tracking another
+    component. The 2026-07-09 Rubik's-cube session was exactly this: ``cubies``
+    + ``stickers`` both read ``grid_n/unit/gap`` but don't connect (no
+    ports.in, zero anchors) — so stickers re-derive the face position by
+    formula instead of measuring the cube. It works while both formulas stay
+    identical, but is latently fragile and violates the 'measure, don't
+    re-derive' principle. ``verify_parametric`` cannot detect this (it checks
+    each param drives the MERGED bbox, not that B follows A), so we surface it
+    here as advisory — never a hard gate, since legitimate independent
+    components exist.
+    """
+    advisories: list[dict] = []
+    if len(components) < 2:
+        return advisories
+    if any((comp.get("ports", {}) or {}).get("in") for comp in components):
+        # At least one component consumes another's anchors → coupled.
+        return advisories
+    total_anchors = sum(len(_declared_anchor_names(c)) for c in components)
+    advisories.append({
+        "kind": "independent_components",
+        "severity": "advisory",
+        "component_count": len(components),
+        "anchors_declared": total_anchors,
+        "message": (
+            f"{len(components)} components declared, but none consumes "
+            f"another's anchors (no ports.in; {total_anchors} anchor(s) "
+            f"declared). They are independent parametric islands — each "
+            f"recomputes its geometry from shared params. If a component "
+            f"should TRACK another (e.g. stickers following a body), declare "
+            f"ports.in + measure anchors via project_add_anchors so it moves "
+            f"with upstream; otherwise consider merging them into a single "
+            f"component to avoid duplicated formulas drifting apart."
+        ),
+    })
+    return advisories
+
+
 def project_status(core_path: str) -> dict[str, Any]:
     """One-shot completion snapshot of every component in a Project HDA.
 
@@ -938,6 +1041,7 @@ def project_status(core_path: str) -> dict[str, Any]:
             "project": core_path,
             "component_count": len(components),
             "components": out,
+            "coupling_advisories": _coupling_advisories(components),
             "overall": {
                 "with_geometry": with_geo,
                 "with_all_anchors": with_all_anchors,
@@ -1166,10 +1270,17 @@ def project_finalize(
             except Exception:
                 drafts_created = 0
 
+        # ── Coupling advisory (non-blocking) ──
+        # Multi-component projects with no cross-component wiring are
+        # independent islands (the cube cubies+stickers pattern). Never a
+        # failure — surfaced so the agent/user can decide to couple or merge.
+        advisories = _coupling_advisories(decl.get("components", []) or [])
+
         # ── Decide ──
         if failures:
             return {"success": False, "finalized": False, "core_path": core_path,
                     "checks": checks, "failures": failures, "skipped": False,
+                    "advisories": advisories,
                     "drafts_created": drafts_created, "failure_records": records}
 
         # All green — audit the finalize to the log.
@@ -1183,6 +1294,7 @@ def project_finalize(
         save_declaration(core, decl)
         return {"success": True, "finalized": True, "core_path": core_path,
                 "checks": checks, "failures": [], "skipped": False,
+                "advisories": advisories,
                 "drafts_created": 0, "failure_records": []}
     except Exception as e:
         return {"success": False,

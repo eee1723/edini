@@ -1106,7 +1106,7 @@ Recipe Library 已完成「参考样本」定位转向，Dashboard HDA 的捕获
 | Skill 主文件 | `skills/project-modeling/SKILL.md` | 重构（316→230 行）|
 | Skill 子文件（新增）| `MISTAKES.md` / `DISCIPLINE.md` / `PORT_PROTOCOL.md` | 从主文件拆出 |
 | 中文版 | `SKILL.zh.html` | 重生成同步新结构 |
-| 平台层 guard | `python3.11libs/edini/project/guards.py` | 报错用统一 `measure` leading word（保留 `_BYPASS_MARKER`/`_FORBIDDEN_TOKEN`/`"Refused:"` 不变）|
+| 平台层 guard | `python3.11libs/edini/project/guards.py` | 报错用统一 `measure` leading word；2026-07-09 重构：只拒**字面坐标** addpoint（`_FORBIDDEN_TOKEN` 子串匹配 → `_has_hardcoded_addpoint` 字面检测），计算位置 addpoint 放行；`_BYPASS_MARKER`/`"Refused:"` 保留 |
 | 工具描述 | `pi-extensions/edini-tools/tools/project.ts` | 4 个工具 description + promptGuidelines 统一 leading words |
 | 系统 prompt | `pi-extensions/edini-context/index.ts` | 路由文案补 leading words |
 | brainstorming | `skills/superpowers/brainstorming/SKILL.md` | fast-path 契约同步阶段名 |
