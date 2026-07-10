@@ -59,6 +59,7 @@ from edini.project.builder import (
     project_capture_archetype,
 )
 from edini.project.guards import lint_wrangle_snippet
+from edini.structure import analyze_component_structure
 
 # NOTE: Three procedural pipelines are archived under _disabled_backup/:
 #   1. procedural-modeling/  — prompt-driven build_procedural_asset + G1-G3 gates.
@@ -654,6 +655,12 @@ TOOL_HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     # One-shot per-component completion snapshot (geo_flow / anchors emitted /
     # errors). Replaces the N-tool status-gathering loop with a single call.
     "project_status": lambda **kw: project_status(kw["core_path"]),
+    # Per-component structural verdicts (fatal/advisory). Its fatal subset is
+    # also enforced as Gate 4 in project_finalize (immune to acknowledge_skip).
+    "analyze_component_structure": lambda **kw: analyze_component_structure(
+        kw["core_path"],
+        component_id=kw.get("component_id"),
+    ),
     # Hard gate: refuse to mark the project complete until it passes
     # verification (status complete + verify_robust + verify_parametric per
     # design param). The structural cure for "declared done prematurely"

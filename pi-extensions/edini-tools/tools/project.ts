@@ -291,6 +291,34 @@ export const projectTools = [
     },
   },
   {
+    name: "analyze_component_structure",
+    label: "Analyze Component Structure (Fatal/Advisory Verdicts)",
+    description:
+      "Per-component structural verdicts for an edini::project core. Reads the node graph + cooked " +
+      "geometry + declared structural intent, and returns fatal/advisory findings: " +
+      "F1 bare curves at out_geometry, F2 repeated parts not instanced via Copy-to-Points, " +
+      "F3 radial/planar axis mismatch vs baked edini_world_axis, F4 Copy-to-Points target points " +
+      "missing orient/N/up. The fatal subset is ALSO enforced as Gate 4 in project_finalize and " +
+      "cannot be bypassed by acknowledge_skip. Call this during the build to self-check before " +
+      "finalizing.",
+    promptSnippet: "Self-check component structure (fatal/advisory verdicts)",
+    promptGuidelines: [
+      "Use analyze_component_structure to get per-component structural verdicts (fatal vs advisory) before calling project_finalize.",
+      "Fatal findings (F1-F4) are also enforced as Gate 4 in project_finalize and CANNOT be bypassed by acknowledge_skip — fix them during the build.",
+      "Omit component_id to analyze every declared component; pass a component_id to scope to one.",
+      "Advisory findings are worth fixing but won't block finalize; use them to improve structural quality.",
+    ],
+    parameters: Type.Object({
+      core_path: Type.String({ description: "edini::project SOP HDA instance path." }),
+      component_id: Type.Optional(Type.String({
+        description: "Optional: analyze one component. Omit to analyze all.",
+      })),
+    }),
+    async execute(_id: string, params: { core_path: string; component_id?: string }) {
+      return forwardTool("analyze_component_structure", params);
+    },
+  },
+  {
     name: "project_finalize",
     label: "Finalize Project (Hard Verify Gate)",
     description:
