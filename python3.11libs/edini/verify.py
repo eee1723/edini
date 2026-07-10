@@ -1082,6 +1082,8 @@ def project_finalize(
     acknowledge_skip: bool = False,
     skip_reason: str | None = None,
     samples: str = "min_default_max",
+    structure_override: bool = False,
+    structure_reason: str | None = None,
 ) -> dict[str, Any]:
     """Hard gate: refuse to mark a project complete until it passes verification.
 
@@ -1095,7 +1097,16 @@ def project_finalize(
     the declaration log) — the "open the right door" principle from
     pitfalls.md (refuse the wrong action, but leave a correct channel).
 
+    **Gate 4 (structure) is immune to ``acknowledge_skip``**: a FATAL verdict
+    from ``analyze_component_structure`` blocks finalize even when skip is
+    requested. The only override is an audited
+    ``structure_override=True`` + ``structure_reason``. This closes the
+    2026-07-09 gap where 3/6 sessions shipped broken models via the skip hatch.
+
     Runs, in order:
+      4. ``analyze_component_structure`` — structural-intent check (FATAL
+         verdicts immune to ``acknowledge_skip``). Runs FIRST so a structural
+         fatal blocks everything else, including the skip hatch.
       1. ``project_status`` — every declared component complete (geo_flow ok,
          no missing anchors, no errors)?
       2. ``verify_robust`` — the model holds (non-degenerate + error-free)
@@ -1109,16 +1120,24 @@ def project_finalize(
 
     Args:
         core_path: the edini::project SOP HDA instance path.
-        acknowledge_skip: bypass running verification. Requires ``skip_reason``.
-            Use only when verification genuinely can't run (e.g. an intentionally
-            non-parametric study). The skip is audited to the declaration log.
+        acknowledge_skip: bypass running Gates 1-3 verification. Requires
+            ``skip_reason``.  Does NOT bypass Gate 4 (structure) — a structural
+            fatal blocks finalize regardless. Use only when verification
+            genuinely can't run (e.g. an intentionally non-parametric study).
+            The skip is audited to the declaration log.
         skip_reason: required when ``acknowledge_skip=True``; why verify is skipped.
         samples: passed through to ``verify_robust`` ("min_default_max" | "min_max").
+        structure_override: the ONLY way past a Gate 4 structural fatal.
+            Requires ``structure_reason``. The override is audited to the log.
+        structure_reason: required when ``structure_override=True``; state WHY
+            the structural fatal is being overridden.
 
     Returns:
-        ``{success, finalized, core_path, checks:{status, robust, parametric},
-        failures:[...], skipped, skip_reason}``. ``success=True`` iff finalized
-        (all gates passed OR ``acknowledge_skip`` was used correctly).
+        ``{success, finalized, core_path, checks:{structure, status, robust,
+        parametric}, failures:[...], skipped, skip_reason}``.
+        ``success=True`` iff finalized (all gates passed OR
+        ``acknowledge_skip`` was used correctly AND Gate 4 passed/overridden).
+        On a Gate 4 block: ``{structure_blocked: True, structure_fatal: [...]}``.
     """
     try:
         core = hou.node(core_path)
@@ -1127,24 +1146,6 @@ def project_finalize(
 
         from edini.project.state import (load_declaration, save_declaration,
                                          append_log)
-
-        # ── SKIP path: explicit acknowledgement, audited to the log ──
-        if acknowledge_skip:
-            if not (skip_reason and skip_reason.strip()):
-                return {"success": False,
-                        "error": ("acknowledge_skip=True requires a non-empty "
-                                  "skip_reason (the 'right door' — state WHY "
-                                  "verification is skipped).")}
-            decl = load_declaration(core)
-            append_log(decl, kind="finalize_skip",
-                       summary=f"finalized without verification: {skip_reason.strip()}",
-                       payload={"skip_reason": skip_reason.strip()},
-                       result_ok=True)
-            save_declaration(core, decl)
-            return {"success": True, "finalized": True, "skipped": True,
-                    "skip_reason": skip_reason.strip(), "core_path": core_path,
-                    "checks": {}, "failures": [],
-                    "drafts_created": 0, "failure_records": []}
 
         failures: list[str] = []
         records: list[dict] = []  # structured FailureRecords → knowledge drafts (5a)
@@ -1161,6 +1162,7 @@ def project_finalize(
             "dead_param": "参数未驱动几何 — 检查 ch() 引用是否断开,或 repath_to_relative 修复",
             "orientation": "朝向不符 — 检查组件 axis 声明或 anchor @orient",
             "missing_param": "设计参数在 core 上缺失 — 重新 project_build_scaffold",
+            "structure": "结构不符声明 — 检查 repeats 方法/instancing 节点或 axis 朝向",
         }
 
         def _add_failure(category: str, message: str, **struct) -> None:
@@ -1171,6 +1173,58 @@ def project_finalize(
                    "message": message, "hint": _FINALIZE_HINTS.get(category, "")}
             rec.update({k: v for k, v in struct.items() if v is not None})
             records.append(rec)
+
+        decl = load_declaration(core)
+
+        # ── Gate 4: structure (FATAL verdicts immune to acknowledge_skip) ──
+        # Runs FIRST so that a structural fatal blocks everything else,
+        # including the acknowledge_skip hatch. The only way past a structural
+        # fatal is an audited structure_override + structure_reason.
+        from edini.structure import analyze_component_structure
+        struct = analyze_component_structure(core_path)
+        fatal_struct = struct.get("fatal", []) if struct.get("success") else []
+        if fatal_struct and not structure_override:
+            if acknowledge_skip:
+                return {"success": False, "finalized": False, "core_path": core_path,
+                        "skipped": False, "structure_blocked": True,
+                        "checks": {"structure": struct},
+                        "failures": [f"Gate 4 (structure) fatal — not bypassable by "
+                                     f"acknowledge_skip: {[f.get('rule') for f in fatal_struct]}"],
+                        "structure_fatal": fatal_struct}
+            _add_failure("structure",
+                         f"Gate 4 structure fatal: {[f.get('rule') for f in fatal_struct]}",
+                         components=[f.get("component") for f in fatal_struct])
+        elif fatal_struct and structure_override:
+            if not (structure_reason and structure_reason.strip()):
+                return {"success": False, "error": (
+                    "structure_override=True requires a non-empty structure_reason "
+                    "(state WHY the structural fatal is being overridden).")}
+            append_log(decl, kind="structure_override",
+                       summary=f"structure fatal overridden: {structure_reason.strip()}",
+                       payload={"fatal": [f.get("rule") for f in fatal_struct],
+                                "reason": structure_reason.strip()}, result_ok=True)
+            save_declaration(core, decl)
+        checks["structure"] = struct
+
+        # ── SKIP path: bypasses Gates 1-3 only (Gate 4 already ran above) ──
+        if acknowledge_skip:
+            if not (skip_reason and skip_reason.strip()):
+                return {"success": False,
+                        "error": ("acknowledge_skip=True requires a non-empty "
+                                  "skip_reason (the 'right door' — state WHY "
+                                  "verification is skipped). Note: Gate 4 "
+                                  "(structure) is NOT bypassable by skip; use "
+                                  "structure_override + structure_reason.")}
+            append_log(decl, kind="finalize_skip",
+                       summary=f"finalized without verification (Gates 1-3 skipped; "
+                               f"Gate 4 structure passed): {skip_reason.strip()}",
+                       payload={"skip_reason": skip_reason.strip()},
+                       result_ok=True)
+            save_declaration(core, decl)
+            return {"success": True, "finalized": True, "skipped": True,
+                    "skip_reason": skip_reason.strip(), "core_path": core_path,
+                    "checks": checks, "failures": [],
+                    "drafts_created": 0, "failure_records": []}
 
         # ── Gate 1: completeness (project_status) ──
         status = project_status(core_path)
@@ -1197,7 +1251,6 @@ def project_finalize(
                          "project OUT node not found on the core "
                          "(re-run project_build_scaffold).")
 
-        decl = load_declaration(core)
         design_params = decl.get("design_params", []) or []
 
         # ── Gates 2 & 3: parametric verification (only if design params exist) ──
@@ -1286,7 +1339,7 @@ def project_finalize(
         # All green — audit the finalize to the log.
         decl = load_declaration(core)
         append_log(decl, kind="finalize",
-                   summary=("passed all gates: status complete"
+                   summary=("passed all gates: structure + status complete"
                             + (f" + robust + parametric over {len(design_params)} "
                                f"param(s)" if design_params else " (no design_params)")),
                    payload={"design_params": [p.get("name") for p in design_params]},
