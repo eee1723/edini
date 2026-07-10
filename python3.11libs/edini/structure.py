@@ -5,7 +5,6 @@ hou-coupled extractor/orchestrator is lower in this module and lazy-imports hou.
 See docs/superpowers/specs/2026-07-10-component-structure-analyzer-design.md.
 """
 from __future__ import annotations
-from typing import Any
 
 # ── Declaration schema constants ──────────────────────────────────────────
 _VALID_KINDS = {"radial", "planar", "repeated", "solid"}
@@ -38,8 +37,9 @@ def lint_structure_decl(comp: dict) -> list[dict]:
     """Validate a component's `structure` declaration. Pure (no hou).
 
     Returns [] if the declaration is acceptable, else a list of
-    {code, detail, schema_hint} dicts. Called by build_project_scaffold
-    BEFORE any nodes are created — the shift-left refusal point.
+    {code, detail, schema_hint?} dicts (schema_hint present only where
+    helpful). Called by build_project_scaffold BEFORE any nodes are created
+    — the shift-left refusal point.
     """
     cid = comp.get("id", "?")
     struct = comp.get("structure")

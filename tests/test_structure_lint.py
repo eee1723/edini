@@ -1,5 +1,6 @@
 import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "python3.11libs"))
+import pytest
 from edini.structure import lint_structure_decl
 
 
@@ -34,3 +35,32 @@ def test_valid_radial_passes():
         "kind": "radial", "expected_axis": "Z",
         "repeats": [{"part": "spoke", "count": 28, "method": "copytopoints"}]}})
     assert errs == []
+
+
+def test_structure_not_dict():
+    errs = lint_structure_decl({"id": "x", "structure": [1, 2]})
+    assert [e["code"] for e in errs] == ["structure_not_dict"]
+
+
+def test_bad_kind():
+    errs = lint_structure_decl({"id": "x", "structure": {"kind": "wheel"}})
+    assert "bad_kind" in [e["code"] for e in errs]
+
+
+def test_bad_repeat_entry():
+    errs = lint_structure_decl({"id": "x", "structure": {
+        "kind": "repeated", "repeats": [42]}})
+    assert "bad_repeat_entry" in [e["code"] for e in errs]
+
+
+def test_planar_requires_axis():
+    errs = lint_structure_decl({"id": "top", "structure": {"kind": "planar"}})
+    assert "missing_axis" in [e["code"] for e in errs]
+
+
+@pytest.mark.parametrize("count", [None, "28"])
+def test_bad_repeat_count_none_and_string(count):
+    errs = lint_structure_decl({"id": "spokes", "structure": {
+        "kind": "repeated",
+        "repeats": [{"part": "spoke", "count": count, "method": "copytopoints"}]}})
+    assert "bad_repeat_count" in [e["code"] for e in errs]
