@@ -28,6 +28,7 @@ from edini.project.ports import (
     validate_component_ports, validate_route_contract,
 )
 from edini.vex_strategies import build_mount_vex, VexStrategyError
+from edini.structure import lint_structure_decl
 
 
 def build_project_scaffold(core_node: "hou.Node",
@@ -48,6 +49,27 @@ def build_project_scaffold(core_node: "hou.Node",
 
     decl = load_declaration(core_node)
     components = decl.get("components", [])
+
+    # Shift-left structural-intent lint: refuse a component whose `structure`
+    # declaration fails lint BEFORE any nodes are created. This runs on the
+    # resolved components — both the inline `declaration=` path and the
+    # re-read-existing path flow through load_declaration above, so a re-
+    # scaffold of a badly-declared existing core also refuses here.
+    #
+    # The `structure` field is opt-in: components WITHOUT one (the historical
+    # default) pass through — only a component that HAS a structure declaration
+    # but is malformed (bad kind, missing axis, etc.) is refused.
+    lint_errors: list[dict] = []
+    for comp in components:
+        lint_errors.extend(lint_structure_decl(comp))
+    lint_errors = [e for e in lint_errors if e.get("code") != "structure_missing"]
+    if lint_errors:
+        return {"success": False,
+                "error": ("structural-intent declaration failed lint (refused before any "
+                          "nodes were created). Fix the declaration and re-run "
+                          "project_build_scaffold."),
+                "lint_errors": lint_errors,
+                "suggested_fix": lint_errors[0].get("detail", "")}
 
     # Dry-run validation: collect ALL port errors before building anything,
     # so the agent gets every field wrong in one shot instead of one-at-a-time.

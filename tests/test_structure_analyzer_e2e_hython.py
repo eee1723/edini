@@ -99,3 +99,37 @@ class TestAnalyze(unittest.TestCase):
         r = _run(_ANALYZE_HARNESS)
         self.assertEqual(r["overall"], "fatal")
         self.assertIn("F2_repeat_no_instancing", r["rules"])
+
+
+# build_project_scaffold must REFUSE a component whose structure fails lint,
+# before creating any nodes.
+_LINT_REFUSE_HARNESS = r"""
+import json, sys, os
+sys.path.insert(0, os.path.join(r"%s", "python3.11libs"))
+import hou
+_hda = os.path.join(r"%s", "otls", "edini_project.hda")
+if os.path.isfile(_hda): hou.hda.installFile(_hda)
+from edini.project.node import create_project_hda
+from edini.project.builder import build_project_scaffold
+from edini.project.state import empty_declaration
+core = create_project_hda(name="proj_lint_refuse")
+decl = empty_declaration("proj_lint_refuse")
+decl["components"] = [{"id": "wheel", "structure": {"kind": "radial"}}]  # no axis
+res = build_project_scaffold(core, declaration=decl)
+# res may be a dict (refusal) — coerce for JSON. If it's not a dict, the
+# scaffold failed to refuse; signal that.
+if not isinstance(res, dict):
+    print(json.dumps({"refused": False, "code": None,
+                      "note": "scaffold did not return a refusal dict"}))
+else:
+    print(json.dumps({"refused": not res.get("success", False),
+                      "code": (res.get("lint_errors") or [{}])[0].get("code")}))
+"""
+
+
+class TestScaffoldLint(unittest.TestCase):
+    @unittest.skipUnless(HYTHON, "hython not installed — run under real Houdini")
+    def test_scaffold_refuses_bad_structure(self):
+        r = _run(_LINT_REFUSE_HARNESS)
+        self.assertTrue(r["refused"], f"scaffold should refuse bad structure, got: {r}")
+        self.assertEqual(r["code"], "missing_axis")
