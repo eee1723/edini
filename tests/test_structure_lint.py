@@ -64,3 +64,16 @@ def test_bad_repeat_count_none_and_string(count):
         "kind": "repeated",
         "repeats": [{"part": "spoke", "count": count, "method": "copytopoints"}]}})
     assert "bad_repeat_count" in [e["code"] for e in errs]
+
+
+from edini.project.state import empty_declaration, add_structure_to_component
+
+
+def test_add_structure_to_component_persists():
+    decl = empty_declaration("p")
+    decl["components"].append({"id": "wheel"})
+    add_structure_to_component(decl, "wheel",
+                               {"kind": "radial", "expected_axis": "Z"})
+    c = decl["components"][0]
+    assert c["structure"]["kind"] == "radial"
+    assert c["structure"]["expected_axis"] == "Z"

@@ -248,3 +248,18 @@ def get_design_params_for_component(declaration: dict,
             result.append(p)
     return result
 
+
+def add_structure_to_component(declaration: dict, component_id: str,
+                               structure: dict) -> dict:
+    """Attach a validated structural-intent block to a declared component.
+
+    Pure (no hou). Raises KeyError if the component isn't declared. The
+    structure dict is validated by edini.structure.lint_structure_decl at
+    scaffold time; this helper only attaches it.
+    """
+    for c in declaration["components"]:
+        if c.get("id") == component_id:
+            c["structure"] = structure
+            return c
+    raise KeyError(f"component not declared: {component_id!r}")
+
