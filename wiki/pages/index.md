@@ -10,7 +10,8 @@
 | [开发进度](progress.html) | 进度看板 · 已完成工作 · 下一步任务 |
 | [统一对话窗口](unified-chat.html) | 主 Agent + HDA 窗口共享组件库架构（13 组件 + 5 装配层 + workspace lock） |
 | [工具清单](tools.html) | 27 个 Houdini 工具的完整目录 |
-| [Procedural Harness](procedural-harness.html) | 程序化建模沙盒、诊断、验证、提交流程与手测重点 |
+| [程序化建模 Agent 详解](procedural-modeling-agent.html) | ⭐ 当前主线：阶段工作 / 提示词四层 / 工具设计 / 全部规则守卫 / 四道 finalize 门 |
+| [Procedural Harness](procedural-harness.html) | ⚰️（旧）程序化建模沙盒、诊断、验证、提交流程与手测重点——已被 Project HDA 主线取代 |
 | [踩坑记录](pitfalls.html) | 开发中的踩坑记录，支持分类/优先级/状态筛选 |
 | [参考资料](references.html) | 外部文档 · 设计决策 · API 参考 |
 | [组件地基验证](project-component-foundation.html) | Project HDA 组件建模地基的 GUI 验证指南（subnet 组件 + 端口信息点 + 输入/输出脚手架 + promote）|
