@@ -191,13 +191,13 @@ path; use `structure_override=True` + a non-empty `structure_reason` only for a
 genuinely atypical structure, and the override is audited to the declaration
 log):
 
-- **F1 — repeated parts must be instanced via Copy-to-Points** (even 2
+- **F1 — no bare curve/surface primitives at `out_geometry`.** Construction
+  curves must go through PolyWire/Sweep (tubes), or be Blasted — don't leave
+  skeleton curves wired to the output.
+- **F2 — repeated parts must be instanced via Copy-to-Points** (even 2
   instances). Two wheels, four legs, N spokes: ONE template + Copy-to-Points,
   never hand-duplicated subnets or Python-SOP loops emitting each copy. Declare
   each in `repeats` with `method: "copytopoints"`.
-- **F2 — no bare curve/surface primitives at `out_geometry`.** Construction
-  curves must go through PolyWire/Sweep (tubes), or be Blasted — don't leave
-  skeleton curves wired to the output.
 - **F3 — radial/planar parts declare their axis** (`expected_axis`), checked
   against the baked `edini_world_axis` via `verify_orientation`. This check
   ONLY runs when you declared `kind` + `expected_axis` — another reason to

@@ -10,7 +10,6 @@ from __future__ import annotations
 _VALID_KINDS = {"radial", "planar", "repeated", "solid"}
 _AXIS_TOKENS = {"X", "Y", "Z", "-X", "-Y", "-Z"}
 _INSTANCING_METHODS = {"copytopoints", "foreach", "stamp", "copy"}
-_SURFACING_METHODS = {"sweep", "polywire", "skin", "rails"}
 
 # Node-type taxonomy (canonical home; harness keeps aliases — see Task 11).
 MODULAR_NODE_TYPES = {
@@ -138,7 +137,8 @@ def evaluate_component_signals(signals: dict, declared: dict | None) -> dict:
             "suggested_tool": "houdini_create_node"})
 
     # ── F4: Copy-to-Points present but target points lack orient/N/up ──
-    if instancing and not signals.get("ctp_target_has_orient"):
+    ctp_present = any(n.startswith("copytopoints") for n in instancing)
+    if ctp_present and not signals.get("ctp_target_has_orient"):
         fatal.append({"rule": "F4_ctp_no_orient", "component": cid,
             "detail": "Copy-to-Points target points have none of orient/N/up — copies inherit "
                       "identity orientation (candles/wheels pointing the wrong way)",
@@ -164,22 +164,19 @@ def _classify_instancing(type_name: str) -> bool:
 
 
 def _ctp_target_has_orient(ctp_node) -> bool:
-    """True if any input geometry of a Copy-to-Points node carries point-level
-    orient / N / up (the target-point orientation attributes). Checks all inputs
-    so CTP 1.0 (target=input1) and 2.0 (target=input0) both work."""
+    """True if the Copy-to-Points TARGET-point input (input 1) carries point-level
+    orient / N / up. The source/template input (0) is not checked — its normals
+    don't orient the copies."""
     try:
-        for inp in ctp_node.inputs():
-            if inp is None:
-                continue
-            geo = inp.geometry()
-            if geo is None:
-                continue
-            for nm in ("orient", "N", "up"):
-                if geo.findPointAttrib(nm) is not None:
-                    return True
+        target = ctp_node.input(1)
+        if target is None:
+            return False
+        geo = target.geometry()
+        if geo is None:
+            return False
+        return any(geo.findPointAttrib(nm) is not None for nm in ("orient", "N", "up"))
     except Exception:
-        pass
-    return False
+        return False
 
 
 def _extract_component_signals(subnet, component_id: str) -> dict:
@@ -198,7 +195,7 @@ def _extract_component_signals(subnet, component_id: str) -> dict:
         tname = _bare_type_name(child)
         if _classify_instancing(tname):
             instancing_nodes.add(tname.split("::")[0])
-            if "copy" in tname and "points" in tname or tname.startswith("copytopoints"):
+            if tname.startswith("copytopoints"):
                 if _ctp_target_has_orient(child):
                     ctp_target_has_orient = True
         if tname == "python":

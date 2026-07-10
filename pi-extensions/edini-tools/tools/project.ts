@@ -325,17 +325,24 @@ export const projectTools = [
       "Hard gate that refuses to mark a Project HDA complete until it passes verification. " +
       "Runs project_status (every component complete?) + verify_robust (model holds across every " +
       "design_param's min/default/max?) + verify_parametric per design_param (each param actually " +
-      "drives the geometry?). Returns {success, finalized, failures:[...]} — a non-empty failures list " +
-      "means the project is NOT complete (fix the named issues; do NOT just re-declare done). This is " +
-      "the structural cure for 'declared done prematurely' (declaring complete after inspect_health " +
-      "without ever proving parametricity). ESCAPE HATCH: if verification genuinely cannot run, pass " +
-      "acknowledge_skip=true + a non-empty skip_reason; the skip is audited to the project's declaration " +
-      "log. A project with NO design_params finalizes on status completeness alone (parametric gates " +
-      "are N/A, not skipped).",
+      "drives the geometry?). Gate 4 runs analyze_component_structure: its fatal verdicts (F1 bare " +
+      "curves at out_geometry, F2 repeated parts not instanced via Copy-to-Points, F3 radial/planar " +
+      "axis mismatch, F4 Copy-to-Points target missing orient/N/up) are NOT bypassable by " +
+      "acknowledge_skip — they block finalize even on the skip path. Returns {success, finalized, " +
+      "failures:[...]} — a non-empty failures list means the project is NOT complete (fix the named " +
+      "issues; do NOT just re-declare done). This is the structural cure for 'declared done prematurely' " +
+      "(declaring complete after inspect_health without ever proving parametricity). ESCAPE HATCH: if " +
+      "verification genuinely cannot run, pass acknowledge_skip=true + a non-empty skip_reason; the " +
+      "skip is audited to the project's declaration log. For a Gate 4 structural fatal that is a " +
+      "genuine false-positive (atypical structure), pass structure_override=true + a non-empty " +
+      "structure_reason. A project with NO design_params finalizes on status completeness alone " +
+      "(parametric gates are N/A, not skipped).",
     promptSnippet: "Gate the project complete on verification passing",
     promptGuidelines: [
       "Call project_finalize as the LAST step before reporting a Project HDA model as done — it is the hard gate that proves 'done' means 'parametric + robust + complete'.",
       "It runs verification itself (you do not call verify_parametric/verify_robust separately for finalize); on failure it returns a failures[] list naming exactly what to fix.",
+      "Gate 4 (analyze_component_structure) fatal verdicts — F1 bare curves, F2 repeated parts not instanced, F3 axis mismatch, F4 CTP no orient — are NOT bypassable by acknowledge_skip; they block finalize even on the skip path. Fix them during the build so Gate 4 passes cleanly.",
+      "structure_override=true + a non-empty structure_reason is the ONLY way past a Gate 4 structural fatal. Use it solely for a genuinely atypical structure that trips a false-positive verdict (the override is audited to the declaration log).",
       "On failure: FIX the named issues, then re-finalize. Do NOT re-declare done, and do NOT use acknowledge_skip to bypass a real failure.",
       "acknowledge_skip=true + skip_reason is ONLY for when verification genuinely can't run (e.g. an intentionally non-parametric study); the skip is recorded in the project log. Using it to bypass a failure defeats the gate.",
       "A project with no design_params finalizes on status completeness alone — no acknowledge_skip needed for that.",
@@ -351,8 +358,14 @@ export const projectTools = [
       samples: Type.Optional(Type.String({
         description: "verify_robust sampling: 'min_default_max' (default) or 'min_max'.",
       })),
+      structure_override: Type.Optional(Type.Boolean({
+        description: "The ONLY way past a Gate 4 structural fatal. Requires structure_reason. Use only for a genuinely atypical structure that trips a false-positive structural verdict.",
+      })),
+      structure_reason: Type.Optional(Type.String({
+        description: "Required when structure_override=true. State WHY the structural fatal is being overridden (audited to the declaration log).",
+      })),
     }),
-    async execute(_id: string, params: { core_path: string; acknowledge_skip?: boolean; skip_reason?: string; samples?: string }) {
+    async execute(_id: string, params: { core_path: string; acknowledge_skip?: boolean; skip_reason?: string; samples?: string; structure_override?: boolean; structure_reason?: string }) {
       return forwardTool("project_finalize", params);
     },
   },
