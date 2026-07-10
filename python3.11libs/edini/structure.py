@@ -232,3 +232,73 @@ def _extract_component_signals(subnet, component_id: str) -> dict:
             "python_emit_geometry": python_emit_geometry,
             "inferred_repeats": inferred_repeats,
             "ctp_target_has_orient": ctp_target_has_orient}
+
+
+def analyze_component_structure(core_path: str, component_id: str | None = None) -> dict:
+    """Analyze one or all components of a project core. hou-coupled.
+
+    Returns {success, core_path, component_id, overall, fatal[], advisory[],
+    signals_per_component}. F3 (axis) is computed here via verify_orientation
+    (reuses the baked edini_world_axis ground truth).
+    """
+    try:
+        import hou
+        from edini.project.state import load_declaration
+        from edini.verify import verify_orientation
+    except ImportError:
+        return {"success": False, "error": "hou not available"}
+
+    core = hou.node(core_path)
+    if core is None:
+        return {"success": False, "error": f"Core not found: {core_path}"}
+    decl = load_declaration(core)
+    components = decl.get("components", []) or []
+    if component_id is not None:
+        components = [c for c in components if c.get("id") == component_id]
+        if not components:
+            return {"success": False, "error": f"component {component_id!r} not declared"}
+
+    out_node = core.node("OUT")
+    out_path = out_node.path() if out_node is not None else None
+
+    all_fatal: list[dict] = []
+    all_advisory: list[dict] = []
+    signals_per: dict[str, dict] = {}
+
+    for comp in components:
+        cid = comp.get("id", "?")
+        subnet = core.node(cid)
+        if subnet is None:
+            all_fatal.append({"rule": "missing_component_subnet", "component": cid,
+                              "detail": f"component subnet {cid!r} not found on the core"})
+            continue
+        declared = comp.get("structure")
+        signals = _extract_component_signals(subnet, cid)
+
+        # ── F3: declared radial/planar axis vs baked edini_world_axis ──
+        kind = (declared or {}).get("kind")
+        expected_axis = (declared or {}).get("expected_axis")
+        if kind in ("radial", "planar") and expected_axis and out_path is not None:
+            vr = verify_orientation(out_path, [{"component_id": cid,
+                                                "kind": kind,
+                                                "expected_axis": expected_axis,
+                                                "tolerance_deg": 15}])
+            if vr.get("success") and vr.get("failed", 0) > 0:
+                det = (vr.get("checks") or [{}])[0].get("detected_axis", "?")
+                signals["baked_axis"] = det
+                all_fatal.append({"rule": "F3_axis_mismatch", "component": cid,
+                    "detail": f"declared axis {expected_axis!r} != baked/detected axis {det!r}",
+                    "fix": "Rebuild the part so its construction axis matches, "
+                           "or correct the declared expected_axis.",
+                    "suggested_tool": "verify_orientation"})
+
+        verdict = evaluate_component_signals(signals, declared)
+        all_fatal.extend(verdict["fatal"])
+        all_advisory.extend(verdict["advisory"])
+        signals_per[cid] = signals
+
+    overall = "fatal" if all_fatal else ("advisory" if all_advisory else "clean")
+    return {"success": True, "core_path": core_path,
+            "component_id": component_id, "overall": overall,
+            "fatal": all_fatal, "advisory": all_advisory,
+            "signals_per_component": signals_per}
