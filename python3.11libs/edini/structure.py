@@ -148,3 +148,87 @@ def evaluate_component_signals(signals: dict, declared: dict | None) -> dict:
 
     overall = "fatal" if fatal else ("advisory" if advisory else "clean")
     return {"fatal": fatal, "advisory": advisory, "overall": overall}
+
+
+# ── hou-coupled section (lazy import) ─────────────────────────────────────
+def _bare_type_name(node) -> str:
+    try:
+        return node.type().name()
+    except Exception:
+        return ""
+
+
+def _classify_instancing(type_name: str) -> bool:
+    t = (type_name or "").lower()
+    return any(t == n or t.startswith(n + "::") for n in INSTANCING_NODE_TYPES)
+
+
+def _ctp_target_has_orient(ctp_node) -> bool:
+    """True if any input geometry of a Copy-to-Points node carries point-level
+    orient / N / up (the target-point orientation attributes). Checks all inputs
+    so CTP 1.0 (target=input1) and 2.0 (target=input0) both work."""
+    try:
+        for inp in ctp_node.inputs():
+            if inp is None:
+                continue
+            geo = inp.geometry()
+            if geo is None:
+                continue
+            for nm in ("orient", "N", "up"):
+                if geo.findPointAttrib(nm) is not None:
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def _extract_component_signals(subnet, component_id: str) -> dict:
+    """Walk a component subnet + its out_geometry, build the signal dict that
+    evaluate_component_signals consumes. hou-coupled."""
+    from edini.project.ports import OUT_GEOMETRY_NODE
+
+    instancing_nodes: set[str] = set()
+    python_emit_geometry = False
+    ctp_target_has_orient = False
+    try:
+        children = list(subnet.allSubChildren())
+    except Exception:
+        children = []
+    for child in children:
+        tname = _bare_type_name(child)
+        if _classify_instancing(tname):
+            instancing_nodes.add(tname.split("::")[0])
+            if "copy" in tname and "points" in tname or tname.startswith("copytopoints"):
+                if _ctp_target_has_orient(child):
+                    ctp_target_has_orient = True
+        if tname == "python":
+            try:
+                if child.geometry() is not None and len(child.geometry().prims()) > 0:
+                    python_emit_geometry = True
+            except Exception:
+                pass
+
+    # prim_types from the component's out_geometry (agent's raw output, pre-bake).
+    prim_types: dict[str, int] = {}
+    out_geo = subnet.node(OUT_GEOMETRY_NODE)
+    out_prim_count = 0
+    if out_geo is not None:
+        try:
+            geo = out_geo.geometry()
+            if geo is not None:
+                for prim in geo.prims():
+                    tn = prim.type().name()
+                    prim_types[tn] = prim_types.get(tn, 0) + 1
+                out_prim_count = len(geo.prims())
+        except Exception:
+            pass
+
+    inferred_repeats = (
+        python_emit_geometry and not instancing_nodes
+        and out_prim_count >= _INFERRED_REPEAT_MIN_PRIMS
+    )
+    return {"component_id": component_id, "prim_types": prim_types,
+            "instancing_nodes": instancing_nodes,
+            "python_emit_geometry": python_emit_geometry,
+            "inferred_repeats": inferred_repeats,
+            "ctp_target_has_orient": ctp_target_has_orient}
